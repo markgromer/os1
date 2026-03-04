@@ -2662,7 +2662,8 @@ function renderDashboard(container) {
         ? { id: pendingDoneEntries[0][0], ...(pendingDoneEntries[0][1] || {}) }
         : null;
 
-    const nextAction = getTodayNextActions().find((task) => !state.taskDoneUndoById?.[safeText(task?.id)]) || null;
+    const nextActions = getTodayNextActions().filter((task) => !state.taskDoneUndoById?.[safeText(task?.id)]).slice(0, 3);
+    const nextAction = nextActions[0] || null;
     const callsConnected = !!state.settings?.googleConnected;
     const calls = Array.isArray(state.dashboardCalls?.events) ? state.dashboardCalls.events : [];
     if (callsConnected) setTimeout(() => refreshDashboardCalls({ force: false }), 0);
@@ -2682,20 +2683,30 @@ function renderDashboard(container) {
         return false;
     });
 
-    const nextTaskPrimaryText = pendingDone
-        ? (safeText(pendingDone.title) || 'Task marked done')
-        : (safeText(nextAction?.title) || 'No immediate task');
-    const nextTaskSecondaryText = pendingDone
-        ? `Auto-archiving in 5s • ${safeText(pendingDone.project) || 'No project'}`
-        : (safeText(nextAction?.project) || 'Open a project to create tasks');
-    const nextTaskActionHtml = pendingDone
-        ? `<button data-next-task-undo="${escapeHtml(pendingDone.id)}" class="px-2 py-1 rounded border border-amber-600/40 bg-amber-600/10 text-[10px] font-mono text-amber-200 hover:bg-amber-600/20 transition-colors">Undo</button>`
-        : (nextAction
-            ? `<button data-next-task-done="${escapeHtml(safeText(nextAction?.id))}" class="px-2 py-1 rounded border border-emerald-600/40 bg-emerald-600/10 text-[10px] font-mono text-emerald-200 hover:bg-emerald-600/20 transition-colors">Mark done</button>`
-            : `<span class="text-[10px] font-mono text-zinc-600">No action</span>`);
+    const nextTaskRowsHtml = pendingDone
+        ? `
+            <div class="mt-2 border border-amber-600/30 rounded-lg bg-amber-600/5 px-2 py-2">
+                <div class="text-[11px] text-zinc-100 truncate">${escapeHtml(safeText(pendingDone.title) || 'Task marked done')}</div>
+                <div class="text-[10px] font-mono text-amber-200 mt-0.5">Auto-archiving in 5s • ${escapeHtml(safeText(pendingDone.project) || 'No project')}</div>
+                <div class="mt-1.5"><button data-next-task-undo="${escapeHtml(pendingDone.id)}" class="px-2 py-1 rounded border border-amber-600/40 bg-amber-600/10 text-[10px] font-mono text-amber-200 hover:bg-amber-600/20 transition-colors">Undo</button></div>
+            </div>
+        `
+        : (nextActions.length
+            ? `<div class="mt-2 space-y-1.5">${nextActions.map((task) => `
+                <div class="border border-zinc-800 rounded-md bg-zinc-950/20 px-2 py-1.5">
+                    <div class="flex items-center justify-between gap-2">
+                        <div class="min-w-0">
+                            <div class="text-[11px] text-zinc-100 truncate" title="${escapeHtml(safeText(task?.title))}">${escapeHtml(safeText(task?.title) || 'Untitled')}</div>
+                            <div class="text-[10px] font-mono text-zinc-500 truncate">${escapeHtml(safeText(task?.project) || '—')}</div>
+                        </div>
+                        <button data-next-task-done="${escapeHtml(safeText(task?.id))}" class="shrink-0 px-2 py-1 rounded border border-emerald-600/40 bg-emerald-600/10 text-[10px] font-mono text-emerald-200 hover:bg-emerald-600/20 transition-colors">Done</button>
+                    </div>
+                </div>
+            `).join('')}</div>`
+            : `<div class="mt-2 text-[10px] font-mono text-zinc-600">No action</div>`);
 
     const controlStrip = document.createElement('div');
-    controlStrip.className = 'mb-6 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3';
+    controlStrip.className = 'grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3';
     controlStrip.innerHTML = `
         <button data-strip-action="focus" class="group text-left border border-zinc-800 rounded-xl bg-zinc-900/30 p-3 hover:bg-zinc-900/50 transition-colors">
             <div class="text-[10px] font-mono uppercase tracking-widest text-zinc-500">Today Outcomes</div>
@@ -2705,9 +2716,8 @@ function renderDashboard(container) {
 
         <button data-strip-action="next-task" class="group text-left border border-zinc-800 rounded-xl bg-zinc-900/30 p-3 hover:bg-zinc-900/50 transition-colors">
             <div class="text-[10px] font-mono uppercase tracking-widest text-zinc-500">Next Task</div>
-            <div class="mt-1 text-sm text-zinc-100 truncate">${escapeHtml(nextTaskPrimaryText)}</div>
-            <div class="mt-2 text-[11px] text-zinc-400 truncate">${escapeHtml(nextTaskSecondaryText)}</div>
-            <div class="mt-2 flex items-center gap-2">${nextTaskActionHtml}</div>
+            <div class="mt-1 text-sm text-zinc-100 truncate">${escapeHtml(nextAction ? 'Action queue (top 3)' : 'No immediate task')}</div>
+            ${nextTaskRowsHtml}
         </button>
 
         <button data-strip-action="next-call" class="group text-left border border-zinc-800 rounded-xl bg-zinc-900/30 p-3 hover:bg-zinc-900/50 transition-colors">
@@ -2728,7 +2738,12 @@ function renderDashboard(container) {
             <div class="mt-2 max-h-0 opacity-0 overflow-hidden transition-all duration-200 ease-out group-hover:max-h-24 group-hover:opacity-100 text-[11px] text-zinc-400">${escapeHtml(atRiskProjects.slice(0, 2).map((p) => safeText(p?.name)).filter(Boolean).join(' • ') || 'No immediate risk detected')}</div>
         </button>
     `;
-    content.appendChild(controlStrip);
+
+    const missionContainer = document.createElement('div');
+    missionContainer.className = 'mb-6 border border-zinc-800 rounded-xl bg-zinc-900/20 p-3';
+    missionContainer.innerHTML = `<div class="text-[10px] font-mono uppercase tracking-widest text-zinc-500 mb-2">Mission Control</div>`;
+    missionContainer.appendChild(controlStrip);
+    content.appendChild(missionContainer);
 
     // New Project Intake
     const intake = document.createElement('div');
@@ -2877,7 +2892,10 @@ function renderDashboard(container) {
         </div>
         <div class="mt-3 ${unreadItems.length ? 'hidden' : ''} text-xs text-zinc-500">No new inbox items.</div>
     `;
-    content.appendChild(unreadPanel);
+    const commsContainer = document.createElement('div');
+    commsContainer.className = 'mb-6 border border-zinc-800 rounded-xl bg-zinc-900/20 p-3';
+    commsContainer.innerHTML = `<div class="text-[10px] font-mono uppercase tracking-widest text-zinc-500 mb-2">Comms Radar</div>`;
+    commsContainer.appendChild(unreadPanel);
 
     const triageStatuses = ['New', 'Triaged', 'Done', 'Archived'];
     const triageBoard = document.createElement('div');
@@ -2931,18 +2949,23 @@ function renderDashboard(container) {
             }).join('')}
         </div>
     `;
-    content.appendChild(triageBoard);
+    commsContainer.appendChild(triageBoard);
+    content.appendChild(commsContainer);
 
-    content.appendChild(renderProjectBuckets(buckets, { bulkMode: !!state.dashboardBulkMode }));
+    const deliveryContainer = document.createElement('div');
+    deliveryContainer.className = 'mb-6 border border-zinc-800 rounded-xl bg-zinc-900/20 p-3';
+    deliveryContainer.innerHTML = `<div class="text-[10px] font-mono uppercase tracking-widest text-zinc-500 mb-2">Delivery Board</div>`;
+    deliveryContainer.appendChild(renderProjectBuckets(buckets, { bulkMode: !!state.dashboardBulkMode }));
 
     if (state.showArchivedOnDashboard) {
         const archivedCard = renderProjectBucket('Archived', archivedProjects, { bulkMode: !!state.dashboardBulkMode });
         archivedCard.classList.add('mt-6');
-        content.appendChild(archivedCard);
+        deliveryContainer.appendChild(archivedCard);
     }
 
     // Today panel (secondary)
-    content.appendChild(renderTodayPanel());
+    deliveryContainer.appendChild(renderTodayPanel());
+    content.appendChild(deliveryContainer);
 
     wrap.appendChild(banner);
     wrap.appendChild(content);
