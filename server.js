@@ -413,6 +413,28 @@ function extractMeetingLink(event) {
   return '';
 }
 
+function getStringAtPath(obj, pathExpr) {
+  if (!obj || typeof obj !== 'object') return '';
+  const path = String(pathExpr || '').trim();
+  if (!path) return '';
+  const parts = path.split('.').map((p) => p.trim()).filter(Boolean);
+  let cur = obj;
+  for (const p of parts) {
+    if (!cur || typeof cur !== 'object') return '';
+    cur = cur[p];
+  }
+  return typeof cur === 'string' ? cur : cur === undefined || cur === null ? '' : String(cur);
+}
+
+function firstNonEmptyString(obj, pathExprs) {
+  const paths = Array.isArray(pathExprs) ? pathExprs : [];
+  for (const p of paths) {
+    const v = getStringAtPath(obj, p).trim();
+    if (v) return v;
+  }
+  return '';
+}
+
 function redact(obj) {
   // very small helper to avoid leaking tokens
   if (!obj || typeof obj !== 'object') return obj;
@@ -2526,12 +2548,30 @@ app.post('/api/integrations/quo/sms', async (req, res) => {
       return;
     }
 
-    const sid = String(req.body?.MessageSid || req.body?.SmsSid || '').trim();
-    const from = String(req.body?.From || '').trim();
-    const to = String(req.body?.To || '').trim();
-    const body = String(req.body?.Body || '').trim();
+    const payload = req.body && typeof req.body === 'object' ? req.body : {};
+    const sid = firstNonEmptyString(payload, ['MessageSid', 'SmsSid', 'sid', 'messageSid', 'message_id', 'id']);
+    const from = firstNonEmptyString(payload, ['From', 'from', 'sender', 'source', 'fromNumber', 'from_number', 'data.from', 'data.sender']);
+    const to = firstNonEmptyString(payload, ['To', 'to', 'recipient', 'destination', 'toNumber', 'to_number', 'data.to', 'data.recipient']);
+    const body = firstNonEmptyString(payload, ['Body', 'body', 'message', 'text', 'content', 'data.body', 'data.message', 'data.text']);
+
+    debugWebhookLog('Quo SMS payload', {
+      keys: Object.keys(payload || {}).slice(0, 40),
+      derived: {
+        sid: sid ? 'yes' : 'no',
+        from: from ? 'yes' : 'no',
+        to: to ? 'yes' : 'no',
+        bodyLen: body.length,
+      },
+      contentType: req.headers['content-type'],
+    });
 
     if (!body) {
+      debugWebhookLog('Quo SMS ignored (missing body)', {
+        sid: sid || '',
+        from: from || '',
+        to: to || '',
+        contentType: req.headers['content-type'],
+      });
       res.status(200).type('text/plain').send('OK');
       return;
     }
@@ -2594,13 +2634,25 @@ app.post('/api/integrations/quo/calls', async (req, res) => {
       return;
     }
 
-    const callSid = String(req.body?.CallSid || '').trim();
-    const from = String(req.body?.From || '').trim();
-    const to = String(req.body?.To || '').trim();
-    const callStatus = String(req.body?.CallStatus || req.body?.CallStatusCallbackEvent || '').trim();
+    const payload = req.body && typeof req.body === 'object' ? req.body : {};
+    const callSid = firstNonEmptyString(payload, ['CallSid', 'callSid', 'sid', 'call_id', 'id']);
+    const from = firstNonEmptyString(payload, ['From', 'from', 'caller', 'source', 'fromNumber', 'from_number', 'data.from', 'data.caller']);
+    const to = firstNonEmptyString(payload, ['To', 'to', 'callee', 'destination', 'toNumber', 'to_number', 'data.to', 'data.callee']);
+    const callStatus = firstNonEmptyString(payload, ['CallStatus', 'CallStatusCallbackEvent', 'status', 'event', 'callStatus', 'data.status', 'data.event']);
+
+    debugWebhookLog('Quo call payload', {
+      keys: Object.keys(payload || {}).slice(0, 40),
+      derived: {
+        callSid: callSid ? 'yes' : 'no',
+        from: from ? 'yes' : 'no',
+        to: to ? 'yes' : 'no',
+        callStatus: callStatus || '',
+      },
+      contentType: req.headers['content-type'],
+    });
 
     // Twilio final CallStatus values: queued, ringing, in-progress, completed, busy, failed, no-answer, canceled
-    const missed = ['busy', 'failed', 'no-answer', 'canceled'].includes(callStatus.toLowerCase());
+    const missed = ['busy', 'failed', 'no-answer', 'canceled', 'missed', 'no_answer', 'noanswer'].includes(callStatus.toLowerCase());
     if (!missed) {
       res.status(200).type('text/plain').send('OK');
       return;
