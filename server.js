@@ -14,6 +14,8 @@ const app = express();
 app.set('trust proxy', true);
 const PORT = process.env.PORT ? Number(process.env.PORT) : 3030;
 
+const DEBUG_WEBHOOKS = String(process.env.DEBUG_WEBHOOKS || '').trim().toLowerCase() === 'true';
+
 // Capture the raw request bytes so we can verify webhook signatures (Slack/Twilio/etc).
 app.use(express.json({
   limit: '256kb',
@@ -319,6 +321,16 @@ function verifyTwilioRequest({ req, authToken }) {
   const expected = computeTwilioSignature({ authToken: token, url: fullUrl, params: req.body || {} });
   if (!safeTimingEqual(expected, sig)) return { ok: false, error: 'Invalid Twilio signature (check BASE_URL / webhook URL)' };
   return { ok: true };
+}
+
+function debugWebhookLog(message, extra) {
+  if (!DEBUG_WEBHOOKS) return;
+  try {
+    const meta = extra && typeof extra === 'object' ? extra : {};
+    console.warn(`[webhook] ${message}`, meta);
+  } catch {
+    // ignore
+  }
 }
 
 function getMcpConfigFromSettings(settings) {
@@ -2461,6 +2473,17 @@ app.post('/api/integrations/quo/sms', async (req, res) => {
 
     const verified = verifyTwilioRequest({ req, authToken });
     if (!verified.ok) {
+      debugWebhookLog('Quo SMS rejected', {
+        reason: verified.error,
+        fullUrl: `${getBaseUrl(req)}${req.originalUrl || req.url || ''}`,
+        hasSignature: Boolean(req.headers['x-twilio-signature']),
+        contentType: req.headers['content-type'],
+        forwardedProto: req.headers['x-forwarded-proto'],
+        forwardedHost: req.headers['x-forwarded-host'],
+        host: req.get('host'),
+        method: req.method,
+        path: req.originalUrl || req.url,
+      });
       res.status(401).type('text/plain').send(verified.error || 'Unauthorized');
       return;
     }
@@ -2489,6 +2512,13 @@ app.post('/api/integrations/quo/sms', async (req, res) => {
       projectName: matched?.name || '',
     });
 
+    debugWebhookLog('Quo SMS accepted', {
+      sid: sid || '',
+      from: from || '',
+      to: to || '',
+      bodyLen: body.length,
+    });
+
     res.status(200).type('text/plain').send('OK');
   } catch (err) {
     res.status(200).type('text/plain').send('OK');
@@ -2506,6 +2536,17 @@ app.post('/api/integrations/quo/calls', async (req, res) => {
 
     const verified = verifyTwilioRequest({ req, authToken });
     if (!verified.ok) {
+      debugWebhookLog('Quo call rejected', {
+        reason: verified.error,
+        fullUrl: `${getBaseUrl(req)}${req.originalUrl || req.url || ''}`,
+        hasSignature: Boolean(req.headers['x-twilio-signature']),
+        contentType: req.headers['content-type'],
+        forwardedProto: req.headers['x-forwarded-proto'],
+        forwardedHost: req.headers['x-forwarded-host'],
+        host: req.get('host'),
+        method: req.method,
+        path: req.originalUrl || req.url,
+      });
       res.status(401).type('text/plain').send(verified.error || 'Unauthorized');
       return;
     }
@@ -2527,6 +2568,13 @@ app.post('/api/integrations/quo/calls', async (req, res) => {
       source: 'call',
       externalId: `call:${callSid || crypto.createHash('sha1').update(`${from}|${to}|${callStatus}|${Date.now()}`).digest('hex')}`,
       text,
+    });
+
+    debugWebhookLog('Quo call accepted', {
+      callSid: callSid || '',
+      from: from || '',
+      to: to || '',
+      callStatus: callStatus || '',
     });
 
     res.status(200).type('text/plain').send('OK');
