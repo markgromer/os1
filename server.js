@@ -505,6 +505,7 @@ const googlePkceState = new Map();
 const slackOAuthState = new Map();
 const slackUserCache = new Map();
 const slackChannelCache = new Map();
+const slackUsersListCache = new Map();
 
 function pruneSlackOAuthState() {
   const cutoff = Date.now() - 10 * 60 * 1000;
@@ -526,6 +527,9 @@ function pruneSlackCaches() {
   }
   for (const [k, v] of slackChannelCache.entries()) {
     if (!v || typeof v !== 'object' || typeof v.expiresAt !== 'number' || v.expiresAt <= now) slackChannelCache.delete(k);
+  }
+  for (const [k, v] of slackUsersListCache.entries()) {
+    if (!v || typeof v !== 'object' || typeof v.expiresAt !== 'number' || v.expiresAt <= now) slackUsersListCache.delete(k);
   }
 }
 
@@ -630,6 +634,95 @@ async function formatSlackInboxText({ token, channelId, userId, text }) {
   }
 
   return `${prefix.join(' ')}: ${cleanText}`;
+}
+
+function normalizeSlackLookupText(value) {
+  return String(value || '')
+    .trim()
+    .replace(/^@+/, '')
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
+}
+
+function isLikelySlackUserId(value) {
+  const s = String(value || '').trim();
+  return /^[UW][A-Z0-9]{6,}$/i.test(s);
+}
+
+function slackUserAliases(user) {
+  const u = user && typeof user === 'object' ? user : {};
+  const p = u.profile && typeof u.profile === 'object' ? u.profile : {};
+  const aliases = new Set();
+  const push = (v) => {
+    const n = normalizeSlackLookupText(v);
+    if (n) aliases.add(n);
+  };
+  push(u.id);
+  push(u.name);
+  push(p.display_name);
+  push(p.real_name);
+  push(p.real_name_normalized);
+  push(p.display_name_normalized);
+  push(p.email);
+  return aliases;
+}
+
+async function slackListWorkspaceUsers({ token }) {
+  const t = String(token || '').trim();
+  if (!t) return [];
+
+  pruneSlackCaches();
+  const cacheKey = `users:${t.slice(-12)}`;
+  const cached = slackUsersListCache.get(cacheKey);
+  if (cached && Array.isArray(cached.users)) return cached.users;
+
+  let cursor = '';
+  const all = [];
+  for (let page = 0; page < 20; page += 1) {
+    const params = { limit: 200 };
+    if (cursor) params.cursor = cursor;
+    const data = await slackApiGet({ token: t, method: 'users.list', params });
+    const members = Array.isArray(data?.members) ? data.members : [];
+    all.push(...members);
+    const next = typeof data?.response_metadata?.next_cursor === 'string' ? data.response_metadata.next_cursor.trim() : '';
+    if (!next) break;
+    cursor = next;
+  }
+
+  slackUsersListCache.set(cacheKey, { users: all, expiresAt: Date.now() + 5 * 60 * 1000 });
+  return all;
+}
+
+function matchSlackUserForTeamMember({ member, users }) {
+  const m = member && typeof member === 'object' ? member : {};
+  const list = Array.isArray(users) ? users : [];
+
+  const explicit = String(m.slackUserId || '').trim();
+  if (explicit && isLikelySlackUserId(explicit)) {
+    const direct = list.find((u) => String(u?.id || '').trim().toLowerCase() === explicit.toLowerCase());
+    return {
+      user: direct || { id: explicit, name: explicit, profile: {} },
+      source: 'explicit-id',
+    };
+  }
+
+  const explicitNorm = normalizeSlackLookupText(explicit);
+  if (explicitNorm) {
+    for (const u of list) {
+      const aliases = slackUserAliases(u);
+      if (aliases.has(explicitNorm)) return { user: u, source: 'explicit-alias' };
+    }
+  }
+
+  const byName = normalizeSlackLookupText(m.name);
+  if (byName) {
+    for (const u of list) {
+      const aliases = slackUserAliases(u);
+      if (aliases.has(byName)) return { user: u, source: 'name' };
+    }
+  }
+
+  return { user: null, source: '' };
 }
 
 function base64Url(buf) {
@@ -1014,6 +1107,7 @@ function normalizeTeamMember(input) {
   const wipLimitRaw = Number(m.wipLimit);
   const wipLimit = Number.isFinite(wipLimitRaw) ? Math.max(0, Math.min(99, Math.floor(wipLimitRaw))) : 0;
   const avatar = typeof m.avatar === 'string' ? m.avatar.trim().slice(0, 3) : '';
+  const slackUserId = typeof m.slackUserId === 'string' ? m.slackUserId.trim().slice(0, 120) : '';
 
   return {
     id: typeof m.id === 'string' && m.id.trim() ? m.id.trim() : makeId(),
@@ -1023,6 +1117,7 @@ function normalizeTeamMember(input) {
     abilities,
     wipLimit,
     avatar,
+    slackUserId,
   };
 }
 
@@ -1162,6 +1257,74 @@ app.delete('/api/team/:id', async (req, res) => {
   });
 
   await writeLock;
+});
+
+app.get('/api/integrations/slack/team-presence', async (req, res) => {
+  try {
+    const store = await readStore();
+    const members = (Array.isArray(store.team) ? store.team : []).filter((m) => String(m?.id || '') !== 'ai');
+    const { botToken } = await getSlackOAuthConfig();
+    if (!botToken) {
+      res.json({ ok: true, connected: false, members: [] });
+      return;
+    }
+
+    let users = [];
+    let directoryError = '';
+    try {
+      users = await slackListWorkspaceUsers({ token: botToken });
+    } catch (err) {
+      directoryError = err?.message || 'Failed to load Slack users';
+    }
+
+    const linked = members.map((member) => {
+      const match = matchSlackUserForTeamMember({ member, users });
+      const user = match.user;
+      const profile = user && typeof user.profile === 'object' ? user.profile : {};
+      const slackUserId = String(user?.id || '').trim();
+      const slackLabel = String(profile?.display_name || profile?.real_name || user?.name || slackUserId || '').trim();
+      return {
+        memberId: String(member?.id || '').trim(),
+        memberName: String(member?.name || '').trim(),
+        slackUserId,
+        slackLabel,
+        linked: Boolean(slackUserId),
+        matchSource: match.source,
+      };
+    });
+
+    const uniqueIds = [...new Set(linked.map((x) => x.slackUserId).filter(Boolean))];
+    const presenceById = new Map();
+    await Promise.all(uniqueIds.map(async (id) => {
+      try {
+        const data = await slackApiGet({ token: botToken, method: 'users.getPresence', params: { user: id } });
+        const presence = String(data?.presence || '').trim().toLowerCase();
+        const autoAway = Boolean(data?.auto_away);
+        const online = presence === 'active' && !autoAway;
+        presenceById.set(id, { online, presence, autoAway });
+      } catch {
+        presenceById.set(id, { online: null, presence: '' });
+      }
+    }));
+
+    const out = linked.map((entry) => {
+      const p = entry.slackUserId ? presenceById.get(entry.slackUserId) : null;
+      return {
+        ...entry,
+        online: p && Object.prototype.hasOwnProperty.call(p, 'online') ? p.online : null,
+        presence: p?.presence || '',
+      };
+    });
+
+    res.json({
+      ok: true,
+      connected: true,
+      members: out,
+      error: directoryError,
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message || 'Failed to load Slack team presence' });
+  }
 });
 
 async function writeStore(nextStore) {

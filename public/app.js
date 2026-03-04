@@ -64,6 +64,11 @@ const state = {
         events: [],
     },
 
+    teamPresenceByMemberId: {},
+    teamPresenceFetchedAt: 0,
+    teamPresenceLoading: false,
+    teamPresenceError: '',
+
     // Per-project transcript drafts (paste -> analyze -> apply)
     projectTranscriptDraftById: {},
 
@@ -199,6 +204,40 @@ function normalizeCsvList(text) {
 function getHumanTeamMembers() {
     const list = Array.isArray(state.team) ? state.team : [];
     return list.filter((m) => safeText(m?.id) && safeText(m?.id) !== 'ai' && safeText(m?.name));
+}
+
+async function refreshSlackTeamPresence({ force = false } = {}) {
+    if (!state.settings?.slackInstalled) {
+        state.teamPresenceByMemberId = {};
+        state.teamPresenceError = '';
+        state.teamPresenceLoading = false;
+        state.teamPresenceFetchedAt = Date.now();
+        return;
+    }
+
+    const age = Date.now() - Number(state.teamPresenceFetchedAt || 0);
+    if (!force && age < 60_000) return;
+    if (state.teamPresenceLoading) return;
+
+    state.teamPresenceLoading = true;
+    try {
+        const data = await apiJson('/api/integrations/slack/team-presence');
+        const members = Array.isArray(data?.members) ? data.members : [];
+        const map = {};
+        for (const member of members) {
+            const id = safeText(member?.memberId).trim();
+            if (!id) continue;
+            map[id] = member;
+        }
+        state.teamPresenceByMemberId = map;
+        state.teamPresenceError = safeText(data?.error).trim();
+        state.teamPresenceFetchedAt = Date.now();
+    } catch (e) {
+        state.teamPresenceError = e?.message || 'Failed to load Slack presence';
+        state.teamPresenceFetchedAt = Date.now();
+    } finally {
+        state.teamPresenceLoading = false;
+    }
 }
 
 function isArchivedProject(project) {
@@ -945,6 +984,7 @@ async function openSettings() {
     state.currentView = 'settings';
     state.currentProjectId = null;
     await fetchSettings();
+    await refreshSlackTeamPresence({ force: true });
     renderNav();
     renderMain();
     renderChat();
@@ -1500,6 +1540,7 @@ function renderSettings(container) {
                 <input id="team-name" type="text" placeholder="Name" value="${escapeHtml(safeText(editing?.name))}" class="w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-sm" />
                 <input id="team-title" type="text" placeholder="Job title" value="${escapeHtml(safeText(editing?.title))}" class="w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-sm" />
                 <input id="team-avatar" type="text" placeholder="Avatar (optional, e.g. MK)" value="${escapeHtml(safeText(editing?.avatar))}" class="w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-sm" />
+                <input id="team-slack-user" type="text" placeholder="Slack link (U123..., @username, or email)" value="${escapeHtml(safeText(editing?.slackUserId))}" class="w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-sm" />
                 <input id="team-wip" type="number" min="0" max="99" placeholder="WIP limit (0 = no limit)" value="${editing && Number.isFinite(Number(editing.wipLimit)) ? Number(editing.wipLimit) : 0}" class="w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-sm" />
                 <input id="team-skills" type="text" placeholder="Skills (comma separated)" value="${escapeHtml((Array.isArray(editing?.skills)?editing.skills:[]).join(', '))}" class="w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-sm" />
                 <input id="team-abilities" type="text" placeholder="Abilities (comma separated)" value="${escapeHtml((Array.isArray(editing?.abilities)?editing.abilities:[]).join(', '))}" class="w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-sm" />
@@ -1507,12 +1548,15 @@ function renderSettings(container) {
                     <button id="btn-team-save" class="px-3 py-2 rounded bg-blue-600 text-white text-xs hover:bg-blue-500">${editing ? 'Save changes' : 'Add member'}</button>
                     <button id="btn-team-cancel" class="px-3 py-2 rounded bg-ops-bg border border-ops-border text-ops-light text-xs hover:text-white">Cancel</button>
                 </div>
+                <div class="text-[11px] text-ops-light">Set Slack link to map presence by ID, @username, or email.</div>
                 <div id="team-error" class="text-xs text-red-400 hidden"></div>
             </div>
             <div class="space-y-2">
                 <div class="flex items-center justify-between">
                     <div class="text-xs text-ops-light">Members (${humans.length})</div>
                 </div>
+                ${state.teamPresenceLoading ? `<div class="text-[11px] text-ops-light">Loading Slack presence…</div>` : ''}
+                ${state.teamPresenceError ? `<div class="text-[11px] text-amber-300">Slack presence: ${escapeHtml(state.teamPresenceError)}</div>` : ''}
                 <div class="space-y-2">
                     ${humans.length ? humans.map((m) => {
                         const nm = safeText(m.name);
@@ -1520,12 +1564,18 @@ function renderSettings(container) {
                         const w = Number(m.wipLimit) || 0;
                         const sk = Array.isArray(m.skills) ? m.skills.slice(0, 8).join(', ') : '';
                         const ab = Array.isArray(m.abilities) ? m.abilities.slice(0, 8).join(', ') : '';
+                        const p = (state.teamPresenceByMemberId && typeof state.teamPresenceByMemberId === 'object') ? state.teamPresenceByMemberId[safeText(m.id)] : null;
+                        const online = p && Object.prototype.hasOwnProperty.call(p, 'online') ? p.online : null;
+                        const slackLabel = safeText(p?.slackLabel) || safeText(m?.slackUserId);
+                        const statusClass = online === true ? 'bg-emerald-500' : (online === false ? 'bg-zinc-500' : 'bg-amber-400');
+                        const statusText = online === true ? 'Online' : (online === false ? 'Offline' : 'Unknown');
                         return `
                             <div class="border border-ops-border rounded-lg bg-ops-bg/30 p-3">
                                 <div class="flex items-start justify-between gap-2">
                                     <div class="min-w-0">
                                         <div class="text-white text-sm font-semibold truncate">${escapeHtml(nm)}</div>
                                         <div class="text-[11px] text-ops-light mt-0.5">${escapeHtml(tt || '—')}${w ? ` • WIP ${w}` : ''}</div>
+                                        <div class="text-[11px] text-ops-light mt-1 flex items-center gap-1.5"><span class="inline-block w-2 h-2 rounded-full ${statusClass}"></span><span>Slack ${statusText}${slackLabel ? ` • ${escapeHtml(slackLabel)}` : ''}</span></div>
                                         ${sk ? `<div class=\"text-[11px] text-ops-light mt-1\"><span class=\"font-mono\">skills</span>: ${escapeHtml(sk)}</div>` : ''}
                                         ${ab ? `<div class=\"text-[11px] text-ops-light mt-1\"><span class=\"font-mono\">abilities</span>: ${escapeHtml(ab)}</div>` : ''}
                                     </div>
@@ -1596,6 +1646,7 @@ function renderSettings(container) {
                 const name = safeText(teamBody.querySelector('#team-name')?.value).trim();
                 const title = safeText(teamBody.querySelector('#team-title')?.value).trim();
                 const avatar = safeText(teamBody.querySelector('#team-avatar')?.value).trim();
+                const slackUserId = safeText(teamBody.querySelector('#team-slack-user')?.value).trim();
                 const wipLimit = Number(teamBody.querySelector('#team-wip')?.value);
                 const skills = normalizeCsvList(teamBody.querySelector('#team-skills')?.value);
                 const abilities = normalizeCsvList(teamBody.querySelector('#team-abilities')?.value);
@@ -1605,19 +1656,20 @@ function renderSettings(container) {
                     const data = await withRevisionRetry(() => apiJson(`/api/team/${encodeURIComponent(editing.id)}`, {
                         method: 'PUT',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ baseRevision: state.revision, patch: { name, title, avatar, wipLimit, skills, abilities } })
+                        body: JSON.stringify({ baseRevision: state.revision, patch: { name, title, avatar, slackUserId, wipLimit, skills, abilities } })
                     }));
                     if (data?.store) applyStore(data.store);
                 } else {
                     const data = await withRevisionRetry(() => apiJson('/api/team', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ baseRevision: state.revision, member: { name, title, avatar, wipLimit, skills, abilities } })
+                        body: JSON.stringify({ baseRevision: state.revision, member: { name, title, avatar, slackUserId, wipLimit, skills, abilities } })
                     }));
                     if (data?.store) applyStore(data.store);
                 }
 
                 await saveSettingsPatch({ teamEditingId: '' });
+                await refreshSlackTeamPresence({ force: true });
                 renderNav();
                 renderSettings(container);
             } catch (e) {
