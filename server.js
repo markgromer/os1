@@ -323,6 +323,35 @@ function verifyTwilioRequest({ req, authToken }) {
   return { ok: true };
 }
 
+function extractWebhookSharedSecret(req) {
+  const auth = typeof req.headers.authorization === 'string' ? req.headers.authorization.trim() : '';
+  if (auth.toLowerCase().startsWith('bearer ')) return auth.slice(7).trim();
+  const headerToken = typeof req.headers['x-quo-token'] === 'string' ? req.headers['x-quo-token'].trim() : '';
+  if (headerToken) return headerToken;
+  const queryToken = typeof req.query?.token === 'string' ? req.query.token.trim() : '';
+  return queryToken;
+}
+
+function verifyQuoWebhookRequest({ req, twilioAuthToken, webhookToken }) {
+  const hasTwilioSigHeader = typeof req.headers['x-twilio-signature'] === 'string' && req.headers['x-twilio-signature'].trim();
+  if (hasTwilioSigHeader) {
+    return verifyTwilioRequest({ req, authToken: twilioAuthToken });
+  }
+
+  const secret = typeof webhookToken === 'string' ? webhookToken.trim() : '';
+  if (!secret) {
+    return {
+      ok: false,
+      error: 'Missing X-Twilio-Signature header (and QUO_WEBHOOK_TOKEN not configured)',
+    };
+  }
+
+  const presented = extractWebhookSharedSecret(req);
+  if (!presented) return { ok: false, error: 'Missing webhook token (set Authorization: Bearer …, X-Quo-Token, or ?token=...)' };
+  if (!safeTimingEqual(presented, secret)) return { ok: false, error: 'Invalid webhook token' };
+  return { ok: true };
+}
+
 function debugWebhookLog(message, extra) {
   if (!DEBUG_WEBHOOKS) return;
   try {
@@ -2463,7 +2492,11 @@ app.post('/api/integrations/slack/events', async (req, res) => {
 
 // Integrations: Quo (Twilio) SMS webhook -> Inbox
 // Configure your provider to send incoming message webhooks to: POST /api/integrations/quo/sms
-// Requires: TWILIO_AUTH_TOKEN (env) or settings.quoAuthToken
+// Twilio-compatible providers: set TWILIO_AUTH_TOKEN (env) or settings.quoAuthToken and ensure X-Twilio-Signature is sent.
+// Non-Twilio providers: set QUO_WEBHOOK_TOKEN (env) and configure the sender to include it as:
+// - Authorization: Bearer <token>, OR
+// - X-Quo-Token: <token>, OR
+// - add ?token=<token> to the webhook URL.
 app.post('/api/integrations/quo/sms', async (req, res) => {
   try {
     const settings = await readSettings();
@@ -2471,12 +2504,17 @@ app.post('/api/integrations/quo/sms', async (req, res) => {
       ? process.env.TWILIO_AUTH_TOKEN.trim()
       : (typeof settings.quoAuthToken === 'string' ? settings.quoAuthToken.trim() : '');
 
-    const verified = verifyTwilioRequest({ req, authToken });
+    const webhookToken = typeof process.env.QUO_WEBHOOK_TOKEN === 'string' ? process.env.QUO_WEBHOOK_TOKEN.trim() : '';
+
+    const verified = verifyQuoWebhookRequest({ req, twilioAuthToken: authToken, webhookToken });
     if (!verified.ok) {
       debugWebhookLog('Quo SMS rejected', {
         reason: verified.error,
         fullUrl: `${getBaseUrl(req)}${req.originalUrl || req.url || ''}`,
         hasSignature: Boolean(req.headers['x-twilio-signature']),
+        hasBearer: typeof req.headers.authorization === 'string' && req.headers.authorization.toLowerCase().startsWith('bearer '),
+        hasQuoTokenHeader: Boolean(req.headers['x-quo-token']),
+        hasTokenQuery: Boolean(req.query?.token),
         contentType: req.headers['content-type'],
         forwardedProto: req.headers['x-forwarded-proto'],
         forwardedHost: req.headers['x-forwarded-host'],
@@ -2534,12 +2572,17 @@ app.post('/api/integrations/quo/calls', async (req, res) => {
       ? process.env.TWILIO_AUTH_TOKEN.trim()
       : (typeof settings.quoAuthToken === 'string' ? settings.quoAuthToken.trim() : '');
 
-    const verified = verifyTwilioRequest({ req, authToken });
+    const webhookToken = typeof process.env.QUO_WEBHOOK_TOKEN === 'string' ? process.env.QUO_WEBHOOK_TOKEN.trim() : '';
+
+    const verified = verifyQuoWebhookRequest({ req, twilioAuthToken: authToken, webhookToken });
     if (!verified.ok) {
       debugWebhookLog('Quo call rejected', {
         reason: verified.error,
         fullUrl: `${getBaseUrl(req)}${req.originalUrl || req.url || ''}`,
         hasSignature: Boolean(req.headers['x-twilio-signature']),
+        hasBearer: typeof req.headers.authorization === 'string' && req.headers.authorization.toLowerCase().startsWith('bearer '),
+        hasQuoTokenHeader: Boolean(req.headers['x-quo-token']),
+        hasTokenQuery: Boolean(req.query?.token),
         contentType: req.headers['content-type'],
         forwardedProto: req.headers['x-forwarded-proto'],
         forwardedHost: req.headers['x-forwarded-host'],
