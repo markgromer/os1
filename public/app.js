@@ -1074,6 +1074,30 @@ function inboxSourceBadge(source) {
     return `<span class="px-2 py-0.5 rounded border border-zinc-800 bg-zinc-950/40 text-[10px] font-mono text-zinc-300">${escapeHtml(s)}</span>`;
 }
 
+function normalizeInboxSourceKey(source) {
+    const s = String(source || '').trim().toLowerCase();
+    if (!s) return 'other';
+    if (s.includes('fireflies')) return 'fireflies';
+    if (s.includes('email') || s.includes('gmail') || s.includes('outlook')) return 'email';
+    if (s.includes('sms') || s.includes('quo') || s.includes('twilio') || s.includes('text')) return 'sms';
+    if (s.includes('call') || s.includes('voice')) return 'call';
+    if (s.includes('slack')) return 'slack';
+    return 'other';
+}
+
+function inboxSourceMeta(sourceKey) {
+    const key = safeText(sourceKey).trim().toLowerCase();
+    const map = {
+        fireflies: { label: 'Fireflies', icon: 'fa-microphone-lines', tone: 'text-violet-300' },
+        email: { label: 'Email', icon: 'fa-envelope', tone: 'text-blue-300' },
+        sms: { label: 'SMS', icon: 'fa-comment-sms', tone: 'text-emerald-300' },
+        call: { label: 'Calls', icon: 'fa-phone', tone: 'text-amber-300' },
+        slack: { label: 'Slack', icon: 'fa-slack', tone: 'text-indigo-300' },
+        other: { label: 'Other', icon: 'fa-inbox', tone: 'text-zinc-300' },
+    };
+    return map[key] || map.other;
+}
+
 async function createInboxItem(text) {
     const cleanText = safeText(text).trim();
     if (!cleanText) throw new Error('Inbox text is required');
@@ -2454,38 +2478,67 @@ function renderDashboard(container) {
         .slice()
         .sort((a, b) => String(b?.createdAt || '').localeCompare(String(a?.createdAt || '')));
 
+    const unreadGroupsMap = new Map();
+    for (const item of unreadItems) {
+        const key = normalizeInboxSourceKey(item?.source);
+        if (!unreadGroupsMap.has(key)) unreadGroupsMap.set(key, []);
+        unreadGroupsMap.get(key).push(item);
+    }
+    const unreadGroups = Array.from(unreadGroupsMap.entries())
+        .map(([key, items]) => ({ key, items }))
+        .sort((a, b) => b.items.length - a.items.length);
+
     const unreadPanel = document.createElement('div');
     unreadPanel.className = 'mb-6 border border-zinc-800 rounded-xl bg-zinc-900/30 p-4';
     unreadPanel.innerHTML = `
         <div class="flex items-center justify-between gap-3">
             <div>
-                <div class="text-white text-sm font-semibold">Unreads</div>
-                <div class="text-[11px] text-zinc-500 mt-0.5">${unreadItems.length} new inbox item${unreadItems.length === 1 ? '' : 's'}</div>
+                <div class="text-white text-sm font-semibold">Inbox Radar</div>
+                <div class="text-[11px] text-zinc-500 mt-0.5">${unreadItems.length} new inbox item${unreadItems.length === 1 ? '' : 's'} • hover cards for details</div>
             </div>
             <button id="btn-open-inbox" class="px-3 py-1.5 rounded-lg border border-zinc-700 text-xs font-mono text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Open Inbox</button>
         </div>
-        <div class="mt-3 ${unreadItems.length ? '' : 'hidden'}">
-            <div class="space-y-2 max-h-72 overflow-y-auto pr-1">
-                ${unreadItems.map((item) => {
+
+        <div class="mt-3 ${unreadItems.length ? '' : 'hidden'} grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+            ${unreadGroups.map((group) => {
+                const meta = inboxSourceMeta(group.key);
+                const newest = group.items[0];
+                const newestTime = safeText(newest?.createdAt) ? formatTimeFromIso(newest.createdAt) : '';
+                const previewButtons = group.items.slice(0, 4).map((item) => {
                     const id = safeText(item?.id);
-                    const src = inboxSourceBadge(item?.source);
-                    const createdAt = safeText(item?.createdAt);
-                    const time = createdAt ? formatTimeFromIso(createdAt) : '';
+                    const time = safeText(item?.createdAt) ? formatTimeFromIso(item.createdAt) : '';
                     const text = safeText(item?.text).replace(/\s+/g, ' ').trim();
                     return `
-                        <button data-dash-open-inbox="${escapeHtml(id)}" class="w-full text-left border border-zinc-800 rounded-lg bg-zinc-950/20 px-3 py-2 hover:bg-zinc-800/40 transition-colors">
+                        <button data-dash-open-inbox="${escapeHtml(id)}" class="w-full text-left border border-zinc-800 rounded-md bg-zinc-950/20 px-2.5 py-1.5 hover:bg-zinc-800/40 transition-colors">
                             <div class="flex items-center justify-between gap-2">
-                                <div class="flex items-center gap-2 min-w-0">
-                                    ${src}
-                                    <span class="text-[11px] text-zinc-500 font-mono">${escapeHtml(time)}</span>
-                                </div>
+                                <span class="text-[10px] font-mono text-zinc-500">${escapeHtml(time || '—')}</span>
                                 ${inboxStatusBadge('New')}
                             </div>
-                            <div class="mt-1 text-sm text-zinc-200 truncate" title="${escapeHtml(text)}">${escapeHtml(text || '(empty)')}</div>
+                            <div class="mt-0.5 text-[11px] text-zinc-200 truncate" title="${escapeHtml(text)}">${escapeHtml(text || '(empty)')}</div>
                         </button>
                     `;
-                }).join('')}
-            </div>
+                }).join('');
+
+                return `
+                    <div class="group border border-zinc-800 rounded-lg bg-zinc-950/20 px-3 py-2 transition-colors hover:bg-zinc-900/40">
+                        <div class="flex items-center justify-between gap-3">
+                            <div class="min-w-0">
+                                <div class="text-[10px] font-mono uppercase tracking-widest text-zinc-500">Source</div>
+                                <div class="flex items-center gap-2 mt-0.5">
+                                    <i class="fa-solid ${meta.icon} ${meta.tone}"></i>
+                                    <div class="text-sm text-zinc-100 truncate">${escapeHtml(meta.label)}</div>
+                                </div>
+                            </div>
+                            <div class="shrink-0 px-2 py-1 rounded border border-zinc-700 bg-zinc-900/40 text-xs font-mono text-zinc-200">${group.items.length}</div>
+                        </div>
+                        <div class="mt-1 text-[10px] font-mono text-zinc-500">Latest: ${escapeHtml(newestTime || '—')}</div>
+                        <div class="mt-2 max-h-0 opacity-0 overflow-hidden transition-all duration-200 ease-out group-hover:max-h-64 group-hover:opacity-100 space-y-1.5">
+                            ${previewButtons}
+                            <button data-dash-open-inbox="group-${escapeHtml(group.key)}" class="w-full text-center px-2 py-1 rounded border border-zinc-800 text-[10px] font-mono text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors">Open full Inbox</button>
+                        </div>
+                    </div>
+                `;
+            }).join('')}
         </div>
         <div class="mt-3 ${unreadItems.length ? 'hidden' : ''} text-xs text-zinc-500">No new inbox items.</div>
     `;
