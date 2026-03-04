@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Task Tracker</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+
+  <!-- Sidebar Navigation -->
+  <nav id="sidebar">
+    <div class="brand">
+      <div class="brand__icon">⚡</div>
+      <div class="brand__text">Task Tracker</div>
+    </div>
+
+    <div class="nav-section">
+      <div class="nav-label">Menu</div>
+      <button class="nav-item active" data-target="dashboard">
+        <span class="icon">🏠</span> Dashboard
+      </button>
+      <button class="nav-item" data-target="settings">
+        <span class="icon">⚙️</span> Settings
+      </button>
+    </div>
+
+    <div class="nav-section">
+      <div class="nav-label">Filters</div>
+      <button class="nav-item" data-filter="today">Today</button>
+      <button class="nav-item" data-filter="week">This Week</button>
+      <button class="nav-item" data-filter="all">All Projects</button>
+    </div>
+
+    <div class="nav-footer">
+      <div id="aiStatus" class="status-indicator off">
+        <span class="dot"></span>
+        <span class="text">AI: Checking...</span>
+      </div>
+      <button id="addProjectBtn" class="btn btn--primary full-width">+ New Project</button>
+    </div>
+  </nav>
+
+  <!-- Main Content Area -->
+  <main id="main">
+    <!-- Views will be injected here -->
+    <div id="viewContainer"></div>
+  </main>
+
+  <!-- Modal for Adding Project -->
+  <dialog id="addProjectDialog">
+    <form id="addProjectForm" method="dialog">
+      <h2>New Project</h2>
+      <div class="form-group">
+        <label>Project Name</label>
+        <input type="text" name="projectName" required placeholder="e.g. Website Redesign">
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Type</label>
+          <select name="projectType">
+            <option>Build</option>
+            <option>Rebuild</option>
+            <option>Revision</option>
+            <option>Workflow</option>
+            <option>Cleanup</option>
+            <option selected>Other</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Due Date</label>
+          <input type="date" name="projectDue">
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Status</label>
+        <select name="projectStatus">
+          <option selected>Active</option>
+          <option>On Hold</option>
+          <option>Done</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Account Manager</label>
+          <input type="text" name="amName" placeholder="Name">
+        </div>
+        <div class="form-group">
+          <label>AM Email</label>
+          <input type="email" name="amEmail" placeholder="email@example.com">
+        </div>
+      </div>
+      <div class="dialog-actions">
+        <button type="button" class="btn btn--ghost" id="cancelAddProject">Cancel</button>
+        <button type="submit" class="btn btn--primary">Create Project</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="app.js"></script>
+</body>
+</html>

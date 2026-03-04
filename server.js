@@ -1,0 +1,4638 @@
+import crypto from 'node:crypto';
+import fs from 'node:fs/promises';
+import { exec } from 'node:child_process';
+import os from 'node:os';
+import path from 'node:path';
+
+import express from 'express';
+import { google } from 'googleapis';
+
+import { mcpCallTool, mcpListTools } from './mcpClient.js';
+
+const app = express();
+// When running behind SiteGround / reverse proxies, trust forwarded headers.
+app.set('trust proxy', true);
+const PORT = process.env.PORT ? Number(process.env.PORT) : 3030;
+
+// Capture the raw request bytes so we can verify webhook signatures (Slack/Twilio/etc).
+app.use(express.json({
+  limit: '256kb',
+  verify: (req, res, buf) => {
+    // Buffer may be empty for requests with no body.
+    req.rawBody = buf;
+  },
+}));
+
+app.use(express.urlencoded({
+  extended: false,
+  verify: (req, res, buf) => {
+    req.rawBody = buf;
+  },
+}));
+
+function resolveDirFromEnv(envValue) {
+  const raw = typeof envValue === 'string' ? envValue.trim() : '';
+  if (!raw) return '';
+  try {
+    return path.isAbsolute(raw) ? raw : path.resolve(process.cwd(), raw);
+  } catch {
+    return '';
+  }
+}
+
+const DATA_DIR = resolveDirFromEnv(process.env.TASK_TRACKER_DATA_DIR || process.env.DATA_DIR) || path.join(process.cwd(), 'data');
+const DATA_FILE = path.join(DATA_DIR, 'tasks.json');
+
+const APP_NAME = 'Task Tracker';
+
+function getDefaultSettingsDir() {
+  const home = os.homedir();
+  if (process.platform === 'win32') {
+    const appData = typeof process.env.APPDATA === 'string' ? process.env.APPDATA.trim() : '';
+    return path.join(appData || path.join(home, 'AppData', 'Roaming'), APP_NAME);
+  }
+  if (process.platform === 'darwin') {
+    return path.join(home, 'Library', 'Application Support', APP_NAME);
+  }
+  const xdg = typeof process.env.XDG_CONFIG_HOME === 'string' ? process.env.XDG_CONFIG_HOME.trim() : '';
+  return path.join(xdg || path.join(home, '.config'), 'task-tracker');
+}
+
+const SETTINGS_DIR = resolveDirFromEnv(process.env.TASK_TRACKER_SETTINGS_DIR || process.env.SETTINGS_DIR) || getDefaultSettingsDir();
+const SETTINGS_FILE = resolveDirFromEnv(process.env.TASK_TRACKER_SETTINGS_FILE || process.env.SETTINGS_FILE) || path.join(SETTINGS_DIR, 'settings.json');
+
+const ADMIN_TOKEN = typeof process.env.ADMIN_TOKEN === 'string' ? process.env.ADMIN_TOKEN.trim() : '';
+
+function isPublicApiRoute(req) {
+  const method = String(req.method || '').toUpperCase();
+  const p = String(req.path || '');
+  if (method === 'POST' && p === '/api/integrations/slack/events') return true;
+  if (method === 'POST' && p === '/api/integrations/quo/sms') return true;
+  if (method === 'POST' && p === '/api/integrations/quo/calls') return true;
+  if (method === 'POST' && p === '/api/integrations/fireflies/ingest') return true;
+  if (method === 'GET' && p === '/api/integrations/slack/oauth/callback') return true;
+  if (method === 'GET' && p === '/api/integrations/google/callback') return true;
+  return false;
+}
+
+function extractBearerToken(req) {
+  const auth = typeof req.headers.authorization === 'string' ? req.headers.authorization.trim() : '';
+  if (auth.toLowerCase().startsWith('bearer ')) return auth.slice(7).trim();
+  const headerToken = typeof req.headers['x-admin-token'] === 'string' ? req.headers['x-admin-token'].trim() : '';
+  if (headerToken) return headerToken;
+  const queryToken = typeof req.query?.token === 'string' ? req.query.token.trim() : '';
+  return queryToken;
+}
+
+// Optional auth for internet-hosting. If ADMIN_TOKEN is set, all /api/* routes require it
+// except inbound webhooks + OAuth callbacks.
+app.use((req, res, next) => {
+  try {
+    if (!ADMIN_TOKEN) return next();
+    const p = String(req.path || '');
+    if (!p.startsWith('/api/')) return next();
+    if (isPublicApiRoute(req)) return next();
+
+    const token = extractBearerToken(req);
+    if (token && safeTimingEqual(token, ADMIN_TOKEN)) return next();
+    res.status(401).json({ error: 'Unauthorized' });
+  } catch {
+    res.status(401).json({ error: 'Unauthorized' });
+  }
+});
+
+/**
+ * File format:
+ * {
+ *   revision: number,
+ *   updatedAt: string,
+ *   projects?: Array<Project>,
+ *   tasks: Array<Task>
+ *   projectNotes?: Record<string, { notes: string, updatedAt: string } | string>, // legacy
+ *   projectScratchpads?: Record<projectId, { text: string, updatedAt: string }>,
+ *   projectNoteEntries?: Record<projectId, Array<NoteEntry>>,
+ *   projectChats?: Record<projectId, { messages: Array<ChatMessage>, updatedAt: string }>,
+ *   projectCommunications?: Record<projectId, Array<Communication>>, // { id, source: 'email'|'quo'|'other', date, from, to, subject, body }
+ *   team?: Array<TeamMember>
+ * }
+ */
+const EMPTY_STORE = {
+  revision: 1,
+  updatedAt: new Date(0).toISOString(),
+  projects: [],
+  tasks: [],
+  team: [],
+  projectNotes: {},
+  projectScratchpads: {},
+  projectNoteEntries: {},
+  projectChats: {},
+  projectCommunications: {},
+  inboxItems: [],
+  projectTranscriptUndo: {},
+};
+
+let writeLock = Promise.resolve();
+
+async function readSettings() {
+  try {
+    await fs.mkdir(SETTINGS_DIR, { recursive: true });
+    const raw = await fs.readFile(SETTINGS_FILE, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return {};
+    return parsed;
+  } catch {
+    return {};
+  }
+}
+
+async function writeSettings(next) {
+  await fs.mkdir(SETTINGS_DIR, { recursive: true });
+  const tmpFile = `${SETTINGS_FILE}.tmp-${crypto.randomBytes(6).toString('hex')}`;
+  await fs.writeFile(tmpFile, JSON.stringify(next, null, 2) + '\n', 'utf8');
+  await fs.rename(tmpFile, SETTINGS_FILE);
+}
+
+async function getAiConfig() {
+  const saved = await readSettings();
+  const envKey = typeof process.env.OPENAI_API_KEY === 'string' ? process.env.OPENAI_API_KEY.trim() : '';
+  const savedKey = typeof saved.openaiApiKey === 'string' ? saved.openaiApiKey.trim() : '';
+  const apiKey = envKey || savedKey;
+
+  const envModel = typeof process.env.OPENAI_MODEL === 'string' ? process.env.OPENAI_MODEL.trim() : '';
+  const savedModel = typeof saved.openaiModel === 'string' ? saved.openaiModel.trim() : '';
+  const model = envModel || savedModel || 'gpt-4o-mini';
+
+  const source = envKey ? 'env' : savedKey ? 'saved' : 'none';
+  const last4 = apiKey && apiKey.length >= 4 ? apiKey.slice(-4) : '';
+  const keyHint = last4 ? `••••${last4}` : '';
+  const settingsUpdatedAt = typeof saved.updatedAt === 'string' ? saved.updatedAt : '';
+
+  return {
+    apiKey,
+    model,
+    source,
+    keyHint,
+    settingsUpdatedAt,
+  };
+}
+
+function sanitizeSettingsForClient(settings) {
+  if (!settings || typeof settings !== 'object') return {};
+  const clone = { ...settings };
+  // Never send secrets/tokens to the browser.
+  delete clone.openaiApiKey;
+  delete clone.googleClientSecret;
+  delete clone.googleTokens;
+  delete clone.firefliesSecret;
+  delete clone.slackSigningSecret;
+  delete clone.slackClientSecret;
+  delete clone.slackBotToken;
+  delete clone.quoAuthToken;
+  return clone;
+}
+
+function safeTimingEqual(a, b) {
+  const aBuf = Buffer.from(String(a || ''), 'utf8');
+  const bBuf = Buffer.from(String(b || ''), 'utf8');
+  if (aBuf.length !== bBuf.length) return false;
+  return crypto.timingSafeEqual(aBuf, bBuf);
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function getRawBodyString(req) {
+  const buf = req && req.rawBody instanceof Buffer ? req.rawBody : null;
+  if (!buf) return '';
+  try {
+    return buf.toString('utf8');
+  } catch {
+    return '';
+  }
+}
+
+function matchProjectFromText(store, text) {
+  const s = String(text || '').toLowerCase();
+  if (!s) return null;
+  const projects = Array.isArray(store?.projects) ? store.projects : [];
+  // Prefer longer names first to reduce false positives.
+  const sorted = [...projects].sort((a, b) => String(b?.name || '').length - String(a?.name || '').length);
+  for (const p of sorted) {
+    const name = String(p?.name || '').trim();
+    if (!name) continue;
+    if (s.includes(name.toLowerCase())) return p;
+  }
+  return null;
+}
+
+async function addInboxIntegrationItem({ source, externalId, text, projectId = '', projectName = '' }) {
+  const cleanSource = typeof source === 'string' ? source.trim().slice(0, 32) : '';
+  const cleanExternalId = typeof externalId === 'string' ? externalId.trim() : '';
+  const cleanText = normalizeInboxText(text);
+  const id = cleanExternalId ? `${cleanSource}:${cleanExternalId}` : makeId();
+  if (!cleanText) return { ok: false, error: 'Missing text' };
+
+  writeLock = writeLock.then(async () => {
+    const store = await readStore();
+    const list = Array.isArray(store.inboxItems) ? store.inboxItems : [];
+    if (cleanExternalId && list.some((x) => String(x?.id || '') === id)) {
+      return;
+    }
+
+    const ts = nowIso();
+    const nextItem = normalizeInboxItem({
+      id,
+      source: cleanSource,
+      text: cleanText,
+      status: 'New',
+      projectId,
+      projectName,
+      createdAt: ts,
+      updatedAt: ts,
+    });
+
+    const nextStore = {
+      ...store,
+      revision: store.revision + 1,
+      updatedAt: ts,
+      inboxItems: [nextItem, ...list].slice(0, 500),
+    };
+    await writeStore(nextStore);
+  });
+
+  await writeLock;
+  return { ok: true };
+}
+
+function verifySlackRequest({ req, signingSecret }) {
+  const secret = typeof signingSecret === 'string' ? signingSecret.trim() : '';
+  if (!secret) return { ok: false, error: 'Slack signing secret not configured' };
+
+  const ts = typeof req.headers['x-slack-request-timestamp'] === 'string' ? req.headers['x-slack-request-timestamp'].trim() : '';
+  const sig = typeof req.headers['x-slack-signature'] === 'string' ? req.headers['x-slack-signature'].trim() : '';
+  if (!ts || !sig) return { ok: false, error: 'Missing Slack signature headers' };
+
+  const tsNum = Number(ts);
+  if (!Number.isFinite(tsNum)) return { ok: false, error: 'Invalid Slack timestamp' };
+  const nowSec = Math.floor(Date.now() / 1000);
+  if (Math.abs(nowSec - tsNum) > 60 * 5) return { ok: false, error: 'Slack timestamp too old' };
+
+  const raw = getRawBodyString(req);
+  const base = `v0:${ts}:${raw}`;
+  const hmac = crypto.createHmac('sha256', secret).update(base, 'utf8').digest('hex');
+  const expected = `v0=${hmac}`;
+  if (!safeTimingEqual(expected, sig)) return { ok: false, error: 'Invalid Slack signature' };
+  return { ok: true };
+}
+
+function computeTwilioSignature({ authToken, url, params }) {
+  const token = typeof authToken === 'string' ? authToken : '';
+  const u = typeof url === 'string' ? url : '';
+  const p = params && typeof params === 'object' ? params : {};
+
+  const keys = Object.keys(p).sort();
+  let data = u;
+  for (const k of keys) {
+    const v = p[k];
+    if (Array.isArray(v)) {
+      for (const item of v) data += `${k}${String(item)}`;
+    } else if (v !== undefined && v !== null) {
+      data += `${k}${String(v)}`;
+    }
+  }
+  return crypto.createHmac('sha1', token).update(data, 'utf8').digest('base64');
+}
+
+function verifyTwilioRequest({ req, authToken }) {
+  const token = typeof authToken === 'string' ? authToken.trim() : '';
+  if (!token) return { ok: false, error: 'Quo/Twilio auth token not configured' };
+  const sig = typeof req.headers['x-twilio-signature'] === 'string' ? req.headers['x-twilio-signature'].trim() : '';
+  if (!sig) return { ok: false, error: 'Missing X-Twilio-Signature header' };
+
+  const fullUrl = `${getBaseUrl(req)}${req.originalUrl || req.url || ''}`;
+  const expected = computeTwilioSignature({ authToken: token, url: fullUrl, params: req.body || {} });
+  if (!safeTimingEqual(expected, sig)) return { ok: false, error: 'Invalid Twilio signature (check BASE_URL / webhook URL)' };
+  return { ok: true };
+}
+
+function getMcpConfigFromSettings(settings) {
+  const raw = settings && typeof settings === 'object' && settings.mcp && typeof settings.mcp === 'object' ? settings.mcp : {};
+  const enabled = Boolean(raw.enabled);
+  const command = typeof raw.command === 'string' ? raw.command.trim() : '';
+  const args = Array.isArray(raw.args) ? raw.args.map((v) => String(v)).join(' ') : typeof raw.args === 'string' ? raw.args : '';
+  const cwd = typeof raw.cwd === 'string' ? raw.cwd.trim() : '';
+  return { enabled, command, args, cwd };
+}
+
+function getBaseUrl(req) {
+  // Prefer explicit BASE_URL if provided (useful behind a proxy), else derive.
+  const envBase = typeof process.env.BASE_URL === 'string' ? process.env.BASE_URL.trim() : '';
+  if (envBase) return envBase.replace(/\/$/, '');
+  const proto = req.headers['x-forwarded-proto'] ? String(req.headers['x-forwarded-proto']).split(',')[0].trim() : req.protocol;
+  const host = req.headers['x-forwarded-host'] ? String(req.headers['x-forwarded-host']).split(',')[0].trim() : req.get('host');
+  return `${proto}://${host}`;
+}
+
+function getDefaultBaseUrl() {
+  const envBase = typeof process.env.BASE_URL === 'string' ? process.env.BASE_URL.trim() : '';
+  if (envBase) return envBase.replace(/\/$/, '');
+  return `http://localhost:${PORT}`;
+}
+
+function extractFirstUrl(text) {
+  const s = String(text || '');
+  const m = s.match(/https?:\/\/[^\s<>()]+/i);
+  return m ? m[0] : '';
+}
+
+function extractMeetingLink(event) {
+  if (!event || typeof event !== 'object') return '';
+  const hangout = typeof event.hangoutLink === 'string' ? event.hangoutLink.trim() : '';
+  if (hangout) return hangout;
+
+  const entryPoints = Array.isArray(event?.conferenceData?.entryPoints) ? event.conferenceData.entryPoints : [];
+  for (const ep of entryPoints) {
+    const uri = typeof ep?.uri === 'string' ? ep.uri.trim() : '';
+    if (!uri) continue;
+    if (ep?.entryPointType === 'video') return uri;
+    if (/zoom\.us\//i.test(uri)) return uri;
+  }
+
+  const locationUrl = extractFirstUrl(event.location);
+  if (locationUrl) return locationUrl;
+
+  const descUrl = extractFirstUrl(event.description);
+  if (descUrl) return descUrl;
+  return '';
+}
+
+function redact(obj) {
+  // very small helper to avoid leaking tokens
+  if (!obj || typeof obj !== 'object') return obj;
+  const clone = JSON.parse(JSON.stringify(obj));
+  if (clone.refresh_token) clone.refresh_token = '***';
+  if (clone.access_token) clone.access_token = '***';
+  if (clone.id_token) clone.id_token = '***';
+  return clone;
+}
+
+function isLikelyGoogleClientId(value) {
+  const s = typeof value === 'string' ? value.trim() : '';
+  if (!s) return false;
+  // Client IDs are not emails and typically end with .apps.googleusercontent.com
+  if (s.includes('@')) return false;
+  return /\.apps\.googleusercontent\.com$/i.test(s);
+}
+
+async function getGoogleOAuthConfig() {
+  const saved = await readSettings();
+  const clientId = (typeof process.env.GOOGLE_CLIENT_ID === 'string' ? process.env.GOOGLE_CLIENT_ID.trim() : '') || (typeof saved.googleClientId === 'string' ? saved.googleClientId.trim() : '');
+  const clientSecret = (typeof process.env.GOOGLE_CLIENT_SECRET === 'string' ? process.env.GOOGLE_CLIENT_SECRET.trim() : '') || (typeof saved.googleClientSecret === 'string' ? saved.googleClientSecret.trim() : '');
+  const calendarId = typeof saved.googleCalendarId === 'string' ? saved.googleCalendarId.trim() : '';
+  const tokens = saved.googleTokens && typeof saved.googleTokens === 'object' ? saved.googleTokens : null;
+  const projectEventIds = saved.googleProjectEventIds && typeof saved.googleProjectEventIds === 'object' ? saved.googleProjectEventIds : {};
+  return { clientId, clientSecret, calendarId, tokens, projectEventIds, saved };
+}
+
+const googlePkceState = new Map();
+
+// Slack OAuth + Web API caches (in-memory)
+const slackOAuthState = new Map();
+const slackUserCache = new Map();
+const slackChannelCache = new Map();
+
+function pruneSlackOAuthState() {
+  const cutoff = Date.now() - 10 * 60 * 1000;
+  for (const [key, value] of slackOAuthState.entries()) {
+    if (!value || typeof value !== 'object') {
+      slackOAuthState.delete(key);
+      continue;
+    }
+    if (typeof value.createdAt !== 'number' || value.createdAt < cutoff) {
+      slackOAuthState.delete(key);
+    }
+  }
+}
+
+function pruneSlackCaches() {
+  const now = Date.now();
+  for (const [k, v] of slackUserCache.entries()) {
+    if (!v || typeof v !== 'object' || typeof v.expiresAt !== 'number' || v.expiresAt <= now) slackUserCache.delete(k);
+  }
+  for (const [k, v] of slackChannelCache.entries()) {
+    if (!v || typeof v !== 'object' || typeof v.expiresAt !== 'number' || v.expiresAt <= now) slackChannelCache.delete(k);
+  }
+}
+
+async function getSlackOAuthConfig() {
+  const saved = await readSettings();
+  const clientId = (typeof process.env.SLACK_CLIENT_ID === 'string' ? process.env.SLACK_CLIENT_ID.trim() : '') || (typeof saved.slackClientId === 'string' ? saved.slackClientId.trim() : '');
+  const clientSecret = (typeof process.env.SLACK_CLIENT_SECRET === 'string' ? process.env.SLACK_CLIENT_SECRET.trim() : '') || (typeof saved.slackClientSecret === 'string' ? saved.slackClientSecret.trim() : '');
+  const botToken = (typeof process.env.SLACK_BOT_TOKEN === 'string' ? process.env.SLACK_BOT_TOKEN.trim() : '') || (typeof saved.slackBotToken === 'string' ? saved.slackBotToken.trim() : '');
+  return { clientId, clientSecret, botToken, saved };
+}
+
+async function slackApiGet({ token, method, params }) {
+  const t = typeof token === 'string' ? token.trim() : '';
+  if (!t) throw new Error('Missing Slack bot token');
+  const m = typeof method === 'string' ? method.trim() : '';
+  if (!m) throw new Error('Missing Slack method');
+
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(params || {})) {
+    if (v === undefined || v === null) continue;
+    const s = String(v);
+    if (!s) continue;
+    qs.set(k, s);
+  }
+
+  const url = `https://slack.com/api/${m}${qs.toString() ? `?${qs.toString()}` : ''}`;
+  const resp = await fetch(url, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${t}`,
+      'User-Agent': 'Task-Tracker/1.0',
+    },
+  });
+
+  if (resp.status === 429) {
+    throw new Error('Slack rate limited');
+  }
+
+  const json = await resp.json().catch(() => ({}));
+  if (!resp.ok || !json || json.ok !== true) {
+    const err = typeof json?.error === 'string' ? json.error : `HTTP ${resp.status}`;
+    throw new Error(err);
+  }
+  return json;
+}
+
+async function slackResolveUserLabel({ token, userId }) {
+  const id = typeof userId === 'string' ? userId.trim() : '';
+  if (!id) return '';
+
+  pruneSlackCaches();
+  const cached = slackUserCache.get(id);
+  if (cached && typeof cached.label === 'string') return cached.label;
+
+  const data = await slackApiGet({ token, method: 'users.info', params: { user: id } });
+  const profile = data?.user && typeof data.user === 'object' ? data.user : {};
+  const name = typeof profile?.name === 'string' ? profile.name.trim() : '';
+  const realName = typeof profile?.real_name === 'string' ? profile.real_name.trim() : '';
+  const label = name ? `@${name}` : realName ? `@${realName}` : `@${id}`;
+  slackUserCache.set(id, { label, expiresAt: Date.now() + 60 * 60 * 1000 });
+  return label;
+}
+
+async function slackResolveChannelLabel({ token, channelId }) {
+  const id = typeof channelId === 'string' ? channelId.trim() : '';
+  if (!id) return '';
+
+  pruneSlackCaches();
+  const cached = slackChannelCache.get(id);
+  if (cached && typeof cached.label === 'string') return cached.label;
+
+  const data = await slackApiGet({ token, method: 'conversations.info', params: { channel: id } });
+  const ch = data?.channel && typeof data.channel === 'object' ? data.channel : {};
+  const name = typeof ch?.name === 'string' ? ch.name.trim() : '';
+  const isIm = Boolean(ch?.is_im);
+  const label = name ? `#${name}` : isIm ? 'DM' : id;
+  slackChannelCache.set(id, { label, expiresAt: Date.now() + 60 * 60 * 1000 });
+  return label;
+}
+
+async function formatSlackInboxText({ token, channelId, userId, text }) {
+  const cleanText = String(text || '').trim();
+  if (!cleanText) return '';
+  const prefix = ['Slack'];
+
+  if (channelId) {
+    try {
+      const c = await slackResolveChannelLabel({ token, channelId });
+      if (c) prefix.push(c);
+    } catch {
+      prefix.push(channelId);
+    }
+  }
+
+  if (userId) {
+    try {
+      const u = await slackResolveUserLabel({ token, userId });
+      if (u) prefix.push(u);
+    } catch {
+      prefix.push(`@${userId}`);
+    }
+  }
+
+  return `${prefix.join(' ')}: ${cleanText}`;
+}
+
+function base64Url(buf) {
+  return Buffer.from(buf)
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '');
+}
+
+function makePkceVerifier() {
+  return base64Url(crypto.randomBytes(32));
+}
+
+function makePkceChallenge(verifier) {
+  const hash = crypto.createHash('sha256').update(verifier).digest();
+  return base64Url(hash);
+}
+
+function pruneGooglePkceState() {
+  const cutoff = Date.now() - 10 * 60 * 1000;
+  for (const [key, value] of googlePkceState.entries()) {
+    if (!value || typeof value !== 'object') {
+      googlePkceState.delete(key);
+      continue;
+    }
+    if (typeof value.createdAt !== 'number' || value.createdAt < cutoff) {
+      googlePkceState.delete(key);
+    }
+  }
+}
+
+async function googleTokenRequest(params) {
+  const body = new URLSearchParams();
+  for (const [k, v] of Object.entries(params || {})) {
+    if (v === undefined || v === null) continue;
+    const s = String(v);
+    if (!s) continue;
+    body.set(k, s);
+  }
+
+  const resp = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: body.toString(),
+  });
+
+  const json = await resp.json().catch(() => ({}));
+  if (!resp.ok) {
+    const msg = typeof json?.error_description === 'string' ? json.error_description : typeof json?.error === 'string' ? json.error : 'token request failed';
+    throw new Error(msg);
+  }
+  return json;
+}
+
+function normalizeGoogleTokens(tokenJson) {
+  const expiresIn = Number(tokenJson?.expires_in);
+  const expiryDate = Number.isFinite(expiresIn) && expiresIn > 0 ? Date.now() + expiresIn * 1000 : undefined;
+  const out = { ...tokenJson };
+  if (expiryDate) out.expiry_date = expiryDate;
+  return out;
+}
+
+async function ensureFreshGoogleTokens({ clientId, clientSecret, tokens, saved }) {
+  const existing = tokens && typeof tokens === 'object' ? tokens : null;
+  if (!existing || !existing.refresh_token) return { tokens: existing, saved };
+
+  const expiry = Number(existing.expiry_date);
+  const marginMs = 60 * 1000;
+  const needsRefresh = !existing.access_token || !Number.isFinite(expiry) || expiry <= Date.now() + marginMs;
+  if (!needsRefresh) return { tokens: existing, saved };
+
+  const refreshed = await googleTokenRequest({
+    client_id: clientId,
+    client_secret: clientSecret || undefined,
+    refresh_token: existing.refresh_token,
+    grant_type: 'refresh_token',
+  });
+
+  const normalized = normalizeGoogleTokens(refreshed);
+  const nextTokens = {
+    ...existing,
+    access_token: typeof normalized.access_token === 'string' ? normalized.access_token : existing.access_token,
+    token_type: typeof normalized.token_type === 'string' ? normalized.token_type : existing.token_type,
+    scope: typeof normalized.scope === 'string' ? normalized.scope : existing.scope,
+    expiry_date: typeof normalized.expiry_date === 'number' ? normalized.expiry_date : existing.expiry_date,
+  };
+
+  const nextSaved = { ...saved, googleTokens: nextTokens, updatedAt: nowIso() };
+  await writeSettings(nextSaved);
+  return { tokens: nextTokens, saved: nextSaved };
+}
+
+function buildOAuthClient({ clientId, clientSecret, redirectUri }) {
+  return new google.auth.OAuth2({ clientId, clientSecret, redirectUri });
+}
+
+async function ensureGoogleCalendar(calendar, settings) {
+  const existingId = typeof settings.googleCalendarId === 'string' ? settings.googleCalendarId.trim() : '';
+  if (existingId) return { calendarId: existingId, settings };
+
+  const created = await calendar.calendars.insert({
+    requestBody: {
+      summary: 'Task Tracker',
+      description: 'Project due dates synced from Task Tracker',
+      timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+    },
+  });
+  const newId = created?.data?.id ? String(created.data.id) : '';
+  if (!newId) throw new Error('Failed to create Google Calendar');
+  const next = { ...settings, googleCalendarId: newId, updatedAt: nowIso() };
+  await writeSettings(next);
+  return { calendarId: newId, settings: next };
+}
+
+function ttEventSummary(project) {
+  const name = typeof project?.name === 'string' ? project.name.trim() : '';
+  return name ? `[TT] ${name}` : '[TT] Project';
+}
+
+function projectDueDateFromEvent(event) {
+  const d = event?.start?.date;
+  return safeYmd(typeof d === 'string' ? d : '');
+}
+
+function ymdAddDays(ymd, days) {
+  const safe = safeYmd(ymd);
+  if (!safe) return '';
+  const [y, m, d] = safe.split('-').map((v) => Number(v));
+  if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return '';
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + days);
+  return dt.toISOString().slice(0, 10);
+}
+
+async function googleSyncProjects({ req }) {
+  const { clientId, clientSecret, tokens, saved } = await getGoogleOAuthConfig();
+  if (!clientId || !isLikelyGoogleClientId(clientId)) {
+    return { ok: false, reason: 'missing_client', message: 'Google OAuth client is not configured (missing/invalid Client ID). Paste the OAuth Client ID ending with .apps.googleusercontent.com.' };
+  }
+  if (!tokens || !tokens.refresh_token) {
+    return { ok: false, reason: 'not_connected', message: 'Google Calendar is not connected. Run the OAuth connect flow first.' };
+  }
+
+  const redirectUri = `${getBaseUrl(req)}/api/integrations/google/callback`;
+  const fresh = await ensureFreshGoogleTokens({ clientId, clientSecret, tokens, saved });
+  const oauth2 = buildOAuthClient({ clientId, clientSecret: clientSecret || '', redirectUri });
+  oauth2.setCredentials(fresh.tokens);
+
+  const calendar = google.calendar({ version: 'v3', auth: oauth2 });
+
+  const ensured = await ensureGoogleCalendar(calendar, saved);
+  const calendarId = ensured.calendarId;
+  let settings = ensured.settings;
+
+  // 1) Push: upsert events for each project with dueDate.
+  const store = await readStore();
+  const projects = Array.isArray(store.projects) ? store.projects : [];
+
+  const eventIds = settings.googleProjectEventIds && typeof settings.googleProjectEventIds === 'object' ? settings.googleProjectEventIds : {};
+  let pushed = 0;
+  for (const project of projects) {
+    const dueDate = safeYmd(project?.dueDate);
+    if (!dueDate) continue;
+    const projectId = String(project.id);
+    const existingEventId = typeof eventIds[projectId] === 'string' ? eventIds[projectId] : '';
+
+    const requestBody = {
+      summary: ttEventSummary(project),
+      start: { date: dueDate },
+      end: { date: ymdAddDays(dueDate, 1) || dueDate },
+      description: 'Synced from Task Tracker (project due date)',
+      transparency: 'transparent',
+      extendedProperties: { private: { taskTrackerProjectId: projectId } },
+    };
+
+    try {
+      if (existingEventId) {
+        await calendar.events.patch({ calendarId, eventId: existingEventId, requestBody });
+      } else {
+        const created = await calendar.events.insert({ calendarId, requestBody });
+        const newId = created?.data?.id ? String(created.data.id) : '';
+        if (newId) {
+          eventIds[projectId] = newId;
+        }
+      }
+      pushed++;
+    } catch (err) {
+      // If the event was deleted manually, recreate it.
+      const code = err?.code || err?.response?.status;
+      if (existingEventId && (code === 404 || code === 410)) {
+        try {
+          const created = await calendar.events.insert({ calendarId, requestBody });
+          const newId = created?.data?.id ? String(created.data.id) : '';
+          if (newId) eventIds[projectId] = newId;
+          pushed++;
+          continue;
+        } catch {
+          // fall through
+        }
+      }
+      // keep going; we don't want one project to block sync
+    }
+  }
+
+  // Persist event id mapping
+  settings = { ...settings, googleProjectEventIds: eventIds, updatedAt: nowIso() };
+  await writeSettings(settings);
+
+  // 2) Pull: update project dueDate if the synced event date changed.
+  // Only for projects that already have a mapped event.
+  let pulledUpdates = 0;
+  writeLock = writeLock.then(async () => {
+    const working = await readStore();
+    let changed = false;
+    const nextProjects = [...(working.projects || [])];
+
+    for (let i = 0; i < nextProjects.length; i++) {
+      const p = nextProjects[i];
+      const pid = String(p.id);
+      const eventId = typeof eventIds[pid] === 'string' ? eventIds[pid] : '';
+      if (!eventId) continue;
+
+      try {
+        const ev = await calendar.events.get({ calendarId, eventId });
+        const evDue = projectDueDateFromEvent(ev?.data);
+        if (!evDue) continue;
+        if (safeYmd(p.dueDate) !== evDue) {
+          nextProjects[i] = { ...p, dueDate: evDue, updatedAt: nowIso() };
+          pulledUpdates++;
+          changed = true;
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    if (changed) {
+      const ts = nowIso();
+      const nextStore = { ...working, revision: working.revision + 1, updatedAt: ts, projects: nextProjects };
+      await writeStore(nextStore);
+    }
+  });
+  await writeLock;
+
+  return {
+    ok: true,
+    calendarId,
+    pushed,
+    pulledUpdates,
+  };
+}
+
+async function googleListUpcomingEvents({ days = 7, max = 25 } = {}) {
+  const safeDays = Math.min(30, Math.max(1, Number(days) || 7));
+  const safeMax = Math.min(50, Math.max(1, Number(max) || 25));
+
+  const { clientId, clientSecret, tokens, saved } = await getGoogleOAuthConfig();
+  if (!clientId || !isLikelyGoogleClientId(clientId)) {
+    return { ok: false, reason: 'missing_client', message: 'Google OAuth client is not configured (missing/invalid Client ID).' };
+  }
+  if (!tokens || !tokens.refresh_token) {
+    return { ok: false, reason: 'not_connected', message: 'Google Calendar is not connected. Run the OAuth connect flow first.' };
+  }
+
+  const calendarId = typeof saved.googleReadCalendarId === 'string' && saved.googleReadCalendarId.trim() ? saved.googleReadCalendarId.trim() : 'primary';
+  const redirectUri = `${getDefaultBaseUrl()}/api/integrations/google/callback`;
+  const fresh = await ensureFreshGoogleTokens({ clientId, clientSecret, tokens, saved });
+  const oauth2 = buildOAuthClient({ clientId, clientSecret: clientSecret || '', redirectUri });
+  oauth2.setCredentials(fresh.tokens);
+  const calendar = google.calendar({ version: 'v3', auth: oauth2 });
+
+  const now = new Date();
+  const end = new Date(now.getTime() + safeDays * 24 * 60 * 60 * 1000);
+
+  const resp = await calendar.events.list({
+    calendarId,
+    timeMin: now.toISOString(),
+    timeMax: end.toISOString(),
+    maxResults: safeMax,
+    singleEvents: true,
+    orderBy: 'startTime',
+  });
+
+  const items = Array.isArray(resp?.data?.items) ? resp.data.items : [];
+  const events = items.map((ev) => {
+    const start = ev?.start?.dateTime || ev?.start?.date || '';
+    const endAt = ev?.end?.dateTime || ev?.end?.date || '';
+    return {
+      id: ev?.id ? String(ev.id) : '',
+      summary: typeof ev?.summary === 'string' ? ev.summary : '',
+      start,
+      end: endAt,
+      htmlLink: typeof ev?.htmlLink === 'string' ? ev.htmlLink : '',
+      meetingLink: extractMeetingLink(ev),
+      location: typeof ev?.location === 'string' ? ev.location : '',
+    };
+  });
+
+  return { ok: true, calendarId, days: safeDays, events };
+}
+
+async function ensureStoreExists() {
+  await fs.mkdir(DATA_DIR, { recursive: true });
+  try {
+    await fs.access(DATA_FILE);
+  } catch {
+    await fs.writeFile(DATA_FILE, JSON.stringify(EMPTY_STORE, null, 2) + '\n', 'utf8');
+  }
+}
+
+async function readStore() {
+  await ensureStoreExists();
+  const raw = await fs.readFile(DATA_FILE, 'utf8');
+  const parsed = JSON.parse(raw);
+  if (!parsed || typeof parsed !== 'object') return structuredClone(EMPTY_STORE);
+
+  const revision = Number(parsed.revision);
+  const updatedAt = typeof parsed.updatedAt === 'string' ? parsed.updatedAt : new Date(0).toISOString();
+  const projects = Array.isArray(parsed.projects) ? parsed.projects : [];
+  const tasks = Array.isArray(parsed.tasks) ? parsed.tasks : [];
+  const team = Array.isArray(parsed.team) ? parsed.team : [];
+  const projectNotes = parsed.projectNotes && typeof parsed.projectNotes === 'object' ? parsed.projectNotes : {};
+  const projectScratchpads = parsed.projectScratchpads && typeof parsed.projectScratchpads === 'object' ? parsed.projectScratchpads : {};
+  const projectNoteEntries = parsed.projectNoteEntries && typeof parsed.projectNoteEntries === 'object' ? parsed.projectNoteEntries : {};
+  const projectChats = parsed.projectChats && typeof parsed.projectChats === 'object' ? parsed.projectChats : {};
+  const projectCommunications = parsed.projectCommunications && typeof parsed.projectCommunications === 'object' ? parsed.projectCommunications : {};
+  const inboxItems = Array.isArray(parsed.inboxItems) ? parsed.inboxItems : [];
+  const projectTranscriptUndo = parsed.projectTranscriptUndo && typeof parsed.projectTranscriptUndo === 'object' ? parsed.projectTranscriptUndo : {};
+
+  return {
+    revision: Number.isFinite(revision) && revision > 0 ? revision : 1,
+    updatedAt,
+    projects,
+    tasks,
+    team,
+    projectNotes,
+    projectScratchpads,
+    projectNoteEntries,
+    projectChats,
+    projectCommunications,
+    inboxItems,
+    projectTranscriptUndo,
+  };
+}
+
+function normalizeInboxText(text) {
+  if (typeof text !== 'string') return '';
+  return text.replace(/\r\n/g, '\n').trim();
+}
+
+function normalizeInboxItem(input) {
+  const i = input && typeof input === 'object' ? input : {};
+  const text = normalizeInboxText(i.text);
+  const source = typeof i.source === 'string' ? i.source.trim().slice(0, 32) : '';
+  const status = safeEnum(i.status, ['New', 'Triaged', 'Done', 'Archived'], 'New');
+  const projectId = typeof i.projectId === 'string' ? i.projectId.trim() : '';
+  const projectName = typeof i.projectName === 'string' ? i.projectName.trim() : '';
+  const createdAt = typeof i.createdAt === 'string' ? i.createdAt : nowIso();
+  const updatedAt = typeof i.updatedAt === 'string' ? i.updatedAt : createdAt;
+  const converted = i.converted && typeof i.converted === 'object' ? i.converted : {};
+
+  return {
+    id: typeof i.id === 'string' && i.id.trim() ? i.id.trim() : makeId(),
+    text,
+    source,
+    status,
+    projectId,
+    projectName,
+    createdAt,
+    updatedAt,
+    converted,
+  };
+}
+
+function normalizeTeamMember(input) {
+  const m = input && typeof input === 'object' ? input : {};
+  const name = typeof m.name === 'string' ? m.name.trim() : '';
+  const title = typeof m.title === 'string' ? m.title.trim() : '';
+  const skills = Array.isArray(m.skills) ? m.skills.map((s) => String(s || '').trim()).filter(Boolean).slice(0, 32) : [];
+  const abilities = Array.isArray(m.abilities) ? m.abilities.map((s) => String(s || '').trim()).filter(Boolean).slice(0, 32) : [];
+  const wipLimitRaw = Number(m.wipLimit);
+  const wipLimit = Number.isFinite(wipLimitRaw) ? Math.max(0, Math.min(99, Math.floor(wipLimitRaw))) : 0;
+  const avatar = typeof m.avatar === 'string' ? m.avatar.trim().slice(0, 3) : '';
+
+  return {
+    id: typeof m.id === 'string' && m.id.trim() ? m.id.trim() : makeId(),
+    name,
+    title,
+    skills,
+    abilities,
+    wipLimit,
+    avatar,
+  };
+}
+
+app.get('/api/team', async (req, res) => {
+  try {
+    const store = await readStore();
+    res.json({ ok: true, team: Array.isArray(store.team) ? store.team : [] });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message || 'Failed to load team' });
+  }
+});
+
+app.post('/api/team', async (req, res) => {
+  const baseRevision = Number(req.body?.baseRevision);
+  const member = normalizeTeamMember(req.body?.member);
+  if (!member.name) {
+    res.status(400).json({ ok: false, error: 'name is required' });
+    return;
+  }
+
+  writeLock = writeLock.then(async () => {
+    const store = await readStore();
+    if (Number.isFinite(baseRevision) && baseRevision !== store.revision) {
+      res.status(409).json({ ok: false, error: 'Revision mismatch. Reload and try again.', currentRevision: store.revision });
+      return;
+    }
+
+    const exists = (Array.isArray(store.team) ? store.team : []).some((t) => String(t?.name || '').trim().toLowerCase() === member.name.toLowerCase());
+    if (exists) {
+      res.status(400).json({ ok: false, error: 'A team member with that name already exists' });
+      return;
+    }
+
+    const ts = nowIso();
+    const nextStore = {
+      ...store,
+      revision: store.revision + 1,
+      updatedAt: ts,
+      team: [member, ...(Array.isArray(store.team) ? store.team : [])],
+    };
+    await writeStore(nextStore);
+    res.json({ ok: true, store: nextStore });
+  });
+
+  await writeLock;
+});
+
+app.put('/api/team/:id', async (req, res) => {
+  const baseRevision = Number(req.body?.baseRevision);
+  const patch = req.body?.patch && typeof req.body.patch === 'object' ? req.body.patch : {};
+  const teamId = String(req.params.id || '').trim();
+  if (!teamId) {
+    res.status(400).json({ ok: false, error: 'Missing team member id' });
+    return;
+  }
+
+  writeLock = writeLock.then(async () => {
+    const store = await readStore();
+    if (Number.isFinite(baseRevision) && baseRevision !== store.revision) {
+      res.status(409).json({ ok: false, error: 'Revision mismatch. Reload and try again.', currentRevision: store.revision });
+      return;
+    }
+
+    const list = Array.isArray(store.team) ? store.team : [];
+    const idx = list.findIndex((m) => String(m?.id || '') === teamId);
+    if (idx === -1) {
+      res.status(404).json({ ok: false, error: 'Team member not found' });
+      return;
+    }
+
+    const current = list[idx];
+    const next = normalizeTeamMember({
+      ...current,
+      ...patch,
+      id: current.id,
+    });
+
+    if (!next.name) {
+      res.status(400).json({ ok: false, error: 'name is required' });
+      return;
+    }
+
+    // Name uniqueness (excluding self)
+    const nameTaken = list.some((m, i) => i !== idx && String(m?.name || '').trim().toLowerCase() === next.name.toLowerCase());
+    if (nameTaken) {
+      res.status(400).json({ ok: false, error: 'Another team member already has that name' });
+      return;
+    }
+
+    const ts = nowIso();
+    const nextList = [...list];
+    nextList[idx] = next;
+    const nextStore = {
+      ...store,
+      revision: store.revision + 1,
+      updatedAt: ts,
+      team: nextList,
+    };
+    await writeStore(nextStore);
+    res.json({ ok: true, store: nextStore });
+  });
+
+  await writeLock;
+});
+
+app.delete('/api/team/:id', async (req, res) => {
+  const baseRevision = Number(req.body?.baseRevision);
+  const teamId = String(req.params.id || '').trim();
+  if (!teamId) {
+    res.status(400).json({ ok: false, error: 'Missing team member id' });
+    return;
+  }
+
+  writeLock = writeLock.then(async () => {
+    const store = await readStore();
+    if (Number.isFinite(baseRevision) && baseRevision !== store.revision) {
+      res.status(409).json({ ok: false, error: 'Revision mismatch. Reload and try again.', currentRevision: store.revision });
+      return;
+    }
+
+    const list = Array.isArray(store.team) ? store.team : [];
+    const nextList = list.filter((m) => String(m?.id || '') !== teamId);
+    if (nextList.length === list.length) {
+      res.status(404).json({ ok: false, error: 'Team member not found' });
+      return;
+    }
+
+    const ts = nowIso();
+    const nextStore = {
+      ...store,
+      revision: store.revision + 1,
+      updatedAt: ts,
+      team: nextList,
+    };
+    await writeStore(nextStore);
+    res.json({ ok: true, store: nextStore });
+  });
+
+  await writeLock;
+});
+
+async function writeStore(nextStore) {
+  await ensureStoreExists();
+
+  const tmpFile = `${DATA_FILE}.tmp-${crypto.randomBytes(6).toString('hex')}`;
+  await fs.writeFile(tmpFile, JSON.stringify(nextStore, null, 2) + '\n', 'utf8');
+  await fs.rename(tmpFile, DATA_FILE);
+}
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function makeId() {
+  // short, url-safe id
+  return crypto.randomBytes(9).toString('base64url');
+}
+
+function safeYmd(input) {
+  if (typeof input !== 'string') return '';
+  const s = input.trim();
+  if (!s) return '';
+  // Accept YYYY-MM-DD only
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return '';
+  return s;
+}
+
+function safeEnum(input, allowed, fallback) {
+  const s = typeof input === 'string' ? input.trim() : '';
+  if (allowed.includes(s)) return s;
+  return fallback;
+}
+
+function safeUrl(input) {
+  if (typeof input !== 'string') return '';
+  const s = input.trim();
+  if (!s) return '';
+  // Keep it simple: only allow http(s) URLs.
+  if (!/^https?:\/\//i.test(s)) return '';
+  return s;
+}
+
+function normalizeProject(input) {
+  const name = typeof input.name === 'string' ? input.name.trim() : '';
+  if (!name) throw new Error('Project name is required');
+
+  const type = safeEnum(input.type, ['Build', 'Rebuild', 'Revision', 'Workflow', 'Cleanup', 'Other'], 'Other');
+  const dueDate = safeYmd(input.dueDate);
+  const status = safeEnum(input.status, ['Active', 'On Hold', 'Done', 'Archived'], 'Active');
+
+  const accountManagerName = typeof input.accountManagerName === 'string' ? input.accountManagerName.trim() : '';
+  const accountManagerEmail = typeof input.accountManagerEmail === 'string' ? input.accountManagerEmail.trim() : '';
+
+  const workspacePath = typeof input.workspacePath === 'string' ? input.workspacePath.trim() : '';
+  const airtableUrl = typeof input.airtableUrl === 'string' ? input.airtableUrl.trim() : '';
+
+  const projectValue = typeof input.projectValue === 'string' ? input.projectValue.trim() : '';
+  const stripeInvoiceUrl = safeUrl(input.stripeInvoiceUrl);
+  const repoUrl = safeUrl(input.repoUrl);
+  const docsUrl = safeUrl(input.docsUrl);
+
+  return {
+    name,
+    type,
+    dueDate,
+    status,
+    accountManagerName,
+    accountManagerEmail,
+    workspacePath,
+    airtableUrl,
+    projectValue,
+    stripeInvoiceUrl,
+    repoUrl,
+    docsUrl,
+  };
+}
+
+function normalizeTask(input) {
+  const title = typeof input.title === 'string' ? input.title.trim() : '';
+  if (!title) throw new Error('Title is required');
+
+  const project = typeof input.project === 'string' ? input.project.trim() : 'Other';
+  const type = typeof input.type === 'string' ? input.type.trim() : 'Other';
+  const owner = typeof input.owner === 'string' ? input.owner.trim() : '';
+  const status = typeof input.status === 'string' ? input.status : 'Next';
+
+  const priorityRaw = input.priority;
+  const priorityNum = Number(priorityRaw);
+  const priority = Number.isFinite(priorityNum) ? Math.min(3, Math.max(1, priorityNum)) : 2;
+
+  const dueDate = typeof input.dueDate === 'string' && input.dueDate ? input.dueDate : '';
+
+  return {
+    title,
+    project,
+    type,
+    owner,
+    status,
+    priority,
+    dueDate,
+  };
+}
+
+function normKey(input) {
+  return String(input || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s_-]+/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function appendTasksToStore(store, projectName, tasks) {
+  if (!store || typeof store !== 'object') throw new Error('Store missing');
+  if (!Array.isArray(tasks) || tasks.length === 0) return { ok: true, created: 0, tasks: [] };
+  const now = nowIso();
+  const created = tasks
+    .map((t) => ({
+      title: typeof t?.title === 'string' ? t.title : '',
+      priority: Number(t?.priority),
+      dueDate: typeof t?.dueDate === 'string' ? safeYmd(t.dueDate) : '',
+    }))
+    .filter((t) => String(t.title).trim())
+    .map((t) => {
+      const normalized = normalizeTask({
+        title: t.title,
+        status: 'Next',
+        priority: Number.isFinite(t.priority) ? t.priority : 2,
+        project: projectName,
+        dueDate: t.dueDate,
+      });
+      return {
+        id: makeId(),
+        ...normalized,
+        createdAt: now,
+        updatedAt: now,
+      };
+    });
+
+  store.tasks = [...created, ...(store.tasks || [])];
+  return { ok: true, created: created.length, tasks: created };
+}
+
+function computeLearnedTaskTemplates(store) {
+  const byType = {};
+  const projects = Array.isArray(store?.projects) ? store.projects : [];
+  const tasks = Array.isArray(store?.tasks) ? store.tasks : [];
+
+  const tasksByProjectKey = new Map();
+  for (const t of tasks) {
+    const pk = normKey(t?.project);
+    if (!pk) continue;
+    const list = tasksByProjectKey.get(pk) || [];
+    list.push(t);
+    tasksByProjectKey.set(pk, list);
+  }
+
+  for (const p of projects) {
+    const type = safeEnum(p?.type, ['Build', 'Rebuild', 'Revision', 'Workflow', 'Cleanup', 'Other'], 'Other');
+    const pk = normKey(p?.name);
+    if (!pk) continue;
+    const list = tasksByProjectKey.get(pk) || [];
+    for (const t of list) {
+      const title = String(t?.title || '').trim();
+      if (!title) continue;
+      const key = normKey(title);
+      if (!key) continue;
+      byType[type] = byType[type] || {};
+      byType[type][key] = byType[type][key] || { title, count: 0 };
+      const isDone = String(t?.status || '').trim().toLowerCase() === 'done';
+      byType[type][key].count += isDone ? 3 : 1;
+    }
+  }
+
+  const compact = {};
+  for (const [type, rec] of Object.entries(byType)) {
+    const arr = Object.values(rec)
+      .sort((a, b) => (b.count - a.count) || a.title.localeCompare(b.title))
+      .slice(0, 40);
+    compact[type] = arr;
+  }
+  return { updatedAt: nowIso(), byType: compact };
+}
+
+function baselineTasksForType(type) {
+  const t = safeEnum(type, ['Build', 'Rebuild', 'Revision', 'Workflow', 'Cleanup', 'Other'], 'Other');
+  const common = [
+    { title: 'Confirm scope + success criteria', priority: 1 },
+    { title: 'Collect access + credentials', priority: 1 },
+    { title: 'Set up repo + local workspace', priority: 2 },
+    { title: 'Create timeline + milestones', priority: 2 },
+    { title: 'Kickoff call agenda + notes', priority: 2 },
+  ];
+  const byType = {
+    Build: [
+      { title: 'Define sitemap / information architecture', priority: 2 },
+      { title: 'Create wireframes / layout plan', priority: 2 },
+      { title: 'Implement core pages + navigation', priority: 1 },
+      { title: 'Analytics + conversion tracking', priority: 3 },
+      { title: 'QA pass (mobile + desktop)', priority: 1 },
+      { title: 'Launch checklist + deploy', priority: 1 },
+    ],
+    Rebuild: [
+      { title: 'Audit existing site + pain points', priority: 1 },
+      { title: 'Migration plan (content, redirects)', priority: 1 },
+      { title: 'Implement rebuild in staging', priority: 1 },
+      { title: 'Redirects + SEO validation', priority: 1 },
+      { title: 'QA pass + launch', priority: 1 },
+    ],
+    Revision: [
+      { title: 'Gather requested changes', priority: 1 },
+      { title: 'Implement revisions in staging', priority: 1 },
+      { title: 'Client review + iterate', priority: 2 },
+      { title: 'Deploy revisions', priority: 1 },
+    ],
+    Workflow: [
+      { title: 'Map current workflow', priority: 1 },
+      { title: 'Define target workflow', priority: 1 },
+      { title: 'Implement automation / SOP', priority: 2 },
+      { title: 'Pilot + refine', priority: 2 },
+    ],
+    Cleanup: [
+      { title: 'Inventory issues / technical debt', priority: 1 },
+      { title: 'Prioritize fixes', priority: 1 },
+      { title: 'Fix high-impact issues', priority: 1 },
+      { title: 'Regression test', priority: 2 },
+    ],
+    Other: [
+      { title: 'Define next 3 outcomes', priority: 2 },
+      { title: 'Break down work into tasks', priority: 2 },
+      { title: 'Schedule review checkpoint', priority: 3 },
+    ],
+  };
+  return [...common, ...(byType[t] || [])];
+}
+
+function buildStarterTaskSuggestions(store, project, limit = 12) {
+  const learned = computeLearnedTaskTemplates(store);
+  store.learnedTaskTemplates = learned;
+
+  const type = safeEnum(project?.type, ['Build', 'Rebuild', 'Revision', 'Workflow', 'Cleanup', 'Other'], 'Other');
+  const existing = new Set(
+    (Array.isArray(store?.tasks) ? store.tasks : [])
+      .filter((t) => normKey(t?.project) === normKey(project?.name))
+      .map((t) => normKey(t?.title))
+      .filter(Boolean)
+  );
+
+  const baseline = baselineTasksForType(type);
+  const learnedTitles = (learned.byType?.[type] || []).map((x) => ({ title: x.title, priority: 2 }));
+  const candidates = [...baseline, ...learnedTitles];
+
+  const deduped = [];
+  const seen = new Set();
+  for (const c of candidates) {
+    const title = String(c?.title || '').trim();
+    const k = normKey(title);
+    if (!k || seen.has(k)) continue;
+    seen.add(k);
+    if (existing.has(k)) continue;
+    deduped.push({ title, priority: Number(c?.priority) || 2 });
+    if (deduped.length >= limit) break;
+  }
+
+  return { type, tasks: deduped };
+}
+
+function getProjectChatArray(store, projectId) {
+  store.projectChats = store.projectChats || {};
+  const existing = store.projectChats[projectId];
+
+  // Canonical store shape: { messages: [], updatedAt: '' }
+  if (Array.isArray(existing)) {
+    // Migrate legacy array-in-store to object form.
+    const migrated = { messages: existing, updatedAt: store.updatedAt || '' };
+    store.projectChats[projectId] = migrated;
+    return migrated.messages;
+  }
+
+  if (existing && typeof existing === 'object' && Array.isArray(existing.messages)) {
+    return existing.messages;
+  }
+
+  const created = { messages: [], updatedAt: '' };
+  store.projectChats[projectId] = created;
+  return created.messages;
+}
+
+function resolveProjectForMessage(store, message, projectId) {
+  const projects = Array.isArray(store?.projects) ? store.projects : [];
+  if (projectId) {
+    const direct = projects.find((p) => String(p?.id || '') === projectId);
+    if (direct) return direct;
+  }
+  const msg = normKey(message);
+  if (!msg) return null;
+
+  const scored = [];
+  for (const p of projects) {
+    const name = String(p?.name || '').trim();
+    if (!name) continue;
+    const nameKey = normKey(name);
+    if (!nameKey) continue;
+    let score = 0;
+    if (msg.includes(nameKey)) score = 100 + nameKey.length; // strong signal
+    else {
+      const tokens = nameKey.split(' ').filter(Boolean);
+      const hits = tokens.filter((tok) => tok.length >= 3 && msg.includes(tok)).length;
+      score = hits / Math.max(2, tokens.length);
+    }
+    scored.push({ p, score });
+  }
+
+  scored.sort((a, b) => b.score - a.score);
+  const best = scored[0];
+  const second = scored[1];
+  if (!best) return null;
+  if (best.score >= 120) return best.p;
+  if (best.score < 0.4) return null;
+  if (second && second.score >= 0.4 && Math.abs(best.score - second.score) < 0.15) {
+    // ambiguous; let caller ask
+    return { ambiguous: true, options: [best.p, second.p] };
+  }
+  return best.p;
+}
+
+function tryHandleDeterministicTaskRequest(store, message, projectId) {
+  const raw = String(message || '').trim();
+  const msg = raw.toLowerCase();
+  const mentionsTasks = /\btasks?\b/.test(msg) || /\bchecklist\b/.test(msg) || /\bto-?dos?\b/.test(msg);
+  if (!mentionsTasks) return null;
+
+  const wantsCreate = /\b(create|add|generate|make|spin up|set up)\b/.test(msg) && (/(\btasks?\b|\bchecklist\b|\bto-?dos?\b)/.test(msg));
+  const wantsSuggest = /\b(suggest|recommend|what (tasks|to-?dos)|ideas|starter)\b/.test(msg) && mentionsTasks;
+  if (!wantsCreate && !wantsSuggest) return null;
+
+  const resolved = resolveProjectForMessage(store, raw, projectId);
+  if (resolved && typeof resolved === 'object' && resolved.ambiguous) {
+    const opts = Array.isArray(resolved.options) ? resolved.options : [];
+    const list = opts.map((p) => `- ${p.name}`).join('\n');
+    return {
+      handled: true,
+      reply: `Which project did you mean?\n${list}`,
+    };
+  }
+  const project = resolved && typeof resolved === 'object' ? resolved : null;
+  if (!project) {
+    const active = (Array.isArray(store?.projects) ? store.projects : [])
+      .filter((p) => String(p?.status || '') !== 'Done')
+      .slice(0, 12)
+      .map((p) => `- ${p.name}`)
+      .join('\n');
+    return {
+      handled: true,
+      reply:
+        "Which project should I use?\n\nReply with something like: 'Create tasks for <project name>'.\n\nActive projects:\n" +
+        (active || '- (none)')
+    };
+  }
+
+  const learned = computeLearnedTaskTemplates(store);
+  store.learnedTaskTemplates = learned;
+  const type = safeEnum(project.type, ['Build', 'Rebuild', 'Revision', 'Workflow', 'Cleanup', 'Other'], 'Other');
+
+  const existing = new Set(
+    (Array.isArray(store?.tasks) ? store.tasks : [])
+      .filter((t) => normKey(t?.project) === normKey(project.name))
+      .map((t) => normKey(t?.title))
+      .filter(Boolean)
+  );
+
+  const baseline = baselineTasksForType(type);
+  const learnedTitles = (learned.byType?.[type] || []).map((x) => ({ title: x.title, priority: 2 }));
+  const candidates = [...baseline, ...learnedTitles];
+
+  const deduped = [];
+  const seen = new Set();
+  for (const c of candidates) {
+    const title = String(c?.title || '').trim();
+    const k = normKey(title);
+    if (!k || seen.has(k)) continue;
+    seen.add(k);
+    if (existing.has(k)) continue;
+    deduped.push({ title, priority: Number(c?.priority) || 2 });
+    if (deduped.length >= 12) break;
+  }
+
+  if (deduped.length === 0) {
+    return {
+      handled: true,
+      reply: `"${project.name}" already has the usual starter tasks for a ${type} project. Tell me what’s missing and I’ll add it.`
+    };
+  }
+
+  if (wantsSuggest && !wantsCreate) {
+    const lines = deduped.map((t, i) => `${i + 1}. [P${t.priority}] ${t.title}`);
+    return {
+      handled: true,
+      reply:
+        `Starter tasks for "${project.name}" (${type}):\n` +
+        lines.join('\n') +
+        `\n\nSay: "Create these tasks" to add them.`
+    };
+  }
+
+  const result = appendTasksToStore(store, project.name, deduped);
+  const createdLines = (result.tasks || []).map((t) => `- [P${t.priority}] ${t.title}`);
+  return {
+    handled: true,
+    reply: `Created ${result.created} tasks for "${project.name}":\n${createdLines.join('\n')}`,
+  };
+}
+
+function normalizeNotes(input) {
+  if (typeof input !== 'string') return '';
+  return input.replace(/\r\n/g, '\n').trimEnd();
+}
+
+function projectKeyFromParam(raw) {
+  const decoded = decodeURIComponent(String(raw ?? ''));
+  return decoded.trim();
+}
+
+function pickProjectNotesValue(entry) {
+  if (!entry) return { notes: '', updatedAt: '' };
+  if (typeof entry === 'string') return { notes: entry, updatedAt: '' };
+  if (typeof entry === 'object') {
+    return {
+      notes: typeof entry.notes === 'string' ? entry.notes : '',
+      updatedAt: typeof entry.updatedAt === 'string' ? entry.updatedAt : '',
+    };
+  }
+  return { notes: '', updatedAt: '' };
+}
+
+async function aiNextActions({ project, notes, tasks }) {
+  const { apiKey, model } = await getAiConfig();
+  if (!apiKey) {
+    const lines = String(notes || '')
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean);
+
+    const bullets = lines
+      .map((l) => l.replace(/^[-*•]\s+/, '').replace(/^\d+\.\s+/, '').trim())
+      .filter((l) => l.length >= 6)
+      .slice(0, 8);
+
+    const open = (Array.isArray(tasks) ? tasks : []).filter((t) => String(t.status || '').toLowerCase() !== 'done');
+    const top = open
+      .slice()
+      .sort((a, b) => Number(a.priority ?? 2) - Number(b.priority ?? 2))
+      .slice(0, 5)
+      .map((t) => t.title);
+
+    const out = [];
+    out.push(`Next actions for: ${project || 'Selected project'}`);
+    out.push('');
+    if (bullets.length) {
+      out.push('From your notes:');
+      bullets.forEach((b, i) => out.push(`${i + 1}. ${b}`));
+      out.push('');
+    }
+    if (top.length) {
+      out.push('From your current tasks (highest priority):');
+      top.forEach((t, i) => out.push(`${i + 1}. ${t}`));
+      out.push('');
+    }
+    out.push('If you want real AI suggestions, set OPENAI_API_KEY and restart the server.');
+    return out.join('\n');
+  }
+
+  // model resolved above
+
+  const safeNotes = String(notes || '').slice(0, 8000);
+  const safeTasks = (Array.isArray(tasks) ? tasks : []).slice(0, 60).map((t) => ({
+    title: t.title,
+    status: t.status,
+    priority: t.priority,
+    dueDate: t.dueDate,
+    owner: t.owner,
+    type: t.type,
+  }));
+
+  const payload = {
+    model,
+    temperature: 0.4,
+    messages: [
+      {
+        role: 'system',
+        content:
+          'You are an operations assistant. Generate 5-10 next actions that keep momentum. Output a concise numbered list. Each item must start with [P1], [P2], or [P3]. Include a suggested due date only when obvious. No extra commentary.',
+      },
+      {
+        role: 'user',
+        content: JSON.stringify(
+          {
+            project,
+            notes: safeNotes,
+            currentTasks: safeTasks,
+          },
+          null,
+          2,
+        ),
+      },
+    ],
+  };
+
+  const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => '');
+    throw new Error(`AI request failed (${resp.status}). ${text}`.slice(0, 400));
+  }
+
+  const json = await resp.json();
+  const content = json?.choices?.[0]?.message?.content;
+  if (typeof content !== 'string' || !content.trim()) {
+    throw new Error('AI returned no content');
+  }
+  return content.trim();
+}
+
+async function aiProjectAssistant({ project, scratchpad, noteEntries, communications, chatMessages }) {
+  const { apiKey, model } = await getAiConfig();
+
+  const projectName = project?.name || '';
+  const projectType = project?.type || '';
+  const projectDue = project?.dueDate || '';
+  const projectStatus = project?.status || 'Active';
+  const accountManagerName = project?.accountManagerName || '';
+
+  const recentNotes = Array.isArray(noteEntries) ? noteEntries.slice(0, 6) : [];
+  const recentComms = Array.isArray(communications) ? communications.slice(0, 8) : [];
+  const recentChat = Array.isArray(chatMessages) ? chatMessages.slice(-16) : [];
+
+  if (!apiKey) {
+    const lastUser = [...recentChat].reverse().find((m) => m.role === 'user')?.content || '';
+    const lines = [];
+    lines.push(`I don't have real AI enabled (OPENAI_API_KEY not set).`);
+    lines.push(`Project: ${projectName}${projectType ? ` (${projectType})` : ''}${projectDue ? ` due ${projectDue}` : ''} • ${projectStatus}`);
+    if (accountManagerName) lines.push(`Account manager: ${accountManagerName}`);
+    lines.push('');
+
+    if (lastUser) {
+      lines.push('You asked:');
+      lines.push(lastUser);
+      lines.push('');
+    }
+
+    lines.push('Quick next actions you can take right now:');
+    lines.push('1. Identify the single blocker and write it as 1 sentence.');
+    lines.push('2. Write a 3-bullet client update (what changed / what you need / ETA).');
+    lines.push('3. Add 1-3 concrete deliverables to the scratchpad with owners.');
+    lines.push('');
+    lines.push('To enable real AI, set OPENAI_API_KEY and restart the server.');
+    return { content: lines.join('\n'), tasks: [] };
+  }
+
+  // model resolved above
+
+  const context = {
+    project: {
+      name: projectName,
+      type: projectType,
+      dueDate: projectDue,
+      status: projectStatus,
+      accountManagerName,
+      accountManagerEmail: project?.accountManagerEmail || '',
+    },
+    scratchpad: String(scratchpad || '').slice(0, 8000),
+    recentNotes: recentNotes.map((n) => ({
+      kind: n.kind,
+      date: n.date,
+      title: n.title,
+      content: String(n.content || '').slice(0, 2000),
+    })),
+    recentCommunications: recentComms.map((c) => ({
+      type: c.type,
+      direction: c.direction,
+      subject: c.subject,
+      date: c.date,
+      body: String(c.body || '').slice(0, 2000),
+    })),
+  };
+
+  const messages = [
+    {
+      role: 'system',
+      content:
+        'You are a project operations assistant. Stay concise and action-oriented. Maintain context for this specific project only. If asked to draft a message to the account manager, produce (1) a short client-ready update and (2) internal next steps. Prefer bullet points. Do not hallucinate facts; ask questions when needed.',
+    },
+    {
+      role: 'user',
+      content: `Project context (JSON):\n${JSON.stringify(context, null, 2)}`,
+    },
+    ...recentChat.map((m) => ({
+      role: m.role,
+      content: String(m.content || '').slice(0, 4000),
+    })),
+  ];
+
+  const tools = [
+    {
+      type: 'function',
+      function: {
+        name: 'create_tasks',
+        description: 'Create new tasks in the project tracker.',
+        parameters: {
+          type: 'object',
+          properties: {
+            tasks: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  title: { type: 'string', description: 'Brief actionable title' },
+                  priority: { type: 'number', enum: [1, 2, 3], description: '1=High, 2=Medium, 3=Low' },
+                  dueDate: { type: 'string', description: 'YYYY-MM-DD format' },
+                },
+                required: ['title', 'priority'],
+              },
+            },
+          },
+          required: ['tasks'],
+        },
+      },
+    },
+  ];
+
+  const payload = {
+    model,
+    temperature: 0.4,
+    messages,
+    tools,
+    tool_choice: 'auto',
+  };
+
+  const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => '');
+    throw new Error(`AI request failed (${resp.status}). ${text}`.slice(0, 400));
+  }
+
+  const json = await resp.json();
+  const choice = json?.choices?.[0];
+  const msg = choice?.message;
+  
+  if (!msg) {
+    throw new Error('AI returned no content');
+  }
+
+  let finalContent = msg.content || '';
+  const newTasks = [];
+
+  if (msg.tool_calls) {
+    for (const toolCall of msg.tool_calls) {
+      if (toolCall.function.name === 'create_tasks') {
+        try {
+          const args = JSON.parse(toolCall.function.arguments);
+          if (Array.isArray(args.tasks)) {
+            newTasks.push(...args.tasks);
+          }
+        } catch (e) {
+          console.error('Failed to parse create_tasks arguments', e);
+        }
+      }
+    }
+  }
+
+  if (newTasks.length > 0) {
+    const taskSummary = newTasks.map(t => `- ${t.title} (P${t.priority})`).join('\n');
+    if (!finalContent) {
+        finalContent = `I've created the following tasks:\n${taskSummary}`;
+    } else {
+        finalContent += `\n\nI also created these tasks:\n${taskSummary}`;
+    }
+  }
+
+  return { content: finalContent.trim(), tasks: newTasks };
+}
+
+function safeParseJsonObject(text) {
+  const s = typeof text === 'string' ? text.trim() : '';
+  if (!s) return null;
+  const first = s.indexOf('{');
+  const last = s.lastIndexOf('}');
+  if (first === -1 || last === -1 || last <= first) return null;
+  const candidate = s.slice(first, last + 1);
+  try {
+    const parsed = JSON.parse(candidate);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeTranscript(text) {
+  if (typeof text !== 'string') return '';
+  return text.replace(/\r\n/g, '\n').trim();
+}
+
+function heuristicallyExtractActionItems(transcript) {
+  const lines = String(transcript || '')
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  const items = [];
+  const pushTitle = (title) => {
+    const t = String(title || '').trim();
+    if (!t) return;
+    if (t.length < 6) return;
+    if (items.some((x) => x.title.toLowerCase() === t.toLowerCase())) return;
+    items.push({ title: t, priority: 2 });
+  };
+
+  for (const l of lines) {
+    if (/^(action items?|actions?)\s*:/i.test(l)) continue;
+    if (/^(todo|to-do)\s*:/i.test(l)) {
+      pushTitle(l.replace(/^(todo|to-do)\s*:\s*/i, ''));
+      continue;
+    }
+    if (/^[-*•]\s+/.test(l)) {
+      pushTitle(l.replace(/^[-*•]\s+/, ''));
+      continue;
+    }
+    if (/^\d+\.\s+/.test(l)) {
+      pushTitle(l.replace(/^\d+\.\s+/, ''));
+      continue;
+    }
+    if (/\bwe need to\b/i.test(l) || /\blet's\b/i.test(l) || /\bplease\b/i.test(l) || /\bfollow up\b/i.test(l)) {
+      pushTitle(l);
+      continue;
+    }
+  }
+
+  return items.slice(0, 12);
+}
+
+async function aiTranscriptProposal({ project, transcript, tasks, noteEntries }) {
+  const { apiKey, model } = await getAiConfig();
+
+  const safeTranscript = normalizeTranscript(transcript).slice(0, 20000);
+  const safeTasks = (Array.isArray(tasks) ? tasks : []).slice(0, 40).map((t) => ({
+    title: t.title,
+    status: t.status,
+    priority: t.priority,
+    dueDate: t.dueDate,
+    owner: t.owner,
+  }));
+  const safeNotes = (Array.isArray(noteEntries) ? noteEntries : []).slice(0, 6).map((n) => ({
+    kind: n.kind,
+    date: n.date,
+    title: n.title,
+    content: String(n.content || '').slice(0, 800),
+  }));
+
+  if (!apiKey) {
+    const actionItems = heuristicallyExtractActionItems(safeTranscript);
+    const subject = `Update: ${project?.name || 'Project'}`;
+    const recapLines = [];
+    recapLines.push('Quick update:');
+    recapLines.push('');
+    recapLines.push('What we covered: (imported transcript — review)');
+    recapLines.push('');
+    if (actionItems.length) {
+      recapLines.push('Next steps:');
+      actionItems.slice(0, 8).forEach((a) => recapLines.push(`- ${a.title}`));
+      recapLines.push('');
+    }
+    recapLines.push('Reply with anything I missed.');
+
+    return {
+      ok: true,
+      proposal: {
+        summary: 'Transcript imported. Review proposed next steps.',
+        decisions: [],
+        actionItems,
+        recapSubject: subject,
+        recapBody: recapLines.join('\n').trimEnd(),
+        internalNote: 'Imported transcript (AI disabled). Confirm action items and send recap.',
+        meta: { source: 'heuristic' },
+      },
+    };
+  }
+
+  const payload = {
+    model,
+    temperature: 0.2,
+    messages: [
+      {
+        role: 'system',
+        content:
+          'You are an operations assistant. Convert a meeting transcript into an actionable proposal. Return ONLY valid JSON with keys: summary (string), decisions (string[]), actionItems (array of {title, owner?, dueDate?, priority?}), recapSubject (string), recapBody (string), internalNote (string). Priority is 1,2,3. dueDate must be YYYY-MM-DD or empty. Keep it concise and non-hallucinatory; if unknown, omit owner/dueDate.',
+      },
+      {
+        role: 'user',
+        content: JSON.stringify(
+          {
+            project: {
+              name: project?.name || '',
+              type: project?.type || '',
+              dueDate: project?.dueDate || '',
+              status: project?.status || '',
+            },
+            existingTasks: safeTasks,
+            recentNotes: safeNotes,
+            transcript: safeTranscript,
+          },
+          null,
+          2,
+        ),
+      },
+    ],
+  };
+
+  const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => '');
+    return { ok: false, error: `AI request failed (${resp.status}). ${text}`.slice(0, 400) };
+  }
+
+  const json = await resp.json().catch(() => ({}));
+  const content = json?.choices?.[0]?.message?.content;
+  const parsed = safeParseJsonObject(typeof content === 'string' ? content : '');
+  if (!parsed) {
+    return { ok: false, error: 'AI returned non-JSON output. Try again or shorten the transcript.' };
+  }
+
+  const decisions = Array.isArray(parsed.decisions) ? parsed.decisions.map((d) => String(d || '').trim()).filter(Boolean).slice(0, 12) : [];
+  const actionItemsRaw = Array.isArray(parsed.actionItems) ? parsed.actionItems : [];
+  const actionItems = actionItemsRaw
+    .map((a) => ({
+      title: typeof a?.title === 'string' ? a.title.trim() : '',
+      owner: typeof a?.owner === 'string' ? a.owner.trim() : '',
+      dueDate: safeYmd(a?.dueDate) || '',
+      priority: [1, 2, 3].includes(Number(a?.priority)) ? Number(a.priority) : 2,
+    }))
+    .filter((a) => a.title)
+    .slice(0, 20);
+
+  return {
+    ok: true,
+    proposal: {
+      summary: typeof parsed.summary === 'string' ? parsed.summary.trim() : 'Transcript summary',
+      decisions,
+      actionItems,
+      recapSubject: typeof parsed.recapSubject === 'string' ? parsed.recapSubject.trim() : `Update: ${project?.name || 'Project'}`,
+      recapBody: typeof parsed.recapBody === 'string' ? parsed.recapBody.trimEnd() : '',
+      internalNote: typeof parsed.internalNote === 'string' ? parsed.internalNote.trimEnd() : '',
+      meta: { source: 'openai' },
+    },
+  };
+}
+
+// Basic no-cache so the browser doesn't fight OneDrive syncing.
+app.use((req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store');
+  next();
+});
+
+app.use(express.static(path.join(process.cwd(), 'public')));
+
+// Settings
+app.get('/api/settings', async (req, res) => {
+  const settings = await readSettings();
+  const safe = sanitizeSettingsForClient(settings);
+
+  const { apiKey, model, source, keyHint, settingsUpdatedAt } = await getAiConfig();
+
+  // Integration hints for the Settings UI.
+  const envGoogleClientId = typeof process.env.GOOGLE_CLIENT_ID === 'string' ? process.env.GOOGLE_CLIENT_ID.trim() : '';
+  const envGoogleClientSecret = typeof process.env.GOOGLE_CLIENT_SECRET === 'string' ? process.env.GOOGLE_CLIENT_SECRET.trim() : '';
+  const savedGoogleClientId = typeof settings.googleClientId === 'string' ? settings.googleClientId.trim() : '';
+  const savedGoogleClientSecret = typeof settings.googleClientSecret === 'string' ? settings.googleClientSecret.trim() : '';
+  const effectiveGoogleClientId = envGoogleClientId || savedGoogleClientId;
+  const googleConfigured = Boolean(isLikelyGoogleClientId(effectiveGoogleClientId));
+  const googleConnected = Boolean(settings.googleTokens && typeof settings.googleTokens === 'object' && settings.googleTokens.refresh_token);
+  const firefliesConfigured = Boolean(typeof settings.firefliesSecret === 'string' && settings.firefliesSecret.trim());
+  const slackConfigured = Boolean(
+    (typeof process.env.SLACK_SIGNING_SECRET === 'string' && process.env.SLACK_SIGNING_SECRET.trim()) ||
+    (typeof settings.slackSigningSecret === 'string' && settings.slackSigningSecret.trim()),
+  );
+
+  const envSlackClientId = typeof process.env.SLACK_CLIENT_ID === 'string' ? process.env.SLACK_CLIENT_ID.trim() : '';
+  const envSlackClientSecret = typeof process.env.SLACK_CLIENT_SECRET === 'string' ? process.env.SLACK_CLIENT_SECRET.trim() : '';
+  const savedSlackClientId = typeof settings.slackClientId === 'string' ? settings.slackClientId.trim() : '';
+  const savedSlackClientSecret = typeof settings.slackClientSecret === 'string' ? settings.slackClientSecret.trim() : '';
+  const slackOAuthConfigured = Boolean((envSlackClientId || savedSlackClientId) && (envSlackClientSecret || savedSlackClientSecret));
+
+  const envSlackBotToken = typeof process.env.SLACK_BOT_TOKEN === 'string' ? process.env.SLACK_BOT_TOKEN.trim() : '';
+  const savedSlackBotToken = typeof settings.slackBotToken === 'string' ? settings.slackBotToken.trim() : '';
+  const slackInstalled = Boolean(envSlackBotToken || savedSlackBotToken);
+
+  const quoConfigured = Boolean(
+    (typeof process.env.TWILIO_AUTH_TOKEN === 'string' && process.env.TWILIO_AUTH_TOKEN.trim()) ||
+    (typeof settings.quoAuthToken === 'string' && settings.quoAuthToken.trim()),
+  );
+
+  const mcp = getMcpConfigFromSettings(settings);
+  const mcpEnabled = Boolean(mcp.enabled);
+  const mcpConfigured = Boolean(mcpEnabled && mcp.command);
+
+  res.json({
+    ...safe,
+    aiEnabled: Boolean(apiKey),
+    openaiModel: model,
+    openaiKeyHint: keyHint,
+    source,
+    settingsUpdatedAt,
+    googleConfigured,
+    googleConnected,
+    firefliesConfigured,
+    slackConfigured,
+    slackOAuthConfigured,
+    slackInstalled,
+    quoConfigured,
+    mcpEnabled,
+    mcpConfigured,
+  });
+});
+
+app.put('/api/settings', async (req, res) => {
+  const body = req.body || {};
+  
+  writeLock = writeLock.then(async () => {
+    const saved = await readSettings();
+    const next = { ...saved, ...body, updatedAt: nowIso() };
+    await writeSettings(next);
+    // Never echo settings back (could include secrets).
+    res.json({ ok: true });
+  });
+  
+  await writeLock;
+});
+
+// Integrations: Google Calendar
+app.get('/api/integrations/google/status', async (req, res) => {
+  const { clientId, clientSecret, calendarId, tokens } = await getGoogleOAuthConfig();
+  const clientIdValid = isLikelyGoogleClientId(clientId);
+  res.json({
+    configured: Boolean(clientIdValid),
+    clientIdValid,
+    secretPresent: Boolean(clientSecret),
+    connected: Boolean(tokens && tokens.refresh_token),
+    calendarId: calendarId || '',
+  });
+});
+
+app.get('/api/integrations/google/auth-url', async (req, res) => {
+  const { clientId, clientSecret } = await getGoogleOAuthConfig();
+  if (!clientId || !isLikelyGoogleClientId(clientId)) {
+    res.status(400).json({ error: 'Google OAuth client is not configured. Paste the OAuth Client ID that ends with .apps.googleusercontent.com.' });
+    return;
+  }
+
+  const redirectUri = `${getBaseUrl(req)}/api/integrations/google/callback`;
+  const state = crypto.randomBytes(16).toString('hex');
+  pruneGooglePkceState();
+
+  const usePkce = !clientSecret;
+  let verifier = '';
+  let challenge = '';
+  if (usePkce) {
+    verifier = makePkceVerifier();
+    challenge = makePkceChallenge(verifier);
+    googlePkceState.set(state, { verifier, createdAt: Date.now() });
+  }
+
+  const params = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    response_type: 'code',
+    access_type: 'offline',
+    prompt: 'consent',
+    include_granted_scopes: 'true',
+    scope: 'https://www.googleapis.com/auth/calendar',
+    state,
+  });
+  if (usePkce) {
+    params.set('code_challenge', challenge);
+    params.set('code_challenge_method', 'S256');
+  }
+
+  const url = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
+  res.json({ url, mode: usePkce ? 'pkce' : 'secret' });
+});
+
+app.get('/api/integrations/google/callback', async (req, res) => {
+  try {
+    const code = typeof req.query?.code === 'string' ? req.query.code : '';
+    if (!code) {
+      res.status(400).send('Missing code');
+      return;
+    }
+
+    const state = typeof req.query?.state === 'string' ? req.query.state : '';
+    const { clientId, clientSecret } = await getGoogleOAuthConfig();
+    if (!clientId) {
+      res.status(400).send('Google OAuth client is not configured (missing Client ID).');
+      return;
+    }
+
+    const usePkce = !clientSecret;
+    let codeVerifier = '';
+    if (usePkce) {
+      if (!state) {
+        res.status(400).send('Missing state');
+        return;
+      }
+      pruneGooglePkceState();
+      const entry = googlePkceState.get(state);
+      googlePkceState.delete(state);
+      codeVerifier = typeof entry?.verifier === 'string' ? entry.verifier : '';
+      if (!codeVerifier) {
+        res.status(400).send('Missing PKCE verifier (state expired). Try connecting again.');
+        return;
+      }
+    }
+
+    const redirectUri = `${getBaseUrl(req)}/api/integrations/google/callback`;
+
+    const tokenJson = await googleTokenRequest({
+      client_id: clientId,
+      client_secret: clientSecret || undefined,
+      code,
+      code_verifier: usePkce ? codeVerifier : undefined,
+      redirect_uri: redirectUri,
+      grant_type: 'authorization_code',
+    });
+    const tokens = normalizeGoogleTokens(tokenJson);
+
+    const saved = await readSettings();
+    const next = { ...saved, googleTokens: tokens, updatedAt: nowIso() };
+    await writeSettings(next);
+
+    // Friendly close page
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(`<!doctype html><html><head><meta charset="utf-8"><title>Connected</title></head><body style="font-family: system-ui, sans-serif; padding: 24px;">
+      <h1>Google Calendar connected.</h1>
+      <p>You can close this tab and return to Task Tracker.</p>
+    </body></html>`);
+  } catch (err) {
+    res.status(500).send(`OAuth failed: ${err?.message || 'unknown error'}`);
+  }
+});
+
+app.post('/api/integrations/google/sync', async (req, res) => {
+  try {
+    const result = await googleSyncProjects({ req });
+    if (!result.ok) {
+      res.status(400).json(result);
+      return;
+    }
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message || 'sync failed' });
+  }
+});
+
+// Read-only: upcoming events (calls/meetings live on the user's calendar)
+app.get('/api/integrations/google/upcoming', async (req, res) => {
+  try {
+    const days = Number(req.query?.days);
+    const max = Number(req.query?.max);
+    const result = await googleListUpcomingEvents({ days, max });
+    if (!result.ok) {
+      res.status(400).json(result);
+      return;
+    }
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message || 'Failed to list events' });
+  }
+});
+
+// One endpoint the UI can call from the existing sync button
+app.post('/api/integrations/sync', async (req, res) => {
+  const results = {};
+  try {
+    results.google = await googleSyncProjects({ req });
+  } catch (err) {
+    results.google = { ok: false, error: err?.message || 'google sync failed' };
+  }
+  res.json({ ok: true, results });
+});
+
+// Integrations: Fireflies ingestion (meeting summaries into project notes)
+// Expected payload: { projectId, date?: 'YYYY-MM-DD', title?: string, summary: string, transcriptUrl?: string }
+app.post('/api/integrations/fireflies/ingest', async (req, res) => {
+  const secret = typeof req.headers['x-fireflies-secret'] === 'string' ? req.headers['x-fireflies-secret'].trim() : '';
+  const saved = await readSettings();
+  const expected = typeof saved.firefliesSecret === 'string' ? saved.firefliesSecret.trim() : '';
+  if (!expected || secret !== expected) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return;
+  }
+
+  const projectId = typeof req.body?.projectId === 'string' ? req.body.projectId.trim() : '';
+  const date = safeYmd(req.body?.date) || safeYmd(new Date().toISOString().slice(0, 10));
+  const title = typeof req.body?.title === 'string' ? req.body.title.trim() : '';
+  const summary = normalizeNotes(req.body?.summary);
+  const transcriptUrl = typeof req.body?.transcriptUrl === 'string' ? req.body.transcriptUrl.trim() : '';
+
+  if (!projectId) {
+    res.status(400).json({ error: 'projectId is required' });
+    return;
+  }
+  if (!summary) {
+    res.status(400).json({ error: 'summary is required' });
+    return;
+  }
+
+  writeLock = writeLock.then(async () => {
+    const store = await readStore();
+    const project = (store.projects || []).find((p) => p.id === projectId);
+    if (!project) {
+      res.status(404).json({ error: 'Project not found' });
+      return;
+    }
+
+    const ts = nowIso();
+    const noteTitle = title || `Fireflies summary`;
+    const lines = [];
+    lines.push(summary);
+    if (transcriptUrl) {
+      lines.push('');
+      lines.push(`Transcript: ${transcriptUrl}`);
+    }
+
+    const note = {
+      id: makeId(),
+      kind: 'Summary',
+      date,
+      title: noteTitle,
+      content: lines.join('\n').trimEnd(),
+      createdAt: ts,
+    };
+
+    const existing = Array.isArray(store.projectNoteEntries?.[projectId]) ? store.projectNoteEntries[projectId] : [];
+    const nextStore = {
+      ...store,
+      revision: store.revision + 1,
+      updatedAt: ts,
+      projectNoteEntries: {
+        ...(store.projectNoteEntries || {}),
+        [projectId]: [note, ...existing],
+      },
+    };
+
+    await writeStore(nextStore);
+    res.status(201).json({ ok: true, revision: nextStore.revision, note });
+  });
+
+  await writeLock;
+});
+
+// Integrations: Slack Events API -> Inbox
+// Slack OAuth (install + bot token) is optional, but enables richer Inbox labels and “all the things”.
+// Set a public BASE_URL so Slack can redirect back to your instance.
+app.get('/api/integrations/slack/auth-url', async (req, res) => {
+  try {
+    const { clientId, clientSecret } = await getSlackOAuthConfig();
+    if (!clientId || !clientSecret) {
+      res.status(400).json({ error: 'Slack OAuth is not configured. Paste Slack Client ID + Client Secret first.' });
+      return;
+    }
+
+    const state = crypto.randomBytes(16).toString('hex');
+    pruneSlackOAuthState();
+    slackOAuthState.set(state, { createdAt: Date.now() });
+
+    const redirectUri = `${getBaseUrl(req)}/api/integrations/slack/oauth/callback`;
+
+    // Broad scopes for “I want it all” (messages + lookup for channels/users).
+    const scope = [
+      'users:read',
+      'channels:read',
+      'groups:read',
+      'im:read',
+      'mpim:read',
+      'channels:history',
+      'groups:history',
+      'im:history',
+      'mpim:history',
+    ].join(',');
+
+    const params = new URLSearchParams({
+      client_id: clientId,
+      scope,
+      redirect_uri: redirectUri,
+      state,
+    });
+
+    const url = `https://slack.com/oauth/v2/authorize?${params.toString()}`;
+    res.json({ url });
+  } catch (err) {
+    res.status(500).json({ error: err?.message || 'Failed to build Slack auth URL' });
+  }
+});
+
+app.get('/api/integrations/slack/oauth/callback', async (req, res) => {
+  try {
+    const code = typeof req.query?.code === 'string' ? req.query.code : '';
+    const state = typeof req.query?.state === 'string' ? req.query.state : '';
+    if (!code) {
+      res.status(400).send('Missing code');
+      return;
+    }
+    if (!state) {
+      res.status(400).send('Missing state');
+      return;
+    }
+
+    pruneSlackOAuthState();
+    const entry = slackOAuthState.get(state);
+    slackOAuthState.delete(state);
+    if (!entry) {
+      res.status(400).send('Invalid/expired state. Try connecting again.');
+      return;
+    }
+
+    const { clientId, clientSecret } = await getSlackOAuthConfig();
+    if (!clientId || !clientSecret) {
+      res.status(400).send('Slack OAuth is not configured (missing Client ID/Secret).');
+      return;
+    }
+
+    const redirectUri = `${getBaseUrl(req)}/api/integrations/slack/oauth/callback`;
+    const body = new URLSearchParams({
+      client_id: clientId,
+      client_secret: clientSecret,
+      code,
+      redirect_uri: redirectUri,
+    });
+
+    const resp = await fetch('https://slack.com/api/oauth.v2.access', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body.toString(),
+    });
+
+    const json = await resp.json().catch(() => ({}));
+    if (!resp.ok || !json || json.ok !== true) {
+      const msg = typeof json?.error === 'string' ? json.error : 'Slack token exchange failed';
+      res.status(400).send(msg);
+      return;
+    }
+
+    const token = typeof json?.access_token === 'string' ? json.access_token.trim() : '';
+    if (!token) {
+      res.status(400).send('Slack did not return an access token');
+      return;
+    }
+
+    const teamId = typeof json?.team?.id === 'string' ? json.team.id.trim() : '';
+    const teamName = typeof json?.team?.name === 'string' ? json.team.name.trim() : '';
+    const botUserId = typeof json?.bot_user_id === 'string' ? json.bot_user_id.trim() : '';
+    const appId = typeof json?.app_id === 'string' ? json.app_id.trim() : '';
+    const scopes = typeof json?.scope === 'string' ? json.scope.trim() : '';
+
+    const saved = await readSettings();
+    const next = {
+      ...saved,
+      slackBotToken: token,
+      slackTeamId: teamId,
+      slackTeamName: teamName,
+      slackBotUserId: botUserId,
+      slackAppId: appId,
+      slackScopes: scopes,
+      slackInstalledAt: nowIso(),
+      updatedAt: nowIso(),
+    };
+    await writeSettings(next);
+
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(`<!doctype html><html><head><meta charset="utf-8"><title>Connected</title></head><body style="font-family: system-ui, sans-serif; padding: 24px;">
+      <h1>Slack connected.</h1>
+      <p>Workspace: ${escapeHtml(teamName || teamId || 'unknown')}</p>
+      <p>You can close this tab and return to Task Tracker.</p>
+    </body></html>`);
+  } catch (err) {
+    res.status(500).send(`Slack OAuth failed: ${err?.message || 'unknown error'}`);
+  }
+});
+
+// Configure Slack to send events to: POST /api/integrations/slack/events
+// Requires: SLACK_SIGNING_SECRET (env) or settings.slackSigningSecret
+app.post('/api/integrations/slack/events', async (req, res) => {
+  try {
+    const settings = await readSettings();
+    const signingSecret = (typeof process.env.SLACK_SIGNING_SECRET === 'string' && process.env.SLACK_SIGNING_SECRET.trim())
+      ? process.env.SLACK_SIGNING_SECRET.trim()
+      : (typeof settings.slackSigningSecret === 'string' ? settings.slackSigningSecret.trim() : '');
+
+    const botToken = (typeof process.env.SLACK_BOT_TOKEN === 'string' && process.env.SLACK_BOT_TOKEN.trim())
+      ? process.env.SLACK_BOT_TOKEN.trim()
+      : (typeof settings.slackBotToken === 'string' ? settings.slackBotToken.trim() : '');
+
+    const verified = verifySlackRequest({ req, signingSecret });
+    if (!verified.ok) {
+      res.status(401).json({ ok: false, error: verified.error || 'Unauthorized' });
+      return;
+    }
+
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    if (body.type === 'url_verification') {
+      res.json({ challenge: body.challenge });
+      return;
+    }
+
+    if (body.type !== 'event_callback') {
+      res.json({ ok: true });
+      return;
+    }
+
+    const eventId = typeof body.event_id === 'string' ? body.event_id.trim() : '';
+    const teamId = typeof body.team_id === 'string' ? body.team_id.trim() : '';
+    const ev = body.event && typeof body.event === 'object' ? body.event : {};
+    const evType = typeof ev.type === 'string' ? ev.type : '';
+    const subtype = typeof ev.subtype === 'string' ? ev.subtype : '';
+    const isBot = Boolean(ev.bot_id) || Boolean(ev.bot_profile);
+
+    // Only capture human message posts.
+    if (evType !== 'message' || subtype || isBot) {
+      res.json({ ok: true });
+      return;
+    }
+
+    const text = typeof ev.text === 'string' ? ev.text.trim() : '';
+    if (!text) {
+      res.json({ ok: true });
+      return;
+    }
+
+    // Optional: try to associate to a project if the message includes the project name.
+    const store = await readStore();
+    const matched = matchProjectFromText(store, text);
+    const channel = typeof ev.channel === 'string' ? ev.channel : '';
+    const user = typeof ev.user === 'string' ? ev.user : '';
+
+    const display = botToken
+      ? await formatSlackInboxText({ token: botToken, channelId: channel, userId: user, text })
+      : [`Slack${channel ? ` ${channel}` : ''}${user ? ` @${user}` : ''}:`, text].join(' ');
+    const externalId = `${teamId || 'team'}:${eventId || (typeof ev.ts === 'string' ? ev.ts : makeId())}`;
+
+    await addInboxIntegrationItem({
+      source: 'slack',
+      externalId,
+      text: display,
+      projectId: matched?.id || '',
+      projectName: matched?.name || '',
+    });
+
+    res.json({ ok: true });
+  } catch (err) {
+    // Slack expects fast 2xx responses; treat unexpected errors as 200 to prevent retries storms.
+    res.json({ ok: true, error: err?.message || 'unknown error' });
+  }
+});
+
+// Integrations: Quo (Twilio) SMS webhook -> Inbox
+// Configure your provider to send incoming message webhooks to: POST /api/integrations/quo/sms
+// Requires: TWILIO_AUTH_TOKEN (env) or settings.quoAuthToken
+app.post('/api/integrations/quo/sms', async (req, res) => {
+  try {
+    const settings = await readSettings();
+    const authToken = (typeof process.env.TWILIO_AUTH_TOKEN === 'string' && process.env.TWILIO_AUTH_TOKEN.trim())
+      ? process.env.TWILIO_AUTH_TOKEN.trim()
+      : (typeof settings.quoAuthToken === 'string' ? settings.quoAuthToken.trim() : '');
+
+    const verified = verifyTwilioRequest({ req, authToken });
+    if (!verified.ok) {
+      res.status(401).type('text/plain').send(verified.error || 'Unauthorized');
+      return;
+    }
+
+    const sid = String(req.body?.MessageSid || req.body?.SmsSid || '').trim();
+    const from = String(req.body?.From || '').trim();
+    const to = String(req.body?.To || '').trim();
+    const body = String(req.body?.Body || '').trim();
+
+    if (!body) {
+      res.status(200).type('text/plain').send('OK');
+      return;
+    }
+
+    const store = await readStore();
+    const matched = matchProjectFromText(store, body);
+    const lines = [];
+    lines.push(`SMS${from ? ` from ${from}` : ''}${to ? ` → ${to}` : ''}:`);
+    lines.push(body);
+
+    await addInboxIntegrationItem({
+      source: 'quo',
+      externalId: `sms:${sid || crypto.createHash('sha1').update(`${from}|${to}|${body}`).digest('hex')}`,
+      text: lines.join('\n'),
+      projectId: matched?.id || '',
+      projectName: matched?.name || '',
+    });
+
+    res.status(200).type('text/plain').send('OK');
+  } catch (err) {
+    res.status(200).type('text/plain').send('OK');
+  }
+});
+
+// Integrations: Quo (Twilio) Voice status callback -> Inbox (missed calls)
+// Configure provider status callbacks to: POST /api/integrations/quo/calls
+app.post('/api/integrations/quo/calls', async (req, res) => {
+  try {
+    const settings = await readSettings();
+    const authToken = (typeof process.env.TWILIO_AUTH_TOKEN === 'string' && process.env.TWILIO_AUTH_TOKEN.trim())
+      ? process.env.TWILIO_AUTH_TOKEN.trim()
+      : (typeof settings.quoAuthToken === 'string' ? settings.quoAuthToken.trim() : '');
+
+    const verified = verifyTwilioRequest({ req, authToken });
+    if (!verified.ok) {
+      res.status(401).type('text/plain').send(verified.error || 'Unauthorized');
+      return;
+    }
+
+    const callSid = String(req.body?.CallSid || '').trim();
+    const from = String(req.body?.From || '').trim();
+    const to = String(req.body?.To || '').trim();
+    const callStatus = String(req.body?.CallStatus || req.body?.CallStatusCallbackEvent || '').trim();
+
+    // Twilio final CallStatus values: queued, ringing, in-progress, completed, busy, failed, no-answer, canceled
+    const missed = ['busy', 'failed', 'no-answer', 'canceled'].includes(callStatus.toLowerCase());
+    if (!missed) {
+      res.status(200).type('text/plain').send('OK');
+      return;
+    }
+
+    const text = `Missed call${from ? ` from ${from}` : ''}${to ? ` → ${to}` : ''}${callStatus ? ` (${callStatus})` : ''}`;
+    await addInboxIntegrationItem({
+      source: 'call',
+      externalId: `call:${callSid || crypto.createHash('sha1').update(`${from}|${to}|${callStatus}|${Date.now()}`).digest('hex')}`,
+      text,
+    });
+
+    res.status(200).type('text/plain').send('OK');
+  } catch {
+    res.status(200).type('text/plain').send('OK');
+  }
+});
+
+// Integrations: MCP (Model Context Protocol) over stdio
+app.get('/api/integrations/mcp/status', async (req, res) => {
+  const settings = await readSettings();
+  const mcp = getMcpConfigFromSettings(settings);
+  res.json({
+    enabled: Boolean(mcp.enabled),
+    configured: Boolean(mcp.enabled && mcp.command),
+    command: mcp.command,
+    args: mcp.args,
+    cwd: mcp.cwd,
+  });
+});
+
+app.post('/api/integrations/mcp/tools', async (req, res) => {
+  try {
+    const settings = await readSettings();
+    const mcp = getMcpConfigFromSettings(settings);
+    if (!mcp.enabled || !mcp.command) {
+      res.status(400).json({ ok: false, error: 'MCP is not enabled/configured in Settings.' });
+      return;
+    }
+
+    const result = await mcpListTools({ command: mcp.command, args: mcp.args, cwd: mcp.cwd || process.cwd() });
+    res.json({ ok: true, tools: result.tools || [] });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message || 'Failed to list MCP tools' });
+  }
+});
+
+app.post('/api/integrations/mcp/call', async (req, res) => {
+  try {
+    const settings = await readSettings();
+    const mcp = getMcpConfigFromSettings(settings);
+    if (!mcp.enabled || !mcp.command) {
+      res.status(400).json({ ok: false, error: 'MCP is not enabled/configured in Settings.' });
+      return;
+    }
+
+    const name = typeof req.body?.name === 'string' ? req.body.name : '';
+    const args = req.body?.arguments && typeof req.body.arguments === 'object' && !Array.isArray(req.body.arguments) ? req.body.arguments : {};
+    const result = await mcpCallTool({ command: mcp.command, args: mcp.args, cwd: mcp.cwd || process.cwd() }, name, args);
+    res.json({ ok: true, result });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message || 'Failed to call MCP tool' });
+  }
+});
+
+app.put('/api/settings/openai', async (req, res) => {
+  const openaiApiKey = typeof req.body?.openaiApiKey === 'string' ? req.body.openaiApiKey.trim() : '';
+  const openaiModel = typeof req.body?.openaiModel === 'string' ? req.body.openaiModel.trim() : '';
+
+  // Avoid accidentally returning secrets back to the browser.
+  writeLock = writeLock.then(async () => {
+    const saved = await readSettings();
+    const next = {
+      ...saved,
+      openaiApiKey,
+      openaiModel,
+      updatedAt: nowIso(),
+    };
+    await writeSettings(next);
+    const last4 = openaiApiKey && openaiApiKey.length >= 4 ? openaiApiKey.slice(-4) : '';
+    const keyHint = last4 ? `••••${last4}` : '';
+    res.json({
+      ok: true,
+      aiEnabled: Boolean(openaiApiKey),
+      openaiModel: openaiModel || 'gpt-4.1-mini',
+      openaiKeyHint: keyHint,
+      source: openaiApiKey ? 'saved' : 'none',
+      settingsUpdatedAt: next.updatedAt,
+    });
+  });
+
+  await writeLock;
+});
+
+app.get('/api/tasks', async (req, res) => {
+  const store = await readStore();
+  res.json(store);
+});
+
+// Inbox (global capture)
+app.get('/api/inbox', async (req, res) => {
+  const store = await readStore();
+  const items = Array.isArray(store.inboxItems) ? store.inboxItems : [];
+  res.json({ revision: store.revision, updatedAt: store.updatedAt, items });
+});
+
+app.post('/api/inbox', async (req, res) => {
+  const baseRevision = Number(req.body?.baseRevision);
+  const item = normalizeInboxItem(req.body?.item);
+  if (!item.text) {
+    res.status(400).json({ ok: false, error: 'text is required' });
+    return;
+  }
+
+  writeLock = writeLock.then(async () => {
+    const store = await readStore();
+    if (Number.isFinite(baseRevision) && baseRevision !== store.revision) {
+      res.status(409).json({ ok: false, error: 'Revision mismatch. Reload and try again.', currentRevision: store.revision });
+      return;
+    }
+
+    const ts = nowIso();
+    const nextItem = {
+      ...item,
+      status: 'New',
+      createdAt: ts,
+      updatedAt: ts,
+    };
+
+    const nextStore = {
+      ...store,
+      revision: store.revision + 1,
+      updatedAt: ts,
+      inboxItems: [nextItem, ...(Array.isArray(store.inboxItems) ? store.inboxItems : [])].slice(0, 500),
+    };
+
+    await writeStore(nextStore);
+    res.status(201).json({ ok: true, store: nextStore, item: nextItem });
+  });
+
+  await writeLock;
+});
+
+app.put('/api/inbox/:id', async (req, res) => {
+  const inboxId = String(req.params.id || '').trim();
+  const baseRevision = Number(req.body?.baseRevision);
+  const patch = req.body?.patch && typeof req.body.patch === 'object' ? req.body.patch : {};
+
+  if (!inboxId) {
+    res.status(400).json({ ok: false, error: 'Missing inbox id' });
+    return;
+  }
+
+  writeLock = writeLock.then(async () => {
+    const store = await readStore();
+    if (Number.isFinite(baseRevision) && baseRevision !== store.revision) {
+      res.status(409).json({ ok: false, error: 'Revision mismatch. Reload and try again.', currentRevision: store.revision });
+      return;
+    }
+
+    const list = Array.isArray(store.inboxItems) ? store.inboxItems : [];
+    const idx = list.findIndex((x) => String(x?.id || '') === inboxId);
+    if (idx === -1) {
+      res.status(404).json({ ok: false, error: 'Inbox item not found' });
+      return;
+    }
+
+    const current = list[idx];
+    const next = normalizeInboxItem({
+      ...current,
+      ...patch,
+      id: current.id,
+      text: Object.prototype.hasOwnProperty.call(patch, 'text') ? normalizeInboxText(patch.text) : current.text,
+      status: Object.prototype.hasOwnProperty.call(patch, 'status') ? safeEnum(patch.status, ['New', 'Triaged', 'Done', 'Archived'], current.status || 'New') : current.status,
+      updatedAt: nowIso(),
+    });
+
+    const ts = nowIso();
+    const nextList = [...list];
+    nextList[idx] = next;
+    const nextStore = {
+      ...store,
+      revision: store.revision + 1,
+      updatedAt: ts,
+      inboxItems: nextList,
+    };
+    await writeStore(nextStore);
+    res.json({ ok: true, store: nextStore, item: next });
+  });
+
+  await writeLock;
+});
+
+app.post('/api/inbox/:id/convert', async (req, res) => {
+  const inboxId = String(req.params.id || '').trim();
+  const baseRevision = Number(req.body?.baseRevision);
+  const kind = safeEnum(req.body?.kind, ['task', 'note', 'comm'], 'task');
+  const payload = req.body?.payload && typeof req.body.payload === 'object' ? req.body.payload : {};
+
+  if (!inboxId) {
+    res.status(400).json({ ok: false, error: 'Missing inbox id' });
+    return;
+  }
+
+  writeLock = writeLock.then(async () => {
+    const store = await readStore();
+    if (Number.isFinite(baseRevision) && baseRevision !== store.revision) {
+      res.status(409).json({ ok: false, error: 'Revision mismatch. Reload and try again.', currentRevision: store.revision });
+      return;
+    }
+
+    const list = Array.isArray(store.inboxItems) ? store.inboxItems : [];
+    const idx = list.findIndex((x) => String(x?.id || '') === inboxId);
+    if (idx === -1) {
+      res.status(404).json({ ok: false, error: 'Inbox item not found' });
+      return;
+    }
+
+    const item = list[idx];
+    const projectId = typeof payload.projectId === 'string' ? payload.projectId.trim() : (typeof item.projectId === 'string' ? item.projectId.trim() : '');
+    const project = projectId ? (store.projects || []).find((p) => p.id === projectId) : null;
+
+    const ts = nowIso();
+    const date = safeYmd(payload.date) || safeYmd(new Date().toISOString().slice(0, 10));
+
+    let createdTask = null;
+    let createdNote = null;
+    let createdComm = null;
+
+    const nextTasks = [...(store.tasks || [])];
+    const nextProjectNoteEntries = { ...(store.projectNoteEntries || {}) };
+    const nextProjectComms = { ...(store.projectCommunications || {}) };
+
+    if (kind === 'task') {
+      const title = typeof payload.title === 'string' ? payload.title.trim() : '';
+      const dueDate = safeYmd(payload.dueDate) || '';
+      const owner = typeof payload.owner === 'string' ? payload.owner.trim() : '';
+      const priority = [1, 2, 3].includes(Number(payload.priority)) ? Number(payload.priority) : 2;
+      const projectName = project?.name || (typeof payload.projectName === 'string' ? payload.projectName.trim() : '') || (typeof item.projectName === 'string' ? item.projectName.trim() : '') || 'Other';
+      const finalTitle = title || item.text;
+      if (!finalTitle) {
+        res.status(400).json({ ok: false, error: 'Task title is required' });
+        return;
+      }
+
+      createdTask = {
+        id: makeId(),
+        title: finalTitle,
+        project: projectName,
+        type: typeof payload.type === 'string' ? payload.type.trim() : 'Other',
+        owner,
+        status: 'Next',
+        priority,
+        dueDate,
+        createdAt: ts,
+        updatedAt: ts,
+      };
+      nextTasks.unshift(createdTask);
+    }
+
+    if (kind === 'note') {
+      if (!projectId || !project) {
+        res.status(400).json({ ok: false, error: 'projectId is required for notes' });
+        return;
+      }
+      const content = normalizeInboxText(payload.content) || item.text;
+      if (!content) {
+        res.status(400).json({ ok: false, error: 'Note content is required' });
+        return;
+      }
+      createdNote = {
+        id: makeId(),
+        kind: safeEnum(payload.kind, ['Call Note', 'Summary'], 'Call Note'),
+        date,
+        title: typeof payload.title === 'string' ? payload.title.trim() : '',
+        content,
+        createdAt: ts,
+      };
+      const existing = Array.isArray(store.projectNoteEntries?.[projectId]) ? store.projectNoteEntries[projectId] : [];
+      nextProjectNoteEntries[projectId] = [createdNote, ...existing];
+    }
+
+    if (kind === 'comm') {
+      if (!projectId || !project) {
+        res.status(400).json({ ok: false, error: 'projectId is required for communications' });
+        return;
+      }
+      const subject = typeof payload.subject === 'string' ? payload.subject.trim() : '';
+      const body = typeof payload.body === 'string' ? payload.body.trimEnd() : '';
+      const finalBody = body || item.text;
+      createdComm = {
+        id: makeId(),
+        type: safeEnum(payload.type, ['email', 'quo', 'call', 'other'], 'other'),
+        direction: safeEnum(payload.direction, ['inbound', 'outbound'], 'outbound'),
+        subject: subject || 'Inbox conversion',
+        body: finalBody,
+        date,
+        createdAt: ts,
+      };
+      const existing = Array.isArray(store.projectCommunications?.[projectId]) ? store.projectCommunications[projectId] : [];
+      nextProjectComms[projectId] = [createdComm, ...existing];
+    }
+
+    const nextList = [...list];
+    const converted = {
+      kind,
+      taskId: createdTask?.id || '',
+      noteId: createdNote?.id || '',
+      commId: createdComm?.id || '',
+      projectId: projectId || '',
+      at: ts,
+    };
+    nextList[idx] = normalizeInboxItem({
+      ...item,
+      status: 'Done',
+      updatedAt: ts,
+      converted,
+      projectId: projectId || item.projectId || '',
+      projectName: project?.name || item.projectName || '',
+    });
+
+    const nextStore = {
+      ...store,
+      revision: store.revision + 1,
+      updatedAt: ts,
+      inboxItems: nextList,
+      tasks: nextTasks,
+      projectNoteEntries: nextProjectNoteEntries,
+      projectCommunications: nextProjectComms,
+    };
+
+    await writeStore(nextStore);
+    res.json({ ok: true, store: nextStore, converted });
+  });
+
+  await writeLock;
+});
+
+// Projects
+app.get('/api/projects', async (req, res) => {
+  const store = await readStore();
+  res.json({ revision: store.revision, updatedAt: store.updatedAt, projects: store.projects || [] });
+});
+
+app.post('/api/projects', async (req, res) => {
+  const baseRevision = Number(req.body?.baseRevision);
+  const data = req.body?.project ?? {};
+
+  writeLock = writeLock.then(async () => {
+    const store = await readStore();
+    if (Number.isFinite(baseRevision) && baseRevision !== store.revision) {
+      res.status(409).json({ error: 'Revision mismatch. Reload and try again.', currentRevision: store.revision });
+      return;
+    }
+
+    const normalized = normalizeProject(data);
+    const ts = nowIso();
+    const project = {
+      id: makeId(),
+      ...normalized,
+      createdAt: ts,
+      updatedAt: ts,
+    };
+
+    const nextStore = {
+      ...store,
+      revision: store.revision + 1,
+      updatedAt: ts,
+      projects: [project, ...(store.projects || [])],
+    };
+
+    await writeStore(nextStore);
+    res.status(201).json(nextStore);
+  });
+
+  await writeLock;
+});
+
+app.put('/api/projects/:id', async (req, res) => {
+  const projectId = req.params.id;
+  const baseRevision = Number(req.body?.baseRevision);
+  const patch = req.body?.patch ?? {};
+
+  writeLock = writeLock.then(async () => {
+    const store = await readStore();
+    if (Number.isFinite(baseRevision) && baseRevision !== store.revision) {
+      res.status(409).json({ error: 'Revision mismatch. Reload and try again.', currentRevision: store.revision });
+      return;
+    }
+
+    const idx = (store.projects || []).findIndex((p) => p.id === projectId);
+    if (idx === -1) {
+      res.status(404).json({ error: 'Project not found' });
+      return;
+    }
+
+    const existing = store.projects[idx];
+    const merged = { ...existing, ...patch };
+    const normalized = normalizeProject(merged);
+    const ts = nowIso();
+
+    const updated = { ...existing, ...normalized, updatedAt: ts };
+    const nextProjects = [...store.projects];
+    nextProjects[idx] = updated;
+
+    const nextStore = {
+      ...store,
+      revision: store.revision + 1,
+      updatedAt: ts,
+      projects: nextProjects,
+    };
+
+    await writeStore(nextStore);
+    res.json(nextStore);
+  });
+
+  await writeLock;
+});
+
+app.post('/api/projects/bulk-update', async (req, res) => {
+  const baseRevision = Number(req.body?.baseRevision);
+  const projectIdsRaw = req.body?.projectIds;
+  const patchRaw = req.body?.patch;
+
+  const projectIds = Array.isArray(projectIdsRaw)
+    ? projectIdsRaw.map((v) => String(v || '').trim()).filter(Boolean)
+    : [];
+
+  const patch = patchRaw && typeof patchRaw === 'object' && !Array.isArray(patchRaw) ? patchRaw : {};
+
+  writeLock = writeLock.then(async () => {
+    const store = await readStore();
+    if (Number.isFinite(baseRevision) && baseRevision !== store.revision) {
+      res.status(409).json({ error: 'Revision mismatch. Reload and try again.', currentRevision: store.revision });
+      return;
+    }
+
+    if (!projectIds.length) {
+      res.json(store);
+      return;
+    }
+
+    const projects = Array.isArray(store.projects) ? store.projects : [];
+    const missing = projectIds.filter((id) => !projects.some((p) => p.id === id));
+    if (missing.length) {
+      res.status(404).json({ error: `Project not found: ${missing.slice(0, 3).join(', ')}${missing.length > 3 ? '…' : ''}` });
+      return;
+    }
+
+    const ts = nowIso();
+    const nextProjects = projects.map((p) => {
+      if (!projectIds.includes(p.id)) return p;
+      const merged = { ...p, ...patch };
+      const normalized = normalizeProject(merged);
+      return { ...p, ...normalized, updatedAt: ts };
+    });
+
+    const nextStore = {
+      ...store,
+      revision: store.revision + 1,
+      updatedAt: ts,
+      projects: nextProjects,
+    };
+
+    await writeStore(nextStore);
+    res.json(nextStore);
+  });
+
+  await writeLock;
+});
+
+app.post('/api/projects/bulk-delete', async (req, res) => {
+  const baseRevision = Number(req.body?.baseRevision);
+  const projectIdsRaw = req.body?.projectIds;
+  const projectIds = Array.isArray(projectIdsRaw)
+    ? projectIdsRaw.map((v) => String(v || '').trim()).filter(Boolean)
+    : [];
+
+  writeLock = writeLock.then(async () => {
+    const store = await readStore();
+    if (Number.isFinite(baseRevision) && baseRevision !== store.revision) {
+      res.status(409).json({ error: 'Revision mismatch. Reload and try again.', currentRevision: store.revision });
+      return;
+    }
+
+    if (!projectIds.length) {
+      res.json(store);
+      return;
+    }
+
+    const deleteIds = new Set(projectIds);
+    const existingProjects = Array.isArray(store.projects) ? store.projects : [];
+    const deletedProjects = existingProjects.filter((p) => deleteIds.has(p.id));
+    if (!deletedProjects.length) {
+      res.json(store);
+      return;
+    }
+
+    const deletedNameKeys = new Set(deletedProjects.map((p) => normKey(p?.name)));
+
+    const nextProjects = existingProjects.filter((p) => !deleteIds.has(p.id));
+    const nextTasks = (Array.isArray(store.tasks) ? store.tasks : []).filter((t) => !deletedNameKeys.has(normKey(t?.project)));
+
+    const nextProjectScratchpads = { ...(store.projectScratchpads && typeof store.projectScratchpads === 'object' ? store.projectScratchpads : {}) };
+    const nextProjectNoteEntries = { ...(store.projectNoteEntries && typeof store.projectNoteEntries === 'object' ? store.projectNoteEntries : {}) };
+    const nextProjectChats = { ...(store.projectChats && typeof store.projectChats === 'object' ? store.projectChats : {}) };
+    const nextProjectCommunications = { ...(store.projectCommunications && typeof store.projectCommunications === 'object' ? store.projectCommunications : {}) };
+
+    for (const id of deleteIds) {
+      delete nextProjectScratchpads[id];
+      delete nextProjectNoteEntries[id];
+      delete nextProjectChats[id];
+      delete nextProjectCommunications[id];
+    }
+
+    const nextProjectNotes = { ...(store.projectNotes && typeof store.projectNotes === 'object' ? store.projectNotes : {}) };
+    for (const key of Object.keys(nextProjectNotes)) {
+      if (deletedNameKeys.has(normKey(key))) delete nextProjectNotes[key];
+    }
+
+    const ts = nowIso();
+    const nextStore = {
+      ...store,
+      revision: store.revision + 1,
+      updatedAt: ts,
+      projects: nextProjects,
+      tasks: nextTasks,
+      projectScratchpads: nextProjectScratchpads,
+      projectNoteEntries: nextProjectNoteEntries,
+      projectChats: nextProjectChats,
+      projectCommunications: nextProjectCommunications,
+      projectNotes: nextProjectNotes,
+    };
+
+    await writeStore(nextStore);
+    res.json({ ok: true, deletedProjectIds: deletedProjects.map((p) => p.id), store: nextStore });
+  });
+
+  await writeLock;
+});
+
+app.get('/api/projects/:id', async (req, res) => {
+  const projectId = req.params.id;
+  const store = await readStore();
+  const project = (store.projects || []).find((p) => p.id === projectId);
+  if (!project) {
+    res.status(404).json({ error: 'Project not found' });
+    return;
+  }
+
+  const scratchpad = store.projectScratchpads?.[projectId]?.text || '';
+  const scratchpadUpdatedAt = store.projectScratchpads?.[projectId]?.updatedAt || '';
+  const notes = Array.isArray(store.projectNoteEntries?.[projectId]) ? store.projectNoteEntries[projectId] : [];
+  const chat = store.projectChats?.[projectId] || { messages: [], updatedAt: '' };
+  const communications = Array.isArray(store.projectCommunications?.[projectId]) ? store.projectCommunications[projectId] : [];
+  
+  // Filter tasks for this project (by name, legacy behavior)
+  const projectTasks = (store.tasks || []).filter(t => t.project === project.name);
+
+  res.json({
+    revision: store.revision,
+    project,
+    scratchpad,
+    scratchpadUpdatedAt,
+    notes,
+    chat,
+    tasks: projectTasks,
+    communications
+  });
+});
+
+app.post('/api/projects/:id/auto-suggest-tasks', async (req, res) => {
+  const projectId = req.params.id;
+  const baseRevision = Number(req.body?.baseRevision);
+
+  writeLock = writeLock.then(async () => {
+    const store = await readStore();
+    if (Number.isFinite(baseRevision) && baseRevision !== store.revision) {
+      res.status(409).json({ error: 'Revision mismatch. Reload and try again.', currentRevision: store.revision });
+      return;
+    }
+
+    const project = (store.projects || []).find((p) => p.id === projectId);
+    if (!project) {
+      res.status(404).json({ error: 'Project not found' });
+      return;
+    }
+
+    const chatHistory = getProjectChatArray(store, projectId);
+    const recent = chatHistory.slice(-10).map((m) => String(m?.content || '')).join('\n');
+    if (/\[Auto\]\s*Starter tasks/i.test(recent)) {
+      // Already suggested recently; no-op.
+      res.json(store);
+      return;
+    }
+
+    const { type, tasks } = buildStarterTaskSuggestions(store, project, 12);
+    if (!tasks.length) {
+      res.json(store);
+      return;
+    }
+
+    const lines = tasks.map((t) => `- [P${t.priority}] ${t.title}`);
+    const msg =
+      `[Auto] Starter tasks for "${project.name}" (${type}):\n` +
+      lines.join('\n') +
+      `\n\nReply: "Create these tasks" to add them.`;
+
+    const ts = nowIso();
+    chatHistory.push({ role: 'ai', content: msg, timestamp: ts });
+    // Persist in canonical object shape.
+    store.projectChats[projectId] = { messages: chatHistory, updatedAt: ts };
+
+    store.revision++;
+    store.updatedAt = ts;
+    await writeStore(store);
+    res.json(store);
+  });
+
+  await writeLock;
+});
+
+app.post('/api/launch', (req, res) => {
+  const { path: projectPath } = req.body;
+  if (!projectPath) return res.status(400).json({ error: 'Path required' });
+  
+  exec(`code "${projectPath}"`, (error) => {
+    if (error) {
+      console.error(`exec error: ${error}`);
+      return res.status(500).json({ error: 'Failed to launch code' });
+    }
+    res.json({ success: true });
+  });
+});
+
+app.post('/api/pick-folder', async (req, res) => {
+  if (process.platform !== 'win32') {
+    res.status(400).json({ error: 'Folder picker is only supported on Windows.' });
+    return;
+  }
+
+  // Use WinForms with a TopMost owner so the dialog reliably appears in front.
+  // This avoids the common failure mode where the dialog opens behind the browser
+  // or not on the visible desktop when invoked from a backgrounded process.
+  const ps =
+    "powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -Command \"$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.Windows.Forms; $owner = New-Object System.Windows.Forms.Form; $owner.TopMost = $true; $owner.Opacity = 0; $owner.ShowInTaskbar = $false; $owner.StartPosition = 'CenterScreen'; $owner.Width = 1; $owner.Height = 1; $owner.Show(); $owner.Activate(); $dlg = New-Object System.Windows.Forms.FolderBrowserDialog; $dlg.Description = 'Select workspace folder'; $dlg.ShowNewFolderButton = $true; $result = $dlg.ShowDialog($owner); $owner.Close(); if ($result -eq [System.Windows.Forms.DialogResult]::OK) { $dlg.SelectedPath }\"";
+
+  exec(ps, { windowsHide: true }, (error, stdout, stderr) => {
+    if (error) {
+      console.error('pick-folder error:', error, stderr);
+      res.status(500).json({ error: 'Failed to open folder picker.' });
+      return;
+    }
+    const selectedPath = String(stdout || '').trim();
+    res.json({ path: selectedPath });
+  });
+});
+
+app.post('/api/projects/:id/template', async (req, res) => {
+  const projectId = req.params.id;
+  const baseRevision = Number(req.body?.baseRevision);
+
+  writeLock = writeLock.then(async () => {
+    const store = await readStore();
+    if (Number.isFinite(baseRevision) && baseRevision !== store.revision) {
+      res.status(409).json({ error: 'Revision mismatch', currentRevision: store.revision });
+      return;
+    }
+
+    const project = (store.projects || []).find(p => p.id === projectId);
+    if (!project) {
+      res.status(404).json({ error: 'Project not found' });
+      return;
+    }
+
+    // Define Templates
+    const templates = {
+      'Build': [
+        { title: 'Setup staging environment', priority: 1, type: 'Build' },
+        { title: 'Gather assets (logo, images, copy)', priority: 1, type: 'Build' },
+        { title: 'Design mockup', priority: 2, type: 'Build' },
+        { title: 'Develop homepage', priority: 2, type: 'Build' },
+        { title: 'Develop inner pages', priority: 2, type: 'Build' },
+        { title: 'Mobile responsiveness check', priority: 1, type: 'Build' },
+        { title: 'SEO basic setup', priority: 2, type: 'Build' },
+        { title: 'Launch checklist', priority: 1, type: 'Build' }
+      ],
+      'Rebuild': [
+         { title: 'Audit existing site', priority: 1, type: 'Rebuild' },
+         { title: 'Backup current site', priority: 1, type: 'Rebuild' },
+         { title: 'Setup staging environment', priority: 1, type: 'Rebuild' },
+         { title: 'Develop new theme', priority: 2, type: 'Rebuild' },
+         { title: 'Content migration', priority: 2, type: 'Rebuild' },
+         { title: '301 Redirect map', priority: 1, type: 'Rebuild' },
+         { title: 'Launch & DNS update', priority: 1, type: 'Rebuild' }
+      ],
+      'Workflow': [
+        { title: 'Map current process', priority: 1, type: 'Workflow' },
+        { title: 'Identify bottlenecks', priority: 2, type: 'Workflow' },
+        { title: 'Draft new SOP', priority: 2, type: 'Workflow' },
+        { title: 'Setup automation (Zapier/Make)', priority: 2, type: 'Workflow' },
+        { title: 'Team training', priority: 3, type: 'Workflow' }
+      ],
+      'Cleanup': [
+        { title: 'Audit current state', priority: 1, type: 'Cleanup' },
+        { title: 'Archive old items', priority: 2, type: 'Cleanup' },
+        { title: 'Organize folder structure', priority: 2, type: 'Cleanup' },
+        { title: 'Update documentation', priority: 3, type: 'Cleanup' }
+      ],
+      'default': [
+        { title: 'Define scope', priority: 1, type: 'Other' },
+        { title: 'Set milestones', priority: 2, type: 'Other' },
+        { title: 'Kickoff call', priority: 2, type: 'Other' }
+      ]
+    };
+
+    const type = project.type || 'Other';
+    const newTasksData = templates[type] || templates['default'];
+
+    const ts = nowIso();
+    const newTasks = newTasksData.map(t => ({
+      id: makeId(),
+      title: t.title,
+      project: project.name, // Link by name as per legacy schema
+      type: t.type || 'Other',
+      owner: '',
+      status: 'Next',
+      priority: t.priority,
+      dueDate: '',
+      createdAt: ts,
+      updatedAt: ts
+    }));
+
+    const nextStore = {
+      ...store,
+      revision: store.revision + 1,
+      updatedAt: ts,
+      tasks: [...newTasks, ...store.tasks]
+    };
+
+    await writeStore(nextStore);
+    res.json({ count: newTasks.length, tasks: newTasks });
+  });
+  await writeLock;
+});
+
+app.put('/api/projects/:id/scratchpad', async (req, res) => {
+  const projectId = req.params.id;
+  const baseRevision = Number(req.body?.baseRevision);
+  const text = normalizeNotes(req.body?.text);
+
+  writeLock = writeLock.then(async () => {
+    const store = await readStore();
+    if (Number.isFinite(baseRevision) && baseRevision !== store.revision) {
+      res.status(409).json({ error: 'Revision mismatch. Reload and try again.', currentRevision: store.revision });
+      return;
+    }
+
+    const project = (store.projects || []).find((p) => p.id === projectId);
+    if (!project) {
+      res.status(404).json({ error: 'Project not found' });
+      return;
+    }
+
+    const ts = nowIso();
+    const nextStore = {
+      ...store,
+      revision: store.revision + 1,
+      updatedAt: ts,
+      projectScratchpads: {
+        ...(store.projectScratchpads || {}),
+        [projectId]: { text, updatedAt: ts },
+      },
+    };
+
+    await writeStore(nextStore);
+    res.json(nextStore);
+  });
+
+  await writeLock;
+});
+
+app.post('/api/projects/:id/notes', async (req, res) => {
+  const projectId = req.params.id;
+  const baseRevision = Number(req.body?.baseRevision);
+  const entry = req.body?.entry ?? {};
+
+  writeLock = writeLock.then(async () => {
+    const store = await readStore();
+    if (Number.isFinite(baseRevision) && baseRevision !== store.revision) {
+      res.status(409).json({ error: 'Revision mismatch. Reload and try again.', currentRevision: store.revision });
+      return;
+    }
+
+    const project = (store.projects || []).find((p) => p.id === projectId);
+    if (!project) {
+      res.status(404).json({ error: 'Project not found' });
+      return;
+    }
+
+    const kind = safeEnum(entry.kind, ['Call Note', 'Summary'], 'Call Note');
+    const date = safeYmd(entry.date) || safeYmd(new Date().toISOString().slice(0, 10));
+    const title = typeof entry.title === 'string' ? entry.title.trim() : '';
+    const content = normalizeNotes(entry.content);
+    if (!content) {
+      res.status(400).json({ error: 'Note content is required' });
+      return;
+    }
+
+    const ts = nowIso();
+    const note = { id: makeId(), kind, date, title, content, createdAt: ts };
+    const existing = Array.isArray(store.projectNoteEntries?.[projectId]) ? store.projectNoteEntries[projectId] : [];
+
+    const nextStore = {
+      ...store,
+      revision: store.revision + 1,
+      updatedAt: ts,
+      projectNoteEntries: {
+        ...(store.projectNoteEntries || {}),
+        [projectId]: [note, ...existing],
+      },
+    };
+
+    await writeStore(nextStore);
+    res.status(201).json(nextStore);
+  });
+
+  await writeLock;
+});
+
+app.get('/api/projects/:id/notes', async (req, res) => {
+  const projectId = req.params.id;
+  const store = await readStore();
+  const notes = Array.isArray(store.projectNoteEntries?.[projectId]) ? store.projectNoteEntries[projectId] : [];
+  res.json({ revision: store.revision, notes });
+});
+
+app.get('/api/projects/:id/chat', async (req, res) => {
+  const projectId = req.params.id;
+  const store = await readStore();
+  const entry = store.projectChats?.[projectId];
+  const history = Array.isArray(entry)
+    ? entry
+    : (entry && typeof entry === 'object' && Array.isArray(entry.messages))
+        ? entry.messages
+        : [];
+  res.json({ revision: store.revision, history });
+});
+
+app.post('/api/projects/:id/chat', async (req, res) => {
+  const projectId = req.params.id;
+  const baseRevision = Number(req.body?.baseRevision);
+  const content = typeof req.body?.message === 'string' ? req.body.message.trim() : '';
+  if (!content) {
+    res.status(400).json({ error: 'Message is required' });
+    return;
+  }
+
+  writeLock = writeLock.then(async () => {
+    try {
+      const store = await readStore();
+      if (Number.isFinite(baseRevision) && baseRevision !== store.revision) {
+        res.status(409).json({ error: 'Revision mismatch. Reload and try again.', currentRevision: store.revision });
+        return;
+      }
+
+      const project = (store.projects || []).find((p) => p.id === projectId);
+      if (!project) {
+        res.status(404).json({ error: 'Project not found' });
+        return;
+      }
+
+      const ts = nowIso();
+      const existingChat = store.projectChats?.[projectId];
+      const existingMessages = Array.isArray(existingChat)
+        ? existingChat
+        : (existingChat && Array.isArray(existingChat.messages))
+        ? existingChat.messages
+        : [];
+
+      const nextUserMsg = { role: 'user', content, timestamp: ts };
+      const workingMessages = [...existingMessages, nextUserMsg];
+
+      const scratchpad = store.projectScratchpads?.[projectId]?.text || '';
+      const noteEntries = Array.isArray(store.projectNoteEntries?.[projectId]) ? store.projectNoteEntries[projectId] : [];
+      const communications = Array.isArray(store.projectCommunications?.[projectId]) ? store.projectCommunications[projectId] : [];
+
+      let assistantContent = '';
+      let newTasks = [];
+      try {
+        const result = await aiProjectAssistant({
+          project,
+          scratchpad,
+          noteEntries,
+          communications,
+          chatMessages: workingMessages,
+        });
+        
+        if (typeof result === 'string') {
+           // Fallback for older return type if mixed
+           assistantContent = result;
+        } else {
+           assistantContent = result.content;
+           newTasks = Array.isArray(result.tasks) ? result.tasks : [];
+        }
+      } catch (err) {
+        assistantContent = `AI error: ${err?.message || 'unknown error'}`;
+      }
+
+      const assistantTs = nowIso();
+      const nextAssistantMsg = { role: 'ai', content: assistantContent, timestamp: assistantTs };
+      const nextMessages = [...workingMessages, nextAssistantMsg].slice(-60);
+
+      const updatedAt = nowIso();
+      
+      let nextTasks = [...(store.tasks || [])];
+      if (newTasks.length > 0) {
+          const createdTasks = newTasks.map(t => ({
+              id: makeId(),
+              title: t.title,
+              project: project.name, // Link by name
+              type: 'Other',
+              owner: '',
+              status: 'Next',
+              priority: t.priority,
+              dueDate: t.dueDate || '',
+              createdAt: updatedAt,
+              updatedAt: updatedAt
+          }));
+          nextTasks = [...createdTasks, ...nextTasks];
+      }
+
+      const nextStore = {
+        ...store,
+        revision: store.revision + 1,
+        updatedAt,
+        tasks: nextTasks,
+        projectChats: {
+          ...(store.projectChats || {}),
+          [projectId]: { messages: nextMessages, updatedAt },
+        },
+      };
+
+      await writeStore(nextStore);
+      res.json({ revision: nextStore.revision, chat: nextStore.projectChats[projectId], tasksCreated: newTasks.length > 0 });
+    } catch (err) {
+      res.status(500).json({ error: err?.message || 'Chat error' });
+    }
+  });
+
+  await writeLock;
+});
+
+// Transcript -> proposal (tasks + recap + internal note), then apply
+app.post('/api/projects/:id/transcript/analyze', async (req, res) => {
+  try {
+    const projectId = req.params.id;
+    const transcript = normalizeTranscript(req.body?.transcript);
+    if (!transcript) {
+      res.status(400).json({ ok: false, error: 'transcript is required' });
+      return;
+    }
+
+    const store = await readStore();
+    const project = (store.projects || []).find((p) => p.id === projectId);
+    if (!project) {
+      res.status(404).json({ ok: false, error: 'Project not found' });
+      return;
+    }
+
+    const projectTasks = (store.tasks || []).filter((t) => t.project === project.name);
+    const noteEntries = Array.isArray(store.projectNoteEntries?.[projectId]) ? store.projectNoteEntries[projectId] : [];
+
+    const result = await aiTranscriptProposal({ project, transcript, tasks: projectTasks, noteEntries });
+    if (!result.ok) {
+      res.status(400).json(result);
+      return;
+    }
+    res.json({ ok: true, proposal: result.proposal });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message || 'Failed to analyze transcript' });
+  }
+});
+
+app.post('/api/projects/:id/transcript/apply', async (req, res) => {
+  const projectId = req.params.id;
+  const baseRevision = Number(req.body?.baseRevision);
+  const transcript = normalizeTranscript(req.body?.transcript);
+  const proposal = req.body?.proposal && typeof req.body.proposal === 'object' ? req.body.proposal : null;
+
+  if (!proposal) {
+    res.status(400).json({ ok: false, error: 'proposal is required' });
+    return;
+  }
+
+  writeLock = writeLock.then(async () => {
+    const store = await readStore();
+    if (Number.isFinite(baseRevision) && baseRevision !== store.revision) {
+      res.status(409).json({ ok: false, error: 'Revision mismatch. Reload and try again.', currentRevision: store.revision });
+      return;
+    }
+
+    const idx = (store.projects || []).findIndex((p) => p.id === projectId);
+    if (idx === -1) {
+      res.status(404).json({ ok: false, error: 'Project not found' });
+      return;
+    }
+
+    const project = store.projects[idx];
+    const ts = nowIso();
+    const date = safeYmd(new Date().toISOString().slice(0, 10));
+
+    const rawItems = Array.isArray(proposal.actionItems) ? proposal.actionItems : [];
+    const actionItems = rawItems
+      .map((a) => ({
+        title: typeof a?.title === 'string' ? a.title.trim() : '',
+        priority: [1, 2, 3].includes(Number(a?.priority)) ? Number(a.priority) : 2,
+        dueDate: safeYmd(a?.dueDate) || '',
+      }))
+      .filter((a) => a.title)
+      .slice(0, 20);
+
+    const createdTasks = actionItems.map((a) => ({
+      id: makeId(),
+      title: a.title,
+      project: project.name,
+      type: 'Other',
+      owner: '',
+      status: 'Next',
+      priority: a.priority,
+      dueDate: a.dueDate,
+      createdAt: ts,
+      updatedAt: ts,
+    }));
+
+    const summary = typeof proposal.summary === 'string' ? proposal.summary.trim() : 'Transcript import';
+    const decisions = Array.isArray(proposal.decisions) ? proposal.decisions.map((d) => String(d || '').trim()).filter(Boolean).slice(0, 12) : [];
+    const internalNote = typeof proposal.internalNote === 'string' ? proposal.internalNote.trimEnd() : '';
+
+    const noteLines = [];
+    noteLines.push(summary);
+    if (internalNote) {
+      noteLines.push('');
+      noteLines.push(internalNote);
+    }
+    if (decisions.length) {
+      noteLines.push('');
+      noteLines.push('Decisions:');
+      decisions.forEach((d) => noteLines.push(`- ${d}`));
+    }
+    if (createdTasks.length) {
+      noteLines.push('');
+      noteLines.push('Proposed tasks applied:');
+      createdTasks.forEach((t) => noteLines.push(`- [P${t.priority}] ${t.title}${t.dueDate ? ` (due ${t.dueDate})` : ''}`));
+    }
+    if (transcript) {
+      noteLines.push('');
+      noteLines.push('Transcript (excerpt):');
+      noteLines.push(String(transcript).slice(0, 4000));
+    }
+
+    const note = {
+      id: makeId(),
+      kind: 'Summary',
+      date: date || new Date().toISOString().slice(0, 10),
+      title: 'Transcript import',
+      content: noteLines.join('\n').trimEnd(),
+      createdAt: ts,
+    };
+    const existingNotes = Array.isArray(store.projectNoteEntries?.[projectId]) ? store.projectNoteEntries[projectId] : [];
+
+    const recapSubject = typeof proposal.recapSubject === 'string' ? proposal.recapSubject.trim() : `Update: ${project.name}`;
+    const recapBody = typeof proposal.recapBody === 'string' ? proposal.recapBody.trimEnd() : '';
+    const comm = {
+      id: makeId(),
+      type: 'email',
+      direction: 'outbound',
+      subject: recapSubject || `Update: ${project.name}`,
+      body: recapBody,
+      date: date || new Date().toISOString().slice(0, 10),
+      createdAt: ts,
+    };
+    const existingComms = Array.isArray(store.projectCommunications?.[projectId]) ? store.projectCommunications[projectId] : [];
+
+    const nextProjects = [...(store.projects || [])];
+    nextProjects[idx] = { ...project, updatedAt: ts };
+
+    const nextStore = {
+      ...store,
+      revision: store.revision + 1,
+      updatedAt: ts,
+      projects: nextProjects,
+      tasks: [...createdTasks, ...(store.tasks || [])],
+      projectNoteEntries: {
+        ...(store.projectNoteEntries || {}),
+        [projectId]: [note, ...existingNotes],
+      },
+      projectCommunications: {
+        ...(store.projectCommunications || {}),
+        [projectId]: [comm, ...existingComms],
+      },
+      projectTranscriptUndo: (() => {
+        const existing = store.projectTranscriptUndo && typeof store.projectTranscriptUndo === 'object' ? store.projectTranscriptUndo : {};
+        const stack = Array.isArray(existing[projectId]) ? existing[projectId] : [];
+        const record = {
+          id: makeId(),
+          at: ts,
+          createdTaskIds: createdTasks.map((t) => t.id),
+          noteId: note.id,
+          commId: comm.id,
+        };
+        return {
+          ...existing,
+          [projectId]: [record, ...stack].slice(0, 25),
+        };
+      })(),
+    };
+
+    await writeStore(nextStore);
+    res.json({ ok: true, store: nextStore, createdTasks: createdTasks.length, noteId: note.id, commId: comm.id });
+  });
+
+  await writeLock;
+});
+
+app.post('/api/projects/:id/transcript/undo', async (req, res) => {
+  const projectId = req.params.id;
+  const baseRevision = Number(req.body?.baseRevision);
+  const undoId = typeof req.body?.undoId === 'string' ? req.body.undoId.trim() : '';
+
+  writeLock = writeLock.then(async () => {
+    const store = await readStore();
+    if (Number.isFinite(baseRevision) && baseRevision !== store.revision) {
+      res.status(409).json({ ok: false, error: 'Revision mismatch. Reload and try again.', currentRevision: store.revision });
+      return;
+    }
+
+    const project = (store.projects || []).find((p) => p.id === projectId);
+    if (!project) {
+      res.status(404).json({ ok: false, error: 'Project not found' });
+      return;
+    }
+
+    const stacks = store.projectTranscriptUndo && typeof store.projectTranscriptUndo === 'object' ? store.projectTranscriptUndo : {};
+    const stack = Array.isArray(stacks[projectId]) ? stacks[projectId] : [];
+    if (!stack.length) {
+      res.status(400).json({ ok: false, error: 'Nothing to undo' });
+      return;
+    }
+
+    const recordIdx = undoId ? stack.findIndex((r) => String(r?.id || '') === undoId) : 0;
+    if (recordIdx === -1) {
+      res.status(404).json({ ok: false, error: 'Undo record not found' });
+      return;
+    }
+
+    const record = stack[recordIdx];
+    const createdTaskIds = Array.isArray(record?.createdTaskIds) ? record.createdTaskIds.map((v) => String(v || '')).filter(Boolean) : [];
+    const noteId = String(record?.noteId || '').trim();
+    const commId = String(record?.commId || '').trim();
+
+    const nextTasks = (store.tasks || []).filter((t) => !createdTaskIds.includes(String(t?.id || '')));
+
+    const notes = Array.isArray(store.projectNoteEntries?.[projectId]) ? store.projectNoteEntries[projectId] : [];
+    const nextNotes = noteId ? notes.filter((n) => String(n?.id || '') !== noteId) : notes;
+
+    const comms = Array.isArray(store.projectCommunications?.[projectId]) ? store.projectCommunications[projectId] : [];
+    const nextComms = commId ? comms.filter((c) => String(c?.id || '') !== commId) : comms;
+
+    const nextStack = [...stack];
+    nextStack.splice(recordIdx, 1);
+
+    const ts = nowIso();
+    const nextStore = {
+      ...store,
+      revision: store.revision + 1,
+      updatedAt: ts,
+      tasks: nextTasks,
+      projectNoteEntries: {
+        ...(store.projectNoteEntries || {}),
+        [projectId]: nextNotes,
+      },
+      projectCommunications: {
+        ...(store.projectCommunications || {}),
+        [projectId]: nextComms,
+      },
+      projectTranscriptUndo: {
+        ...(stacks || {}),
+        [projectId]: nextStack,
+      },
+    };
+
+    await writeStore(nextStore);
+    res.json({ ok: true, store: nextStore, undone: { undoId: record.id, removedTasks: createdTaskIds.length, removedNote: Boolean(noteId), removedComm: Boolean(commId) } });
+  });
+
+  await writeLock;
+});
+
+app.get('/api/projects/:id/communications', async (req, res) => {
+  const projectId = req.params.id;
+  const store = await readStore();
+  const comms = Array.isArray(store.projectCommunications?.[projectId]) ? store.projectCommunications[projectId] : [];
+  res.json({ revision: store.revision, communications: comms });
+});
+
+app.post('/api/projects/:id/communications', async (req, res) => {
+  const projectId = req.params.id;
+  const baseRevision = Number(req.body?.baseRevision);
+  const data = req.body?.communication ?? {};
+
+  writeLock = writeLock.then(async () => {
+    const store = await readStore();
+    if (Number.isFinite(baseRevision) && baseRevision !== store.revision) {
+      res.status(409).json({ error: 'Revision mismatch', currentRevision: store.revision });
+      return;
+    }
+
+    const type = safeEnum(data.type, ['email', 'quo', 'call', 'other'], 'other');
+    const direction = safeEnum(data.direction, ['inbound', 'outbound'], 'outbound');
+    const subject = typeof data.subject === 'string' ? data.subject.trim() : 'No Subject';
+    const body = typeof data.body === 'string' ? data.body.trim() : '';
+    const date = safeYmd(data.date) ||  new Date().toISOString().slice(0, 10);
+    const ts = nowIso();
+
+    const entry = { id: makeId(), type, direction, subject, body, date, createdAt: ts };
+    
+    // Default to empty array if no communications exist
+    const existing = Array.isArray(store.projectCommunications?.[projectId]) ? store.projectCommunications[projectId] : [];
+
+    const nextStore = {
+      ...store,
+      revision: store.revision + 1,
+      updatedAt: ts,
+      projectCommunications: {
+        ...(store.projectCommunications || {}),
+        [projectId]: [entry, ...existing] 
+      }
+    };
+    
+    await writeStore(nextStore);
+    res.status(201).json({ communications: nextStore.projectCommunications[projectId] });
+  });
+
+  await writeLock;
+});
+
+// Legacy endpoints kept for compatibility with older UI builds (no longer used by the current UI)
+app.get('/api/project-notes/:project', async (req, res) => {
+  const project = projectKeyFromParam(req.params.project);
+  const store = await readStore();
+  const entry = pickProjectNotesValue(store.projectNotes?.[project]);
+  res.json({ revision: store.revision, project, notes: entry.notes, updatedAt: entry.updatedAt || store.updatedAt });
+});
+
+app.put('/api/project-notes/:project', async (req, res) => {
+  const project = projectKeyFromParam(req.params.project);
+  const baseRevision = Number(req.body?.baseRevision);
+  const notes = normalizeNotes(req.body?.notes);
+
+  writeLock = writeLock.then(async () => {
+    const store = await readStore();
+    if (Number.isFinite(baseRevision) && baseRevision !== store.revision) {
+      res.status(409).json({ error: 'Revision mismatch. Reload and try again.', currentRevision: store.revision });
+      return;
+    }
+
+    const ts = nowIso();
+    const nextStore = {
+      ...store,
+      revision: store.revision + 1,
+      updatedAt: ts,
+      projectNotes: {
+        ...(store.projectNotes && typeof store.projectNotes === 'object' ? store.projectNotes : {}),
+        [project]: { notes, updatedAt: ts },
+      },
+    };
+
+    await writeStore(nextStore);
+    res.json(nextStore);
+  });
+
+  await writeLock;
+});
+
+app.post('/api/ai/agent', async (req, res) => {
+  const { apiKey, model } = await getAiConfig();
+  if (!apiKey) {
+    res.json({ error: 'AI not configured' });
+    return;
+  }
+
+  const userPrompt = typeof req.body.prompt === 'string' ? req.body.prompt.trim() : '';
+  if (!userPrompt) {
+    res.status(400).json({ error: 'Prompt required' });
+    return;
+  }
+
+  writeLock = writeLock.then(async () => {
+    const store = await readStore();
+    
+    // We want the LLM to return a JSON action
+    // "create_project": { name, type, dueDate, tasks: [{title, priority}] }
+    // "create_tasks": { projectName, tasks: [...] } 
+    
+    const context = `
+    Current Projects: ${(store.projects || []).map(p => `${p.name} (${p.type})`).join(', ')}
+    Current Time: ${nowIso()}
+    User Request: ${userPrompt}
+    `;
+
+    const systemPrompt = `
+    You are an autonomous agent capable of modifying the project database.
+    Your goal is to interpret the user's request and output a JSON object representing the action to take.
+    
+    Supported Actions:
+    1. Create Project:
+       {
+         "action": "create_project",
+         "name": "Project Name",
+         "type": "Build" | "Rebuild" | "Workflow" | "Cleanup" | "Other",
+         "dueDate": "YYYY-MM-DD" (optional),
+         "tasks": [ { "title": "Task title", "priority": 1|2|3 } ] (optional list of initial tasks)
+       }
+       
+    2. Add Tasks to Project:
+       {
+         "action": "add_tasks",
+         "projectName": "Exact existing project name or close match",
+         "tasks": [ { "title": "Task title", "priority": 1|2|3 } ]
+       }
+       
+    If the request is ambiguous or invalid, return { "action": "error", "message": "Reason" }.
+    If the user provides a transcript, extract actionable tasks and use "add_tasks" (if project exists) or "create_project" (if new).
+    Be smart about inferring project type from context (e.g. "website" -> Build/Rebuild).
+    Only return the JSON. No processing text.
+    `;
+
+    try {
+      const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: context }
+          ],
+          temperature: 0.1
+        }),
+      });
+      
+      if (!resp.ok) {
+        throw new Error(`AI error: ${resp.status}`);
+      }
+      
+      const json = await resp.json();
+      const content = json.choices?.[0]?.message?.content || '{}';
+      let action;
+      try {
+        // loose parse in case of markdown wrapping
+        const clean = content.replace(/```json/g, '').replace(/```/g, '').trim();
+        action = JSON.parse(clean);
+      } catch (e) {
+        res.status(500).json({ error: 'Failed to parse AI response', raw: content });
+        return;
+      }
+      
+      const ts = nowIso();
+      
+      if (action.action === 'create_project') {
+          const newProject = {
+              id: makeId(),
+              name: action.name || 'New Project',
+              type: safeEnum(action.type, ['Build', 'Rebuild', 'Revision', 'Workflow', 'Cleanup', 'Other'], 'Other'),
+              dueDate: safeYmd(action.dueDate),
+              status: 'Active',
+              createdAt: ts,
+              updatedAt: ts
+          };
+          
+          const newTasks = (Array.isArray(action.tasks) ? action.tasks : []).map(t => ({
+              id: makeId(),
+              title: t.title,
+              project: newProject.name,
+              status: 'Next',
+              priority: t.priority || 2,
+              createdAt: ts,
+              updatedAt: ts
+          }));
+          
+          const nextStore = {
+              ...store,
+              revision: store.revision + 1,
+              updatedAt: ts,
+              projects: [newProject, ...(store.projects || [])],
+              tasks: [...newTasks, ...(store.tasks || [])]
+          };
+          
+          await writeStore(nextStore);
+          res.json({ success: true, message: `Created project "${newProject.name}" with ${newTasks.length} tasks.`, project: newProject });
+          
+      } else if (action.action === 'add_tasks') {
+          // Find project fuzzy match
+          const targetName = (action.projectName || '').toLowerCase();
+          const project = (store.projects || []).find(p => p.name.toLowerCase().includes(targetName));
+          
+          if (!project) {
+              res.status(404).json({ error: `Project matching "${action.projectName}" not found.` });
+              return;
+          }
+          
+          const newTasks = (Array.isArray(action.tasks) ? action.tasks : []).map(t => ({
+              id: makeId(),
+              title: t.title,
+              project: project.name,
+              status: 'Next',
+              priority: t.priority || 2,
+              createdAt: ts,
+              updatedAt: ts
+          }));
+          
+          const nextStore = {
+              ...store,
+              revision: store.revision + 1,
+              updatedAt: ts,
+              tasks: [...newTasks, ...(store.tasks || [])]
+          };
+          
+          await writeStore(nextStore);
+          res.json({ success: true, message: `Added ${newTasks.length} tasks to "${project.name}".` });
+          
+      } else {
+          res.status(400).json({ error: action.message || 'Unknown action' });
+      }
+
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+  
+  await writeLock;
+});
+
+app.post('/api/tasks', async (req, res) => {
+  const baseRevision = Number(req.body?.baseRevision);
+  const data = req.body?.task ?? {};
+
+  writeLock = writeLock.then(async () => {
+    const store = await readStore();
+    if (Number.isFinite(baseRevision) && baseRevision !== store.revision) {
+      res.status(409).json({
+        error: 'Revision mismatch. Reload and try again.',
+        currentRevision: store.revision,
+      });
+      return;
+    }
+
+    const normalized = normalizeTask(data);
+    const ts = nowIso();
+
+    const task = {
+      id: makeId(),
+      ...normalized,
+      createdAt: ts,
+      updatedAt: ts,
+    };
+
+    const nextStore = {
+      ...store,
+      revision: store.revision + 1,
+      updatedAt: ts,
+      tasks: [task, ...store.tasks],
+    };
+
+    await writeStore(nextStore);
+    res.status(201).json(nextStore);
+  });
+
+  await writeLock;
+});
+
+app.put('/api/tasks/:id', async (req, res) => {
+  const taskId = req.params.id;
+  const baseRevision = Number(req.body?.baseRevision);
+  const patch = req.body?.patch ?? {};
+
+  writeLock = writeLock.then(async () => {
+    const store = await readStore();
+    if (Number.isFinite(baseRevision) && baseRevision !== store.revision) {
+      res.status(409).json({
+        error: 'Revision mismatch. Reload and try again.',
+        currentRevision: store.revision,
+      });
+      return;
+    }
+
+    const idx = store.tasks.findIndex((t) => t.id === taskId);
+    if (idx === -1) {
+      res.status(404).json({ error: 'Task not found' });
+      return;
+    }
+
+    const existing = store.tasks[idx];
+    const merged = {
+      ...existing,
+      ...patch,
+    };
+
+    // validate required title
+    if (typeof merged.title !== 'string' || !merged.title.trim()) {
+      res.status(400).json({ error: 'Title is required' });
+      return;
+    }
+
+    // normalize key fields
+    const normalized = normalizeTask(merged);
+    const ts = nowIso();
+
+    const updated = {
+      ...existing,
+      ...normalized,
+      updatedAt: ts,
+    };
+
+    const nextTasks = [...store.tasks];
+    nextTasks[idx] = updated;
+
+    const nextStore = {
+      ...store,
+      revision: store.revision + 1,
+      updatedAt: ts,
+      tasks: nextTasks,
+    };
+
+    await writeStore(nextStore);
+    res.json(nextStore);
+  });
+
+  await writeLock;
+});
+
+app.delete('/api/tasks/:id', async (req, res) => {
+  const taskId = req.params.id;
+  const baseRevision = Number(req.body?.baseRevision);
+
+  writeLock = writeLock.then(async () => {
+    const store = await readStore();
+    if (Number.isFinite(baseRevision) && baseRevision !== store.revision) {
+      res.status(409).json({
+        error: 'Revision mismatch. Reload and try again.',
+        currentRevision: store.revision,
+      });
+      return;
+    }
+
+    const nextTasks = store.tasks.filter((t) => t.id !== taskId);
+    if (nextTasks.length === store.tasks.length) {
+      res.status(404).json({ error: 'Task not found' });
+      return;
+    }
+
+    const ts = nowIso();
+    const nextStore = {
+      ...store,
+      revision: store.revision + 1,
+      updatedAt: ts,
+      tasks: nextTasks,
+    };
+
+    await writeStore(nextStore);
+    res.json(nextStore);
+  });
+
+  await writeLock;
+});
+
+/* Global AI Assistant */
+async function aiAgentAction(message, store, projectId = null) {
+  const { apiKey, model } = await getAiConfig();
+
+    const settings = await readSettings();
+    const mcp = getMcpConfigFromSettings(settings);
+    const mcpAvailable = Boolean(mcp.enabled && mcp.command);
+
+    const googleConnected = Boolean(settings.googleTokens && typeof settings.googleTokens === 'object' && settings.googleTokens.refresh_token);
+
+    const findProjectByName = (name) => {
+      const n = typeof name === 'string' ? name.trim().toLowerCase() : '';
+      if (!n) return null;
+      return (store.projects || []).find((p) => String(p.name || '').trim().toLowerCase() === n) || null;
+    };
+
+    const resolveProject = () => {
+      const resolved = resolveProjectForMessage(store, message, projectId);
+      if (resolved && typeof resolved === 'object' && resolved.ambiguous) return resolved;
+      return resolved && typeof resolved === 'object' ? resolved : null;
+    };
+
+    const resolvedProject = resolveProject();
+    if (resolvedProject && typeof resolvedProject === 'object' && resolvedProject.ambiguous) {
+      const opts = Array.isArray(resolvedProject.options) ? resolvedProject.options : [];
+      const list = opts.map((p) => `- ${p.name}`).join('\n');
+      return { content: `Which project did you mean?\n${list}` };
+    }
+
+    const effectiveProject = resolvedProject || (projectId ? (store.projects || []).find((p) => p.id === projectId) : null) || null;
+    const effectiveProjectId = effectiveProject?.id || projectId || null;
+
+    const upsertScratchpad = (pid, text) => {
+      store.projectScratchpads = store.projectScratchpads || {};
+      store.projectScratchpads[pid] = { text: String(text ?? ''), updatedAt: nowIso() };
+    };
+
+    const appendTasks = (projectName, tasks) => {
+      if (!Array.isArray(tasks) || tasks.length === 0) return { ok: true, created: 0 };
+      const now = nowIso();
+      const newTasks = tasks.map((t) => {
+        const normalized = normalizeTask({
+          title: t.title,
+          status: 'Next',
+          priority: t.priority || 2,
+          project: projectName,
+          dueDate: t.dueDate,
+        });
+        return {
+          id: makeId(),
+          ...normalized,
+          createdAt: now,
+          updatedAt: now,
+        };
+      });
+      store.tasks = [...newTasks, ...(store.tasks || [])];
+      return { ok: true, created: newTasks.length };
+    };
+
+    const doCreateProject = (args) => {
+      const { type: projectType, tasks, scratchpad, ...rest } = args || {};
+      const base = normalizeProject({
+        ...rest,
+        type: projectType,
+        status: rest.status || 'Active',
+      });
+      const ts = nowIso();
+      const project = {
+        id: makeId(),
+        ...base,
+        createdAt: ts,
+        updatedAt: ts,
+      };
+      store.projects = [project, ...(store.projects || [])];
+      if (typeof scratchpad === 'string' && scratchpad.trim() !== '') {
+        upsertScratchpad(project.id, scratchpad);
+      }
+      const taskResult = appendTasks(project.name, tasks);
+      return { ok: true, projectId: project.id, name: project.name, tasksCreated: taskResult.created };
+    };
+
+    const doUpdateProject = (args) => {
+      const patch = args && args.patch && typeof args.patch === 'object' ? args.patch : {};
+      let target = null;
+      if (args && typeof args.projectId === 'string' && args.projectId.trim()) {
+        target = (store.projects || []).find((p) => p.id === args.projectId.trim()) || null;
+      }
+      if (!target && args && typeof args.projectName === 'string' && args.projectName.trim()) {
+        target = findProjectByName(args.projectName);
+      }
+      if (!target && projectId) {
+        target = (store.projects || []).find((p) => p.id === projectId) || null;
+      }
+      if (!target) return { ok: false, error: 'Project not found' };
+
+      const merged = { ...target, ...patch };
+      const normalized = normalizeProject(merged);
+      const updated = { ...target, ...normalized, updatedAt: nowIso() };
+      store.projects = (store.projects || []).map((p) => (p.id === updated.id ? updated : p));
+
+      if (Object.prototype.hasOwnProperty.call(patch, 'scratchpad') && typeof patch.scratchpad === 'string') {
+        upsertScratchpad(updated.id, patch.scratchpad);
+      }
+
+      return { ok: true, projectId: updated.id, name: updated.name };
+    };
+
+    const doCreateTasks = (args) => {
+      const tasks = args && Array.isArray(args.tasks) ? args.tasks : [];
+      let targetProj = null;
+      if (args && typeof args.projectName === 'string' && args.projectName.trim()) {
+        targetProj = findProjectByName(args.projectName);
+      } else if (projectId) {
+        targetProj = (store.projects || []).find((p) => p.id === projectId) || null;
+      }
+      if (!targetProj) return { ok: false, error: 'Target project not found for tasks' };
+      return appendTasks(targetProj.name, tasks);
+    };
+
+    const userSystemPrompt = typeof settings.agentSystemPrompt === 'string' ? settings.agentSystemPrompt.trimEnd() : '';
+    const userMemory = typeof settings.agentMemory === 'string' ? settings.agentMemory.trimEnd() : '';
+
+    let context = '';
+    const baseSystemPrompt =
+      "You are an intelligent project assistant for OS.1 (Operator System 1). Stay concise and action-oriented. You DO have access to the user's OS.1 project data provided in context. Never claim you can't access tasks/notes; if something isn't present in context, ask for it.";
+    let systemPrompt = userSystemPrompt ? `${userSystemPrompt}\n\n---\n${baseSystemPrompt}` : baseSystemPrompt;
+
+    if (userMemory) {
+      context += `GLOBAL MEMORY (user-provided; treat as true unless contradicted):\n${String(userMemory).slice(0, 12000)}\n\n`;
+    }
+
+    if (effectiveProjectId && effectiveProject) {
+      const pTasksRaw = (store.tasks || []).filter((t) => t.project === effectiveProject.name || t.project === effectiveProjectId);
+      const pTasks = pTasksRaw.slice(0, 120).map((t) => ({
+        id: t.id,
+        title: t.title,
+        status: t.status,
+        priority: t.priority,
+        dueDate: t.dueDate,
+        owner: t.owner,
+        type: t.type,
+        updatedAt: t.updatedAt,
+      }));
+
+      const scratchpad = String(store.projectScratchpads?.[effectiveProjectId]?.text || '').slice(0, 12000);
+      const noteEntryList = Array.isArray(store.projectNoteEntries?.[effectiveProjectId]) ? store.projectNoteEntries[effectiveProjectId] : [];
+      const noteEntries = noteEntryList.slice(0, 16).map((n) => ({
+        kind: n.kind,
+        date: n.date,
+        title: n.title,
+        content: String(n.content || '').slice(0, 2000),
+      }));
+      const commList = Array.isArray(store.projectCommunications?.[effectiveProjectId]) ? store.projectCommunications[effectiveProjectId] : [];
+      const communications = commList.slice(0, 16).map((c) => ({
+        type: c.type,
+        direction: c.direction,
+        subject: c.subject,
+        date: c.date,
+        body: String(c.body || '').slice(0, 2000),
+      }));
+
+      const legacyNotes = pickProjectNotesValue(store.projectNotes?.[effectiveProject.name]);
+
+      const ctxObj = {
+        project: effectiveProject,
+        team: Array.isArray(store.team) ? store.team : [],
+        scratchpad,
+        projectNotes: legacyNotes.notes,
+        noteEntries,
+        communications,
+        tasks: pTasks,
+      };
+
+      context += `CURRENT PROJECT CONTEXT (JSON):\n${JSON.stringify(ctxObj, null, 2).slice(0, 24000)}\n\n`;
+    } else {
+      const projectsOverview = (store.projects || []).map((p) => ({ id: p.id, name: p.name, type: p.type, status: p.status, dueDate: p.dueDate }));
+      context += `ALL PROJECTS (JSON): ${JSON.stringify(projectsOverview).slice(0, 24000)}\n\n`;
+    }
+
+    // If OpenAI isn't configured, still answer from local data.
+    if (!apiKey) {
+      if (effectiveProjectId && effectiveProject) {
+        const tasks = (store.tasks || []).filter((t) => t.project === effectiveProject.name || t.project === effectiveProjectId);
+        const open = tasks.filter((t) => String(t.status || '').toLowerCase() !== 'done');
+        const sorted = open
+          .slice()
+          .sort((a, b) => {
+            const ap = Number(a.priority ?? 2);
+            const bp = Number(b.priority ?? 2);
+            if (ap !== bp) return ap - bp;
+            return String(a.dueDate || '9999-12-31').localeCompare(String(b.dueDate || '9999-12-31'));
+          })
+          .slice(0, 12);
+
+        const lines = [];
+        lines.push(`Project: ${effectiveProject.name}${effectiveProject.type ? ` (${effectiveProject.type})` : ''} • ${effectiveProject.status || 'Active'}${effectiveProject.dueDate ? ` • due ${effectiveProject.dueDate}` : ''}`);
+        lines.push('');
+        lines.push(`Open tasks: ${open.length} (showing top ${sorted.length})`);
+        sorted.forEach((t, i) => {
+          const due = t.dueDate ? ` • due ${t.dueDate}` : '';
+          const pri = `P${Number(t.priority ?? 2)}`;
+          const st = t.status ? String(t.status) : 'Next';
+          lines.push(`${i + 1}. [${pri}] ${t.title} — ${st}${due}`);
+        });
+        lines.push('');
+        lines.push('AI is not enabled (OPENAI_API_KEY not set), but I can still show you everything in the tracker.');
+        lines.push('If you want deeper reasoning/rewrites, set the key in Settings → OpenAI.');
+        return { content: lines.join('\n') };
+      }
+
+      return {
+        content:
+          "AI is not enabled (OPENAI_API_KEY not set). Tell me a project name and I can summarize its tasks/notes/scratchpad from the tracker, or enable OpenAI in Settings → OpenAI for full conversational reasoning.",
+      };
+    }
+
+    const tools = [
+      {
+        type: "function",
+        function: {
+          name: "create_project",
+          description: "Create a new project with full details (due date, links, value, etc).",
+          parameters: {
+            type: "object",
+            properties: {
+              name: { type: "string", description: "Name of the project" },
+              type: { type: "string", enum: ["Build", "Rebuild", "Revision", "Workflow", "Cleanup", "Other"] },
+              dueDate: { type: "string", description: "YYYY-MM-DD" },
+              status: { type: "string", enum: ["Active", "On Hold", "Done", "Archived"] },
+              accountManagerName: { type: "string" },
+              accountManagerEmail: { type: "string" },
+              workspacePath: { type: "string", description: "Local folder path for VS Code" },
+              airtableUrl: { type: "string", description: "http(s) URL" },
+              projectValue: { type: "string", description: "Optional, e.g. $5000" },
+              stripeInvoiceUrl: { type: "string", description: "http(s) URL" },
+              repoUrl: { type: "string", description: "http(s) URL" },
+              docsUrl: { type: "string", description: "http(s) URL" },
+              scratchpad: { type: "string", description: "Initial scratchpad / notes" },
+              tasks: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    title: { type: "string" },
+                    priority: { type: "integer", minimum: 1, maximum: 3 },
+                    dueDate: { type: "string", description: "YYYY-MM-DD" }
+                  },
+                  required: ["title"]
+                }
+              }
+            },
+            required: ["name", "type"]
+          }
+        }
+      },
+      {
+        type: "function",
+        function: {
+          name: "update_project",
+          description: "Update an existing project by id or name. Use when the user provides new details for an existing project.",
+          parameters: {
+            type: "object",
+            properties: {
+              projectId: { type: "string", description: "Preferred when known" },
+              projectName: { type: "string", description: "Case-insensitive match if id not provided" },
+              patch: {
+                type: "object",
+                properties: {
+                  name: { type: "string" },
+                  type: { type: "string", enum: ["Build", "Rebuild", "Revision", "Workflow", "Cleanup", "Other"] },
+                  dueDate: { type: "string", description: "YYYY-MM-DD" },
+                  status: { type: "string", enum: ["Active", "On Hold", "Done", "Archived"] },
+                  accountManagerName: { type: "string" },
+                  accountManagerEmail: { type: "string" },
+                  workspacePath: { type: "string" },
+                  airtableUrl: { type: "string" },
+                  projectValue: { type: "string" },
+                  stripeInvoiceUrl: { type: "string" },
+                  repoUrl: { type: "string" },
+                  docsUrl: { type: "string" },
+                  scratchpad: { type: "string" }
+                }
+              }
+            },
+            required: ["patch"]
+          }
+        }
+      },
+      {
+        type: "function",
+        function: {
+          name: "create_tasks",
+          description: "Create multiple tasks.",
+          parameters: {
+            type: "object",
+            properties: {
+              projectName: { type: "string", description: "Name of the project. Optional if inside a project context." },
+              tasks: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    title: { type: "string" },
+                    priority: { type: "integer", minimum: 1, maximum: 3 },
+                    dueDate: { type: "string", description: "YYYY-MM-DD" }
+                  },
+                  required: ["title"]
+                }
+              }
+            },
+            required: ["tasks"]
+          }
+        }
+      }
+    ];
+
+    if (mcpAvailable) {
+      tools.push({
+        type: 'function',
+        function: {
+          name: 'mcp_list_tools',
+          description: 'List available tools from the configured MCP server.',
+          parameters: { type: 'object', properties: {} },
+        },
+      });
+      tools.push({
+        type: 'function',
+        function: {
+          name: 'mcp_call',
+          description: 'Call a tool on the configured MCP server.',
+          parameters: {
+            type: 'object',
+            properties: {
+              name: { type: 'string', description: 'MCP tool name' },
+              arguments: { type: 'object', description: 'Tool arguments as an object' },
+            },
+            required: ['name'],
+          },
+        },
+      });
+    }
+
+    if (googleConnected) {
+      tools.push({
+        type: 'function',
+        function: {
+          name: 'google_list_upcoming_events',
+          description: 'List upcoming Google Calendar events (read-only). Useful for seeing upcoming calls/meetings and their join links.',
+          parameters: {
+            type: 'object',
+            properties: {
+              days: { type: 'number', description: 'How many days ahead to look (1-30). Default 7.' },
+              max: { type: 'number', description: 'Max events to return (1-50). Default 25.' },
+            },
+          },
+        },
+      });
+    }
+
+    const messages = [
+      {
+        role: 'system',
+        content:
+          systemPrompt +
+          "\n\nIMPORTANT: When the user asks to create or update a project (due date, links, invoice, repo, docs, value, status, account manager), you MUST use tool calls (create_project / update_project / create_tasks). If you need external data, use MCP tools when available.",
+      },
+    ];
+
+    // Include a small amount of history for continuity (before the current message).
+    if (effectiveProjectId && store.projectChats && store.projectChats[effectiveProjectId]) {
+      const h = store.projectChats[effectiveProjectId];
+      const history = Array.isArray(h) ? h : Array.isArray(h.messages) ? h.messages : [];
+      for (const m of history.slice(-8)) {
+        if (!m || typeof m !== 'object') continue;
+        const role = m.role === 'user' ? 'user' : m.role === 'ai' ? 'assistant' : '';
+        if (!role) continue;
+        const content = String(m.content || '').slice(0, 2000);
+        if (content) messages.push({ role, content });
+      }
+    }
+
+    messages.push({ role: 'user', content: `${context}User Request: ${message}` });
+
+    const callOpenAi = async () => {
+      const body = {
+        model,
+        messages,
+        temperature: 0.2,
+        tools,
+        tool_choice: 'auto',
+      };
+      const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        const detail = typeof data?.error?.message === 'string' ? data.error.message : JSON.stringify(data);
+        throw new Error(`AI request failed (${resp.status}). ${detail}`.slice(0, 400));
+      }
+      const msg = data?.choices?.[0]?.message;
+      if (!msg) throw new Error('AI returned no message');
+      return msg;
+    };
+
+    const execTool = async (toolName, args) => {
+      if (toolName === 'create_project') return doCreateProject(args);
+      if (toolName === 'update_project') return doUpdateProject(args);
+      if (toolName === 'create_tasks') return doCreateTasks(args);
+      if (toolName === 'mcp_list_tools') {
+        if (!mcpAvailable) return { ok: false, error: 'MCP is not configured' };
+        const result = await mcpListTools({ command: mcp.command, args: mcp.args, cwd: mcp.cwd || process.cwd() });
+        const toolsList = Array.isArray(result?.tools) ? result.tools : [];
+        return {
+          ok: true,
+          tools: toolsList.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })),
+        };
+      }
+      if (toolName === 'mcp_call') {
+        if (!mcpAvailable) return { ok: false, error: 'MCP is not configured' };
+        const name = typeof args?.name === 'string' ? args.name : '';
+        const a = args?.arguments && typeof args.arguments === 'object' && !Array.isArray(args.arguments) ? args.arguments : {};
+        const result = await mcpCallTool({ command: mcp.command, args: mcp.args, cwd: mcp.cwd || process.cwd() }, name, a);
+        return { ok: true, result };
+      }
+      if (toolName === 'google_list_upcoming_events') {
+        if (!googleConnected) return { ok: false, error: 'Google Calendar is not connected' };
+        const days = Number(args?.days);
+        const max = Number(args?.max);
+        return await googleListUpcomingEvents({ days, max });
+      }
+      return { ok: false, error: `Unknown tool: ${toolName}` };
+    };
+
+    try {
+      for (let step = 0; step < 4; step++) {
+        const msg = await callOpenAi();
+
+        // Preserve the assistant message in the transcript for tool-call chaining.
+        const assistantMsg = { role: 'assistant', content: msg.content || '' };
+        if (msg.tool_calls) assistantMsg.tool_calls = msg.tool_calls;
+        messages.push(assistantMsg);
+
+        if (!msg.tool_calls || msg.tool_calls.length === 0) {
+          return { content: String(msg.content || '').trim() };
+        }
+
+        for (const call of msg.tool_calls) {
+          const toolName = call?.function?.name;
+          const raw = call?.function?.arguments;
+          let args = {};
+          try {
+            args = raw ? JSON.parse(raw) : {};
+          } catch {
+            args = {};
+          }
+
+          let result;
+          try {
+            result = await execTool(toolName, args);
+          } catch (e) {
+            result = { ok: false, error: e?.message || 'Tool failed' };
+          }
+
+          messages.push({
+            role: 'tool',
+            tool_call_id: call.id,
+            content: JSON.stringify(result).slice(0, 12000),
+          });
+        }
+      }
+      return { content: 'I hit a tool-calling loop limit. Try again with a more specific request.' };
+    } catch (e) {
+      console.error('AI call failed:', e);
+      return { content: `Error: ${e.message}` };
+    }
+}
+
+app.post('/api/chat', async (req, res) => {
+  const message = typeof req.body?.message === 'string' ? req.body.message : '';
+  const projectId = typeof req.body?.projectId === 'string' ? req.body.projectId : null;
+
+  if (!message.trim()) return res.status(400).json({ error: 'Message required' });
+
+  writeLock = writeLock.then(async () => {
+    try {
+      const store = await readStore();
+
+      const resolved = resolveProjectForMessage(store, message, projectId);
+      if (resolved && typeof resolved === 'object' && resolved.ambiguous) {
+        const opts = Array.isArray(resolved.options) ? resolved.options : [];
+        const list = opts.map((p) => `- ${p.name}`).join('\n');
+        res.json({ reply: `Which project did you mean?\n${list}` });
+        return;
+      }
+
+      const effectiveProjectId = resolved && typeof resolved === 'object' ? resolved.id : projectId;
+
+      const deterministic = tryHandleDeterministicTaskRequest(store, message, effectiveProjectId);
+      const response = deterministic?.handled ? { content: deterministic.reply } : await aiAgentAction(message, store, effectiveProjectId);
+      const reply = String(response.content || '').trim();
+
+      if (effectiveProjectId) {
+        store.projectChats = store.projectChats || {};
+        const existing = store.projectChats[effectiveProjectId];
+        let chatHistory = Array.isArray(existing)
+          ? existing
+          : (existing && typeof existing === 'object' && Array.isArray(existing.messages))
+              ? existing.messages
+              : [];
+        const ts = nowIso();
+        chatHistory.push({ role: 'user', content: message, timestamp: ts });
+        chatHistory.push({ role: 'ai', content: reply, timestamp: ts });
+        store.projectChats[effectiveProjectId] = { messages: chatHistory, updatedAt: ts };
+      }
+
+      store.revision++;
+      store.updatedAt = nowIso();
+      await writeStore(store);
+
+      res.json({ reply });
+    } catch (err) {
+      console.error('Error in /api/chat:', err);
+      res.status(500).json({ error: 'Internal Server Error during chat processing.', details: err?.message || '' });
+    }
+  });
+
+  await writeLock;
+});
+
+app.listen(PORT, async () => {
+  await ensureStoreExists();
+  // eslint-disable-next-line no-console
+  console.log(`Task Tracker running on http://localhost:${PORT}`);
+});
