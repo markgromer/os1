@@ -536,7 +536,7 @@ function ymdToday() {
     }
 }
 
-async function apiJson(url, options) {
+async function apiFetch(url, options) {
     const opts = (options && typeof options === 'object') ? { ...options } : {};
     const headers = new Headers(opts.headers || {});
     const token = getStoredAdminToken();
@@ -545,8 +545,11 @@ async function apiJson(url, options) {
 
     let res = await fetch(url, opts);
 
-    // If hosted with ADMIN_TOKEN enabled, prompt once and retry.
-    if ((res.status === 401 || res.status === 403) && !token) {
+    // If hosted with ADMIN_TOKEN enabled:
+    // - if no token is stored, prompt once
+    // - if a token is stored but rejected (401/403), prompt again (token likely rotated)
+    if (res.status === 401 || res.status === 403) {
+        if (token) setStoredAdminToken('');
         const entered = safeText(window.prompt('This server is protected. Paste ADMIN_TOKEN to continue:') || '').trim();
         if (entered) {
             setStoredAdminToken(entered);
@@ -556,6 +559,11 @@ async function apiJson(url, options) {
         }
     }
 
+    return res;
+}
+
+async function apiJson(url, options) {
+    const res = await apiFetch(url, options);
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data?.error || `Request failed (${res.status})`);
     return data;
@@ -726,7 +734,7 @@ function setupEventListeners() {
             if (icon) icon.classList.add('fa-spin');
             sync.disabled = true;
             try {
-                const statusRes = await fetch('/api/integrations/google/status');
+                const statusRes = await apiFetch('/api/integrations/google/status');
                 const status = statusRes.ok ? await statusRes.json() : { configured: false, connected: false };
 
                 if (!status.configured) {
@@ -740,7 +748,7 @@ function setupEventListeners() {
                     return;
                 }
 
-                const syncRes = await fetch('/api/integrations/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+                const syncRes = await apiFetch('/api/integrations/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
                 const syncData = await syncRes.json().catch(() => ({}));
                 if (!syncRes.ok) throw new Error(syncData?.error || 'Sync failed');
 
@@ -781,7 +789,7 @@ function showError(msg) {
 
 async function fetchState() {
     try {
-        const res = await fetch("/api/tasks");
+        const res = await apiFetch("/api/tasks");
         if (!res.ok) throw new Error("Failed to load store");
         const store = await res.json();
         applyStore(store);
@@ -808,7 +816,7 @@ async function fetchState() {
 
 async function fetchSettings() {
     try {
-        const res = await fetch("/api/settings");
+        const res = await apiFetch("/api/settings");
         if(res.ok) {
             state.settings = await res.json();
             state.aiAvailable = !!state.settings.aiEnabled;
@@ -1259,7 +1267,7 @@ function generateSecret() {
 }
 
 async function saveSettingsPatch(patch) {
-    const res = await fetch('/api/settings', {
+    const res = await apiFetch('/api/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(patch)
@@ -1271,7 +1279,7 @@ async function saveSettingsPatch(patch) {
 }
 
 async function openGoogleAuthWindow() {
-    const r = await fetch('/api/integrations/google/auth-url');
+    const r = await apiFetch('/api/integrations/google/auth-url');
     const data = await r.json().catch(() => ({}));
     if (!r.ok || !data.url) {
         throw new Error(data?.error || 'Failed to start Google OAuth');
@@ -1289,7 +1297,7 @@ async function openGoogleAuthWindow() {
 }
 
 async function openSlackAuthWindow() {
-    const r = await fetch('/api/integrations/slack/auth-url');
+    const r = await apiFetch('/api/integrations/slack/auth-url');
     const data = await r.json().catch(() => ({}));
     if (!r.ok || !data.url) {
         throw new Error(data?.error || 'Failed to start Slack OAuth');
@@ -1865,7 +1873,7 @@ function renderSettings(container) {
 
     const refreshGoogleStatus = async () => {
         try {
-            const r = await fetch('/api/integrations/google/status');
+            const r = await apiFetch('/api/integrations/google/status');
             const s = await r.json().catch(() => ({}));
             const configured = !!s.configured;
             const connected = !!s.connected;
@@ -1954,7 +1962,7 @@ function renderSettings(container) {
 
     if (btnSyncGoogle) btnSyncGoogle.onclick = async () => {
         try {
-            const r = await fetch('/api/integrations/google/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+            const r = await apiFetch('/api/integrations/google/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
             const data = await r.json().catch(() => ({}));
             if (!r.ok || !data.ok) throw new Error(data?.message || data?.error || 'Sync failed');
             alert(`Synced. Pushed: ${data.pushed || 0}, Pulled updates: ${data.pulledUpdates || 0}`);
@@ -1970,7 +1978,7 @@ function renderSettings(container) {
                 googleUpcomingOutput.classList.remove('hidden');
                 googleUpcomingOutput.textContent = 'Loading upcoming events...';
             }
-            const r = await fetch('/api/integrations/google/upcoming?days=7&max=25');
+            const r = await apiFetch('/api/integrations/google/upcoming?days=7&max=25');
             const data = await r.json().catch(() => ({}));
             if (!r.ok || !data.ok) throw new Error(data?.message || data?.error || 'Failed to load events');
 
@@ -2101,7 +2109,7 @@ function renderSettings(container) {
                 mcpToolsOutput.textContent = 'Testing MCP...';
             }
 
-            const r = await fetch('/api/integrations/mcp/tools', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+            const r = await apiFetch('/api/integrations/mcp/tools', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
             const data = await r.json().catch(() => ({}));
             if (!r.ok || !data.ok) throw new Error(data?.error || 'MCP test failed');
 
@@ -3810,7 +3818,7 @@ function createTaskRow(task, showProjectLabel = false) {
                 if (!ok) return;
             }
 
-            const res = await fetch(`/api/tasks/${task.id}`, {
+            const res = await apiFetch(`/api/tasks/${task.id}`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ baseRevision: state.revision, patch: { owner: picked } })
@@ -3860,7 +3868,7 @@ async function toggleTaskStatus(task) {
     renderMain();
     
     try {
-        const res = await fetch(`/api/tasks/${task.id}`, {
+        const res = await apiFetch(`/api/tasks/${task.id}`, {
             method: 'PUT',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({ baseRevision: state.revision, patch: { status: newStatus } })
@@ -3887,7 +3895,7 @@ async function renderDelete(id) {
     renderMain();
     
     try {
-        const res = await fetch(`/api/tasks/${id}`, {
+        const res = await apiFetch(`/api/tasks/${id}`, {
             method: 'DELETE',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ baseRevision: state.revision })
@@ -3933,7 +3941,7 @@ async function promptNewTask(project) {
         defaultValue: defaultDate
     });
     
-    const res = await fetch("/api/tasks", {
+    const res = await apiFetch("/api/tasks", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -4013,7 +4021,7 @@ async function autoDelegate(project) {
                 alert('All team members are at WIP limit. Increase limits or complete tasks, then retry.');
                 break;
             }
-            const res = await fetch(`/api/tasks/${t.id}`,
+            const res = await apiFetch(`/api/tasks/${t.id}`,
                 {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
@@ -4074,7 +4082,7 @@ async function handleChatSubmit() {
     if(status) status.style.opacity = "1";
     
     try {
-        const res = await fetch("/api/chat", {
+        const res = await apiFetch("/api/chat", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ 
@@ -4150,7 +4158,7 @@ async function loadChatHistory() {
     // Project-specific chat is persisted server-side.
     if (state.currentProjectId) {
         try {
-            const res = await fetch(`/api/projects/${state.currentProjectId}/chat`);
+            const res = await apiFetch(`/api/projects/${state.currentProjectId}/chat`);
             if (!res.ok) throw new Error('Failed to load chat');
             const data = await res.json();
             const history = Array.isArray(data.history) ? data.history : [];
