@@ -43,6 +43,9 @@ const state = {
     globalChatHistory: [],
     chatHistory: [],
     isChatOpen: true,
+    commandPaletteOpen: false,
+    commandPaletteQuery: '',
+    commandPaletteSelection: 0,
 
     // Inbox UI state
     inboxDraftText: '',
@@ -150,6 +153,191 @@ function applyTheme(theme) {
     if (icon) {
         icon.className = `fa-solid ${t === 'light' ? 'fa-sun' : 'fa-moon'}`;
     }
+}
+
+function isEditableTarget(el) {
+    if (!el || typeof el !== 'object') return false;
+    const tag = String(el.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'textarea' || tag === 'select') return true;
+    return !!el.isContentEditable;
+}
+
+function openCommandPalette(prefill = '') {
+    state.commandPaletteOpen = true;
+    state.commandPaletteQuery = safeText(prefill).trim();
+    state.commandPaletteSelection = 0;
+    renderCommandPaletteOverlay();
+}
+
+function closeCommandPalette() {
+    state.commandPaletteOpen = false;
+    state.commandPaletteQuery = '';
+    state.commandPaletteSelection = 0;
+    renderCommandPaletteOverlay();
+}
+
+function getCommandPaletteItems() {
+    const projects = Array.isArray(state.projects) ? state.projects.slice(0, 12) : [];
+    const currentProject = projects.find((p) => safeText(p?.id) === safeText(state.currentProjectId));
+    const actions = [
+        {
+            id: 'go-dashboard',
+            label: 'Go to Dashboard',
+            hint: 'Navigation',
+            keywords: 'dashboard home overview',
+            run: async () => { await openDashboard(); },
+        },
+        {
+            id: 'go-inbox',
+            label: 'Go to Inbox',
+            hint: 'Navigation',
+            keywords: 'inbox messages radar',
+            run: async () => { await openInbox(); },
+        },
+        {
+            id: 'new-project',
+            label: 'Create New Project',
+            hint: 'Action',
+            keywords: 'new project intake create',
+            run: async () => { await createNewProjectPrompt(); },
+        },
+        {
+            id: 'new-inbox-item',
+            label: 'Capture Inbox Item',
+            hint: 'Action',
+            keywords: 'capture inbox message add note',
+            run: async () => {
+                const text = safeText(window.prompt('Capture to inbox:') || '').trim();
+                if (!text) return;
+                await createInboxItem(text);
+                renderMain();
+            },
+        },
+        {
+            id: 'refresh-calls',
+            label: 'Refresh Calls Feed',
+            hint: 'Action',
+            keywords: 'google calls refresh calendar',
+            run: async () => { await refreshDashboardCalls({ force: true }); },
+        },
+    ];
+
+    if (currentProject) {
+        actions.push({
+            id: 'new-task-current-project',
+            label: `New Task in ${safeText(currentProject.name) || 'Current Project'}`,
+            hint: 'Task',
+            keywords: 'task create current project',
+            run: async () => { await promptNewTask(currentProject); },
+        });
+    }
+
+    for (const p of projects) {
+        const pid = safeText(p?.id);
+        const pname = safeText(p?.name);
+        if (!pid || !pname) continue;
+        actions.push({
+            id: `open-project-${pid}`,
+            label: `Open Project: ${pname}`,
+            hint: 'Project',
+            keywords: `open project ${pname.toLowerCase()}`,
+            run: async () => { await openProject(pid); },
+        });
+    }
+
+    return actions;
+}
+
+function renderCommandPaletteOverlay() {
+    const existing = document.getElementById('command-palette-overlay');
+    if (existing) existing.remove();
+    if (!state.commandPaletteOpen) return;
+
+    const query = safeText(state.commandPaletteQuery).trim().toLowerCase();
+    const all = getCommandPaletteItems();
+    const filtered = all.filter((item) => {
+        if (!query) return true;
+        const hay = `${safeText(item.label).toLowerCase()} ${safeText(item.hint).toLowerCase()} ${safeText(item.keywords).toLowerCase()}`;
+        return hay.includes(query);
+    }).slice(0, 12);
+
+    if (state.commandPaletteSelection >= filtered.length) {
+        state.commandPaletteSelection = Math.max(0, filtered.length - 1);
+    }
+
+    const overlay = document.createElement('div');
+    overlay.id = 'command-palette-overlay';
+    overlay.className = 'fixed inset-0 z-[70] bg-black/50 backdrop-blur-[1px] flex items-start justify-center pt-24 px-4';
+    overlay.innerHTML = `
+        <div class="w-full max-w-2xl border border-zinc-800 rounded-xl bg-zinc-950 shadow-2xl overflow-hidden">
+            <div class="px-4 py-3 border-b border-zinc-800 bg-zinc-900/50">
+                <input id="command-palette-input" type="text" value="${escapeHtml(state.commandPaletteQuery)}" placeholder="Type a command… (Dashboard, Inbox, Project, Task)" class="w-full bg-zinc-950/40 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-blue-500/30 focus:border-blue-500/40" />
+                <div class="text-[10px] text-zinc-500 font-mono mt-1">Enter: run • ↑/↓: navigate • Esc: close • /: open</div>
+            </div>
+            <div class="max-h-[55vh] overflow-y-auto p-2">
+                ${filtered.length ? filtered.map((item, idx) => `
+                    <button data-cmd-run="${escapeHtml(item.id)}" class="w-full text-left px-3 py-2 rounded-lg border ${idx === state.commandPaletteSelection ? 'border-blue-600/40 bg-blue-600/10' : 'border-transparent hover:border-zinc-800 hover:bg-zinc-900/40'} transition-colors">
+                        <div class="flex items-center justify-between gap-3">
+                            <div class="text-sm text-zinc-100 truncate">${escapeHtml(item.label)}</div>
+                            <div class="text-[10px] font-mono text-zinc-500 uppercase tracking-widest">${escapeHtml(item.hint)}</div>
+                        </div>
+                    </button>
+                `).join('') : `<div class="px-3 py-8 text-center text-sm text-zinc-500">No commands match your search.</div>`}
+            </div>
+        </div>
+    `;
+
+    overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) closeCommandPalette();
+    });
+
+    document.body.appendChild(overlay);
+
+    const input = overlay.querySelector('#command-palette-input');
+    if (input) {
+        input.focus();
+        input.setSelectionRange(input.value.length, input.value.length);
+        input.addEventListener('input', () => {
+            state.commandPaletteQuery = safeText(input.value);
+            state.commandPaletteSelection = 0;
+            renderCommandPaletteOverlay();
+        });
+        input.addEventListener('keydown', async (e) => {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                closeCommandPalette();
+                return;
+            }
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                state.commandPaletteSelection = Math.min(state.commandPaletteSelection + 1, Math.max(0, filtered.length - 1));
+                renderCommandPaletteOverlay();
+                return;
+            }
+            if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                state.commandPaletteSelection = Math.max(state.commandPaletteSelection - 1, 0);
+                renderCommandPaletteOverlay();
+                return;
+            }
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                const item = filtered[state.commandPaletteSelection] || filtered[0];
+                if (!item) return;
+                closeCommandPalette();
+                await item.run();
+            }
+        });
+    }
+
+    overlay.querySelectorAll('button[data-cmd-run]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+            const id = safeText(btn.getAttribute('data-cmd-run'));
+            const item = all.find((x) => safeText(x.id) === id);
+            closeCommandPalette();
+            if (item) await item.run();
+        });
+    });
 }
 
 function toggleTheme() {
@@ -735,6 +923,63 @@ async function addProjectCommunication(projectId, communication) {
 }
 
 function setupEventListeners() {
+    let gotoPrimed = false;
+    let gotoTimer = 0;
+
+    const primeGoto = () => {
+        gotoPrimed = true;
+        if (gotoTimer) clearTimeout(gotoTimer);
+        gotoTimer = setTimeout(() => { gotoPrimed = false; }, 1100);
+    };
+
+    document.addEventListener('keydown', async (e) => {
+        const target = e.target;
+        const typing = isEditableTarget(target);
+
+        if (!typing && e.key === '/') {
+            e.preventDefault();
+            openCommandPalette();
+            return;
+        }
+
+        if (state.commandPaletteOpen && e.key === 'Escape') {
+            e.preventDefault();
+            closeCommandPalette();
+            return;
+        }
+
+        if (typing || state.commandPaletteOpen) return;
+
+        const k = String(e.key || '').toLowerCase();
+        if (k === 'g') {
+            primeGoto();
+            return;
+        }
+        if (gotoPrimed && k === 'd') {
+            gotoPrimed = false;
+            e.preventDefault();
+            await openDashboard();
+            return;
+        }
+        if (gotoPrimed && k === 'i') {
+            gotoPrimed = false;
+            e.preventDefault();
+            await openInbox();
+            return;
+        }
+        if (k === 'n') {
+            e.preventDefault();
+            if (state.currentView === 'project') {
+                const p = (Array.isArray(state.projects) ? state.projects : []).find((x) => safeText(x?.id) === safeText(state.currentProjectId));
+                if (p) {
+                    await promptNewTask(p);
+                    return;
+                }
+            }
+            await createNewProjectPrompt();
+        }
+    });
+
     // Navigation
     const status = document.getElementById("server-status");
     if(status) status.addEventListener("click", () => alert("Server Online"));
@@ -1047,6 +1292,8 @@ function renderMain() {
     } else if (state.currentView === "settings") {
         renderSettings(container);
     }
+
+    renderCommandPaletteOverlay();
 }
 
 function getInboxItems() {
@@ -2395,6 +2642,74 @@ function renderDashboard(container) {
     content.className = "flex-1 min-h-0 overflow-y-auto p-6";
     const buckets = bucketProjectsByDueDate(activeProjects);
 
+    const allInboxItems = Array.isArray(state.inboxItems) ? state.inboxItems : [];
+    const sourceCounts = {};
+    for (const item of allInboxItems) {
+        if (String(item?.status || '').toLowerCase() !== 'new') continue;
+        const k = normalizeInboxSourceKey(item?.source);
+        sourceCounts[k] = Number(sourceCounts[k] || 0) + 1;
+    }
+    const sourceSummary = Object.entries(sourceCounts)
+        .sort((a, b) => Number(b[1]) - Number(a[1]))
+        .slice(0, 3)
+        .map(([key, count]) => `${inboxSourceMeta(key).label}: ${count}`)
+        .join(' • ');
+
+    const nextAction = getTodayNextActions()[0] || null;
+    const callsConnected = !!state.settings?.googleConnected;
+    const calls = Array.isArray(state.dashboardCalls?.events) ? state.dashboardCalls.events : [];
+    if (callsConnected) setTimeout(() => refreshDashboardCalls({ force: false }), 0);
+    const nextCall = calls[0] || null;
+
+    const nowYmd = ymdToday();
+    const atRiskProjects = activeProjects.filter((project) => {
+        const due = safeText(project?.dueDate);
+        const tasks = getProjectTasks(project).filter((t) => !isDoneTask(t));
+        if (!tasks.length) return false;
+        const hasOverdueTask = tasks.some((t) => {
+            const d = safeText(t?.dueDate);
+            return d && nowYmd && d < nowYmd;
+        });
+        if (hasOverdueTask) return true;
+        if (due && nowYmd && due <= nowYmd) return true;
+        return false;
+    });
+
+    const controlStrip = document.createElement('div');
+    controlStrip.className = 'mb-6 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3';
+    controlStrip.innerHTML = `
+        <button data-strip-action="focus" class="group text-left border border-zinc-800 rounded-xl bg-zinc-900/30 p-3 hover:bg-zinc-900/50 transition-colors">
+            <div class="text-[10px] font-mono uppercase tracking-widest text-zinc-500">Today Outcomes</div>
+            <div class="mt-1 text-sm text-zinc-100 truncate">${escapeHtml(safeText(state.settings?.todayOutcomes).split('\n')[0] || 'Set top outcomes')}</div>
+            <div class="mt-2 max-h-0 opacity-0 overflow-hidden transition-all duration-200 ease-out group-hover:max-h-24 group-hover:opacity-100 text-[11px] text-zinc-400">Click to jump to Today panel.</div>
+        </button>
+
+        <button data-strip-action="next-task" class="group text-left border border-zinc-800 rounded-xl bg-zinc-900/30 p-3 hover:bg-zinc-900/50 transition-colors">
+            <div class="text-[10px] font-mono uppercase tracking-widest text-zinc-500">Next Task</div>
+            <div class="mt-1 text-sm text-zinc-100 truncate">${escapeHtml(safeText(nextAction?.title) || 'No immediate task')}</div>
+            <div class="mt-2 max-h-0 opacity-0 overflow-hidden transition-all duration-200 ease-out group-hover:max-h-24 group-hover:opacity-100 text-[11px] text-zinc-400">${escapeHtml(safeText(nextAction?.project) || 'Open a project to create tasks')}</div>
+        </button>
+
+        <button data-strip-action="next-call" class="group text-left border border-zinc-800 rounded-xl bg-zinc-900/30 p-3 hover:bg-zinc-900/50 transition-colors">
+            <div class="text-[10px] font-mono uppercase tracking-widest text-zinc-500">Next Call</div>
+            <div class="mt-1 text-sm text-zinc-100 truncate">${escapeHtml(nextCall ? `${formatTimeFromIso(nextCall.start)} • ${safeText(nextCall.summary)}` : (callsConnected ? 'No upcoming call' : 'Connect Google Calendar'))}</div>
+            <div class="mt-2 max-h-0 opacity-0 overflow-hidden transition-all duration-200 ease-out group-hover:max-h-24 group-hover:opacity-100 text-[11px] text-zinc-400">${escapeHtml(nextCall?.meetingLink ? 'Click to refresh and prep calls.' : 'Calls feed refreshes from Google.')}</div>
+        </button>
+
+        <button data-strip-action="inbox-radar" class="group text-left border border-zinc-800 rounded-xl bg-zinc-900/30 p-3 hover:bg-zinc-900/50 transition-colors">
+            <div class="text-[10px] font-mono uppercase tracking-widest text-zinc-500">Inbox Radar</div>
+            <div class="mt-1 text-sm text-zinc-100 truncate">${escapeHtml(sourceSummary || 'No new inbox items')}</div>
+            <div class="mt-2 max-h-0 opacity-0 overflow-hidden transition-all duration-200 ease-out group-hover:max-h-24 group-hover:opacity-100 text-[11px] text-zinc-400">Click to open Inbox with source-aware triage.</div>
+        </button>
+
+        <button data-strip-action="risk" class="group text-left border border-zinc-800 rounded-xl bg-zinc-900/30 p-3 hover:bg-zinc-900/50 transition-colors">
+            <div class="text-[10px] font-mono uppercase tracking-widest text-zinc-500">At Risk Projects</div>
+            <div class="mt-1 text-sm text-zinc-100 truncate">${atRiskProjects.length} flagged</div>
+            <div class="mt-2 max-h-0 opacity-0 overflow-hidden transition-all duration-200 ease-out group-hover:max-h-24 group-hover:opacity-100 text-[11px] text-zinc-400">${escapeHtml(atRiskProjects.slice(0, 2).map((p) => safeText(p?.name)).filter(Boolean).join(' • ') || 'No immediate risk detected')}</div>
+        </button>
+    `;
+    content.appendChild(controlStrip);
+
     // New Project Intake
     const intake = document.createElement('div');
     intake.className = 'mb-6 border border-zinc-800 rounded-xl bg-zinc-900/30 p-4';
@@ -2543,6 +2858,60 @@ function renderDashboard(container) {
         <div class="mt-3 ${unreadItems.length ? 'hidden' : ''} text-xs text-zinc-500">No new inbox items.</div>
     `;
     content.appendChild(unreadPanel);
+
+    const triageStatuses = ['New', 'Triaged', 'Done', 'Archived'];
+    const triageBoard = document.createElement('div');
+    triageBoard.className = 'mb-6 border border-zinc-800 rounded-xl bg-zinc-900/30 p-4';
+    triageBoard.innerHTML = `
+        <div class="flex items-center justify-between gap-3 mb-3">
+            <div>
+                <div class="text-white text-sm font-semibold">Inbox Triage Board</div>
+                <div class="text-[11px] text-zinc-500 mt-0.5">Fast status flow with source-aware cards.</div>
+            </div>
+            <button data-triage-open-inbox class="px-3 py-1.5 rounded-lg border border-zinc-700 text-xs font-mono text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Open Inbox</button>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+            ${triageStatuses.map((status) => {
+                const items = allInboxItems
+                    .filter((x) => String(x?.status || '').toLowerCase() === status.toLowerCase())
+                    .slice(0, 4);
+                return `
+                    <div class="border border-zinc-800 rounded-lg bg-zinc-950/20 p-2.5">
+                        <div class="flex items-center justify-between gap-2 mb-2">
+                            <div class="text-[10px] font-mono uppercase tracking-widest text-zinc-500">${escapeHtml(status)}</div>
+                            <div class="text-[10px] font-mono text-zinc-400">${items.length}</div>
+                        </div>
+                        <div class="space-y-2 min-h-[4rem]">
+                            ${items.length ? items.map((item) => {
+                                const id = safeText(item?.id);
+                                const src = normalizeInboxSourceKey(item?.source);
+                                const srcMeta = inboxSourceMeta(src);
+                                const text = safeText(item?.text).replace(/\s+/g, ' ').trim();
+                                const when = safeText(item?.updatedAt || item?.createdAt);
+                                return `
+                                    <div class="border border-zinc-800 rounded-md bg-zinc-950/20 px-2 py-1.5">
+                                        <button data-dash-open-inbox="${escapeHtml(id)}" class="w-full text-left">
+                                            <div class="flex items-center justify-between gap-2">
+                                                <div class="text-[10px] font-mono ${srcMeta.tone}">${escapeHtml(srcMeta.label)}</div>
+                                                <div class="text-[10px] font-mono text-zinc-500">${escapeHtml(formatTimeFromIso(when) || '—')}</div>
+                                            </div>
+                                            <div class="text-[11px] text-zinc-200 truncate mt-0.5" title="${escapeHtml(text)}">${escapeHtml(text || '(empty)')}</div>
+                                        </button>
+                                        <div class="mt-1.5 flex gap-1.5">
+                                            ${status !== 'Triaged' ? `<button data-triage-set-status="Triaged" data-triage-id="${escapeHtml(id)}" class="px-1.5 py-1 rounded border border-zinc-800 text-[10px] font-mono text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors">Triage</button>` : ''}
+                                            ${status !== 'Done' ? `<button data-triage-set-status="Done" data-triage-id="${escapeHtml(id)}" class="px-1.5 py-1 rounded border border-emerald-600/40 bg-emerald-600/10 text-[10px] font-mono text-emerald-300 hover:bg-emerald-600/20 transition-colors">Done</button>` : ''}
+                                            ${status !== 'Archived' ? `<button data-triage-set-status="Archived" data-triage-id="${escapeHtml(id)}" class="px-1.5 py-1 rounded border border-zinc-800 text-[10px] font-mono text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors">Archive</button>` : ''}
+                                        </div>
+                                    </div>
+                                `;
+                            }).join('') : `<div class="text-[11px] text-zinc-600 italic">No items.</div>`}
+                        </div>
+                    </div>
+                `;
+            }).join('')}
+        </div>
+    `;
+    content.appendChild(triageBoard);
 
     content.appendChild(renderProjectBuckets(buckets, { bulkMode: !!state.dashboardBulkMode }));
 
@@ -2789,9 +3158,66 @@ function renderDashboard(container) {
             await openInbox();
         };
     }
-    unreadPanel.querySelectorAll('button[data-dash-open-inbox]').forEach((btn) => {
+
+    const btnTriageOpenInbox = triageBoard.querySelector('button[data-triage-open-inbox]');
+    if (btnTriageOpenInbox) {
+        btnTriageOpenInbox.onclick = async () => {
+            await openInbox();
+        };
+    }
+
+    controlStrip.querySelectorAll('button[data-strip-action]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+            const action = safeText(btn.getAttribute('data-strip-action'));
+            if (action === 'inbox-radar') {
+                await openInbox();
+                return;
+            }
+            if (action === 'next-call') {
+                await refreshDashboardCalls({ force: true });
+                return;
+            }
+            if (action === 'next-task') {
+                if (nextAction) {
+                    const project = activeProjects.find((p) => safeText(p?.name) === safeText(nextAction?.project));
+                    if (project?.id) {
+                        await openProject(project.id);
+                        return;
+                    }
+                }
+                await openDashboard();
+                return;
+            }
+            if (action === 'risk') {
+                if (atRiskProjects.length && atRiskProjects[0]?.id) {
+                    await openProject(atRiskProjects[0].id);
+                    return;
+                }
+                await openDashboard();
+                return;
+            }
+            await openDashboard();
+        });
+    });
+
+    container.querySelectorAll('button[data-dash-open-inbox]').forEach((btn) => {
         btn.addEventListener('click', async () => {
             await openInbox();
+        });
+    });
+
+    triageBoard.querySelectorAll('button[data-triage-set-status][data-triage-id]').forEach((btn) => {
+        btn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const id = safeText(btn.getAttribute('data-triage-id')).trim();
+            const status = safeText(btn.getAttribute('data-triage-set-status')).trim();
+            if (!id || !status) return;
+            try {
+                await patchInboxItem(id, { status });
+                renderMain();
+            } catch (err) {
+                alert(err?.message || 'Failed to update inbox item');
+            }
         });
     });
 }
