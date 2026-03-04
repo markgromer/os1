@@ -63,6 +63,118 @@ function getDefaultSettingsDir() {
 const SETTINGS_DIR = resolveDirFromEnv(process.env.TASK_TRACKER_SETTINGS_DIR || process.env.SETTINGS_DIR) || getDefaultSettingsDir();
 const SETTINGS_FILE = resolveDirFromEnv(process.env.TASK_TRACKER_SETTINGS_FILE || process.env.SETTINGS_FILE) || path.join(SETTINGS_DIR, 'settings.json');
 
+function parsePositiveIntEnv(value, fallback) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return fallback;
+  return Math.floor(n);
+}
+
+const BACKUP_DIR = resolveDirFromEnv(process.env.TASK_TRACKER_BACKUP_DIR || process.env.BACKUP_DIR) || path.join(DATA_DIR, 'backups');
+const BACKUP_MIRROR_DIR = resolveDirFromEnv(process.env.TASK_TRACKER_BACKUP_MIRROR_DIR || process.env.BACKUP_MIRROR_DIR);
+const BACKUP_INTERVAL_MINUTES = parsePositiveIntEnv(process.env.TASK_TRACKER_BACKUP_INTERVAL_MINUTES || process.env.BACKUP_INTERVAL_MINUTES, 60);
+const BACKUP_INTERVAL_MS = BACKUP_INTERVAL_MINUTES * 60 * 1000;
+const BACKUP_RETENTION_DAYS = parsePositiveIntEnv(process.env.TASK_TRACKER_BACKUP_RETENTION_DAYS || process.env.BACKUP_RETENTION_DAYS, 14);
+const BACKUP_RETENTION_MS = BACKUP_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+const lastBackupAtByKey = new Map();
+
+function backupTimestamp(d = new Date()) {
+  return d.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+}
+
+function shouldCreateBackupForKey(key) {
+  const k = String(key || '').trim();
+  if (!k) return false;
+  const last = Number(lastBackupAtByKey.get(k) || 0);
+  if (!Number.isFinite(last) || last <= 0) return true;
+  return (Date.now() - last) >= BACKUP_INTERVAL_MS;
+}
+
+function markBackupForKey(key) {
+  const k = String(key || '').trim();
+  if (!k) return;
+  lastBackupAtByKey.set(k, Date.now());
+}
+
+async function pruneBackupsInDir({ dirPath, prefix }) {
+  const dir = String(dirPath || '').trim();
+  const pfx = String(prefix || '').trim();
+  if (!dir || !pfx) return;
+  if (!BACKUP_RETENTION_MS) return;
+  const now = Date.now();
+  let entries = [];
+  try {
+    entries = await fs.readdir(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  await Promise.all(entries
+    .filter((entry) => entry && entry.isFile() && String(entry.name || '').startsWith(`${pfx}-`) && String(entry.name || '').endsWith('.json'))
+    .map(async (entry) => {
+      const filePath = path.join(dir, entry.name);
+      try {
+        const stat = await fs.stat(filePath);
+        if ((now - Number(stat.mtimeMs || 0)) > BACKUP_RETENTION_MS) {
+          await fs.unlink(filePath);
+        }
+      } catch {
+        // ignore cleanup errors
+      }
+    }));
+}
+
+async function writeBackupSnapshot({ sourceFile, prefix }) {
+  const src = String(sourceFile || '').trim();
+  const pfx = String(prefix || '').trim();
+  if (!src || !pfx) return false;
+  try {
+    await fs.access(src);
+  } catch {
+    return false;
+  }
+
+  const stamp = backupTimestamp();
+  const fileName = `${pfx}-${stamp}.json`;
+
+  await fs.mkdir(BACKUP_DIR, { recursive: true });
+  await fs.copyFile(src, path.join(BACKUP_DIR, fileName));
+  await pruneBackupsInDir({ dirPath: BACKUP_DIR, prefix: pfx });
+
+  if (BACKUP_MIRROR_DIR) {
+    try {
+      await fs.mkdir(BACKUP_MIRROR_DIR, { recursive: true });
+      await fs.copyFile(src, path.join(BACKUP_MIRROR_DIR, fileName));
+      await pruneBackupsInDir({ dirPath: BACKUP_MIRROR_DIR, prefix: pfx });
+    } catch {
+      // mirror is best-effort
+    }
+  }
+
+  return true;
+}
+
+async function backupCriticalFiles({ force = false } = {}) {
+  const shouldTasks = force || shouldCreateBackupForKey('tasks');
+  const shouldSettings = force || shouldCreateBackupForKey('settings');
+
+  if (shouldTasks) {
+    const ok = await writeBackupSnapshot({ sourceFile: DATA_FILE, prefix: 'tasks' });
+    if (ok) markBackupForKey('tasks');
+  }
+  if (shouldSettings) {
+    const ok = await writeBackupSnapshot({ sourceFile: SETTINGS_FILE, prefix: 'settings' });
+    if (ok) markBackupForKey('settings');
+  }
+}
+
+function startBackupScheduler() {
+  const timer = setInterval(() => {
+    backupCriticalFiles().catch(() => {
+      // ignore periodic backup errors
+    });
+  }, BACKUP_INTERVAL_MS);
+  if (typeof timer.unref === 'function') timer.unref();
+}
+
 const ADMIN_TOKEN = typeof process.env.ADMIN_TOKEN === 'string' ? process.env.ADMIN_TOKEN.trim() : '';
 const AUTH_COOKIE_NAME = 'ops_admin_token';
 const AUTH_COOKIE_MAX_AGE_SEC = 60 * 60 * 24 * 30;
@@ -224,6 +336,9 @@ async function writeSettings(next) {
   const tmpFile = `${SETTINGS_FILE}.tmp-${crypto.randomBytes(6).toString('hex')}`;
   await fs.writeFile(tmpFile, JSON.stringify(next, null, 2) + '\n', 'utf8');
   await fs.rename(tmpFile, SETTINGS_FILE);
+  backupCriticalFiles().catch(() => {
+    // backup is best-effort
+  });
 }
 
 async function getAiConfig() {
@@ -1405,6 +1520,9 @@ async function writeStore(nextStore) {
   const tmpFile = `${DATA_FILE}.tmp-${crypto.randomBytes(6).toString('hex')}`;
   await fs.writeFile(tmpFile, JSON.stringify(nextStore, null, 2) + '\n', 'utf8');
   await fs.rename(tmpFile, DATA_FILE);
+  backupCriticalFiles().catch(() => {
+    // backup is best-effort
+  });
 }
 
 function nowIso() {
@@ -5085,6 +5203,10 @@ app.post('/api/chat', async (req, res) => {
 
 app.listen(PORT, async () => {
   await ensureStoreExists();
+  await backupCriticalFiles({ force: true }).catch(() => {
+    // ignore startup backup errors
+  });
+  startBackupScheduler();
   // eslint-disable-next-line no-console
   console.log(`Task Tracker running on http://localhost:${PORT}`);
 });
