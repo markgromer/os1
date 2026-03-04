@@ -591,6 +591,15 @@ async function apiFetch(url, options) {
         if (token) setStoredAdminToken('');
         const entered = safeText(window.prompt('This server is protected. Paste ADMIN_TOKEN to continue:') || '').trim();
         if (entered) {
+            try {
+                await fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ token: entered, remember: true })
+                });
+            } catch {
+                // ignore; keep local token fallback below
+            }
             setStoredAdminToken(entered);
             const retryHeaders = new Headers(opts.headers || {});
             retryHeaders.set('Authorization', `Bearer ${entered}`);

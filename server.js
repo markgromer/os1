@@ -64,10 +64,50 @@ const SETTINGS_DIR = resolveDirFromEnv(process.env.TASK_TRACKER_SETTINGS_DIR || 
 const SETTINGS_FILE = resolveDirFromEnv(process.env.TASK_TRACKER_SETTINGS_FILE || process.env.SETTINGS_FILE) || path.join(SETTINGS_DIR, 'settings.json');
 
 const ADMIN_TOKEN = typeof process.env.ADMIN_TOKEN === 'string' ? process.env.ADMIN_TOKEN.trim() : '';
+const AUTH_COOKIE_NAME = 'ops_admin_token';
+const AUTH_COOKIE_MAX_AGE_SEC = 60 * 60 * 24 * 30;
+
+function parseCookies(req) {
+  const raw = typeof req.headers?.cookie === 'string' ? req.headers.cookie : '';
+  const out = {};
+  if (!raw) return out;
+  for (const chunk of raw.split(';')) {
+    const part = String(chunk || '').trim();
+    if (!part) continue;
+    const eq = part.indexOf('=');
+    if (eq <= 0) continue;
+    const key = part.slice(0, eq).trim();
+    const val = part.slice(eq + 1).trim();
+    if (!key) continue;
+    try {
+      out[key] = decodeURIComponent(val);
+    } catch {
+      out[key] = val;
+    }
+  }
+  return out;
+}
+
+function buildAuthCookie({ req, token, clear = false, remember = true }) {
+  const proto = req?.headers?.['x-forwarded-proto'] ? String(req.headers['x-forwarded-proto']).split(',')[0].trim() : req?.protocol;
+  const secure = String(proto || '').toLowerCase() === 'https';
+  const val = clear ? '' : encodeURIComponent(String(token || ''));
+  const parts = [`${AUTH_COOKIE_NAME}=${val}`, 'Path=/', 'HttpOnly', 'SameSite=Lax'];
+  if (clear) {
+    parts.push('Max-Age=0');
+  } else if (remember) {
+    parts.push(`Max-Age=${AUTH_COOKIE_MAX_AGE_SEC}`);
+  }
+  if (secure) parts.push('Secure');
+  return parts.join('; ');
+}
 
 function isPublicApiRoute(req) {
   const method = String(req.method || '').toUpperCase();
   const p = String(req.path || '');
+  if (method === 'POST' && p === '/api/auth/login') return true;
+  if (method === 'POST' && p === '/api/auth/logout') return true;
+  if (method === 'GET' && p === '/api/auth/status') return true;
   if (method === 'POST' && p === '/api/integrations/slack/events') return true;
   if (method === 'POST' && p === '/api/integrations/quo/sms') return true;
   if (method === 'POST' && p === '/api/integrations/quo/calls') return true;
@@ -82,6 +122,8 @@ function extractBearerToken(req) {
   if (auth.toLowerCase().startsWith('bearer ')) return auth.slice(7).trim();
   const headerToken = typeof req.headers['x-admin-token'] === 'string' ? req.headers['x-admin-token'].trim() : '';
   if (headerToken) return headerToken;
+  const cookieToken = String(parseCookies(req)[AUTH_COOKIE_NAME] || '').trim();
+  if (cookieToken) return cookieToken;
   const queryToken = typeof req.query?.token === 'string' ? req.query.token.trim() : '';
   return queryToken;
 }
@@ -101,6 +143,36 @@ app.use((req, res, next) => {
   } catch {
     res.status(401).json({ error: 'Unauthorized' });
   }
+});
+
+app.get('/api/auth/status', (req, res) => {
+  if (!ADMIN_TOKEN) {
+    res.json({ ok: true, authRequired: false, authenticated: true });
+    return;
+  }
+  const token = extractBearerToken(req);
+  const authenticated = Boolean(token && safeTimingEqual(token, ADMIN_TOKEN));
+  res.json({ ok: true, authRequired: true, authenticated });
+});
+
+app.post('/api/auth/login', (req, res) => {
+  if (!ADMIN_TOKEN) {
+    res.json({ ok: true, authRequired: false });
+    return;
+  }
+  const token = typeof req.body?.token === 'string' ? req.body.token.trim() : '';
+  const remember = req.body?.remember !== false;
+  if (!token || !safeTimingEqual(token, ADMIN_TOKEN)) {
+    res.status(401).json({ ok: false, error: 'Invalid admin token' });
+    return;
+  }
+  res.setHeader('Set-Cookie', buildAuthCookie({ req, token, remember }));
+  res.json({ ok: true, authRequired: true, authenticated: true });
+});
+
+app.post('/api/auth/logout', (req, res) => {
+  res.setHeader('Set-Cookie', buildAuthCookie({ req, token: '', clear: true }));
+  res.json({ ok: true });
 });
 
 /**
