@@ -1,0 +1,48 @@
+services:
+  - type: web
+    name: task-tracker
+    env: node
+    plan: starter
+    autoDeploy: true
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/tasks
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      - key: BASE_URL
+        sync: false
+      - key: ADMIN_TOKEN
+        sync: false
+      - key: TASK_TRACKER_DATA_DIR
+        value: /var/data/task-tracker/data
+      - key: TASK_TRACKER_SETTINGS_DIR
+        value: /var/data/task-tracker/settings
+      - key: TASK_TRACKER_BACKUP_DIR
+        value: /var/data/task-tracker/backups
+      - key: TASK_TRACKER_BACKUP_INTERVAL_MINUTES
+        value: 60
+      - key: TASK_TRACKER_BACKUP_RETENTION_DAYS
+        value: 14
+      - key: SLACK_SIGNING_SECRET
+        sync: false
+      - key: SLACK_CLIENT_ID
+        sync: false
+      - key: SLACK_CLIENT_SECRET
+        sync: false
+      - key: SLACK_BOT_TOKEN
+        sync: false
+      - key: FIREFLIES_SECRET
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: QUO_WEBHOOK_TOKEN
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-4.1-mini
+    disk:
+      name: task-tracker-data
+      mountPath: /var/data/task-tracker
+      sizeGB: 2

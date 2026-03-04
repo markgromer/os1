@@ -29,6 +29,53 @@ Tip: during active tinkering, use:
 npm run dev
 ```
 
+## Deploy on Render (recommended for cloud run)
+
+This repo now includes a Render blueprint file: `render.yaml`.
+
+### Quick setup
+
+1. Push this repo to GitHub.
+2. In Render: **New +** → **Blueprint** → select this repo.
+3. Confirm the service + disk creation.
+4. Set required secrets in Render env vars.
+
+### Required Render env vars
+
+- `BASE_URL` = your Render public URL (example `https://task-tracker.onrender.com`)
+- `ADMIN_TOKEN` = long random token for API/UI protection
+- `SLACK_SIGNING_SECRET` = from Slack app
+- `FIREFLIES_SECRET` = shared secret used by Fireflies webhook header `x-fireflies-secret`
+
+### Optional but recommended env vars
+
+- `SLACK_CLIENT_ID`, `SLACK_CLIENT_SECRET` (for Slack OAuth install flow)
+- `SLACK_BOT_TOKEN` (if not using OAuth install in-app)
+- `TWILIO_AUTH_TOKEN` (if using Quo/Twilio signature verification)
+- `QUO_WEBHOOK_TOKEN` (non-Twilio shared-token webhook verification)
+- `OPENAI_API_KEY`, `OPENAI_MODEL`
+
+### Persistence on Render
+
+The blueprint mounts a persistent disk at `/var/data/task-tracker` and stores:
+
+- tasks data: `/var/data/task-tracker/data`
+- settings: `/var/data/task-tracker/settings`
+- backups: `/var/data/task-tracker/backups`
+
+### Webhook URLs on Render
+
+- Slack events: `https://<your-render-url>/api/integrations/slack/events`
+- Fireflies ingest: `https://<your-render-url>/api/integrations/fireflies/ingest`
+- Quo/Twilio SMS: `https://<your-render-url>/api/integrations/quo/sms`
+- Quo/Twilio calls: `https://<your-render-url>/api/integrations/quo/calls`
+
+### Fireflies payload notes
+
+- `summary` is required.
+- `projectId`/`projectName` are optional.
+- Incoming Fireflies summaries now always create an Inbox item, and will auto-link if project context matches.
+
 ## Run it from VS Code (one click)
 
 This repo includes VS Code tasks so you can run everything without remembering commands.

@@ -2418,7 +2418,10 @@ app.get('/api/settings', async (req, res) => {
   const effectiveGoogleClientId = envGoogleClientId || savedGoogleClientId;
   const googleConfigured = Boolean(isLikelyGoogleClientId(effectiveGoogleClientId));
   const googleConnected = Boolean(settings.googleTokens && typeof settings.googleTokens === 'object' && settings.googleTokens.refresh_token);
-  const firefliesConfigured = Boolean(typeof settings.firefliesSecret === 'string' && settings.firefliesSecret.trim());
+  const envFirefliesSecret =
+    (typeof process.env.FIREFLIES_SECRET === 'string' ? process.env.FIREFLIES_SECRET.trim() : '') ||
+    (typeof process.env.FIREFLIES_WEBHOOK_SECRET === 'string' ? process.env.FIREFLIES_WEBHOOK_SECRET.trim() : '');
+  const firefliesConfigured = Boolean(envFirefliesSecret || (typeof settings.firefliesSecret === 'string' && settings.firefliesSecret.trim()));
   const slackConfigured = Boolean(
     (typeof process.env.SLACK_SIGNING_SECRET === 'string' && process.env.SLACK_SIGNING_SECRET.trim()) ||
     (typeof settings.slackSigningSecret === 'string' && settings.slackSigningSecret.trim()),
@@ -2627,71 +2630,116 @@ app.post('/api/integrations/sync', async (req, res) => {
   res.json({ ok: true, results });
 });
 
-// Integrations: Fireflies ingestion (meeting summaries into project notes)
-// Expected payload: { projectId, date?: 'YYYY-MM-DD', title?: string, summary: string, transcriptUrl?: string }
+// Integrations: Fireflies ingestion (meeting summaries into inbox; optional project note linkage)
+// Expected payload: { projectId?, projectName?, date?: 'YYYY-MM-DD', title?: string, summary: string, transcriptUrl?: string, meetingId?: string }
 app.post('/api/integrations/fireflies/ingest', async (req, res) => {
   const secret = typeof req.headers['x-fireflies-secret'] === 'string' ? req.headers['x-fireflies-secret'].trim() : '';
   const saved = await readSettings();
-  const expected = typeof saved.firefliesSecret === 'string' ? saved.firefliesSecret.trim() : '';
+  const expected =
+    (typeof process.env.FIREFLIES_SECRET === 'string' ? process.env.FIREFLIES_SECRET.trim() : '') ||
+    (typeof process.env.FIREFLIES_WEBHOOK_SECRET === 'string' ? process.env.FIREFLIES_WEBHOOK_SECRET.trim() : '') ||
+    (typeof saved.firefliesSecret === 'string' ? saved.firefliesSecret.trim() : '');
   if (!expected || secret !== expected) {
     res.status(401).json({ error: 'Unauthorized' });
     return;
   }
 
   const projectId = typeof req.body?.projectId === 'string' ? req.body.projectId.trim() : '';
+  const projectName = typeof req.body?.projectName === 'string' ? req.body.projectName.trim() : '';
   const date = safeYmd(req.body?.date) || safeYmd(new Date().toISOString().slice(0, 10));
   const title = typeof req.body?.title === 'string' ? req.body.title.trim() : '';
   const summary = normalizeNotes(req.body?.summary);
   const transcriptUrl = typeof req.body?.transcriptUrl === 'string' ? req.body.transcriptUrl.trim() : '';
+  const meetingId = typeof req.body?.meetingId === 'string' ? req.body.meetingId.trim() : '';
 
-  if (!projectId) {
-    res.status(400).json({ error: 'projectId is required' });
-    return;
-  }
   if (!summary) {
     res.status(400).json({ error: 'summary is required' });
     return;
   }
 
+  const lines = [];
+  if (title) lines.push(`Fireflies: ${title}`);
+  else lines.push('Fireflies summary');
+  lines.push(summary);
+  if (transcriptUrl) {
+    lines.push('');
+    lines.push(`Transcript: ${transcriptUrl}`);
+  }
+
+  const externalId = meetingId
+    ? `meeting:${meetingId}`
+    : `summary:${crypto.createHash('sha1').update(`${title}|${summary}|${transcriptUrl}|${date}`).digest('hex')}`;
+
   writeLock = writeLock.then(async () => {
     const store = await readStore();
-    const project = (store.projects || []).find((p) => p.id === projectId);
+    const projects = Array.isArray(store.projects) ? store.projects : [];
+
+    let project = null;
+    if (projectId) {
+      project = projects.find((p) => String(p?.id || '') === projectId) || null;
+    }
+    if (!project && projectName) {
+      project = projects.find((p) => String(p?.name || '').trim().toLowerCase() === projectName.toLowerCase()) || null;
+    }
     if (!project) {
-      res.status(404).json({ error: 'Project not found' });
-      return;
+      project = matchProjectFromText(store, `${title}\n${summary}`) || null;
     }
 
     const ts = nowIso();
-    const noteTitle = title || `Fireflies summary`;
-    const lines = [];
-    lines.push(summary);
-    if (transcriptUrl) {
-      lines.push('');
-      lines.push(`Transcript: ${transcriptUrl}`);
+    const inboxText = lines.join('\n').trimEnd();
+
+    const inboxItemId = `fireflies:${externalId}`;
+    const inboxList = Array.isArray(store.inboxItems) ? store.inboxItems : [];
+    const inboxExists = inboxList.some((x) => String(x?.id || '') === inboxItemId);
+    const nextInboxItems = inboxExists
+      ? inboxList
+      : [normalizeInboxItem({
+          id: inboxItemId,
+          source: 'fireflies',
+          text: inboxText,
+          status: 'New',
+          projectId: project?.id || '',
+          projectName: project?.name || '',
+          createdAt: ts,
+          updatedAt: ts,
+        }), ...inboxList].slice(0, 500);
+
+    let note = null;
+    let nextProjectNoteEntries = store.projectNoteEntries || {};
+    if (project) {
+      note = {
+        id: makeId(),
+        kind: 'Summary',
+        date,
+        title: title || 'Fireflies summary',
+        content: lines.slice(1).join('\n').trimEnd() || summary,
+        createdAt: ts,
+      };
+
+      const existing = Array.isArray(store.projectNoteEntries?.[project.id]) ? store.projectNoteEntries[project.id] : [];
+      nextProjectNoteEntries = {
+        ...(store.projectNoteEntries || {}),
+        [project.id]: [note, ...existing],
+      };
     }
 
-    const note = {
-      id: makeId(),
-      kind: 'Summary',
-      date,
-      title: noteTitle,
-      content: lines.join('\n').trimEnd(),
-      createdAt: ts,
-    };
-
-    const existing = Array.isArray(store.projectNoteEntries?.[projectId]) ? store.projectNoteEntries[projectId] : [];
     const nextStore = {
       ...store,
       revision: store.revision + 1,
       updatedAt: ts,
-      projectNoteEntries: {
-        ...(store.projectNoteEntries || {}),
-        [projectId]: [note, ...existing],
-      },
+      inboxItems: nextInboxItems,
+      projectNoteEntries: nextProjectNoteEntries,
     };
 
     await writeStore(nextStore);
-    res.status(201).json({ ok: true, revision: nextStore.revision, note });
+    res.status(201).json({
+      ok: true,
+      revision: nextStore.revision,
+      inboxAdded: !inboxExists,
+      linkedProjectId: project?.id || '',
+      linkedProjectName: project?.name || '',
+      note,
+    });
   });
 
   await writeLock;
@@ -3275,6 +3323,151 @@ app.put('/api/inbox/:id', async (req, res) => {
     };
     await writeStore(nextStore);
     res.json({ ok: true, store: nextStore, item: next });
+  });
+
+  await writeLock;
+});
+
+app.post('/api/inbox/:id/link-project', async (req, res) => {
+  const inboxId = String(req.params.id || '').trim();
+  const baseRevision = Number(req.body?.baseRevision);
+  const projectId = typeof req.body?.projectId === 'string' ? req.body.projectId.trim() : '';
+
+  if (!inboxId) {
+    res.status(400).json({ ok: false, error: 'Missing inbox id' });
+    return;
+  }
+  if (!projectId) {
+    res.status(400).json({ ok: false, error: 'projectId is required' });
+    return;
+  }
+
+  writeLock = writeLock.then(async () => {
+    const store = await readStore();
+    if (Number.isFinite(baseRevision) && baseRevision !== store.revision) {
+      res.status(409).json({ ok: false, error: 'Revision mismatch. Reload and try again.', currentRevision: store.revision });
+      return;
+    }
+
+    const list = Array.isArray(store.inboxItems) ? store.inboxItems : [];
+    const idx = list.findIndex((x) => String(x?.id || '') === inboxId);
+    if (idx === -1) {
+      res.status(404).json({ ok: false, error: 'Inbox item not found' });
+      return;
+    }
+
+    const project = (Array.isArray(store.projects) ? store.projects : []).find((p) => String(p?.id || '') === projectId);
+    if (!project) {
+      res.status(404).json({ ok: false, error: 'Project not found' });
+      return;
+    }
+
+    const ts = nowIso();
+    const current = list[idx];
+    const nextItem = normalizeInboxItem({
+      ...current,
+      projectId: String(project.id || ''),
+      projectName: String(project.name || ''),
+      status: current?.status === 'New' ? 'Triaged' : current?.status,
+      updatedAt: ts,
+    });
+
+    const nextList = [...list];
+    nextList[idx] = nextItem;
+
+    const nextStore = {
+      ...store,
+      revision: store.revision + 1,
+      updatedAt: ts,
+      inboxItems: nextList,
+    };
+
+    await writeStore(nextStore);
+    res.json({ ok: true, store: nextStore, item: nextItem, project });
+  });
+
+  await writeLock;
+});
+
+app.post('/api/inbox/:id/create-project', async (req, res) => {
+  const inboxId = String(req.params.id || '').trim();
+  const baseRevision = Number(req.body?.baseRevision);
+  const projectInput = req.body?.project && typeof req.body.project === 'object' ? req.body.project : {};
+
+  if (!inboxId) {
+    res.status(400).json({ ok: false, error: 'Missing inbox id' });
+    return;
+  }
+
+  writeLock = writeLock.then(async () => {
+    const store = await readStore();
+    if (Number.isFinite(baseRevision) && baseRevision !== store.revision) {
+      res.status(409).json({ ok: false, error: 'Revision mismatch. Reload and try again.', currentRevision: store.revision });
+      return;
+    }
+
+    const list = Array.isArray(store.inboxItems) ? store.inboxItems : [];
+    const idx = list.findIndex((x) => String(x?.id || '') === inboxId);
+    if (idx === -1) {
+      res.status(404).json({ ok: false, error: 'Inbox item not found' });
+      return;
+    }
+
+    const item = list[idx];
+    const fallbackName = (typeof item?.projectName === 'string' && item.projectName.trim())
+      ? item.projectName.trim()
+      : `Inbox Project ${new Date().toISOString().slice(0, 10)}`;
+
+    let normalized;
+    try {
+      normalized = normalizeProject({
+        name: typeof projectInput.name === 'string' && projectInput.name.trim() ? projectInput.name.trim() : fallbackName,
+        type: safeEnum(projectInput.type, ['Build', 'Rebuild', 'Revision', 'Workflow', 'Cleanup', 'Other'], 'Other'),
+        dueDate: safeYmd(projectInput.dueDate),
+        status: safeEnum(projectInput.status, ['Active', 'On Hold', 'Done', 'Archived'], 'Active'),
+        accountManagerName: typeof projectInput.accountManagerName === 'string' ? projectInput.accountManagerName.trim() : '',
+        accountManagerEmail: typeof projectInput.accountManagerEmail === 'string' ? projectInput.accountManagerEmail.trim() : '',
+        workspacePath: typeof projectInput.workspacePath === 'string' ? projectInput.workspacePath.trim() : '',
+        airtableUrl: typeof projectInput.airtableUrl === 'string' ? projectInput.airtableUrl.trim() : '',
+        projectValue: typeof projectInput.projectValue === 'string' ? projectInput.projectValue.trim() : '',
+        stripeInvoiceUrl: typeof projectInput.stripeInvoiceUrl === 'string' ? projectInput.stripeInvoiceUrl.trim() : '',
+        repoUrl: typeof projectInput.repoUrl === 'string' ? projectInput.repoUrl.trim() : '',
+        docsUrl: typeof projectInput.docsUrl === 'string' ? projectInput.docsUrl.trim() : '',
+      });
+    } catch (err) {
+      res.status(400).json({ ok: false, error: err?.message || 'Invalid project payload' });
+      return;
+    }
+
+    const ts = nowIso();
+    const createdProject = {
+      id: makeId(),
+      ...normalized,
+      createdAt: ts,
+      updatedAt: ts,
+    };
+
+    const nextItem = normalizeInboxItem({
+      ...item,
+      projectId: createdProject.id,
+      projectName: createdProject.name,
+      status: item?.status === 'New' ? 'Triaged' : item?.status,
+      updatedAt: ts,
+    });
+
+    const nextList = [...list];
+    nextList[idx] = nextItem;
+
+    const nextStore = {
+      ...store,
+      revision: store.revision + 1,
+      updatedAt: ts,
+      projects: [createdProject, ...(Array.isArray(store.projects) ? store.projects : [])],
+      inboxItems: nextList,
+    };
+
+    await writeStore(nextStore);
+    res.status(201).json({ ok: true, store: nextStore, item: nextItem, project: createdProject });
   });
 
   await writeLock;

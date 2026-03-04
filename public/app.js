@@ -1109,6 +1109,33 @@ async function convertInboxItem(inboxId, kind, payload) {
     return data;
 }
 
+async function linkInboxItemToProject(inboxId, projectId) {
+    const id = safeText(inboxId).trim();
+    const pid = safeText(projectId).trim();
+    if (!id) throw new Error('Missing inbox id');
+    if (!pid) throw new Error('Select a project first');
+    const data = await withRevisionRetry(() => apiJson(`/api/inbox/${encodeURIComponent(id)}/link-project`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ baseRevision: state.revision, projectId: pid }),
+    }));
+    if (data?.store) applyStore(data.store);
+    return data;
+}
+
+async function createProjectFromInboxItem(inboxId, project) {
+    const id = safeText(inboxId).trim();
+    if (!id) throw new Error('Missing inbox id');
+    const payload = (project && typeof project === 'object') ? project : {};
+    const data = await withRevisionRetry(() => apiJson(`/api/inbox/${encodeURIComponent(id)}/create-project`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ baseRevision: state.revision, project: payload }),
+    }));
+    if (data?.store) applyStore(data.store);
+    return data;
+}
+
 function renderInbox(container) {
     const titleEl = document.getElementById('page-title');
     if (titleEl) titleEl.innerText = 'Inbox';
@@ -1176,6 +1203,8 @@ function renderInbox(container) {
                                 <option value="">Project (optional)</option>
                                 ${(Array.isArray(state.projects) ? state.projects : []).map((p) => `<option value="${escapeHtml(safeText(p?.id))}" ${safeText(p?.id) === projectId ? 'selected' : ''}>${escapeHtml(safeText(p?.name) || 'Project')}</option>`).join('')}
                             </select>
+                            <button data-inbox-link-project="${escapeHtml(id)}" class="px-2 py-1 rounded border border-blue-600/40 bg-blue-600/20 text-[11px] font-mono text-blue-200 hover:bg-blue-600/30 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Link</button>
+                            <button data-inbox-create-project="${escapeHtml(id)}" class="px-2 py-1 rounded border border-emerald-600/40 bg-emerald-600/20 text-[11px] font-mono text-emerald-200 hover:bg-emerald-600/30 transition-colors transition-transform duration-150 ease-out active:translate-y-px">New Project</button>
                             <button data-inbox-edit="${escapeHtml(id)}" class="px-2 py-1 rounded border border-zinc-800 text-[11px] font-mono text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Edit</button>
                         </div>
                     </div>
@@ -1252,6 +1281,54 @@ function renderInbox(container) {
                 renderMain();
             } catch (e) {
                 alert(e?.message || 'Failed to update inbox item');
+            }
+        });
+    });
+
+    container.querySelectorAll('button[data-inbox-link-project]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+            const inboxId = safeText(btn.getAttribute('data-inbox-link-project')).trim();
+            if (!inboxId) return;
+            const projectId = safeText(state.inboxConvertProjectById?.[inboxId]).trim();
+            btn.disabled = true;
+            try {
+                await linkInboxItemToProject(inboxId, projectId);
+                renderMain();
+            } catch (e) {
+                alert(e?.message || 'Failed to link inbox item');
+            } finally {
+                btn.disabled = false;
+            }
+        });
+    });
+
+    container.querySelectorAll('button[data-inbox-create-project]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+            const inboxId = safeText(btn.getAttribute('data-inbox-create-project')).trim();
+            const item = (Array.isArray(state.inboxItems) ? state.inboxItems : []).find((x) => safeText(x?.id) === inboxId);
+            if (!inboxId || !item) return;
+
+            const defaultName = safeText(item?.projectName).trim() || `Inbox Project ${new Date().toISOString().slice(0, 10)}`;
+            const name = prompt('New project name:', defaultName);
+            if (name === null) return;
+            const cleanName = safeText(name).trim();
+            if (!cleanName) {
+                alert('Project name is required');
+                return;
+            }
+
+            btn.disabled = true;
+            try {
+                const created = await createProjectFromInboxItem(inboxId, { name: cleanName, type: 'Other', status: 'Active' });
+                renderMain();
+                const projectId = safeText(created?.project?.id).trim();
+                if (projectId) {
+                    await openProject(projectId);
+                }
+            } catch (e) {
+                alert(e?.message || 'Failed to create project from inbox item');
+            } finally {
+                btn.disabled = false;
             }
         });
     });
