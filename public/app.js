@@ -2889,10 +2889,25 @@ function getProjectTasks(project) {
     });
 }
 
+function getProjectLinkedInboxItems(project) {
+    const list = Array.isArray(state.inboxItems) ? state.inboxItems : [];
+    const projectId = safeText(project?.id).trim();
+    const projectName = safeText(project?.name).trim();
+    return list
+        .filter((item) => {
+            const linkedProjectId = safeText(item?.projectId).trim();
+            const linkedProjectName = safeText(item?.projectName).trim();
+            if (projectId && linkedProjectId === projectId) return true;
+            if (!linkedProjectId && projectName && linkedProjectName === projectName) return true;
+            return false;
+        })
+        .sort((a, b) => String(b?.updatedAt || b?.createdAt || '').localeCompare(String(a?.updatedAt || a?.createdAt || '')));
+}
+
 function getActiveProjectTab(projectId) {
     const pid = safeText(projectId);
     const t = safeText(state.projectRightTabById?.[pid]);
-    return t || 'details';
+    return t || 'inbox';
 }
 
 function setActiveProjectTab(projectId, tab) {
@@ -3315,6 +3330,7 @@ function renderProjectView(container) {
     const tabs = [
         { id: 'details', label: 'Details', icon: 'fa-sliders' },
         { id: 'links', label: 'Links', icon: 'fa-link' },
+        { id: 'inbox', label: 'Inbox', icon: 'fa-inbox' },
         { id: 'notes', label: 'Notes', icon: 'fa-note-sticky' },
         { id: 'scratch', label: 'Scratch', icon: 'fa-pen-to-square' },
         { id: 'comms', label: 'Comms', icon: 'fa-message' },
@@ -3640,6 +3656,49 @@ function renderProjectView(container) {
                     } finally {
                         addNoteBtn.disabled = false;
                     }
+                };
+            }
+            return;
+        }
+
+        if (tab === 'inbox') {
+            const linkedItems = getProjectLinkedInboxItems(project);
+            const listHtml = linkedItems.length
+                ? linkedItems.slice(0, 50).map((item) => {
+                    const text = safeText(item?.text);
+                    const stamp = safeText(item?.updatedAt || item?.createdAt);
+                    const when = stamp ? formatTimeFromIso(stamp) : '';
+                    return `
+                        <div class="border border-zinc-800 rounded-md bg-zinc-950/30 p-3 space-y-2">
+                            <div class="flex items-center justify-between gap-2">
+                                <div class="flex items-center gap-2 min-w-0">
+                                    ${inboxSourceBadge(item?.source)}
+                                    ${inboxStatusBadge(item?.status)}
+                                </div>
+                                <div class="text-[10px] font-mono text-zinc-500">${escapeHtml(when)}</div>
+                            </div>
+                            <div class="text-xs text-zinc-200 whitespace-pre-wrap font-mono">${escapeHtml(text)}</div>
+                        </div>
+                    `;
+                }).join('')
+                : `<div class="text-zinc-600 italic text-sm">No linked inbox messages yet.</div>`;
+
+            const el = document.createElement('div');
+            el.className = 'space-y-3';
+            el.innerHTML = `
+                <div class="flex items-center justify-between">
+                    <div class="text-zinc-400 text-xxs font-mono uppercase tracking-widest">Linked inbox messages</div>
+                    <button id="btn-open-inbox-from-project" class="px-2.5 py-1.5 rounded border border-zinc-800 bg-zinc-950/30 text-[10px] font-mono text-zinc-300 hover:text-white hover:bg-zinc-900/40 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Open Inbox</button>
+                </div>
+                <div class="text-zinc-600 text-[10px] font-mono">${linkedItems.length} linked item${linkedItems.length === 1 ? '' : 's'}</div>
+                <div class="space-y-2">${listHtml}</div>
+            `;
+            panel.appendChild(el);
+
+            const openInboxBtn = el.querySelector('#btn-open-inbox-from-project');
+            if (openInboxBtn) {
+                openInboxBtn.onclick = async () => {
+                    await openInbox();
                 };
             }
             return;
