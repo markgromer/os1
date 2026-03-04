@@ -46,6 +46,7 @@ const state = {
     commandPaletteOpen: false,
     commandPaletteQuery: '',
     commandPaletteSelection: 0,
+    taskDoneUndoById: {},
 
     // Inbox UI state
     inboxDraftText: '',
@@ -99,6 +100,7 @@ const state = {
 
 const THEME_STORAGE_KEY = 'opsTheme';
 const ADMIN_TOKEN_STORAGE_KEY = 'opsAdminToken';
+const taskDoneUndoTimers = new Map();
 
 function getStoredAdminToken() {
     try {
@@ -2655,7 +2657,12 @@ function renderDashboard(container) {
         .map(([key, count]) => `${inboxSourceMeta(key).label}: ${count}`)
         .join(' • ');
 
-    const nextAction = getTodayNextActions()[0] || null;
+    const pendingDoneEntries = Object.entries(state.taskDoneUndoById && typeof state.taskDoneUndoById === 'object' ? state.taskDoneUndoById : {});
+    const pendingDone = pendingDoneEntries.length
+        ? { id: pendingDoneEntries[0][0], ...(pendingDoneEntries[0][1] || {}) }
+        : null;
+
+    const nextAction = getTodayNextActions().find((task) => !state.taskDoneUndoById?.[safeText(task?.id)]) || null;
     const callsConnected = !!state.settings?.googleConnected;
     const calls = Array.isArray(state.dashboardCalls?.events) ? state.dashboardCalls.events : [];
     if (callsConnected) setTimeout(() => refreshDashboardCalls({ force: false }), 0);
@@ -2675,6 +2682,18 @@ function renderDashboard(container) {
         return false;
     });
 
+    const nextTaskPrimaryText = pendingDone
+        ? (safeText(pendingDone.title) || 'Task marked done')
+        : (safeText(nextAction?.title) || 'No immediate task');
+    const nextTaskSecondaryText = pendingDone
+        ? `Auto-archiving in 5s • ${safeText(pendingDone.project) || 'No project'}`
+        : (safeText(nextAction?.project) || 'Open a project to create tasks');
+    const nextTaskActionHtml = pendingDone
+        ? `<button data-next-task-undo="${escapeHtml(pendingDone.id)}" class="px-2 py-1 rounded border border-amber-600/40 bg-amber-600/10 text-[10px] font-mono text-amber-200 hover:bg-amber-600/20 transition-colors">Undo</button>`
+        : (nextAction
+            ? `<button data-next-task-done="${escapeHtml(safeText(nextAction?.id))}" class="px-2 py-1 rounded border border-emerald-600/40 bg-emerald-600/10 text-[10px] font-mono text-emerald-200 hover:bg-emerald-600/20 transition-colors">Mark done</button>`
+            : `<span class="text-[10px] font-mono text-zinc-600">No action</span>`);
+
     const controlStrip = document.createElement('div');
     controlStrip.className = 'mb-6 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3';
     controlStrip.innerHTML = `
@@ -2686,8 +2705,9 @@ function renderDashboard(container) {
 
         <button data-strip-action="next-task" class="group text-left border border-zinc-800 rounded-xl bg-zinc-900/30 p-3 hover:bg-zinc-900/50 transition-colors">
             <div class="text-[10px] font-mono uppercase tracking-widest text-zinc-500">Next Task</div>
-            <div class="mt-1 text-sm text-zinc-100 truncate">${escapeHtml(safeText(nextAction?.title) || 'No immediate task')}</div>
-            <div class="mt-2 max-h-0 opacity-0 overflow-hidden transition-all duration-200 ease-out group-hover:max-h-24 group-hover:opacity-100 text-[11px] text-zinc-400">${escapeHtml(safeText(nextAction?.project) || 'Open a project to create tasks')}</div>
+            <div class="mt-1 text-sm text-zinc-100 truncate">${escapeHtml(nextTaskPrimaryText)}</div>
+            <div class="mt-2 text-[11px] text-zinc-400 truncate">${escapeHtml(nextTaskSecondaryText)}</div>
+            <div class="mt-2 flex items-center gap-2">${nextTaskActionHtml}</div>
         </button>
 
         <button data-strip-action="next-call" class="group text-left border border-zinc-800 rounded-xl bg-zinc-900/30 p-3 hover:bg-zinc-900/50 transition-colors">
@@ -3178,6 +3198,10 @@ function renderDashboard(container) {
                 return;
             }
             if (action === 'next-task') {
+                if (pendingDone) {
+                    await openDashboard();
+                    return;
+                }
                 if (nextAction) {
                     const project = activeProjects.find((p) => safeText(p?.name) === safeText(nextAction?.project));
                     if (project?.id) {
@@ -3197,6 +3221,28 @@ function renderDashboard(container) {
                 return;
             }
             await openDashboard();
+        });
+    });
+
+    controlStrip.querySelectorAll('button[data-next-task-done]').forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const id = safeText(btn.getAttribute('data-next-task-done')).trim();
+            if (!id) return;
+            const task = (Array.isArray(state.tasks) ? state.tasks : []).find((t) => safeText(t?.id) === id);
+            if (!task) return;
+            scheduleTaskDoneWithUndo(task);
+        });
+    });
+
+    controlStrip.querySelectorAll('button[data-next-task-undo]').forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const id = safeText(btn.getAttribute('data-next-task-undo')).trim();
+            if (!id) return;
+            undoTaskDoneWithUndo(id);
         });
     });
 
@@ -4618,6 +4664,92 @@ async function toggleTaskStatus(task) {
         console.error("Update failed", e);
         fetchState(); // Revert on fail
     }
+}
+
+function setTaskStatusLocal(taskId, status) {
+    const id = safeText(taskId).trim();
+    const nextStatus = safeText(status).trim();
+    if (!id || !nextStatus) return;
+    state.tasks = (Array.isArray(state.tasks) ? state.tasks : []).map((task) => {
+        if (safeText(task?.id) !== id) return task;
+        return { ...task, status: nextStatus };
+    });
+}
+
+function clearTaskDoneUndoTimer(taskId) {
+    const id = safeText(taskId).trim();
+    if (!id) return;
+    const existing = taskDoneUndoTimers.get(id);
+    if (existing) {
+        clearTimeout(existing);
+        taskDoneUndoTimers.delete(id);
+    }
+}
+
+async function finalizeTaskDoneWithUndo(taskId) {
+    const id = safeText(taskId).trim();
+    if (!id) return;
+    const pending = state.taskDoneUndoById?.[id];
+    if (!pending) return;
+
+    clearTaskDoneUndoTimer(id);
+    const nextMap = { ...(state.taskDoneUndoById || {}) };
+    delete nextMap[id];
+    state.taskDoneUndoById = nextMap;
+
+    try {
+        const store = await withRevisionRetry(() => apiJson(`/api/tasks/${encodeURIComponent(id)}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ baseRevision: state.revision, patch: { status: 'Done' } })
+        }));
+        applyStore(store);
+        renderNav();
+    } catch {
+        await fetchState();
+    }
+
+    renderMain();
+}
+
+function undoTaskDoneWithUndo(taskId) {
+    const id = safeText(taskId).trim();
+    if (!id) return;
+    const pending = state.taskDoneUndoById?.[id];
+    if (!pending) return;
+
+    clearTaskDoneUndoTimer(id);
+    const nextMap = { ...(state.taskDoneUndoById || {}) };
+    delete nextMap[id];
+    state.taskDoneUndoById = nextMap;
+
+    setTaskStatusLocal(id, safeText(pending.prevStatus) || 'Next');
+    renderMain();
+}
+
+function scheduleTaskDoneWithUndo(task) {
+    const id = safeText(task?.id).trim();
+    if (!id) return;
+    if (state.taskDoneUndoById?.[id]) return;
+
+    const prevStatus = safeText(task?.status) || 'Next';
+    const expiresAt = Date.now() + 5000;
+    const meta = {
+        prevStatus,
+        expiresAt,
+        title: safeText(task?.title),
+        project: safeText(task?.project),
+    };
+
+    state.taskDoneUndoById = { ...(state.taskDoneUndoById || {}), [id]: meta };
+    setTaskStatusLocal(id, 'Done');
+    renderMain();
+
+    clearTaskDoneUndoTimer(id);
+    const timer = setTimeout(() => {
+        finalizeTaskDoneWithUndo(id);
+    }, 5000);
+    taskDoneUndoTimers.set(id, timer);
 }
 
 async function renderDelete(id) {
