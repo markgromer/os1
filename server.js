@@ -426,12 +426,48 @@ function getStringAtPath(obj, pathExpr) {
   return typeof cur === 'string' ? cur : cur === undefined || cur === null ? '' : String(cur);
 }
 
-function firstNonEmptyString(obj, pathExprs) {
+function findFirstStringByKeyDeep(root, keyNames, maxDepth = 6) {
+  const wanted = new Set((Array.isArray(keyNames) ? keyNames : []).map((k) => String(k || '').toLowerCase()).filter(Boolean));
+  if (!wanted.size) return '';
+
+  const queue = [{ value: root, depth: 0 }];
+  const seen = new Set();
+
+  while (queue.length > 0) {
+    const { value, depth } = queue.shift();
+    if (!value || typeof value !== 'object') continue;
+    if (seen.has(value)) continue;
+    seen.add(value);
+
+    if (Array.isArray(value)) {
+      if (depth >= maxDepth) continue;
+      for (const item of value) queue.push({ value: item, depth: depth + 1 });
+      continue;
+    }
+
+    for (const [key, rawVal] of Object.entries(value)) {
+      const keyNorm = String(key || '').toLowerCase();
+      if (wanted.has(keyNorm)) {
+        const s = typeof rawVal === 'string' ? rawVal.trim() : rawVal === undefined || rawVal === null ? '' : String(rawVal).trim();
+        if (s) return s;
+      }
+      if (depth < maxDepth && rawVal && typeof rawVal === 'object') {
+        queue.push({ value: rawVal, depth: depth + 1 });
+      }
+    }
+  }
+
+  return '';
+}
+
+function firstNonEmptyString(obj, pathExprs, deepKeyNames = []) {
   const paths = Array.isArray(pathExprs) ? pathExprs : [];
   for (const p of paths) {
     const v = getStringAtPath(obj, p).trim();
     if (v) return v;
   }
+  const deep = findFirstStringByKeyDeep(obj, deepKeyNames);
+  if (deep) return deep;
   return '';
 }
 
@@ -2549,13 +2585,34 @@ app.post('/api/integrations/quo/sms', async (req, res) => {
     }
 
     const payload = req.body && typeof req.body === 'object' ? req.body : {};
-    const sid = firstNonEmptyString(payload, ['MessageSid', 'SmsSid', 'sid', 'messageSid', 'message_id', 'id']);
-    const from = firstNonEmptyString(payload, ['From', 'from', 'sender', 'source', 'fromNumber', 'from_number', 'data.from', 'data.sender']);
-    const to = firstNonEmptyString(payload, ['To', 'to', 'recipient', 'destination', 'toNumber', 'to_number', 'data.to', 'data.recipient']);
-    const body = firstNonEmptyString(payload, ['Body', 'body', 'message', 'text', 'content', 'data.body', 'data.message', 'data.text']);
+    const sid = firstNonEmptyString(
+      payload,
+      ['MessageSid', 'SmsSid', 'sid', 'messageSid', 'message_id', 'id', 'data.id', 'data.sid', 'data.messageSid'],
+      ['messagesid', 'smssid', 'sid', 'messagesid', 'message_id', 'id', 'eventsid', 'eventsid'],
+    );
+    const from = firstNonEmptyString(
+      payload,
+      ['From', 'from', 'sender', 'source', 'fromNumber', 'from_number', 'data.from', 'data.sender', 'data.source'],
+      ['from', 'sender', 'source', 'fromnumber', 'from_number', 'phone', 'phonefrom', 'originator'],
+    );
+    const to = firstNonEmptyString(
+      payload,
+      ['To', 'to', 'recipient', 'destination', 'toNumber', 'to_number', 'data.to', 'data.recipient', 'data.destination'],
+      ['to', 'recipient', 'destination', 'tonumber', 'to_number', 'phone_to'],
+    );
+    const body = firstNonEmptyString(
+      payload,
+      [
+        'Body', 'body', 'message', 'text', 'content',
+        'data.body', 'data.message', 'data.text', 'data.content',
+        'data.payload.body', 'data.payload.message', 'data.payload.text',
+      ],
+      ['body', 'message', 'text', 'content', 'sms', 'smsbody'],
+    );
 
     debugWebhookLog('Quo SMS payload', {
       keys: Object.keys(payload || {}).slice(0, 40),
+      dataKeys: payload?.data && typeof payload.data === 'object' ? Object.keys(payload.data).slice(0, 40) : [],
       derived: {
         sid: sid ? 'yes' : 'no',
         from: from ? 'yes' : 'no',
@@ -2635,13 +2692,30 @@ app.post('/api/integrations/quo/calls', async (req, res) => {
     }
 
     const payload = req.body && typeof req.body === 'object' ? req.body : {};
-    const callSid = firstNonEmptyString(payload, ['CallSid', 'callSid', 'sid', 'call_id', 'id']);
-    const from = firstNonEmptyString(payload, ['From', 'from', 'caller', 'source', 'fromNumber', 'from_number', 'data.from', 'data.caller']);
-    const to = firstNonEmptyString(payload, ['To', 'to', 'callee', 'destination', 'toNumber', 'to_number', 'data.to', 'data.callee']);
-    const callStatus = firstNonEmptyString(payload, ['CallStatus', 'CallStatusCallbackEvent', 'status', 'event', 'callStatus', 'data.status', 'data.event']);
+    const callSid = firstNonEmptyString(
+      payload,
+      ['CallSid', 'callSid', 'sid', 'call_id', 'id', 'data.callSid', 'data.sid', 'data.id'],
+      ['callsid', 'call_sid', 'sid', 'id'],
+    );
+    const from = firstNonEmptyString(
+      payload,
+      ['From', 'from', 'caller', 'source', 'fromNumber', 'from_number', 'data.from', 'data.caller', 'data.source'],
+      ['from', 'caller', 'source', 'fromnumber', 'from_number', 'phonefrom', 'originator'],
+    );
+    const to = firstNonEmptyString(
+      payload,
+      ['To', 'to', 'callee', 'destination', 'toNumber', 'to_number', 'data.to', 'data.callee', 'data.destination'],
+      ['to', 'callee', 'destination', 'tonumber', 'to_number', 'phone_to'],
+    );
+    const callStatus = firstNonEmptyString(
+      payload,
+      ['CallStatus', 'CallStatusCallbackEvent', 'status', 'event', 'callStatus', 'data.status', 'data.event', 'data.callStatus'],
+      ['callstatus', 'status', 'event', 'state', 'disposition'],
+    );
 
     debugWebhookLog('Quo call payload', {
       keys: Object.keys(payload || {}).slice(0, 40),
+      dataKeys: payload?.data && typeof payload.data === 'object' ? Object.keys(payload.data).slice(0, 40) : [],
       derived: {
         callSid: callSid ? 'yes' : 'no',
         from: from ? 'yes' : 'no',
