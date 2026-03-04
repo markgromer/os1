@@ -2309,6 +2309,50 @@ function renderDashboard(container) {
     `;
 
     content.appendChild(intake);
+
+    // Unreads (Inbox)
+    const unreadItems = (Array.isArray(state.inboxItems) ? state.inboxItems : [])
+        .filter((x) => String(x?.status || '') === 'New')
+        .slice()
+        .sort((a, b) => String(b?.createdAt || '').localeCompare(String(a?.createdAt || '')));
+
+    const unreadPanel = document.createElement('div');
+    unreadPanel.className = 'mb-6 border border-zinc-800 rounded-xl bg-zinc-900/30 p-4';
+    unreadPanel.innerHTML = `
+        <div class="flex items-center justify-between gap-3">
+            <div>
+                <div class="text-white text-sm font-semibold">Unreads</div>
+                <div class="text-[11px] text-zinc-500 mt-0.5">${unreadItems.length} new inbox item${unreadItems.length === 1 ? '' : 's'}</div>
+            </div>
+            <button id="btn-open-inbox" class="px-3 py-1.5 rounded-lg border border-zinc-700 text-xs font-mono text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Open Inbox</button>
+        </div>
+        <div class="mt-3 ${unreadItems.length ? '' : 'hidden'}">
+            <div class="space-y-2 max-h-72 overflow-y-auto pr-1">
+                ${unreadItems.map((item) => {
+                    const id = safeText(item?.id);
+                    const src = inboxSourceBadge(item?.source);
+                    const createdAt = safeText(item?.createdAt);
+                    const time = createdAt ? formatTimeFromIso(createdAt) : '';
+                    const text = safeText(item?.text).replace(/\s+/g, ' ').trim();
+                    return `
+                        <button data-dash-open-inbox="${escapeHtml(id)}" class="w-full text-left border border-zinc-800 rounded-lg bg-zinc-950/20 px-3 py-2 hover:bg-zinc-800/40 transition-colors">
+                            <div class="flex items-center justify-between gap-2">
+                                <div class="flex items-center gap-2 min-w-0">
+                                    ${src}
+                                    <span class="text-[11px] text-zinc-500 font-mono">${escapeHtml(time)}</span>
+                                </div>
+                                ${inboxStatusBadge('New')}
+                            </div>
+                            <div class="mt-1 text-sm text-zinc-200 truncate" title="${escapeHtml(text)}">${escapeHtml(text || '(empty)')}</div>
+                        </button>
+                    `;
+                }).join('')}
+            </div>
+        </div>
+        <div class="mt-3 ${unreadItems.length ? 'hidden' : ''} text-xs text-zinc-500">No new inbox items.</div>
+    `;
+    content.appendChild(unreadPanel);
+
     content.appendChild(renderProjectBuckets(buckets, { bulkMode: !!state.dashboardBulkMode }));
 
     if (state.showArchivedOnDashboard) {
@@ -2546,6 +2590,19 @@ function renderDashboard(container) {
             renderMain();
         };
     }
+
+    // Wire Unreads -> Inbox
+    const btnOpenInbox = unreadPanel.querySelector('#btn-open-inbox');
+    if (btnOpenInbox) {
+        btnOpenInbox.onclick = async () => {
+            await openInbox();
+        };
+    }
+    unreadPanel.querySelectorAll('button[data-dash-open-inbox]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+            await openInbox();
+        });
+    });
 }
 
 function renderTodayPanel() {
