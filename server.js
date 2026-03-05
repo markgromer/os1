@@ -349,7 +349,9 @@ async function getAiConfig() {
 
   const envModel = typeof process.env.OPENAI_MODEL === 'string' ? process.env.OPENAI_MODEL.trim() : '';
   const savedModel = typeof saved.openaiModel === 'string' ? saved.openaiModel.trim() : '';
-  const model = envModel || savedModel || 'gpt-4o-mini';
+  // Prefer the user-selected/saved model when present; env acts as a default.
+  // This makes the model picker in the UI actually take effect on hosted envs.
+  const model = savedModel || envModel || 'gpt-4o-mini';
 
   const source = envKey ? 'env' : savedKey ? 'saved' : 'none';
   const last4 = apiKey && apiKey.length >= 4 ? apiKey.slice(-4) : '';
@@ -363,6 +365,18 @@ async function getAiConfig() {
     keyHint,
     settingsUpdatedAt,
   };
+}
+
+async function fetchJsonWithTimeout(url, { timeoutMs = 25_000, ...init } = {}) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(new Error('timeout')), timeoutMs);
+  try {
+    const resp = await fetch(url, { ...init, signal: controller.signal });
+    const data = await resp.json().catch(() => ({}));
+    return { resp, data };
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 function sanitizeSettingsForClient(settings) {
@@ -5578,14 +5592,16 @@ async function aiAgentAction(message, store, projectId = null) {
     messages.push({ role: 'user', content: `${context}User Request: ${message}` });
 
     const callOpenAi = async () => {
+      // Some newer models reject non-default sampling params; omit temperature entirely.
       const body = {
         model,
         messages,
-        temperature: 0.2,
         tools,
         tool_choice: 'auto',
       };
-      const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+
+      const { resp, data } = await fetchJsonWithTimeout('https://api.openai.com/v1/chat/completions', {
+        timeoutMs: 30_000,
         method: 'POST',
         headers: {
           Authorization: `Bearer ${apiKey}`,
@@ -5593,10 +5609,10 @@ async function aiAgentAction(message, store, projectId = null) {
         },
         body: JSON.stringify(body),
       });
-      const data = await resp.json().catch(() => ({}));
+
       if (!resp.ok) {
         const detail = typeof data?.error?.message === 'string' ? data.error.message : JSON.stringify(data);
-        throw new Error(`AI request failed (${resp.status}). ${detail}`.slice(0, 400));
+        throw new Error(`AI request failed (${resp.status}). model=${model}. ${detail}`.slice(0, 600));
       }
       const msg = data?.choices?.[0]?.message;
       if (!msg) throw new Error('AI returned no message');
