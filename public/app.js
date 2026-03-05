@@ -108,9 +108,21 @@ const state = {
 const THEME_STORAGE_KEY = 'opsTheme';
 const ADMIN_TOKEN_STORAGE_KEY = 'opsAdminToken';
 const MARTY_PANEL_STORAGE_KEY = 'opsMartyPanel';
+const MARTY_OPEN_STORAGE_KEY = 'opsMartyOpen';
 const MARTY_PANEL_MIN_WIDTH = 280;
 const MARTY_PANEL_MIN_HEIGHT = 260;
 const MARTY_TYPING_ID = 'marty-typing-indicator';
+const MARTY_SYNC_STORAGE_KEY = 'opsMartySyncEvent';
+const MARTY_SYNC_CHANNEL = 'ops-marty-sync';
+const IS_MARTY_POPOUT = (() => {
+    try {
+        return new URLSearchParams(window.location.search).get('martyPopout') === '1';
+    } catch {
+        return false;
+    }
+})();
+const MARTY_INSTANCE_ID = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+let martySyncChannel = null;
 const MARTY_THINKING_LINES = [
     'Mapping the battlefield...',
     'Cross-checking every signal...',
@@ -128,11 +140,180 @@ const taskDoneUndoTimers = new Map();
 function normalizeModelLabel(model) {
     const m = String(model || '').trim();
     if (!m) return 'AI';
-    return m
-        .split(/[-_\s]+/)
-        .filter(Boolean)
-        .map((part) => part.length <= 3 ? part.toUpperCase() : (part[0].toUpperCase() + part.slice(1)))
-        .join('-');
+
+    const lower = m.toLowerCase();
+    if (lower.startsWith('gpt-')) {
+        return `GPT-${lower.slice(4)}`;
+    }
+
+    return m;
+}
+
+function getStoredMartyOpen() {
+    try {
+        const raw = String(localStorage.getItem(MARTY_OPEN_STORAGE_KEY) || '').trim().toLowerCase();
+        if (!raw) return true;
+        return raw === '1' || raw === 'true' || raw === 'yes';
+    } catch {
+        return true;
+    }
+}
+
+function setStoredMartyOpen(open) {
+    try {
+        localStorage.setItem(MARTY_OPEN_STORAGE_KEY, open ? '1' : '0');
+    } catch {
+        // ignore
+    }
+}
+
+function applyMartyOpenState(open) {
+    const drawer = document.getElementById('neural-drawer');
+    if (!drawer) return;
+    const isOpen = Boolean(open);
+    drawer.classList.toggle('hidden', !isOpen);
+    drawer.classList.toggle('flex', isOpen);
+    state.isChatOpen = isOpen;
+}
+
+function makeMartySyncEvent(type, payload = {}) {
+    return {
+        type: String(type || '').trim(),
+        payload: (payload && typeof payload === 'object') ? payload : {},
+        source: MARTY_INSTANCE_ID,
+        ts: Date.now(),
+    };
+}
+
+function publishMartySync(type, payload = {}) {
+    const ev = makeMartySyncEvent(type, payload);
+    if (martySyncChannel) {
+        try { martySyncChannel.postMessage(ev); } catch {}
+    }
+    try {
+        localStorage.setItem(MARTY_SYNC_STORAGE_KEY, JSON.stringify(ev));
+    } catch {}
+}
+
+function sameChatEntry(a, b) {
+    return safeText(a?.role) === safeText(b?.role) && safeText(a?.content) === safeText(b?.content);
+}
+
+async function applyMartyRemoteContext(payload) {
+    const p = (payload && typeof payload === 'object') ? payload : {};
+    const nextProjectId = safeText(p.currentProjectId || '');
+    const nextView = safeText(p.currentView || 'dashboard') || 'dashboard';
+
+    if (safeText(state.currentProjectId) === nextProjectId && safeText(state.currentView) === nextView) return;
+
+    state.currentProjectId = nextProjectId || null;
+    state.currentView = nextView;
+    await loadChatHistory();
+    renderChat();
+}
+
+function applyMartyRemoteChat(payload) {
+    const p = (payload && typeof payload === 'object') ? payload : {};
+    const entry = p.entry && typeof p.entry === 'object' ? p.entry : null;
+    if (!entry) return;
+    const targetProjectId = safeText(p.projectId || '');
+    const localProjectId = safeText(state.currentProjectId || '');
+
+    if (targetProjectId !== localProjectId) return;
+
+    const normalizedEntry = { role: normalizeRole(entry.role), content: safeText(entry.content) };
+    if (!normalizedEntry.content) return;
+
+    const target = targetProjectId ? (Array.isArray(state.chatHistory) ? state.chatHistory : []) : (Array.isArray(state.globalChatHistory) ? state.globalChatHistory : []);
+    const last = target[target.length - 1];
+    if (last && sameChatEntry(last, normalizedEntry)) return;
+
+    if (targetProjectId) {
+        state.chatHistory = [...target, normalizedEntry];
+    } else {
+        state.globalChatHistory = [...target, normalizedEntry];
+        state.chatHistory = state.globalChatHistory;
+    }
+    renderChat();
+}
+
+async function handleMartySyncEvent(ev) {
+    const e = (ev && typeof ev === 'object') ? ev : null;
+    if (!e || safeText(e.source) === MARTY_INSTANCE_ID) return;
+    const type = safeText(e.type);
+
+    if (type === 'context') {
+        await applyMartyRemoteContext(e.payload);
+        return;
+    }
+    if (type === 'chat-entry') {
+        applyMartyRemoteChat(e.payload);
+        return;
+    }
+    if (type === 'request-sync') {
+        publishMartySync('sync-state', {
+            currentProjectId: safeText(state.currentProjectId || ''),
+            currentView: safeText(state.currentView || 'dashboard'),
+            globalChatHistory: Array.isArray(state.globalChatHistory) ? state.globalChatHistory.slice(-30) : [],
+        });
+        return;
+    }
+    if (type === 'sync-state') {
+        const payload = e.payload && typeof e.payload === 'object' ? e.payload : {};
+        if (!safeText(state.currentProjectId) && safeText(payload.currentProjectId)) {
+            await applyMartyRemoteContext(payload);
+        }
+        if (!state.globalChatHistory.length && Array.isArray(payload.globalChatHistory) && payload.globalChatHistory.length) {
+            state.globalChatHistory = payload.globalChatHistory
+                .map((x) => ({ role: normalizeRole(x?.role), content: safeText(x?.content) }))
+                .filter((x) => x.content);
+            if (!state.currentProjectId) state.chatHistory = state.globalChatHistory;
+            renderChat();
+        }
+        return;
+    }
+    if (type === 'popout-closed') {
+        if (!IS_MARTY_POPOUT) {
+            applyMartyOpenState(true);
+            setStoredMartyOpen(true);
+        }
+    }
+}
+
+function initMartySync() {
+    try {
+        if (typeof BroadcastChannel === 'function') {
+            martySyncChannel = new BroadcastChannel(MARTY_SYNC_CHANNEL);
+            martySyncChannel.onmessage = (msg) => {
+                handleMartySyncEvent(msg?.data).catch(() => {});
+            };
+        }
+    } catch {
+        martySyncChannel = null;
+    }
+
+    window.addEventListener('storage', (evt) => {
+        if (evt.key !== MARTY_SYNC_STORAGE_KEY || !evt.newValue) return;
+        try {
+            const parsed = JSON.parse(evt.newValue);
+            handleMartySyncEvent(parsed).catch(() => {});
+        } catch {}
+    });
+
+    if (IS_MARTY_POPOUT) {
+        window.addEventListener('beforeunload', () => {
+            publishMartySync('popout-closed', {});
+        });
+    }
+
+    publishMartySync('request-sync', {});
+}
+
+function broadcastMartyContext() {
+    publishMartySync('context', {
+        currentProjectId: safeText(state.currentProjectId || ''),
+        currentView: safeText(state.currentView || 'dashboard'),
+    });
 }
 
 function getDefaultMartyPanelLayout() {
@@ -324,11 +505,54 @@ function initializeMartyWidget() {
     const drawer = document.getElementById('neural-drawer');
     const dragHandle = document.getElementById('marty-drag-handle');
     const resizeHandle = document.getElementById('marty-resize-handle');
+    const popoutToggle = document.getElementById('marty-popout-toggle');
     if (!drawer) return;
 
+    if (IS_MARTY_POPOUT) {
+        document.body.classList.add('marty-popout-mode');
+    }
+
     applyMartyPanelLayout(getStoredMartyPanelLayout());
+    applyMartyOpenState(getStoredMartyOpen());
     syncMartyModelUi();
     setMartyPresence('idle');
+
+    if (IS_MARTY_POPOUT) {
+        applyMartyOpenState(true);
+    }
+
+    if (popoutToggle) {
+        const icon = popoutToggle.querySelector('i');
+        if (IS_MARTY_POPOUT) {
+            popoutToggle.title = 'Return to app window';
+            if (icon) icon.className = 'fa-solid fa-down-left-and-up-right-to-center';
+        }
+        popoutToggle.addEventListener('click', () => {
+            const baseUrl = `${window.location.origin}${window.location.pathname}`;
+            if (IS_MARTY_POPOUT) {
+                const main = window.open(baseUrl, '_blank');
+                if (main) main.focus();
+                window.close();
+                return;
+            }
+
+            const rect = drawer.getBoundingClientRect();
+            const width = Math.max(380, Math.floor(rect.width));
+            const height = Math.max(420, Math.floor(rect.height));
+            const left = Math.max(0, Math.floor(window.screenX + rect.left));
+            const top = Math.max(0, Math.floor(window.screenY + rect.top));
+            const target = `${baseUrl}?martyPopout=1`;
+            const features = `popup=yes,width=${width},height=${height},left=${left},top=${top},resizable=yes,scrollbars=no`;
+            const w = window.open(target, `marty-popout-${Date.now()}`, features);
+            if (w) {
+                w.focus();
+                applyMartyOpenState(false);
+                setStoredMartyOpen(false);
+            }
+        });
+    }
+
+    if (IS_MARTY_POPOUT) return;
 
     let drag = null;
     let resize = null;
@@ -965,6 +1189,7 @@ async function init() {
         // Setup UI
         setupEventListeners();
         initializeMartyWidget();
+        initMartySync();
         await loadChatHistory();
         renderNav();
         renderMain();
@@ -1549,6 +1774,7 @@ async function openDashboard() {
     renderNav();
     renderMain();
     renderChat();
+    broadcastMartyContext();
 }
 
 async function openInbox() {
@@ -1558,6 +1784,7 @@ async function openInbox() {
     renderNav();
     renderMain();
     renderChat();
+    broadcastMartyContext();
 }
 
 async function openProject(projectId) {
@@ -1567,6 +1794,7 @@ async function openProject(projectId) {
     renderNav();
     renderMain();
     renderChat();
+    broadcastMartyContext();
 }
 
 async function openSettings() {
@@ -1577,6 +1805,7 @@ async function openSettings() {
     renderNav();
     renderMain();
     renderChat();
+    broadcastMartyContext();
 }
 
 function createNavIcon(iconClass, tooltip, onClick, active, textLabel) {
@@ -5552,18 +5781,9 @@ async function autoDelegate(project) {
 /* --- Chat Interface --- */
 
 function toggleChat() {
-    const drawer = document.getElementById("neural-drawer");
-    if (!drawer) return;
-    
     state.isChatOpen = !state.isChatOpen;
-    
-    if (state.isChatOpen) {
-        drawer.classList.remove('hidden');
-        drawer.classList.add('flex');
-    } else {
-        drawer.classList.add('hidden');
-        drawer.classList.remove('flex');
-    }
+    applyMartyOpenState(state.isChatOpen);
+    setStoredMartyOpen(state.isChatOpen);
 }
 
 async function handleChatSubmit() {
@@ -5625,6 +5845,11 @@ function recordChatMessage(role, text) {
         state.globalChatHistory.push(entry);
         state.chatHistory = state.globalChatHistory;
     }
+
+    publishMartySync('chat-entry', {
+        projectId: safeText(state.currentProjectId || ''),
+        entry,
+    });
 }
 
 function addChatMessage(role, text) {

@@ -199,12 +199,40 @@
             border-bottom: 2px solid rgb(var(--ops-border));
             border-radius: 1px;
         }
+
+        body.marty-popout-mode {
+            overflow: hidden;
+        }
+
+        body.marty-popout-mode #command-bar,
+        body.marty-popout-mode #workspace-main {
+            display: none !important;
+        }
+
+        body.marty-popout-mode #neural-drawer {
+            position: fixed !important;
+            inset: 0 !important;
+            width: 100vw !important;
+            height: 100vh !important;
+            min-width: 0 !important;
+            min-height: 0 !important;
+            border-radius: 0 !important;
+            border: 0 !important;
+        }
+
+        body.marty-popout-mode #marty-drag-handle {
+            cursor: default;
+        }
+
+        body.marty-popout-mode #marty-resize-handle {
+            display: none;
+        }
     </style>
 </head>
 <body class="h-screen flex text-sm overflow-hidden antialiased">
     
     <!-- COMMAND BAR (Left) -->
-    <aside class="w-16 border-r border-ops-border flex flex-col items-center py-4 bg-ops-surface z-30">
+    <aside id="command-bar" class="w-16 border-r border-ops-border flex flex-col items-center py-4 bg-ops-surface z-30">
         <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-600 to-blue-400 mb-6 flex items-center justify-center font-mono font-bold text-white text-[10px] leading-none shadow-lg shadow-blue-500/20" title="OS.1 — Operator System 1">
             OS.1
         </div>
@@ -219,7 +247,7 @@
     </aside>
 
     <!-- CONTENT (Center) -->
-    <main class="flex-1 flex flex-col min-w-0 bg-ops-bg relative">
+    <main id="workspace-main" class="flex-1 flex flex-col min-w-0 bg-ops-bg relative">
         <!-- Header -->
         <header class="h-12 border-b border-ops-border flex items-center justify-between px-6 bg-ops-bg/80 backdrop-blur-sm z-20">
             <div class="flex items-center gap-3">
@@ -256,6 +284,9 @@
                 </span>
             </div>
             <div class="flex items-center gap-2">
+                <button id="marty-popout-toggle" class="text-ops-light hover:text-white transition-colors text-[11px]" title="Detach MARTY">
+                    <i class="fa-solid fa-up-right-from-square"></i>
+                </button>
                 <select id="marty-model-select" class="bg-ops-bg border border-ops-border rounded px-2 py-1 text-[10px] text-white font-mono focus:outline-none focus:ring-1 focus:ring-ops-accent">
                     <option value="gpt-5">GPT-5</option>
                     <option value="gpt-5-mini">GPT-5 Mini</option>
