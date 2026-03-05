@@ -77,6 +77,9 @@ const BACKUP_RETENTION_DAYS = parsePositiveIntEnv(process.env.TASK_TRACKER_BACKU
 const BACKUP_RETENTION_MS = BACKUP_RETENTION_DAYS * 24 * 60 * 60 * 1000;
 const lastBackupAtByKey = new Map();
 
+const GA4_PULL_INTERVAL_MINUTES = parsePositiveIntEnv(process.env.TASK_TRACKER_GA4_PULL_INTERVAL_MINUTES || process.env.GA4_PULL_INTERVAL_MINUTES, 60);
+const GA4_PULL_INTERVAL_MS = GA4_PULL_INTERVAL_MINUTES * 60 * 1000;
+
 function backupTimestamp(d = new Date()) {
   return d.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
 }
@@ -387,6 +390,7 @@ function sanitizeSettingsForClient(settings) {
   delete clone.openaiApiKey;
   delete clone.googleClientSecret;
   delete clone.googleTokens;
+  delete clone.ga4ServiceAccountJson;
   delete clone.firefliesSecret;
   delete clone.crmApiKey;
   delete clone.crmWebhookSecret;
@@ -404,6 +408,142 @@ async function getCrmConfig() {
   const apiKey = (typeof process.env.CRM_API_KEY === 'string' ? process.env.CRM_API_KEY.trim() : '') || (typeof saved.crmApiKey === 'string' ? saved.crmApiKey.trim() : '');
   const webhookSecret = (typeof process.env.CRM_WEBHOOK_SECRET === 'string' ? process.env.CRM_WEBHOOK_SECRET.trim() : '') || (typeof saved.crmWebhookSecret === 'string' ? saved.crmWebhookSecret.trim() : '');
   return { apiBaseUrl, apiKey, webhookSecret, saved };
+}
+
+function tryParseJson(raw) {
+  if (typeof raw !== 'string') return null;
+  const s = raw.trim();
+  if (!s) return null;
+  try {
+    return JSON.parse(s);
+  } catch {
+    return null;
+  }
+}
+
+async function getGa4Config() {
+  const saved = await readSettings();
+  const envPropertyId = typeof process.env.GA4_PROPERTY_ID === 'string' ? process.env.GA4_PROPERTY_ID.trim() : '';
+  const savedPropertyId = typeof saved.ga4PropertyId === 'string' ? saved.ga4PropertyId.trim() : '';
+  const propertyId = envPropertyId || savedPropertyId;
+
+  const envServiceAccountJson = typeof process.env.GA4_SERVICE_ACCOUNT_JSON === 'string' ? process.env.GA4_SERVICE_ACCOUNT_JSON.trim() : '';
+  const savedServiceAccountJson = typeof saved.ga4ServiceAccountJson === 'string' ? saved.ga4ServiceAccountJson.trim() : '';
+  const serviceAccountJson = envServiceAccountJson || savedServiceAccountJson;
+  const parsed = tryParseJson(serviceAccountJson);
+
+  const clientEmail = typeof parsed?.client_email === 'string' ? parsed.client_email.trim() : '';
+  const privateKey = typeof parsed?.private_key === 'string' ? parsed.private_key : '';
+
+  return { propertyId, clientEmail, privateKey, saved };
+}
+
+function ga4IsoDate(d) {
+  const dt = d instanceof Date ? d : new Date();
+  return dt.toISOString().slice(0, 10);
+}
+
+function ga4YesterdayIsoDate() {
+  return ga4IsoDate(new Date(Date.now() - 24 * 60 * 60 * 1000));
+}
+
+function ga4ToInt(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.floor(n));
+}
+
+async function ga4RunDailyReport({ propertyId, clientEmail, privateKey, date }) {
+  const auth = new google.auth.JWT({
+    email: clientEmail,
+    key: privateKey,
+    scopes: ['https://www.googleapis.com/auth/analytics.readonly'],
+  });
+  const analyticsdata = google.analyticsdata({ version: 'v1beta', auth });
+
+  const resp = await analyticsdata.properties.runReport({
+    property: `properties/${propertyId}`,
+    requestBody: {
+      dateRanges: [{ startDate: date, endDate: date }],
+      metrics: [{ name: 'sessions' }, { name: 'totalUsers' }],
+    },
+  });
+
+  const row = Array.isArray(resp?.data?.rows) ? resp.data.rows[0] : null;
+  const metricValues = Array.isArray(row?.metricValues) ? row.metricValues : [];
+  const sessions = ga4ToInt(metricValues?.[0]?.value);
+  const users = ga4ToInt(metricValues?.[1]?.value);
+  return { sessions, users };
+}
+
+let ga4PullRunning = false;
+async function runGa4DailySummary({ force = false } = {}) {
+  if (ga4PullRunning) return { ok: true, skipped: true, reason: 'Already running' };
+  ga4PullRunning = true;
+  try {
+    const { propertyId, clientEmail, privateKey, saved } = await getGa4Config();
+    const configured = Boolean(propertyId && clientEmail && privateKey);
+    if (!configured) return { ok: true, skipped: true, reason: 'GA4 not configured' };
+
+    const date = ga4YesterdayIsoDate();
+    const last = typeof saved.ga4LastDailySummaryDate === 'string' ? saved.ga4LastDailySummaryDate.trim() : '';
+    if (!force && last === date) return { ok: true, skipped: true, reason: 'Already summarized' };
+
+    const { sessions, users } = await ga4RunDailyReport({ propertyId, clientEmail, privateKey, date });
+    const lines = [];
+    lines.push(`📈 GA4 Daily Summary (${date})`);
+    lines.push(`Property: ${propertyId}`);
+    lines.push(`Sessions: ${sessions}`);
+    lines.push(`Users: ${users}`);
+
+    await addInboxIntegrationItem({
+      source: 'ga4',
+      externalId: `daily:${propertyId}:${date}`,
+      text: lines.join('\n'),
+      channel: 'ga4',
+    });
+
+    const next = {
+      ...saved,
+      ga4LastDailySummaryDate: date,
+      ga4LastDailySummaryAt: nowIso(),
+      ga4LastDailySummaryError: '',
+      updatedAt: nowIso(),
+    };
+    await writeSettings(next);
+    return { ok: true, skipped: false, date, sessions, users };
+  } catch (err) {
+    try {
+      const saved = await readSettings();
+      const next = {
+        ...saved,
+        ga4LastDailySummaryAt: nowIso(),
+        ga4LastDailySummaryError: err?.message || 'GA4 pull failed',
+        updatedAt: nowIso(),
+      };
+      await writeSettings(next);
+    } catch {
+      // ignore
+    }
+    return { ok: false, error: err?.message || 'GA4 pull failed' };
+  } finally {
+    ga4PullRunning = false;
+  }
+}
+
+function startGa4Scheduler() {
+  if (!GA4_PULL_INTERVAL_MS) return;
+  setTimeout(() => {
+    runGa4DailySummary().catch(() => {
+      // best-effort
+    });
+  }, 5_000);
+
+  setInterval(() => {
+    runGa4DailySummary().catch(() => {
+      // best-effort
+    });
+  }, GA4_PULL_INTERVAL_MS);
 }
 
 function safeTimingEqual(a, b) {
@@ -2798,6 +2938,13 @@ app.get('/api/settings', async (req, res) => {
 
   const crmWebhookSecret = (typeof process.env.CRM_WEBHOOK_SECRET === 'string' ? process.env.CRM_WEBHOOK_SECRET.trim() : '') || (typeof settings.crmWebhookSecret === 'string' ? settings.crmWebhookSecret.trim() : '');
   const crmConfigured = Boolean(crmWebhookSecret);
+
+  const envGa4PropertyId = typeof process.env.GA4_PROPERTY_ID === 'string' ? process.env.GA4_PROPERTY_ID.trim() : '';
+  const savedGa4PropertyId = typeof settings.ga4PropertyId === 'string' ? settings.ga4PropertyId.trim() : '';
+  const effectiveGa4PropertyId = envGa4PropertyId || savedGa4PropertyId;
+  const envGa4ServiceAccountJson = typeof process.env.GA4_SERVICE_ACCOUNT_JSON === 'string' ? process.env.GA4_SERVICE_ACCOUNT_JSON.trim() : '';
+  const savedGa4ServiceAccountJson = typeof settings.ga4ServiceAccountJson === 'string' ? settings.ga4ServiceAccountJson.trim() : '';
+  const ga4Configured = Boolean(effectiveGa4PropertyId && (envGa4ServiceAccountJson || savedGa4ServiceAccountJson));
   const slackConfigured = Boolean(
     (typeof process.env.SLACK_SIGNING_SECRET === 'string' && process.env.SLACK_SIGNING_SECRET.trim()) ||
     (typeof settings.slackSigningSecret === 'string' && settings.slackSigningSecret.trim()),
@@ -3233,6 +3380,35 @@ app.get('/api/integrations/crm/status', async (req, res) => {
   } catch (err) {
     res.status(500).json({ ok: false, error: err?.message || 'Failed to load CRM status' });
   }
+});
+
+// Integrations: GA4 (Google Analytics 4) daily summary -> Inbox
+// Configure with settings: ga4PropertyId + ga4ServiceAccountJson
+// Or env: GA4_PROPERTY_ID + GA4_SERVICE_ACCOUNT_JSON
+app.get('/api/integrations/ga4/status', async (req, res) => {
+  try {
+    const { propertyId, clientEmail, privateKey, saved } = await getGa4Config();
+    res.json({
+      ok: true,
+      configured: Boolean(propertyId && clientEmail && privateKey),
+      hasPropertyId: Boolean(propertyId),
+      hasServiceAccount: Boolean(clientEmail && privateKey),
+      lastDailySummaryDate: typeof saved.ga4LastDailySummaryDate === 'string' ? saved.ga4LastDailySummaryDate : '',
+      lastDailySummaryAt: typeof saved.ga4LastDailySummaryAt === 'string' ? saved.ga4LastDailySummaryAt : '',
+      lastDailySummaryError: typeof saved.ga4LastDailySummaryError === 'string' ? saved.ga4LastDailySummaryError : '',
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message || 'Failed to load GA4 status' });
+  }
+});
+
+app.post('/api/integrations/ga4/pull-now', async (req, res) => {
+  const result = await runGa4DailySummary({ force: true });
+  if (!result.ok) {
+    res.status(500).json(result);
+    return;
+  }
+  res.json(result);
 });
 
 app.post('/api/integrations/crm/webhook', async (req, res) => {
@@ -6092,6 +6268,7 @@ app.listen(PORT, async () => {
     // ignore startup backup errors
   });
   startBackupScheduler();
+  startGa4Scheduler();
   // eslint-disable-next-line no-console
   console.log(`Task Tracker running on http://localhost:${PORT}`);
 });

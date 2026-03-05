@@ -2557,6 +2557,7 @@ function normalizeInboxSourceKey(source) {
     if (!s) return 'other';
     if (s.includes('fireflies')) return 'fireflies';
     if (s.includes('crm') || s.includes('hubspot') || s.includes('salesforce') || s.includes('pipedrive')) return 'crm';
+    if (s.includes('ga4') || s.includes('google analytics') || s.includes('analytics')) return 'ga4';
     if (s.includes('email') || s.includes('gmail') || s.includes('outlook')) return 'email';
     if (s.includes('sms') || s.includes('quo') || s.includes('twilio') || s.includes('text')) return 'sms';
     if (s.includes('call') || s.includes('voice')) return 'call';
@@ -2569,6 +2570,7 @@ function inboxSourceMeta(sourceKey) {
     const map = {
         fireflies: { label: 'Fireflies', icon: 'fa-microphone-lines', tone: 'text-violet-300' },
         crm: { label: 'CRM', icon: 'fa-address-card', tone: 'text-emerald-300' },
+        ga4: { label: 'GA4', icon: 'fa-chart-line', tone: 'text-blue-300' },
         email: { label: 'Email', icon: 'fa-envelope', tone: 'text-blue-300' },
         sms: { label: 'SMS', icon: 'fa-comment-sms', tone: 'text-emerald-300' },
         call: { label: 'Calls', icon: 'fa-phone', tone: 'text-amber-300' },
@@ -3445,6 +3447,31 @@ function renderSettings(container) {
     `;
     wrap.appendChild(crm);
 
+    // GA4
+    const ga4 = section('GA4 (Analytics)', 'Pull a daily GA4 summary into Inbox using a Google service account.');
+    const ga4Body = ga4.querySelector('[data-slot="body"]');
+    ga4Body.innerHTML = `
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+                <label class="text-xs text-ops-light">GA4 Property ID</label>
+                <input id="set-ga4-property-id" type="text" autocomplete="off" placeholder="123456789" value="${String(state.settings.ga4PropertyId || '').replace(/"/g, '&quot;')}" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-sm" />
+                <div class="text-[11px] text-ops-light mt-1">Find in GA4 Admin → Property Settings.</div>
+            </div>
+            <div>
+                <label class="text-xs text-ops-light">Service Account JSON</label>
+                <textarea id="set-ga4-service-account" rows="6" placeholder="{\n  \"type\": \"service_account\", ...\n}" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-xs font-mono" spellcheck="false"></textarea>
+                <div class="text-[11px] text-ops-light mt-1">Not shown once saved. Grant the service account <span class="font-mono">Viewer</span> access to the GA4 property.</div>
+            </div>
+        </div>
+        <div class="text-[11px] text-ops-light mt-2">Configured: ${state.settings.ga4Configured ? 'Yes' : 'No'} • Endpoint: <span class="font-mono">POST /api/integrations/ga4/pull-now</span></div>
+        <div class="flex flex-wrap gap-2 mt-4">
+            <button id="btn-save-ga4" class="px-3 py-2 rounded bg-blue-600 text-white text-xs hover:bg-blue-500">Save GA4</button>
+            <button id="btn-pull-ga4" class="px-3 py-2 rounded bg-emerald-600 text-white text-xs hover:bg-emerald-500">Pull now</button>
+        </div>
+        <div id="ga4-pull-output" class="mt-3 hidden bg-ops-bg border border-ops-border rounded px-3 py-2 text-xs text-ops-light font-mono whitespace-pre-wrap"></div>
+    `;
+    wrap.appendChild(ga4);
+
     // Slack
     const slack = section('Slack', 'Ingest Slack messages into Inbox via Slack Events API (signature verified).');
     const slackBody = slack.querySelector('[data-slot="body"]');
@@ -3642,6 +3669,7 @@ function renderSettings(container) {
     delete safeSettings.slackInstalled;
     delete safeSettings.quoConfigured;
     delete safeSettings.ghlConfigured;
+    delete safeSettings.ga4Configured;
     advBody.innerHTML = `
         <label class="text-xs text-ops-light">Settings JSON</label>
         <textarea id="set-advanced-json" rows="10" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-xs font-mono">${JSON.stringify(safeSettings, null, 2)}</textarea>
@@ -3671,6 +3699,9 @@ function renderSettings(container) {
     const btnSaveFireflies = document.getElementById('btn-save-fireflies');
     const btnGenCrm = document.getElementById('btn-generate-crm');
     const btnSaveCrm = document.getElementById('btn-save-crm');
+    const btnSaveGa4 = document.getElementById('btn-save-ga4');
+    const btnPullGa4 = document.getElementById('btn-pull-ga4');
+    const ga4PullOutput = document.getElementById('ga4-pull-output');
     const btnSaveSlack = document.getElementById('btn-save-slack');
     const btnConnectSlack = document.getElementById('btn-connect-slack');
     const btnDisconnectSlack = document.getElementById('btn-disconnect-slack');
@@ -3925,6 +3956,57 @@ function renderSettings(container) {
             renderSettings(container);
         } catch (e) {
             alert(e?.message || 'Failed to save CRM settings');
+        }
+    };
+
+    if (btnSaveGa4) btnSaveGa4.onclick = async () => {
+        try {
+            const ga4PropertyId = String(document.getElementById('set-ga4-property-id')?.value || '').trim();
+            const ga4ServiceAccountJson = String(document.getElementById('set-ga4-service-account')?.value || '').trim();
+
+            if (!ga4PropertyId) throw new Error('GA4 Property ID is required');
+
+            const patch = { ga4PropertyId };
+            if (ga4ServiceAccountJson) patch.ga4ServiceAccountJson = ga4ServiceAccountJson;
+
+            if (!ga4ServiceAccountJson && !state.settings.ga4Configured) {
+                throw new Error('Service account JSON is required');
+            }
+
+            await saveSettingsPatch(patch);
+            alert('GA4 settings saved.');
+            renderSettings(container);
+        } catch (e) {
+            alert(e?.message || 'Failed to save GA4 settings');
+        }
+    };
+
+    if (btnPullGa4) btnPullGa4.onclick = async () => {
+        try {
+            if (ga4PullOutput) {
+                ga4PullOutput.classList.remove('hidden');
+                ga4PullOutput.textContent = 'Pulling GA4 daily summary...';
+            }
+            const r = await apiFetch('/api/integrations/ga4/pull-now', { method: 'POST' });
+            const data = await r.json().catch(() => ({}));
+            if (!r.ok || !data.ok) throw new Error(data?.error || 'GA4 pull failed');
+
+            if (ga4PullOutput) {
+                const lines = [];
+                if (data.skipped) lines.push(`Skipped: ${data.reason || 'n/a'}`);
+                if (data.date) lines.push(`Date: ${data.date}`);
+                if (typeof data.sessions === 'number') lines.push(`Sessions: ${data.sessions}`);
+                if (typeof data.users === 'number') lines.push(`Users: ${data.users}`);
+                ga4PullOutput.textContent = lines.join('\n') || 'OK';
+            }
+            await fetchState();
+        } catch (e) {
+            if (ga4PullOutput) {
+                ga4PullOutput.classList.remove('hidden');
+                ga4PullOutput.textContent = `Error: ${e?.message || 'GA4 pull failed'}`;
+            } else {
+                alert(e?.message || 'GA4 pull failed');
+            }
         }
     };
 
