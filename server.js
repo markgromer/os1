@@ -1007,6 +1007,35 @@ async function slackApiGet({ token, method, params }) {
   return json;
 }
 
+async function slackApiPost({ token, method, body }) {
+  const t = typeof token === 'string' ? token.trim() : '';
+  if (!t) throw new Error('Missing Slack bot token');
+  const m = typeof method === 'string' ? method.trim() : '';
+  if (!m) throw new Error('Missing Slack method');
+
+  const url = `https://slack.com/api/${m}`;
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${t}`,
+      'Content-Type': 'application/json; charset=utf-8',
+      'User-Agent': 'Task-Tracker/1.0',
+    },
+    body: JSON.stringify(body || {})
+  });
+
+  if (resp.status === 429) {
+    throw new Error('Slack rate limited');
+  }
+
+  const json = await resp.json().catch(() => ({}));
+  if (!resp.ok || !json || json.ok !== true) {
+    const err = typeof json?.error === 'string' ? json.error : `HTTP ${resp.status}`;
+    throw new Error(err);
+  }
+  return json;
+}
+
 async function slackResolveUserLabel({ token, userId }) {
   const id = typeof userId === 'string' ? userId.trim() : '';
   if (!id) return '';
@@ -1700,6 +1729,37 @@ app.delete('/api/team/:id', async (req, res) => {
   });
 
   await writeLock;
+});
+
+app.post('/api/integrations/slack/send-summary', async (req, res) => {
+  try {
+    const { text, channel } = req.body;
+    if (!text) {
+      res.status(400).json({ error: 'Missing summary text' });
+      return;
+    }
+
+    const { botToken } = await getSlackOAuthConfig();
+    if (!botToken) {
+      res.status(400).json({ error: 'Slack is not configured' });
+      return;
+    }
+
+    let targetChannel = channel || '@christian';
+
+    const result = await slackApiPost({
+      token: botToken,
+      method: 'chat.postMessage',
+      body: {
+        channel: targetChannel,
+        text: text,
+      },
+    });
+
+    res.json({ ok: true, result });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.get('/api/integrations/slack/team-presence', async (req, res) => {

@@ -1891,6 +1891,77 @@ function setupEventListeners() {
         true,
     );
 
+    // Send Summary Btn
+    const sendSummaryBtn = document.getElementById("send-summary-btn");
+    if (sendSummaryBtn) {
+        sendSummaryBtn.addEventListener("click", async () => {
+            const lastSent = store.settings?.lastAssignSummaryAt || 0;
+            const now = Date.now();
+            
+            // Find newly assigned tasks 
+            const newTasks = store.tasks.filter(t => 
+                t.owner && 
+                t.owner !== 'Unassigned' && 
+                t.owner !== 'AI' &&
+                t.status !== 'Done' &&
+                new Date(t.updatedAt).getTime() > new Date(lastSent).getTime()
+            );
+
+            if (newTasks.length === 0) {
+                alert('No new task assignments to send!');
+                return;
+            }
+
+            // Group by owner
+            const grouped = {};
+            newTasks.forEach(t => {
+                if (!grouped[t.owner]) grouped[t.owner] = [];
+                grouped[t.owner].push(t);
+            });
+
+            let msg = "*Task Assignment Summary* 🚀\n_Here are the pending tasks delegated to the team:_\n\n";
+            for (const [owner, tasks] of Object.entries(grouped)) {
+                msg += `*${owner}*:\n`;
+                tasks.forEach(t => {
+                    const projectName = store.projects.find(p => p.id === t.projectId)?.name || 'Direct Task';
+                    msg += `• [${projectName}] ${t.title}\n`;
+                });
+                msg += `\n`;
+            }
+
+            const icon = sendSummaryBtn.querySelector('i');
+            if (icon) {
+                icon.classList.remove('fa-paper-plane');
+                icon.classList.add('fa-spinner', 'fa-spin');
+            }
+            sendSummaryBtn.disabled = true;
+
+            try {
+                const res = await apiFetch('/api/integrations/slack/send-summary', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text: msg, channel: '@christian' })
+                });
+
+                if (!res.ok) {
+                    const errData = await res.json().catch(()=>({}));
+                    throw new Error(errData?.error || 'Failed to send summary via Slack');
+                }
+
+                await saveSettingsPatch({ lastAssignSummaryAt: now });
+                alert('Summary sent to @christian successfully!');
+            } catch (err) {
+                alert('Error sending summary: ' + err.message);
+            } finally {
+                if (icon) {
+                    icon.classList.remove('fa-spinner', 'fa-spin');
+                    icon.classList.add('fa-paper-plane');
+                }
+                sendSummaryBtn.disabled = false;
+            }
+        });
+    }
+
     // Sync Btn
     const sync = document.getElementById("sync-btn");
     if (sync) {
