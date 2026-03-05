@@ -91,6 +91,29 @@
         body {
             background-color: rgb(var(--ops-bg));
             color: rgb(var(--ops-text));
+            position: relative;
+        }
+
+        /* Subtle ambient background glow (uses existing theme tokens only) */
+        body::before {
+            content: "";
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            z-index: 0;
+            background:
+                radial-gradient(900px 520px at 18% 10%, rgb(var(--ops-accent) / 0.12), transparent 60%),
+                radial-gradient(820px 520px at 85% 18%, rgb(var(--ops-success) / 0.08), transparent 58%),
+                radial-gradient(980px 620px at 55% 100%, rgb(var(--ops-warning) / 0.07), transparent 62%);
+            filter: saturate(120%);
+        }
+
+        /* Ensure app UI stays above glow */
+        #command-bar,
+        #workspace-main,
+        #neural-drawer {
+            position: relative;
+            z-index: 1;
         }
 
         /* Refined Scrollbars */
@@ -101,8 +124,43 @@
 
         /* Utility */
         .glass {
-            background-color: rgb(var(--ops-surface) / 0.6);
-            backdrop-filter: blur(8px);
+            background-color: rgb(var(--ops-surface) / 0.42);
+            backdrop-filter: blur(14px) saturate(160%);
+            -webkit-backdrop-filter: blur(14px) saturate(160%);
+        }
+
+        :root {
+            --ops-glass-blur: 16px;
+            --ops-glass-sat: 165%;
+            --ops-glass-bg: 0.34;
+            --ops-glass-border: 0.65;
+            --ops-glass-inset: 0.06;
+        }
+
+        .glass-panel {
+            background: linear-gradient(
+                135deg,
+                rgb(var(--ops-surface) / calc(var(--ops-glass-bg) + 0.08)),
+                rgb(var(--ops-bg) / calc(var(--ops-glass-bg) - 0.10))
+            );
+            border: 1px solid rgb(var(--ops-border) / var(--ops-glass-border));
+            box-shadow:
+                0 1px 0 rgb(var(--ops-text) / var(--ops-glass-inset)) inset,
+                0 10px 30px rgb(0 0 0 / 0.18);
+            backdrop-filter: blur(var(--ops-glass-blur)) saturate(var(--ops-glass-sat));
+            -webkit-backdrop-filter: blur(var(--ops-glass-blur)) saturate(var(--ops-glass-sat));
+        }
+
+        /* Command bar + header glass */
+        #command-bar {
+            background-color: rgb(var(--ops-surface) / 0.50) !important;
+            backdrop-filter: blur(18px) saturate(165%);
+            -webkit-backdrop-filter: blur(18px) saturate(165%);
+        }
+        #workspace-main > header {
+            background-color: rgb(var(--ops-bg) / 0.55) !important;
+            backdrop-filter: blur(18px) saturate(165%);
+            -webkit-backdrop-filter: blur(18px) saturate(165%);
         }
         
         .nav-item {
@@ -230,14 +288,27 @@
 
         /* ═══ Dashboard Card System ═══════════════════════════════════════ */
         .dash-card {
-            border: 1px solid rgb(var(--ops-border));
             border-radius: 0.75rem;
-            background: rgb(var(--ops-surface) / 0.3);
-            transition: border-color 0.25s ease, box-shadow 0.25s ease;
+            background: linear-gradient(
+                135deg,
+                rgb(var(--ops-surface) / 0.42),
+                rgb(var(--ops-bg) / 0.18)
+            );
+            border: 1px solid rgb(var(--ops-border) / 0.70);
+            box-shadow:
+                0 1px 0 rgb(var(--ops-text) / 0.06) inset,
+                0 10px 28px rgb(0 0 0 / 0.18);
+            backdrop-filter: blur(16px) saturate(165%);
+            -webkit-backdrop-filter: blur(16px) saturate(165%);
+            transition: border-color 0.25s ease, box-shadow 0.25s ease, transform 0.25s ease;
         }
         .dash-card:hover {
-            border-color: rgb(var(--ops-accent) / 0.25);
-            box-shadow: 0 0 0 1px rgb(var(--ops-accent) / 0.08), 0 4px 16px rgb(0 0 0 / 0.15);
+            border-color: rgb(var(--ops-accent) / 0.28);
+            box-shadow:
+                0 1px 0 rgb(var(--ops-text) / 0.07) inset,
+                0 0 0 1px rgb(var(--ops-accent) / 0.08),
+                0 14px 34px rgb(0 0 0 / 0.22);
+            transform: translateY(-1px);
         }
         .dash-card-head {
             cursor: pointer;
@@ -307,14 +378,49 @@
             border-radius: 999px;
             font-size: 10px;
             font-family: 'JetBrains Mono', monospace;
-            border: 1px solid rgb(var(--ops-border));
-            background: rgb(var(--ops-bg) / 0.6);
+            border: 1px solid rgb(var(--ops-border) / 0.75);
+            background: rgb(var(--ops-surface) / 0.26);
             color: rgb(var(--ops-light));
             transition: all 0.2s;
+            backdrop-filter: blur(14px) saturate(160%);
+            -webkit-backdrop-filter: blur(14px) saturate(160%);
         }
         .stat-pill:hover {
             color: white;
             border-color: rgb(var(--ops-accent) / 0.3);
+        }
+
+        /* MARTY drawer: glass + cleaner internal chrome */
+        #neural-drawer {
+            background-color: rgb(var(--ops-surface) / 0.55) !important;
+            backdrop-filter: blur(18px) saturate(165%);
+            -webkit-backdrop-filter: blur(18px) saturate(165%);
+            box-shadow:
+                0 1px 0 rgb(var(--ops-text) / 0.06) inset,
+                0 22px 60px rgb(0 0 0 / 0.35);
+        }
+        #neural-drawer .bg-zinc-900,
+        #neural-drawer .bg-zinc-900\/50 {
+            background-color: rgb(var(--ops-surface) / 0.35) !important;
+            backdrop-filter: blur(16px) saturate(165%);
+            -webkit-backdrop-filter: blur(16px) saturate(165%);
+        }
+
+        /* Apply a glass treatment to the legacy zinc panels in main views (dark theme only). */
+        html:not([data-theme="light"]) #main-port .bg-zinc-900\/30,
+        html:not([data-theme="light"]) #main-port .bg-zinc-900\/20,
+        html:not([data-theme="light"]) #main-port .bg-zinc-950\/20,
+        html:not([data-theme="light"]) #main-port .bg-zinc-950\/40,
+        html:not([data-theme="light"]) #main-port .bg-zinc-900\/50 {
+            background-color: rgb(var(--ops-surface) / 0.25) !important;
+            backdrop-filter: blur(14px) saturate(160%);
+            -webkit-backdrop-filter: blur(14px) saturate(160%);
+        }
+        html:not([data-theme="light"]) #main-port .border-zinc-800,
+        html:not([data-theme="light"]) #main-port .border-zinc-700,
+        html:not([data-theme="light"]) #main-port .border-zinc-800\/60,
+        html:not([data-theme="light"]) #main-port .border-zinc-800\/50 {
+            border-color: rgb(var(--ops-border) / 0.70) !important;
         }
 
         /* Responsive main layout */
@@ -441,6 +547,6 @@
         <div id="marty-resize-handle" aria-hidden="true"></div>
     </aside>
 
-    <script src="app.js?v=ops3.13"></script>
+    <script src="app.js?v=ops3.16"></script>
 </body>
 </html>

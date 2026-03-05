@@ -42,6 +42,10 @@ const state = {
         lastError: '',
     },
 
+    // Background sync UX
+    backgroundDirty: false,
+    lastInteractionAt: 0,
+
     // Focus timer state (Pomodoro)
     focusTimer: {
         running: false,
@@ -71,7 +75,7 @@ function stopPolling() {
 function startPolling() {
     stopPolling();
     const seconds = Math.max(10, Number(state.uiPrefs.autoRefreshSeconds) || 30);
-    pollIntervalId = setInterval(fetchState, seconds * 1000);
+    pollIntervalId = setInterval(() => fetchState({ background: true }), seconds * 1000);
 }
 
 async function refreshAuthStatus() {
@@ -1058,13 +1062,101 @@ function isUserEditingNow() {
     }
 }
 
+function markUiInteraction() {
+    state.lastInteractionAt = Date.now();
+}
+
+function isUserIdle(ms = 2500) {
+    const last = Number(state.lastInteractionAt || 0);
+    if (!last) return true;
+    return (Date.now() - last) > ms;
+}
+
+function setPageMeta(text) {
+    const el = document.getElementById('page-meta');
+    if (!el) return;
+    const t = safeText(text).trim();
+    if (!t) {
+        el.textContent = '';
+        el.classList.add('hidden');
+        return;
+    }
+    el.textContent = t;
+    el.classList.remove('hidden');
+}
+
+function snapshotViewUiState() {
+    const ports = ensurePersistentMartyLayout();
+    const viewPort = ports?.viewPort;
+    if (!viewPort) return null;
+
+    const snap = {
+        view: safeText(state.currentView),
+        scrollTop: null,
+        expandedCards: [],
+        scrollSelector: '',
+    };
+
+    if (state.currentView === 'dashboard') {
+        const scrollEl = viewPort.querySelector('.dash-stagger');
+        if (scrollEl) {
+            snap.scrollSelector = '.dash-stagger';
+            snap.scrollTop = scrollEl.scrollTop;
+        }
+        snap.expandedCards = Array.from(viewPort.querySelectorAll('.dash-card.expanded[data-card-id]'))
+            .map((el) => safeText(el?.dataset?.cardId))
+            .filter(Boolean);
+        return snap;
+    }
+
+    // Best-effort: preserve the first scrollable region inside the view port.
+    const scrollEl = viewPort.querySelector('.overflow-y-auto') || viewPort;
+    snap.scrollSelector = scrollEl === viewPort ? '' : '.overflow-y-auto';
+    snap.scrollTop = scrollEl ? scrollEl.scrollTop : null;
+    return snap;
+}
+
+function restoreViewUiState(snap) {
+    if (!snap || snap.view !== safeText(state.currentView)) return;
+    const ports = ensurePersistentMartyLayout();
+    const viewPort = ports?.viewPort;
+    if (!viewPort) return;
+
+    if (snap.view === 'dashboard') {
+        try {
+            for (const id of Array.isArray(snap.expandedCards) ? snap.expandedCards : []) {
+                const card = viewPort.querySelector(`.dash-card[data-card-id="${CSS.escape(id)}"]`);
+                if (card) card.classList.add('expanded');
+            }
+        } catch {
+            // ignore selector errors
+        }
+        const scrollEl = viewPort.querySelector('.dash-stagger');
+        if (scrollEl && Number.isFinite(Number(snap.scrollTop))) {
+            scrollEl.scrollTop = Number(snap.scrollTop);
+        }
+        return;
+    }
+
+    const scrollEl = (snap.scrollSelector ? viewPort.querySelector(snap.scrollSelector) : null) || viewPort.querySelector('.overflow-y-auto') || viewPort;
+    if (scrollEl && Number.isFinite(Number(snap.scrollTop))) {
+        scrollEl.scrollTop = Number(snap.scrollTop);
+    }
+}
+
+function rerenderMainPreservingUi() {
+    const snap = snapshotViewUiState();
+    renderNav();
+    renderMain();
+    requestAnimationFrame(() => restoreViewUiState(snap));
+}
+
 function flushDeferredRerenderIfSafe() {
     if (!state.deferRerender) return;
     if (Date.now() < Number(state.rerenderPauseUntil || 0)) return;
     if (isUserEditingNow()) return;
     state.deferRerender = false;
-    renderNav();
-    renderMain();
+    rerenderMainPreservingUi();
 }
 
 function ensureAiTeamMember() {
@@ -1669,6 +1761,7 @@ function setupEventListeners() {
     };
 
     document.addEventListener('keydown', async (e) => {
+        markUiInteraction();
         const target = e.target;
         const typing = isEditableTarget(target);
 
@@ -1715,6 +1808,10 @@ function setupEventListeners() {
             await createNewProjectPrompt();
         }
     });
+
+    // Consider pointer + scroll as interaction to avoid applying background updates mid-gesture.
+    document.addEventListener('pointerdown', () => markUiInteraction(), { capture: true, passive: true });
+    document.addEventListener('wheel', () => markUiInteraction(), { capture: true, passive: true });
 
     // Navigation
     const status = document.getElementById("server-status");
@@ -1850,8 +1947,11 @@ function showError(msg) {
 
 /* --- API --- */
 
-async function fetchState() {
+async function fetchState({ background = false } = {}) {
     try {
+        const prevRevision = Number(state.revision) || 0;
+        const prevUpdatedAt = safeText(state.updatedAt).trim();
+
         const res = await apiFetch("/api/tasks");
         if (!res.ok) {
             if (res.status === 401 || res.status === 403) {
@@ -1863,9 +1963,41 @@ async function fetchState() {
             throw new Error(`Failed to load store (${res.status})`);
         }
         const store = await res.json();
+
+        const nextRevision = Number(store?.revision);
+        const nextUpdatedAt = safeText(store?.updatedAt).trim();
+        const changed =
+            (Number.isFinite(nextRevision) && nextRevision !== prevRevision) ||
+            (!!nextUpdatedAt && nextUpdatedAt !== prevUpdatedAt);
+
         applyStore(store);
         
         state.lastSync = new Date();
+
+        // If nothing changed, avoid re-rendering entirely (prevents the "refresh" feel).
+        if (!changed) {
+            if (state.backgroundDirty) setPageMeta('Updates ready');
+            return;
+        }
+
+        // Background polling: sync store silently and only apply to UI when user is idle.
+        // This keeps data fresh without constantly re-rendering the view.
+        if (background) {
+            state.backgroundDirty = true;
+            setPageMeta('Updates ready');
+
+            const paused = Date.now() < Number(state.rerenderPauseUntil || 0);
+            if (!paused && !isUserEditingNow() && isUserIdle(2500)) {
+                state.backgroundDirty = false;
+                setPageMeta('');
+                rerenderMainPreservingUi();
+            }
+            return;
+        }
+
+        // Foreground fetch: apply immediately.
+        state.backgroundDirty = false;
+        setPageMeta('');
 
         if (Date.now() < Number(state.rerenderPauseUntil || 0)) {
             state.deferRerender = true;
@@ -1878,8 +2010,7 @@ async function fetchState() {
         }
 
         state.deferRerender = false;
-        renderNav();
-        renderMain();
+        rerenderMainPreservingUi();
     } catch (e) {
         console.error("Fetch State Error:", e);
     }
@@ -5044,10 +5175,46 @@ function renderDashboard(container) {
     const radarBanner = document.createElement('div');
     radarBanner.className = 'dash-card';
     radarBanner.dataset.cardId = 'radar';
-    const radarExtraRows = inboxNew.slice(0, 6).map(item => {
-        const t = safeText(item?.title||item?.subject)||'Item';
-        const s = safeText(item?.source)||'';
-        return `<div class="flex items-center justify-between gap-2 border border-ops-border rounded bg-ops-bg/40 px-2.5 py-1.5"><span class="text-[11px] text-white truncate">${escapeHtml(t)}</span><span class="text-[9px] font-mono text-ops-light/50 shrink-0">${escapeHtml(s)}</span></div>`;
+    const formatInboxStamp = (iso) => {
+        const s = safeText(iso).trim();
+        if (!s) return '';
+        const d = new Date(s);
+        if (Number.isNaN(d.getTime())) return '';
+        return d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    };
+    const radarExtraRows = inboxNew.slice(0, 8).map(item => {
+        const status = safeText(item?.status).trim() || 'New';
+        const sourceKey = normalizeInboxSourceKey(item?.source);
+        const meta = inboxSourceMeta(sourceKey);
+        const iconCls = meta.icon === 'fa-slack' ? 'fa-brands fa-slack' : `fa-solid ${meta.icon}`;
+        const business = inboxBusinessLabel(item);
+        const stamp = formatInboxStamp(safeText(item?.updatedAt) || safeText(item?.createdAt));
+
+        const fullText = safeText(item?.text) || safeText(item?.content) || safeText(item?.body) || safeText(item?.message) || '';
+        const snippet = previewText(fullText, 140);
+        const explicitTitle = safeText(item?.title) || safeText(item?.subject) || '';
+        const titleLine = explicitTitle.trim() || snippet || 'Inbox item';
+        const subLine = (explicitTitle.trim() && snippet && snippet !== titleLine) ? snippet : '';
+
+        return `
+            <div class="border border-ops-border rounded bg-ops-bg/40 px-2.5 py-2">
+                <div class="flex items-start justify-between gap-2">
+                    <div class="min-w-0 flex-1">
+                        <div class="flex items-center gap-1.5 flex-wrap">
+                            <span class="px-1.5 py-0.5 rounded border border-ops-border text-[9px] font-mono text-ops-light/70">${escapeHtml(status)}</span>
+                            <span class="px-1.5 py-0.5 rounded border border-ops-border text-[9px] font-mono ${meta.tone} flex items-center gap-1">
+                                <i class="${iconCls} text-[9px]"></i>
+                                ${escapeHtml(meta.label)}
+                            </span>
+                            <span class="px-1.5 py-0.5 rounded border border-ops-border text-[9px] font-mono text-ops-light/50">${escapeHtml(business)}</span>
+                            ${stamp ? `<span class="text-[9px] font-mono text-ops-light/40">${escapeHtml(stamp)}</span>` : ''}
+                        </div>
+                        <div class="mt-1 text-[11px] text-white truncate">${escapeHtml(titleLine)}</div>
+                        ${subLine ? `<div class="mt-0.5 text-[10px] text-ops-light/60 truncate">${escapeHtml(subLine)}</div>` : ''}
+                    </div>
+                </div>
+            </div>
+        `;
     }).join('');
     radarBanner.innerHTML = `
         <div class="dash-card-head flex items-center justify-between gap-3 px-3 py-2.5">
