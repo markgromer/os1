@@ -1747,6 +1747,24 @@ app.post('/api/integrations/slack/send-summary', async (req, res) => {
 
     let targetChannel = channel || '@christian';
 
+    if (targetChannel.startsWith('@')) {
+      const username = targetChannel.substring(1).toLowerCase();
+      const users = await slackListWorkspaceUsers({ token: botToken });
+      const user = users.find(u => 
+        u.name?.toLowerCase() === username || 
+        u.profile?.display_name?.toLowerCase() === username ||
+        u.profile?.display_name_normalized?.toLowerCase() === username ||
+        u.profile?.real_name?.toLowerCase() === username ||
+        u.profile?.real_name_normalized?.toLowerCase() === username ||
+        u.profile?.email?.toLowerCase().startsWith(username)
+      );
+      if (user) {
+        targetChannel = user.id;
+      } else {
+        console.warn(`Could not resolve Slack user for ${targetChannel}, trying literal`);
+      }
+    }
+
     const result = await slackApiPost({
       token: botToken,
       method: 'chat.postMessage',
