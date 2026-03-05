@@ -8,112 +8,72 @@
 const state = {
     revision: 1,
     updatedAt: "",
+
+    currentView: "dashboard",
+    currentProjectId: null,
+
     projects: [],
     tasks: [],
     inboxItems: [],
+
     projectScratchpads: {},
     projectNoteEntries: {},
     projectCommunications: {},
+
+    chatHistory: [],
+    globalChatHistory: [],
+    isChatOpen: true,
+
+    settings: {
+        openaiModel: "gpt-4o-mini",
+    },
+    uiPrefs: {
+        weekStartsOnMonday: false,
+    },
+
+    // Focus timer state (Pomodoro)
+    focusTimer: {
+        running: false,
+        remaining: 25 * 60,   // seconds
+        duration: 25 * 60,
+        intervalId: null,
+    },
+
     // Mock team if API fails, but we'll try to fetch
     team: [
         { id: "u1", name: "Mark", role: "admin", avatar: "M" },
         { id: "u2", name: "Sarah", role: "designer", avatar: "S" },
         { id: "u3", name: "David", role: "developer", avatar: "D" },
-        { id: "ai", name: "Neural Core", role: "ai", avatar: "AI" }
+        { id: "ai", name: "Neural Core", role: "ai", avatar: "AI" },
     ],
-    settings: {
-        openaiKey: "",
-        githubToken: "",
-    },
-
-    uiPrefs: {
-        autoRefreshSeconds: 30,
-        weekStartsOnMonday: true,
-        defaultShowCompleted: true,
-    },
-    theme: 'dark',
-    deferRerender: false,
-    rerenderPauseUntil: 0,
-    
-    // UI State
-    currentView: "dashboard", 
-    currentProjectId: null,
-    showCompleted: true,
-    projectRightTabById: {},
-    globalChatHistory: [],
-    chatHistory: [],
-    isChatOpen: true,
-    commandPaletteOpen: false,
-    commandPaletteQuery: '',
-    commandPaletteSelection: 0,
-    taskDoneUndoById: {},
-
-    // Inbox UI state
-    inboxDraftText: '',
-    inboxShowArchived: false,
-    inboxConvertProjectById: {},
-
-    // Bulk project delete selection (Settings)
-    bulkProjectDeleteSelectedById: {},
-
-    // Dashboard bulk selection
-    dashboardBulkMode: false,
-    dashboardSelectedProjectById: {},
-
-    // Dashboard: calls cache
-    dashboardCalls: {
-        loading: false,
-        fetchedAt: 0,
-        error: '',
-        events: [],
-    },
-
-    dashboardGhl: {
-        loading: false,
-        fetchedAt: 0,
-        error: '',
-        snapshot: null,
-    },
-
-    teamPresenceByMemberId: {},
-    teamPresenceFetchedAt: 0,
-    teamPresenceLoading: false,
-    teamPresenceError: '',
-
-    // Per-project transcript drafts (paste -> analyze -> apply)
-    projectTranscriptDraftById: {},
-
-    // New Project Intake
-    showNewProjectIntake: false,
-    showArchivedOnDashboard: false,
-    newProjectDraft: {
-        name: '',
-        type: 'Build',
-        status: 'Active',
-        dueDate: '',
-        projectValue: '',
-        repoUrl: '',
-        docsUrl: '',
-        stripeInvoiceUrl: '',
-        workspacePath: '',
-        agentBrief: '',
-    },
-    
-    // System Status
-    isLoading: true,
-    aiAvailable: false,
-    lastSync: null
 };
 
 const THEME_STORAGE_KEY = 'opsTheme';
 const ADMIN_TOKEN_STORAGE_KEY = 'opsAdminToken';
-const MARTY_PANEL_STORAGE_KEY = 'opsMartyPanel';
+
 const MARTY_OPEN_STORAGE_KEY = 'opsMartyOpen';
-const MARTY_PANEL_MIN_WIDTH = 280;
-const MARTY_PANEL_MIN_HEIGHT = 260;
-const MARTY_TYPING_ID = 'marty-typing-indicator';
+const MARTY_DETACHED_STORAGE_KEY = 'opsMartyDetached';
+const MARTY_PANEL_STORAGE_KEY = 'opsMartyPanel';
+const MARTY_SYNC_CHANNEL = 'opsMartySync';
 const MARTY_SYNC_STORAGE_KEY = 'opsMartySyncEvent';
-const MARTY_SYNC_CHANNEL = 'ops-marty-sync';
+
+const MARTY_PANEL_MIN_WIDTH = 320;
+const MARTY_PANEL_MIN_HEIGHT = 420;
+
+const MARTY_THINKING_LINES = [
+    'SCANNING',
+    'SYNTHESIZING',
+    'MODELING',
+    'ROUTING',
+    'EVALUATING',
+];
+const MARTY_RESPONDING_LINES = [
+    'DRAFTING',
+    'COMPILING',
+    'TRANSMITTING',
+    'CONFIRMING',
+];
+
 const IS_MARTY_POPOUT = (() => {
     try {
         return new URLSearchParams(window.location.search).get('martyPopout') === '1';
@@ -121,43 +81,22 @@ const IS_MARTY_POPOUT = (() => {
         return false;
     }
 })();
-const MARTY_INSTANCE_ID = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-let martySyncChannel = null;
-const MARTY_THINKING_LINES = [
-    'Mapping the battlefield...',
-    'Cross-checking every signal...',
-    'Sharpening the response...',
-    'Compiling operator-grade output...',
-];
-const MARTY_RESPONDING_LINES = [
-    'Delivering with intent.',
-    'Executing your directive.',
-    'Response locked and loaded.',
-    'Actionable answer inbound.',
-];
-const taskDoneUndoTimers = new Map();
 
-function normalizeModelLabel(model) {
-    const m = String(model || '').trim();
-    if (!m) return 'AI';
-
-    const lower = m.toLowerCase();
-    if (lower.startsWith('gpt-')) {
-        return `GPT-${lower.slice(4)}`;
-    }
-
-    return m;
-}
-
-function getStoredMartyOpen() {
+const MARTY_INSTANCE_ID = (() => {
     try {
-        const raw = String(localStorage.getItem(MARTY_OPEN_STORAGE_KEY) || '').trim().toLowerCase();
-        if (!raw) return true;
-        return raw === '1' || raw === 'true' || raw === 'yes';
+        const k = 'opsMartyInstanceId';
+        const existing = String(sessionStorage.getItem(k) || '').trim();
+        if (existing) return existing;
+        const id = `marty_${Math.random().toString(16).slice(2)}_${Date.now().toString(16)}`;
+        sessionStorage.setItem(k, id);
+        return id;
     } catch {
-        return true;
+        return `marty_${Math.random().toString(16).slice(2)}_${Date.now().toString(16)}`;
     }
-}
+})();
+
+let martySyncChannel = null;
+let martyDockRestore = null;
 
 function setStoredMartyOpen(open) {
     try {
@@ -165,6 +104,39 @@ function setStoredMartyOpen(open) {
     } catch {
         // ignore
     }
+}
+
+function getStoredMartyOpen() {
+    try {
+        const raw = String(localStorage.getItem(MARTY_OPEN_STORAGE_KEY) || '').trim().toLowerCase();
+        if (!raw) return true;
+        return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'open';
+    } catch {
+        return true;
+    }
+}
+
+function getStoredMartyDetached() {
+    try {
+        const raw = String(localStorage.getItem(MARTY_DETACHED_STORAGE_KEY) || '').trim().toLowerCase();
+        return raw === '1' || raw === 'true' || raw === 'yes';
+    } catch {
+        return false;
+    }
+}
+
+function setStoredMartyDetached(detached) {
+    try {
+        localStorage.setItem(MARTY_DETACHED_STORAGE_KEY, detached ? '1' : '0');
+    } catch {
+        // ignore
+    }
+}
+
+function syncMartyDetachedIndicator() {
+    const el = document.getElementById('marty-detached-indicator');
+    if (!el) return;
+    el.classList.toggle('hidden', !getStoredMartyDetached());
 }
 
 function applyMartyOpenState(open) {
@@ -274,9 +246,12 @@ async function handleMartySyncEvent(ev) {
     }
     if (type === 'popout-closed') {
         if (!IS_MARTY_POPOUT) {
+            setStoredMartyDetached(false);
+            syncMartyDetachedIndicator();
             applyMartyOpenState(true);
             setStoredMartyOpen(true);
         }
+        return;
     }
 }
 
@@ -360,6 +335,7 @@ function setStoredMartyPanelLayout(layout) {
 function applyMartyPanelLayout(layout) {
     const drawer = document.getElementById('neural-drawer');
     if (!drawer) return;
+    if (drawer.dataset?.martyDocked === '1') return;
     const next = clampMartyPanelLayout(layout);
     drawer.style.left = `${next.x}px`;
     drawer.style.top = `${next.y}px`;
@@ -367,6 +343,149 @@ function applyMartyPanelLayout(layout) {
     drawer.style.height = `${next.height}px`;
     drawer.style.right = 'auto';
     drawer.style.bottom = 'auto';
+}
+
+function dockMartyToDashboardSlot(slotEl) {
+    const slot = slotEl && typeof slotEl === 'object' ? slotEl : null;
+    const drawer = document.getElementById('neural-drawer');
+    if (!slot || !drawer) return;
+    if (drawer.dataset?.martyDocked === '1') return;
+
+    const parent = drawer.parentElement;
+    if (!parent) return;
+
+    martyDockRestore = {
+        parent,
+        nextSibling: drawer.nextSibling,
+        className: drawer.className,
+        style: drawer.getAttribute('style') || '',
+    };
+
+    drawer.dataset.martyDocked = '1';
+    drawer.className = drawer.className
+        .replace(/\bfixed\b/g, '')
+        .replace(/\bright-\S+\b/g, '')
+        .replace(/\bbottom-\S+\b/g, '');
+    drawer.classList.add('relative', 'w-full', 'h-full');
+    drawer.style.left = 'auto';
+    drawer.style.top = 'auto';
+    drawer.style.right = 'auto';
+    drawer.style.bottom = 'auto';
+
+    const resizeHandle = document.getElementById('marty-resize-handle');
+    if (resizeHandle) resizeHandle.classList.add('hidden');
+
+    const dragHandle = document.getElementById('marty-drag-handle');
+    if (dragHandle) dragHandle.classList.remove('cursor-move');
+
+    slot.appendChild(drawer);
+}
+
+function ensurePersistentMartyLayout() {
+    const main = document.getElementById('main-port');
+    if (!main) return null;
+
+    let viewPort = document.getElementById('view-port');
+    let martyPort = document.getElementById('marty-port');
+
+    const needsRebuild = !viewPort || !martyPort || viewPort.parentElement !== main || martyPort.parentElement !== main;
+    if (needsRebuild) {
+        main.innerHTML = '';
+        // Use inline styles for the grid so Tailwind CDN doesn't need to JIT-compile arbitrary values.
+        main.className = 'flex-1 min-h-0 overflow-hidden';
+        main.style.display = 'grid';
+        main.style.gridTemplateColumns = '1fr 22rem';
+        main.style.gridTemplateRows = '1fr';
+        main.style.height = '100%';
+
+        viewPort = document.createElement('div');
+        viewPort.id = 'view-port';
+        viewPort.className = 'min-h-0 overflow-y-auto';
+
+        martyPort = document.createElement('div');
+        martyPort.id = 'marty-port';
+        martyPort.className = 'min-h-0 overflow-hidden border-l border-ops-border';
+
+        main.appendChild(viewPort);
+        main.appendChild(martyPort);
+    }
+
+    return { main, viewPort, martyPort };
+}
+
+function dockMartyToPersistentSlot() {
+    const ports = ensurePersistentMartyLayout();
+    if (!ports) return;
+
+    const drawer = document.getElementById('neural-drawer');
+    if (!drawer) return;
+
+    const slot = ports.martyPort;
+    if (!slot) return;
+
+    // Always force docked & open.
+    setStoredMartyDetached(false);
+    syncMartyDetachedIndicator();
+    applyMartyOpenState(true);
+    setStoredMartyOpen(true);
+
+    // Strip all floating / absolute positioning and fill the right column completely.
+    drawer.dataset.martyDocked = '1';
+    drawer.className = 'flex flex-col overflow-hidden';
+    // Force drawer to fill the marty-port slot exactly.
+    drawer.style.cssText = 'position:relative; width:100%; height:100%; min-width:0; min-height:0; border:none; border-radius:0; box-shadow:none;';
+
+    const resizeHandle = document.getElementById('marty-resize-handle');
+    if (resizeHandle) resizeHandle.classList.add('hidden');
+    const dragHandle = document.getElementById('marty-drag-handle');
+    if (dragHandle) dragHandle.classList.remove('cursor-move');
+    const popoutToggle = document.getElementById('marty-popout-toggle');
+    if (popoutToggle) popoutToggle.classList.add('hidden');
+
+    if (drawer.parentElement !== slot) {
+        slot.innerHTML = '';
+        slot.appendChild(drawer);
+    }
+}
+
+function undockMartyFromDashboard() {
+    const drawer = document.getElementById('neural-drawer');
+    if (!drawer) return;
+    if (drawer.dataset?.martyDocked !== '1') return;
+    if (!martyDockRestore || !martyDockRestore.parent) return;
+
+    drawer.dataset.martyDocked = '0';
+
+    const resizeHandle = document.getElementById('marty-resize-handle');
+    if (resizeHandle) resizeHandle.classList.remove('hidden');
+
+    const dragHandle = document.getElementById('marty-drag-handle');
+    if (dragHandle) dragHandle.classList.add('cursor-move');
+
+    if (martyDockRestore.nextSibling && martyDockRestore.nextSibling.parentNode === martyDockRestore.parent) {
+        martyDockRestore.parent.insertBefore(drawer, martyDockRestore.nextSibling);
+    } else {
+        martyDockRestore.parent.appendChild(drawer);
+    }
+
+    drawer.className = martyDockRestore.className;
+    drawer.setAttribute('style', martyDockRestore.style);
+    martyDockRestore = null;
+
+    const next = clampMartyPanelLayout(getStoredMartyPanelLayout());
+    applyMartyPanelLayout(next);
+    setStoredMartyPanelLayout(next);
+}
+
+function normalizeModelLabel(model) {
+    const raw = String(model || '').trim();
+    if (!raw) return '';
+    const lower = raw.toLowerCase();
+    if (lower === 'gpt-4o-mini') return 'GPT-4o mini';
+    if (lower === 'gpt-4o') return 'GPT-4o';
+    if (lower === 'gpt-4.1-mini') return 'GPT-4.1 mini';
+    if (lower === 'gpt-4.1') return 'GPT-4.1';
+    return raw;
 }
 
 function syncMartyModelUi() {
@@ -510,7 +629,9 @@ function initializeMartyWidget() {
 
     if (IS_MARTY_POPOUT) {
         document.body.classList.add('marty-popout-mode');
+        setStoredMartyDetached(true);
     }
+    syncMartyDetachedIndicator();
 
     applyMartyPanelLayout(getStoredMartyPanelLayout());
     applyMartyOpenState(getStoredMartyOpen());
@@ -530,6 +651,7 @@ function initializeMartyWidget() {
         popoutToggle.addEventListener('click', () => {
             const baseUrl = `${window.location.origin}${window.location.pathname}`;
             if (IS_MARTY_POPOUT) {
+                setStoredMartyDetached(false);
                 const main = window.open(baseUrl, '_blank');
                 if (main) main.focus();
                 window.close();
@@ -546,6 +668,8 @@ function initializeMartyWidget() {
             const w = window.open(target, `marty-popout-${Date.now()}`, features);
             if (w) {
                 w.focus();
+                setStoredMartyDetached(true);
+                syncMartyDetachedIndicator();
                 applyMartyOpenState(false);
                 setStoredMartyOpen(false);
             }
@@ -559,6 +683,7 @@ function initializeMartyWidget() {
 
     if (dragHandle) {
         dragHandle.addEventListener('pointerdown', (e) => {
+            if (drawer.dataset?.martyDocked === '1') return;
             if (e.target && e.target.closest('button,select,input,textarea')) return;
             const rect = drawer.getBoundingClientRect();
             drag = {
@@ -603,6 +728,7 @@ function initializeMartyWidget() {
 
     if (resizeHandle) {
         resizeHandle.addEventListener('pointerdown', (e) => {
+            if (drawer.dataset?.martyDocked === '1') return;
             const rect = drawer.getBoundingClientRect();
             resize = {
                 pointerId: e.pointerId,
@@ -646,6 +772,7 @@ function initializeMartyWidget() {
     }
 
     window.addEventListener('resize', () => {
+        if (drawer.dataset?.martyDocked === '1') return;
         const next = clampMartyPanelLayout(getStoredMartyPanelLayout());
         applyMartyPanelLayout(next);
         setStoredMartyPanelLayout(next);
@@ -1164,7 +1291,7 @@ async function createProjectFromDraft() {
 }
 
 function setMainPortScrolling(enabled) {
-    const el = document.getElementById('main-port');
+    const el = document.getElementById('view-port') || document.getElementById('main-port');
     if (!el) return;
     el.classList.toggle('overflow-y-auto', !!enabled);
     el.classList.toggle('overflow-hidden', !enabled);
@@ -1626,7 +1753,7 @@ function setupEventListeners() {
 }
 
 function showLoading() {
-    const container = document.getElementById("main-port");
+    const container = document.getElementById("view-port") || document.getElementById("main-port");
     if(container) container.innerHTML = `<div class="flex h-full items-center justify-center text-blue-500">
         <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500 mr-3"></div>
         <span class="font-mono text-xs tracking-widest">CONNECTING TO NEURAL CORE...</span>
@@ -1634,7 +1761,7 @@ function showLoading() {
 }
 
 function showError(msg) {
-    const container = document.getElementById("main-port");
+    const container = document.getElementById("view-port") || document.getElementById("main-port");
     if(container) container.innerHTML = `<div class="p-8 text-red-500 font-mono">
         <h1 class="text-xl font-bold mb-2">CRITICAL ERROR</h1>
         <pre>${msg}</pre>
@@ -1715,55 +1842,16 @@ function renderNav() {
     // Preserve Create Button if it exists? No, rebuild.
     nav.innerHTML = "";
     
-    // Dashboard
     nav.appendChild(createNavIcon("fa-grip", "Dashboard", () => openDashboard(), state.currentView === "dashboard"));
-
-    // Inbox
     nav.appendChild(createNavIcon("fa-inbox", "Inbox", () => openInbox(), state.currentView === "inbox"));
-    
-    // Separator
+    nav.appendChild(createNavIcon("fa-folder", "Projects", () => openProjects(), state.currentView === "projects" || state.currentView === "project"));
+    nav.appendChild(createNavIcon("fa-calendar-days", "Calendar", () => openCalendar(), state.currentView === "calendar"));
+    nav.appendChild(createNavIcon("fa-user-group", "Team", () => openTeam(), state.currentView === "team"));
+
     const sep = document.createElement("div");
     sep.className = "h-px w-8 bg-zinc-800 mx-auto my-2";
     nav.appendChild(sep);
-    
-    // Projects (Active)
-    const activeProjects = getActiveProjects();
-    const archivedProjects = getArchivedProjects();
 
-    activeProjects.forEach(p => {
-        const isActive = state.currentView === "project" && state.currentProjectId === p.id;
-        // First letter or icon
-        const label = p.name ? p.name.substring(0, 2).toUpperCase() : "PR";
-        nav.appendChild(createNavIcon(null, p.name, () => openProject(p.id), isActive, label));
-    });
-
-    // Add Project Button
-    const addBtn = document.createElement("button");
-    addBtn.className = "w-10 h-10 rounded-lg flex items-center justify-center text-zinc-500 hover:text-white hover:bg-zinc-800 transition-all mt-2 mx-auto";
-    addBtn.innerHTML = `<i class="fa-solid fa-plus"></i>`;
-    addBtn.onclick = createNewProjectPrompt;
-    nav.appendChild(addBtn);
-
-    // Archived Projects (if any)
-    if (archivedProjects.length) {
-        const sepArchive = document.createElement("div");
-        sepArchive.className = "h-px w-8 bg-zinc-800 mx-auto my-2";
-        nav.appendChild(sepArchive);
-
-        archivedProjects.forEach(p => {
-            const isActive = state.currentView === "project" && state.currentProjectId === p.id;
-            const label = p.name ? p.name.substring(0, 2).toUpperCase() : "AR";
-            const tip = `${p.name || 'Project'} (Archived)`;
-            nav.appendChild(createNavIcon(null, tip, () => openProject(p.id), isActive, label));
-        });
-    }
-
-    // Separator
-    const sep2 = document.createElement("div");
-    sep2.className = "h-px w-8 bg-zinc-800 mx-auto my-2";
-    nav.appendChild(sep2);
-
-    // Settings
     nav.appendChild(createNavIcon("fa-gear", "Settings", () => openSettings(), state.currentView === "settings"));
 }
 
@@ -1787,6 +1875,16 @@ async function openInbox() {
     broadcastMartyContext();
 }
 
+async function openProjects() {
+    state.currentView = 'projects';
+    state.currentProjectId = null;
+    await loadChatHistory();
+    renderNav();
+    renderMain();
+    renderChat();
+    broadcastMartyContext();
+}
+
 async function openProject(projectId) {
     state.currentView = 'project';
     state.currentProjectId = projectId;
@@ -1802,6 +1900,30 @@ async function openSettings() {
     state.currentProjectId = null;
     await fetchSettings();
     await refreshSlackTeamPresence({ force: true });
+    renderNav();
+    renderMain();
+    renderChat();
+    broadcastMartyContext();
+}
+
+async function openCalendar() {
+    state.currentView = 'calendar';
+    state.currentProjectId = null;
+    await fetchSettings();
+    await refreshDashboardCalls({ force: true }).catch(() => {});
+    await loadChatHistory();
+    renderNav();
+    renderMain();
+    renderChat();
+    broadcastMartyContext();
+}
+
+async function openTeam() {
+    state.currentView = 'team';
+    state.currentProjectId = null;
+    await fetchSettings();
+    await refreshSlackTeamPresence({ force: true }).catch(() => {});
+    await loadChatHistory();
     renderNav();
     renderMain();
     renderChat();
@@ -1835,13 +1957,19 @@ function createNavIcon(iconClass, tooltip, onClick, active, textLabel) {
 /* --- Rendering: Main Views --- */
 
 function renderMain() {
-    const container = document.getElementById("main-port");
+    const ports = ensurePersistentMartyLayout();
+    if (!ports) return;
+
+    // Keep MARTY permanently docked on the right.
+    dockMartyToPersistentSlot();
+
+    const container = ports.viewPort;
     if (!container) return;
-    
+
     container.innerHTML = "";
 
     // Reduce full-page scrolling: scroll inside panes for data-heavy views.
-    if (state.currentView === 'project' || state.currentView === 'dashboard' || state.currentView === 'inbox') {
+    if (state.currentView === 'project' || state.currentView === 'projects' || state.currentView === 'dashboard' || state.currentView === 'inbox' || state.currentView === 'calendar' || state.currentView === 'team') {
         setMainPortScrolling(false);
     } else {
         setMainPortScrolling(true);
@@ -1851,13 +1979,179 @@ function renderMain() {
         renderDashboard(container);
     } else if (state.currentView === "inbox") {
         renderInbox(container);
+    } else if (state.currentView === "projects") {
+        renderProjects(container);
     } else if (state.currentView === "project") {
         renderProjectView(container);
+    } else if (state.currentView === "calendar") {
+        renderCalendar(container);
+    } else if (state.currentView === "team") {
+        renderTeam(container);
     } else if (state.currentView === "settings") {
         renderSettings(container);
     }
 
     renderCommandPaletteOverlay();
+}
+
+function renderCalendar(container) {
+    const titleEl = document.getElementById('page-title');
+    if (titleEl) titleEl.innerText = 'Calendar';
+
+    const wrap = document.createElement('div');
+    wrap.className = 'h-full min-h-0 overflow-y-auto p-6';
+
+    const connected = !!state.settings?.googleConnected;
+    const calls = Array.isArray(state.dashboardCalls?.events) ? state.dashboardCalls.events : [];
+    const error = safeText(state.dashboardCalls?.error);
+    const loading = !!state.dashboardCalls?.loading;
+    if (connected) setTimeout(() => refreshDashboardCalls({ force: false }), 0);
+
+    const card = document.createElement('div');
+    card.className = 'border border-ops-border rounded-xl bg-ops-surface/30 p-4';
+
+    const rows = !connected
+        ? `<div class="text-[11px] text-ops-light/80">Connect Google Calendar in Settings to show events here.</div>
+           <div class="mt-3"><button id="btn-calendar-settings" class="px-3 py-2 rounded border border-ops-border text-[11px] font-mono text-ops-light hover:text-white hover:bg-ops-surface/60 transition-colors">Open Settings</button></div>`
+        : (error
+            ? `<div class="text-[11px] text-amber-300">${escapeHtml(error)}</div>`
+            : (loading && !calls.length)
+                ? `<div class="text-[11px] text-ops-light/80">Loading events…</div>`
+                : (calls.length
+                    ? `<div class="space-y-2">${calls.slice(0, 24).map((ev) => {
+                        const time = formatTimeFromIso(ev.start);
+                        const title = safeText(ev.summary) || 'Untitled';
+                        const link = safeText(ev.meetingLink);
+                        return `
+                            <div class="border border-ops-border rounded-lg bg-ops-bg/40 px-3 py-2">
+                                <div class="flex items-center justify-between gap-3">
+                                    <div class="min-w-0">
+                                        <div class="text-xs text-white truncate">${escapeHtml(title)}</div>
+                                        <div class="text-[10px] font-mono text-ops-light truncate">${escapeHtml(time || '')}</div>
+                                    </div>
+                                    ${link ? `<a class="shrink-0 text-[10px] font-mono text-ops-accent hover:underline" href="${escapeHtml(link)}" target="_blank" rel="noreferrer">Join</a>` : ''}
+                                </div>
+                            </div>
+                        `;
+                    }).join('')}</div>`
+                    : `<div class="text-[11px] text-ops-light/80">No upcoming events.</div>`));
+
+    card.innerHTML = `
+        <div class="flex items-center justify-between gap-3">
+            <div>
+                <div class="text-xs font-semibold text-white">Upcoming Events</div>
+                <div class="text-[10px] font-mono text-ops-light">Google Calendar feed</div>
+            </div>
+            <button id="btn-calendar-refresh" class="px-3 py-2 rounded border border-ops-border text-[11px] font-mono text-ops-light hover:text-white hover:bg-ops-surface/60 transition-colors">Refresh</button>
+        </div>
+        <div class="mt-4">${rows}</div>
+    `;
+
+    wrap.appendChild(card);
+    container.appendChild(wrap);
+
+    const btnRefresh = card.querySelector('#btn-calendar-refresh');
+    if (btnRefresh) {
+        btnRefresh.onclick = async () => {
+            await refreshDashboardCalls({ force: true });
+            renderMain();
+        };
+    }
+    const btnSettings = card.querySelector('#btn-calendar-settings');
+    if (btnSettings) {
+        btnSettings.onclick = async () => {
+            await openSettings();
+        };
+    }
+}
+
+function renderTeam(container) {
+    const titleEl = document.getElementById('page-title');
+    if (titleEl) titleEl.innerText = 'Team';
+
+    const wrap = document.createElement('div');
+    wrap.className = 'h-full min-h-0 overflow-y-auto p-6';
+
+    const card = document.createElement('div');
+    card.className = 'border border-ops-border rounded-xl bg-ops-surface/30 p-4';
+
+    const humans = getHumanTeamMembers();
+    const presenceMap = (state.teamPresenceByMemberId && typeof state.teamPresenceByMemberId === 'object') ? state.teamPresenceByMemberId : {};
+    const slackInstalled = !!state.settings?.slackInstalled;
+
+    const presenceFor = (m) => {
+        const id = safeText(m?.id).trim();
+        const slackUserId = safeText(m?.slackUserId).trim();
+        const key = slackUserId || id;
+        return key ? (presenceMap[key] || null) : null;
+    };
+
+    const rows = humans.length
+        ? `<div class="space-y-2">${humans.map((m) => {
+            const name = safeText(m?.name) || 'Member';
+            const role = safeText(m?.role);
+            const avatar = safeText(m?.avatar) || name.slice(0, 1).toUpperCase();
+            const p = presenceFor(m);
+            const rawStatus = safeText(p?.status).toLowerCase();
+            const statusText = slackInstalled ? (rawStatus || 'unknown') : 'not connected';
+            const statusClass = !slackInstalled
+                ? 'bg-zinc-600'
+                : (rawStatus === 'active' || rawStatus === 'online')
+                    ? 'bg-emerald-400'
+                    : (rawStatus === 'away')
+                        ? 'bg-amber-300'
+                        : 'bg-zinc-600';
+            return `
+                <div class="border border-ops-border rounded-lg bg-ops-bg/40 px-3 py-2">
+                    <div class="flex items-center justify-between gap-3">
+                        <div class="flex items-center gap-3 min-w-0">
+                            <div class="w-8 h-8 rounded-lg border border-ops-border bg-ops-surface/60 flex items-center justify-center text-xs font-mono text-white">${escapeHtml(avatar)}</div>
+                            <div class="min-w-0">
+                                <div class="text-sm text-white truncate">${escapeHtml(name)}</div>
+                                <div class="text-[10px] font-mono text-ops-light truncate">${escapeHtml(role || '—')}</div>
+                            </div>
+                        </div>
+                        <div class="shrink-0 flex items-center gap-2">
+                            <span class="inline-block w-2 h-2 rounded-full ${statusClass}"></span>
+                            <span class="text-[10px] font-mono text-ops-light uppercase tracking-widest">${escapeHtml(statusText)}</span>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }).join('')}</div>`
+        : `<div class="text-[11px] text-ops-light/80">No team members yet.</div>`;
+
+    card.innerHTML = `
+        <div class="flex items-center justify-between gap-3">
+            <div>
+                <div class="text-xs font-semibold text-white">Team</div>
+                <div class="text-[10px] font-mono text-ops-light">Slack presence ${slackInstalled ? 'enabled' : 'not connected'}</div>
+            </div>
+            <div class="flex items-center gap-2">
+                <button id="btn-team-refresh" class="px-3 py-2 rounded border border-ops-border text-[11px] font-mono text-ops-light hover:text-white hover:bg-ops-surface/60 transition-colors">Refresh</button>
+                <button id="btn-team-settings" class="px-3 py-2 rounded border border-ops-border text-[11px] font-mono text-ops-light hover:text-white hover:bg-ops-surface/60 transition-colors">Settings</button>
+            </div>
+        </div>
+        ${state.teamPresenceError ? `<div class="mt-3 text-[11px] text-amber-300">${escapeHtml(state.teamPresenceError)}</div>` : ''}
+        <div class="mt-4">${rows}</div>
+    `;
+
+    wrap.appendChild(card);
+    container.appendChild(wrap);
+
+    const btnRefresh = card.querySelector('#btn-team-refresh');
+    if (btnRefresh) {
+        btnRefresh.onclick = async () => {
+            await refreshSlackTeamPresence({ force: true });
+            renderMain();
+        };
+    }
+    const btnSettings = card.querySelector('#btn-team-settings');
+    if (btnSettings) {
+        btnSettings.onclick = async () => {
+            await openSettings();
+        };
+    }
 }
 
 function getInboxItems() {
@@ -3330,7 +3624,241 @@ function renderSettings(container) {
     };
 }
 
-function renderDashboard(container) {
+function renderProjects(container) {
+    const titleEl = document.getElementById('page-title');
+    if (titleEl) titleEl.innerText = 'Projects';
+
+    const activeProjects = getActiveProjects();
+    const archivedProjects = getArchivedProjects();
+
+    const wrap = document.createElement('div');
+    wrap.className = 'h-full flex flex-col min-h-0';
+
+    const content = document.createElement('div');
+    content.className = 'flex-1 min-h-0 overflow-y-auto p-6';
+
+    // New Project Intake
+    const intake = document.createElement('div');
+    intake.className = 'mb-6 border border-zinc-800 rounded-xl bg-zinc-900/30 p-4';
+
+    const d = state.newProjectDraft || {};
+    intake.innerHTML = `
+        <div class="flex items-center justify-between gap-3">
+            <div>
+                <div class="text-white text-sm font-semibold">New Project Intake</div>
+                <div class="text-[11px] text-zinc-500 mt-0.5">Name + type + brief + value + due date + links.</div>
+            </div>
+            <button id="btn-toggle-intake" class="px-3 py-1.5 rounded-lg border border-zinc-700 text-xs text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors transition-transform duration-150 ease-out active:translate-y-px">
+                ${state.showNewProjectIntake ? 'Hide' : 'Create'}
+            </button>
+        </div>
+        <div id="intake-body" class="${state.showNewProjectIntake ? '' : 'hidden'} mt-4">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                    <label class="text-[11px] text-zinc-400">Project name</label>
+                    <input id="np-name" type="text" value="${String(d.name || '').replace(/\"/g, '&quot;')}" class="mt-1 w-full bg-zinc-950/40 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white transition-colors focus:outline-none focus:ring-1 focus:ring-blue-500/30 focus:border-blue-500/40" placeholder="e.g. Freedom Scoopers Website" />
+                </div>
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="text-[11px] text-zinc-400">Type</label>
+                        <select id="np-type" class="mt-1 w-full bg-zinc-950/40 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white transition-colors focus:outline-none focus:ring-1 focus:ring-blue-500/30 focus:border-blue-500/40">
+                            ${['Build','Rebuild','Revision','Workflow','Cleanup','Other'].map(t => `<option value="${t}" ${String(d.type||'')===t?'selected':''}>${t}</option>`).join('')}
+                        </select>
+                    </div>
+                    <div>
+                        <label class="text-[11px] text-zinc-400">Status</label>
+                        <select id="np-status" class="mt-1 w-full bg-zinc-950/40 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white transition-colors focus:outline-none focus:ring-1 focus:ring-blue-500/30 focus:border-blue-500/40">
+                            ${['Active','On Hold','Done'].map(s => `<option value="${s}" ${String(d.status||'')===s?'selected':''}>${s}</option>`).join('')}
+                        </select>
+                    </div>
+                </div>
+                <div>
+                    <label class="text-[11px] text-zinc-400">Project value</label>
+                    <input id="np-value" type="text" value="${String(d.projectValue || '').replace(/\"/g, '&quot;')}" class="mt-1 w-full bg-zinc-950/40 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white" placeholder="$5000" />
+                </div>
+                <div>
+                    <label class="text-[11px] text-zinc-400">Due date</label>
+                    <input id="np-due" type="date" value="${String(d.dueDate || '').replace(/\"/g, '&quot;')}" class="mt-1 w-full bg-zinc-950/40 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white" />
+                </div>
+                <div>
+                    <label class="text-[11px] text-zinc-400">Repo URL</label>
+                    <input id="np-repo" type="text" value="${String(d.repoUrl || '').replace(/\"/g, '&quot;')}" class="mt-1 w-full bg-zinc-950/40 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white" placeholder="https://github.com/..." />
+                </div>
+                <div>
+                    <label class="text-[11px] text-zinc-400">Docs URL</label>
+                    <input id="np-docs" type="text" value="${String(d.docsUrl || '').replace(/\"/g, '&quot;')}" class="mt-1 w-full bg-zinc-950/40 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white" placeholder="https://..." />
+                </div>
+                <div>
+                    <label class="text-[11px] text-zinc-400">Stripe invoice URL</label>
+                    <input id="np-invoice" type="text" value="${String(d.stripeInvoiceUrl || '').replace(/\"/g, '&quot;')}" class="mt-1 w-full bg-zinc-950/40 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white" placeholder="https://invoice.stripe.com/..." />
+                </div>
+                <div>
+                    <label class="text-[11px] text-zinc-400">Workspace path</label>
+                    <div class="mt-1 flex gap-2">
+                        <input id="np-workspace" type="text" value="${String(d.workspacePath || '').replace(/\"/g, '&quot;')}" class="flex-1 w-full bg-zinc-950/40 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white" placeholder="C:\\Work\\Client\\Project" />
+                        <button id="btn-browse-np-workspace" type="button" class="shrink-0 px-3 py-2 rounded-lg border border-zinc-700 text-xs text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Browse</button>
+                    </div>
+                </div>
+                <div class="md:col-span-2">
+                    <label class="text-[11px] text-zinc-400">Agent brief (saved to project Scratchpad for Neural Link)</label>
+                    <textarea id="np-brief" rows="4" class="mt-1 w-full bg-zinc-950/40 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white" placeholder="What is this project? Scope, constraints, stakeholders, success criteria...">${String(d.agentBrief || '')}</textarea>
+                </div>
+            </div>
+            <div class="flex flex-wrap gap-2 mt-3">
+                <button id="btn-create-project" class="px-3 py-2 rounded-lg bg-blue-600 text-white text-xs hover:bg-blue-500">Create project</button>
+                <button id="btn-clear-intake" class="px-3 py-2 rounded-lg border border-zinc-700 text-xs text-zinc-300 hover:text-white hover:bg-zinc-800">Clear</button>
+            </div>
+            <div id="intake-error" class="text-xs text-red-400 mt-2 hidden"></div>
+        </div>
+    `;
+    content.appendChild(intake);
+
+    const makeProjectListCard = (title, projects, emptyText) => {
+        const card = document.createElement('div');
+        card.className = 'border border-zinc-800 rounded-xl bg-zinc-900/30';
+        const list = Array.isArray(projects) ? projects : [];
+        card.innerHTML = `
+            <div class="px-4 py-3 border-b border-zinc-800 flex items-center justify-between gap-3">
+                <div class="text-white text-sm font-semibold">${escapeHtml(title)}</div>
+                <div class="text-xs font-mono text-zinc-500">${list.length}</div>
+            </div>
+            <div class="p-2" data-project-list></div>
+        `;
+        const body = card.querySelector('[data-project-list]');
+        if (body) {
+            if (!list.length) {
+                const empty = document.createElement('div');
+                empty.className = 'p-3 text-zinc-600 italic text-sm';
+                empty.innerText = emptyText || 'None.';
+                body.appendChild(empty);
+            } else {
+                for (const p of list) {
+                    const row = document.createElement('button');
+                    row.type = 'button';
+                    row.className = 'w-full text-left px-3 py-2 rounded-lg hover:bg-zinc-800/60 transition-colors';
+                    row.innerHTML = `
+                        <div class="flex items-center justify-between gap-3">
+                            <div class="min-w-0">
+                                <div class="text-zinc-200 text-sm font-medium truncate">${escapeHtml(safeText(p?.name) || 'Untitled')}</div>
+                                <div class="text-[10px] font-mono text-zinc-500 truncate">${escapeHtml(safeText(p?.type) || 'Other')} • ${escapeHtml(safeText(p?.status) || 'Active')}</div>
+                            </div>
+                            <div class="shrink-0 text-[10px] font-mono uppercase tracking-widest px-2 py-1 rounded border ${safeText(p?.dueDate) ? 'text-blue-300 border-blue-500/30 bg-zinc-950/30' : 'text-zinc-600 border-zinc-800 bg-zinc-950/20'}">${safeText(p?.dueDate) ? `Due ${escapeHtml(safeText(p?.dueDate))}` : 'No due'}</div>
+                        </div>
+                    `;
+                    row.onclick = async () => {
+                        if (p?.id) await openProject(p.id);
+                    };
+                    body.appendChild(row);
+                }
+            }
+        }
+        return card;
+    };
+
+    content.appendChild(makeProjectListCard('Active Projects', activeProjects, 'None.'));
+
+    if (archivedProjects.length) {
+        const archivedCard = makeProjectListCard('Archived Projects', archivedProjects, '');
+        archivedCard.classList.add('mt-6');
+        content.appendChild(archivedCard);
+    }
+
+    // Wire intake controls
+    const toggle = intake.querySelector('#btn-toggle-intake');
+    const errEl = intake.querySelector('#intake-error');
+    const setError = (msg) => {
+        if (!errEl) return;
+        const m = safeText(msg).trim();
+        errEl.textContent = m;
+        errEl.classList.toggle('hidden', !m);
+    };
+
+    if (toggle) {
+        toggle.onclick = () => {
+            state.showNewProjectIntake = !state.showNewProjectIntake;
+            renderMain();
+            if (state.showNewProjectIntake) {
+                setTimeout(() => {
+                    const nameEl = document.getElementById('np-name');
+                    try { nameEl?.focus(); } catch {}
+                }, 50);
+            }
+        };
+    }
+
+    const bind = (id, key) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.addEventListener('input', () => {
+            setNewProjectDraft({ [key]: el.value });
+        });
+    };
+    bind('np-name', 'name');
+    bind('np-type', 'type');
+    bind('np-status', 'status');
+    bind('np-value', 'projectValue');
+    bind('np-due', 'dueDate');
+    bind('np-repo', 'repoUrl');
+    bind('np-docs', 'docsUrl');
+    bind('np-invoice', 'stripeInvoiceUrl');
+    bind('np-workspace', 'workspacePath');
+    bind('np-brief', 'agentBrief');
+
+    const btnBrowseNpWorkspace = intake.querySelector('#btn-browse-np-workspace');
+    if (btnBrowseNpWorkspace) {
+        btnBrowseNpWorkspace.onclick = async () => {
+            const wsEl = intake.querySelector('#np-workspace');
+            btnBrowseNpWorkspace.disabled = true;
+            const original = btnBrowseNpWorkspace.textContent;
+            btnBrowseNpWorkspace.textContent = '...';
+            try {
+                const picked = await pickFolderPath();
+                if (!picked) {
+                    setError('No folder selected. If the picker didn\'t appear, check that the server is running in your desktop session (not as a service) and try again.');
+                    return;
+                }
+                if (wsEl) wsEl.value = picked;
+                setNewProjectDraft({ workspacePath: picked });
+                try { wsEl?.focus(); } catch {}
+            } catch (e) {
+                setError(e?.message || 'Failed to pick folder');
+            } finally {
+                btnBrowseNpWorkspace.disabled = false;
+                btnBrowseNpWorkspace.textContent = original;
+            }
+        };
+    }
+
+    const btnCreate = intake.querySelector('#btn-create-project');
+    if (btnCreate) {
+        btnCreate.onclick = async () => {
+            setError('');
+            btnCreate.disabled = true;
+            const original = btnCreate.textContent;
+            btnCreate.textContent = 'Creating...';
+            try {
+                await createProjectFromDraft();
+            } catch (e) {
+                setError(e?.message || 'Failed to create project');
+                btnCreate.disabled = false;
+                btnCreate.textContent = original;
+            }
+        };
+    }
+
+    const btnClear = intake.querySelector('#btn-clear-intake');
+    if (btnClear) {
+        btnClear.onclick = () => {
+            resetNewProjectDraft();
+            renderMain();
+        };
+    }
+
+    wrap.appendChild(content);
+    container.appendChild(wrap);
+}
+
+function renderDashboardLegacy(container) {
     const titleEl = document.getElementById("page-title");
     if(titleEl) titleEl.innerText = "Command Dashboard";
     
@@ -4099,6 +4627,602 @@ function renderDashboard(container) {
             }
         });
     });
+}
+
+function renderDashboard(container) {
+    const titleEl = document.getElementById('page-title');
+    if (titleEl) titleEl.innerText = 'Dashboard';
+
+    const activeProjects = getActiveProjects();
+    const buckets = bucketProjectsByDueDate(activeProjects);
+
+    const dueThisWeek =
+        (Array.isArray(buckets.today) ? buckets.today.length : 0) +
+        (Array.isArray(buckets.tomorrow) ? buckets.tomorrow.length : 0) +
+        (Array.isArray(buckets.thisWeek) ? buckets.thisWeek.length : 0);
+
+    const inboxItems = Array.isArray(state.inboxItems) ? state.inboxItems : [];
+    const inboxNew = inboxItems.filter((x) => String(x?.status || '').trim().toLowerCase() === 'new');
+    const inboxNewCount = inboxNew.length;
+
+    const teamMembers = Array.isArray(state.team) ? state.team : [];
+    const teamCount = teamMembers.length;
+
+    const callsConnected = !!state.settings?.googleConnected;
+    const calls = Array.isArray(state.dashboardCalls?.events) ? state.dashboardCalls.events : [];
+    const callsError = safeText(state.dashboardCalls?.error);
+    const callsLoading = !!state.dashboardCalls?.loading;
+    if (callsConnected) setTimeout(() => refreshDashboardCalls({ force: false }), 0);
+
+    const slackNew = inboxNew.filter((x) => normalizeInboxSourceKey(x?.source) === 'slack');
+
+    const nextActions = getTodayNextActions();
+    const outcomes = safeText(state.settings?.todayOutcomes);
+
+    const allTasks = Array.isArray(state.tasks) ? state.tasks : [];
+    const today = ymdToday();
+
+    // --- Overdue items ---
+    const overdueTasks = allTasks.filter((t) => {
+        if (isDoneTask(t)) return false;
+        const due = safeText(t?.dueDate).trim();
+        return due && due < today;
+    });
+    const overdueProjects = activeProjects.filter((p) => {
+        const due = safeText(p?.dueDate).trim();
+        return due && due < today;
+    });
+    const totalOverdue = overdueTasks.length + overdueProjects.length;
+
+    // --- Completed tasks this week (for streak chart) ---
+    const weekDays = [];
+    const now = new Date();
+    const dayOfWeek = now.getDay();
+    const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+    for (let i = 0; i < 7; i++) {
+        const d = new Date(now);
+        d.setDate(now.getDate() + mondayOffset + i);
+        const y = d.getFullYear();
+        const m = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        weekDays.push({ label: ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][i], ymd: `${y}-${m}-${day}` });
+    }
+    const doneTasks = allTasks.filter((t) => isDoneTask(t));
+    const completionsByDay = weekDays.map((wd) => {
+        return doneTasks.filter((t) => {
+            const cAt = safeText(t?.completedAt || t?.updatedAt).trim().slice(0, 10);
+            return cAt === wd.ymd;
+        }).length;
+    });
+    const maxCompletions = Math.max(1, ...completionsByDay);
+
+    // --- Activity feed (recent changes) ---
+    const recentActivity = [];
+    for (const t of allTasks) {
+        const updStr = safeText(t?.updatedAt || t?.completedAt || t?.createdAt).trim();
+        if (!updStr) continue;
+        const d = new Date(updStr);
+        if (Number.isNaN(d.getTime())) continue;
+        const done = isDoneTask(t);
+        recentActivity.push({
+            time: d,
+            text: done ? `Completed "${safeText(t?.title)}"` : `Updated "${safeText(t?.title)}"`,
+            icon: done ? 'fa-check-circle text-emerald-400' : 'fa-pen text-blue-400',
+        });
+    }
+    for (const item of inboxItems.slice(0, 20)) {
+        const cStr = safeText(item?.createdAt).trim();
+        if (!cStr) continue;
+        const d = new Date(cStr);
+        if (Number.isNaN(d.getTime())) continue;
+        recentActivity.push({
+            time: d,
+            text: `Inbox: "${safeText(item?.title || item?.subject)}"`,
+            icon: 'fa-inbox text-amber-400',
+        });
+    }
+    recentActivity.sort((a, b) => b.time - a.time);
+
+    // --- MARTY suggestion ---
+    const topAction = nextActions[0] || null;
+    let martySuggestion = '';
+    if (totalOverdue > 0) {
+        martySuggestion = `You have ${totalOverdue} overdue item${totalOverdue > 1 ? 's' : ''}. I'd recommend triaging those first.`;
+    } else if (topAction) {
+        const pr = Number(topAction?.priority) || 3;
+        martySuggestion = `Your top priority is "${safeText(topAction?.title)}" (P${pr}). Focus there next.`;
+    } else if (inboxNewCount > 3) {
+        martySuggestion = `${inboxNewCount} inbox items waiting. Consider processing your inbox to stay clear.`;
+    } else {
+        martySuggestion = 'All clear. Consider reviewing upcoming projects or setting today\'s outcomes.';
+    }
+
+    // --- Build the scrollable dashboard ---
+    const wrap = document.createElement('div');
+    wrap.className = 'h-full min-h-0 overflow-y-auto p-6 space-y-4';
+
+    // ═══ 1. TIME-AWARE GREETING ═══════════════════════════════════════
+    const hour = new Date().getHours();
+    const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
+    const userName = safeText((Array.isArray(state.team) ? state.team : []).find((m) => safeText(m?.role).toLowerCase() === 'admin')?.name) || 'Operator';
+    const dateStr = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+    const summaryParts = [];
+    if (totalOverdue) summaryParts.push(`${totalOverdue} overdue`);
+    if (dueThisWeek) summaryParts.push(`${dueThisWeek} due this week`);
+    if (calls.length) summaryParts.push(`${calls.length} call${calls.length > 1 ? 's' : ''} today`);
+    if (inboxNewCount) summaryParts.push(`${inboxNewCount} inbox items`);
+    const summaryLine = summaryParts.length ? summaryParts.join(' \u00b7 ') : 'All clear \u2014 nothing urgent.';
+
+    const greetingEl = document.createElement('div');
+    greetingEl.className = 'flex items-center justify-between gap-4';
+    greetingEl.innerHTML = `
+        <div>
+            <div class="text-lg text-white font-semibold">${escapeHtml(greeting)}, ${escapeHtml(userName)}</div>
+            <div class="text-[11px] font-mono text-ops-light/70">${escapeHtml(dateStr)} \u00b7 ${escapeHtml(summaryLine)}</div>
+        </div>
+        <div class="text-[10px] font-mono text-ops-light/50 flex items-center gap-3">
+            <span class="cursor-pointer hover:text-ops-light" id="dash-shortcuts-btn" title="Keyboard Shortcuts"><i class="fa-solid fa-keyboard"></i> Shortcuts</span>
+        </div>
+    `;
+    wrap.appendChild(greetingEl);
+
+    // ═══ 2. OVERDUE ALERT ═════════════════════════════════════════════
+    if (totalOverdue > 0) {
+        const alertEl = document.createElement('div');
+        alertEl.className = 'border border-red-500/40 rounded-xl bg-red-500/10 p-3 flex items-center gap-3';
+        alertEl.innerHTML = `
+            <div class="w-8 h-8 rounded-lg flex items-center justify-center bg-red-500/20 text-red-400 shrink-0"><i class="fa-solid fa-triangle-exclamation"></i></div>
+            <div class="min-w-0 flex-1">
+                <div class="text-xs text-red-300 font-semibold">${totalOverdue} Overdue Item${totalOverdue > 1 ? 's' : ''}</div>
+                <div class="text-[10px] font-mono text-red-400/70 truncate">${overdueTasks.slice(0, 3).map((t) => escapeHtml(safeText(t?.title))).join(' \u00b7 ')}${overdueProjects.length ? (overdueTasks.length ? ' \u00b7 ' : '') + overdueProjects.slice(0, 2).map((p) => escapeHtml(safeText(p?.name))).join(' \u00b7 ') : ''}</div>
+            </div>
+        `;
+        wrap.appendChild(alertEl);
+    }
+
+    // ═══ 3. QUICK-ADD BAR ═════════════════════════════════════════════
+    const quickAdd = document.createElement('div');
+    quickAdd.className = 'flex gap-2';
+    quickAdd.innerHTML = `
+        <input id="dash-quick-input" type="text" class="flex-1 bg-ops-bg/60 border border-ops-border rounded-lg px-3 py-2 text-xs font-mono text-white placeholder-ops-light/40 focus:outline-none focus:ring-1 focus:ring-ops-accent" placeholder="Quick add: type a task name and hit Enter\u2026" />
+        <button id="dash-quick-project" class="px-3 py-2 rounded-lg border border-ops-border text-[10px] font-mono text-ops-light hover:text-white hover:bg-ops-surface/60 transition-colors shrink-0"><i class="fa-solid fa-folder-plus mr-1"></i>Project</button>
+    `;
+    wrap.appendChild(quickAdd);
+
+    // ═══ INBOX RADAR \u2014 full-width banner ══════════════════════════════
+    const radarBanner = document.createElement('div');
+    radarBanner.className = 'border border-ops-border rounded-xl bg-ops-surface/30 p-4 flex items-center justify-between gap-4';
+    const emailNew = inboxNew.filter((x) => normalizeInboxSourceKey(x?.source) === 'email');
+    const otherNew = inboxNew.filter((x) => { const k = normalizeInboxSourceKey(x?.source); return k !== 'slack' && k !== 'email'; });
+    radarBanner.innerHTML = `
+        <div class="flex items-center gap-4 min-w-0">
+            <div class="w-10 h-10 rounded-lg flex items-center justify-center bg-blue-500/10 text-blue-400 shrink-0"><i class="fa-solid fa-satellite-dish text-lg"></i></div>
+            <div>
+                <div class="text-[10px] font-mono uppercase tracking-widest text-ops-light">Inbox Radar</div>
+                <div class="flex items-baseline gap-4 mt-1">
+                    <span class="text-2xl font-semibold text-white">${inboxNewCount}</span>
+                    <span class="text-[10px] font-mono text-ops-light/70">new items</span>
+                </div>
+            </div>
+            <div class="flex items-center gap-4 ml-6 text-[10px] font-mono text-ops-light/60">
+                <span><i class="fa-brands fa-slack text-purple-400 mr-1"></i>${slackNew.length} slack</span>
+                <span><i class="fa-solid fa-envelope text-sky-400 mr-1"></i>${emailNew.length} email</span>
+                <span><i class="fa-solid fa-ellipsis text-ops-light/40 mr-1"></i>${otherNew.length} other</span>
+            </div>
+        </div>
+        <button type="button" data-open-inbox class="px-4 py-2 rounded-lg border border-ops-border text-[11px] font-mono text-ops-light hover:text-white hover:bg-ops-surface/60 transition-colors shrink-0">Open Inbox</button>
+    `;
+    wrap.appendChild(radarBanner);
+
+    // ═══ Calendar + Due Today + Due This Week ═════════════════════════
+    const urgentRow = document.createElement('div');
+    urgentRow.className = 'grid grid-cols-3 gap-3';
+
+    const calCard = document.createElement('div');
+    calCard.className = 'border border-ops-border rounded-xl bg-ops-surface/30 p-4';
+    let calRows = '';
+    if (!callsConnected) { calRows = `<div class="text-[11px] text-ops-light/60">Connect Google Calendar in Settings.</div>`; }
+    else if (callsError) { calRows = `<div class="text-[11px] text-amber-300">${escapeHtml(callsError)}</div>`; }
+    else if (callsLoading && !calls.length) { calRows = `<div class="text-[11px] text-ops-light/60">Loading\u2026</div>`; }
+    else if (calls.length) {
+        calRows = calls.slice(0, 3).map((ev) => {
+            const time = formatTimeFromIso(ev.start);
+            const title = safeText(ev.summary) || 'Untitled';
+            const link = safeText(ev.meetingLink);
+            return `<div class="border border-ops-border rounded-lg bg-ops-bg/40 px-3 py-2 flex items-center justify-between gap-3">
+                <div class="min-w-0"><div class="text-xs text-white truncate">${escapeHtml(title)}</div><div class="text-[10px] font-mono text-ops-light/70">${escapeHtml(time || '')}</div></div>
+                ${link ? `<a class="shrink-0 text-[10px] font-mono text-ops-accent hover:underline" href="${escapeHtml(link)}" target="_blank" rel="noreferrer">Join</a>` : ''}
+            </div>`;
+        }).join('');
+    } else { calRows = `<div class="text-[11px] text-ops-light/60">No upcoming events.</div>`; }
+    calCard.innerHTML = `
+        <div class="flex items-center justify-between gap-3 mb-3">
+            <div class="text-[10px] font-mono uppercase tracking-widest text-ops-light flex items-center gap-2"><i class="fa-solid fa-calendar-days text-blue-400"></i> Calendar</div>
+            <div class="flex gap-1.5">
+                <button type="button" data-refresh-calls class="px-2 py-1 rounded border border-ops-border text-[10px] font-mono text-ops-light hover:text-white hover:bg-ops-surface/60 transition-colors">Refresh</button>
+                <button type="button" data-open-calendar class="px-2 py-1 rounded border border-ops-border text-[10px] font-mono text-ops-light hover:text-white hover:bg-ops-surface/60 transition-colors">Open</button>
+            </div>
+        </div>
+        <div class="space-y-2">${calRows}</div>
+    `;
+    urgentRow.appendChild(calCard);
+
+    const dueTodayItems = Array.isArray(buckets.today) ? buckets.today : [];
+    const dueTodayCard = document.createElement('div');
+    dueTodayCard.className = 'border border-ops-border rounded-xl bg-ops-surface/30 p-4';
+    const dueTodayRows = dueTodayItems.length
+        ? dueTodayItems.slice(0, 4).map((p) => `<button type="button" class="dash-project-btn w-full text-left px-3 py-2 rounded-lg border border-ops-border bg-ops-bg/40 hover:bg-ops-surface/60 transition-colors" data-pid="${escapeHtml(safeText(p?.id))}"><div class="text-xs text-white truncate">${escapeHtml(safeText(p?.name) || 'Untitled')}</div><div class="text-[10px] font-mono text-red-400/70">${escapeHtml(safeText(p?.dueDate) || '')}</div></button>`).join('')
+        : `<div class="text-[11px] text-ops-light/60">Nothing due today.</div>`;
+    dueTodayCard.innerHTML = `<div class="flex items-center justify-between gap-3 mb-3"><div class="text-[10px] font-mono uppercase tracking-widest text-ops-light flex items-center gap-2"><i class="fa-solid fa-fire text-red-400"></i> Due Today</div><span class="text-lg font-semibold text-white">${dueTodayItems.length}</span></div><div class="space-y-2">${dueTodayRows}</div>`;
+    urgentRow.appendChild(dueTodayCard);
+
+    const dueWeekItems = [...(Array.isArray(buckets.tomorrow) ? buckets.tomorrow : []), ...(Array.isArray(buckets.thisWeek) ? buckets.thisWeek : [])];
+    const dueWeekCard = document.createElement('div');
+    dueWeekCard.className = 'border border-ops-border rounded-xl bg-ops-surface/30 p-4';
+    const dueWeekRows = dueWeekItems.length
+        ? dueWeekItems.slice(0, 4).map((p) => `<button type="button" class="dash-project-btn w-full text-left px-3 py-2 rounded-lg border border-ops-border bg-ops-bg/40 hover:bg-ops-surface/60 transition-colors" data-pid="${escapeHtml(safeText(p?.id))}"><div class="text-xs text-white truncate">${escapeHtml(safeText(p?.name) || 'Untitled')}</div><div class="text-[10px] font-mono text-amber-400/70">${escapeHtml(safeText(p?.dueDate) || '')}</div></button>`).join('')
+        : `<div class="text-[11px] text-ops-light/60">Nothing else this week.</div>`;
+    dueWeekCard.innerHTML = `<div class="flex items-center justify-between gap-3 mb-3"><div class="text-[10px] font-mono uppercase tracking-widest text-ops-light flex items-center gap-2"><i class="fa-solid fa-calendar-week text-amber-400"></i> Due This Week</div><span class="text-lg font-semibold text-white">${dueWeekItems.length}</span></div><div class="space-y-2">${dueWeekRows}</div>`;
+    urgentRow.appendChild(dueWeekCard);
+    wrap.appendChild(urgentRow);
+
+    // ═══ 4. PROGRESS STREAKS + 5. MARTY SUGGESTIONS + 7. FOCUS TIMER ═
+    const midRow = document.createElement('div');
+    midRow.className = 'grid grid-cols-3 gap-3';
+
+    // -- Progress streaks (bar chart) --
+    const streakCard = document.createElement('div');
+    streakCard.className = 'border border-ops-border rounded-xl bg-ops-surface/30 p-4';
+    const barsHtml = weekDays.map((wd, i) => {
+        const count = completionsByDay[i];
+        const pct = Math.round((count / maxCompletions) * 100);
+        const isToday = wd.ymd === today;
+        const barColor = isToday ? 'bg-blue-400' : count > 0 ? 'bg-emerald-400/70' : 'bg-ops-border';
+        return `<div class="flex flex-col items-center gap-1 flex-1">
+            <div class="w-full rounded-sm ${barColor}" style="height:${Math.max(4, pct * 0.6)}px" title="${count} completed"></div>
+            <span class="text-[9px] font-mono ${isToday ? 'text-blue-400 font-bold' : 'text-ops-light/50'}">${wd.label}</span>
+            <span class="text-[9px] font-mono text-ops-light/40">${count}</span>
+        </div>`;
+    }).join('');
+    const totalDoneThisWeek = completionsByDay.reduce((a, b) => a + b, 0);
+    streakCard.innerHTML = `
+        <div class="flex items-center justify-between gap-3 mb-3">
+            <div class="text-[10px] font-mono uppercase tracking-widest text-ops-light flex items-center gap-2"><i class="fa-solid fa-chart-bar text-emerald-400"></i> Week Progress</div>
+            <span class="text-xs font-mono text-ops-light/60">${totalDoneThisWeek} done</span>
+        </div>
+        <div class="flex items-end gap-1 h-16">${barsHtml}</div>
+    `;
+    midRow.appendChild(streakCard);
+
+    // -- MARTY Suggestion --
+    const suggestCard = document.createElement('div');
+    suggestCard.className = 'border border-blue-500/20 rounded-xl bg-blue-500/5 p-4';
+    suggestCard.innerHTML = `
+        <div class="flex items-center gap-2 mb-3">
+            <div class="w-6 h-6 rounded-full bg-blue-500/20 flex items-center justify-center"><i class="fa-solid fa-microchip text-blue-400 text-[10px]"></i></div>
+            <div class="text-[10px] font-mono uppercase tracking-widest text-blue-300">MARTY Suggests</div>
+        </div>
+        <div class="text-xs text-blue-200/90 leading-relaxed">${escapeHtml(martySuggestion)}</div>
+        <button id="dash-ask-marty" class="mt-3 px-3 py-1.5 rounded border border-blue-500/30 bg-blue-500/10 text-[10px] font-mono text-blue-300 hover:bg-blue-500/20 transition-colors">Ask MARTY</button>
+    `;
+    midRow.appendChild(suggestCard);
+
+    // -- Focus Timer --
+    const timerCard = document.createElement('div');
+    timerCard.className = 'border border-ops-border rounded-xl bg-ops-surface/30 p-4';
+    const mins = Math.floor(state.focusTimer.remaining / 60);
+    const secs = state.focusTimer.remaining % 60;
+    const timerDisplay = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+    const pctElapsed = ((state.focusTimer.duration - state.focusTimer.remaining) / state.focusTimer.duration) * 100;
+    timerCard.innerHTML = `
+        <div class="flex items-center justify-between gap-3 mb-3">
+            <div class="text-[10px] font-mono uppercase tracking-widest text-ops-light flex items-center gap-2"><i class="fa-solid fa-hourglass-half text-orange-400"></i> Focus Timer</div>
+        </div>
+        <div class="text-center">
+            <div id="dash-timer-display" class="text-3xl font-mono font-semibold ${state.focusTimer.running ? 'text-orange-400' : 'text-white'}">${timerDisplay}</div>
+            <div class="mt-2 w-full h-1.5 rounded-full bg-ops-border overflow-hidden">
+                <div class="h-full rounded-full bg-orange-400 transition-all" style="width:${pctElapsed}%"></div>
+            </div>
+            <div class="flex items-center justify-center gap-2 mt-3">
+                <button id="dash-timer-toggle" class="px-3 py-1.5 rounded border ${state.focusTimer.running ? 'border-red-500/40 bg-red-500/10 text-red-300' : 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'} text-[10px] font-mono hover:opacity-80 transition-colors">${state.focusTimer.running ? 'Pause' : 'Start'}</button>
+                <button id="dash-timer-reset" class="px-3 py-1.5 rounded border border-ops-border text-[10px] font-mono text-ops-light hover:text-white hover:bg-ops-surface/60 transition-colors">Reset</button>
+            </div>
+        </div>
+    `;
+    midRow.appendChild(timerCard);
+    wrap.appendChild(midRow);
+
+    // ═══ Today's Focus (outcomes + next actions) ══════════════════════
+    const todayCard = document.createElement('div');
+    todayCard.className = 'border border-ops-border rounded-xl bg-ops-surface/30 p-4';
+    const nextActionsHtml = nextActions.length
+        ? nextActions.slice(0, 6).map((t) => {
+            const pr = Number(t?.priority) || 3;
+            const prColor = pr === 1 ? 'text-red-400' : pr === 2 ? 'text-amber-400' : 'text-ops-light/60';
+            const project = safeText(t?.project) || '';
+            const due = safeText(t?.dueDate) || '';
+            return `<div class="flex items-center gap-3 border border-ops-border rounded-lg bg-ops-bg/40 px-3 py-2">
+                    <span class="${prColor} text-[10px] font-mono font-bold shrink-0">P${pr}</span>
+                    <div class="min-w-0 flex-1">
+                        <div class="text-xs text-white truncate">${escapeHtml(safeText(t?.title) || 'Untitled')}</div>
+                        <div class="text-[10px] font-mono text-ops-light/70 truncate">${escapeHtml(project)}${due ? ` \u00b7 ${escapeHtml(due)}` : ''}</div>
+                    </div>
+                </div>`;
+        }).join('')
+        : `<div class="text-[11px] text-ops-light/60">No next actions. Nice.</div>`;
+
+    todayCard.innerHTML = `
+        <div class="flex items-center justify-between gap-3 mb-4">
+            <div class="text-[10px] font-mono uppercase tracking-widest text-ops-light flex items-center gap-2"><i class="fa-solid fa-crosshairs text-ops-accent"></i> Today's Focus</div>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+                <div class="text-[10px] font-mono uppercase tracking-widest text-ops-light mb-2">Top Outcomes</div>
+                <textarea id="today-outcomes" rows="4" class="w-full bg-ops-bg/60 border border-ops-border rounded-lg px-3 py-2 text-xs font-mono text-white resize-none focus:outline-none focus:ring-1 focus:ring-ops-accent" placeholder="1) \u2026\n2) \u2026\n3) \u2026">${escapeHtml(outcomes)}</textarea>
+                <div class="flex gap-2 mt-2">
+                    <button id="btn-save-today" class="px-3 py-1.5 rounded border border-ops-accent/40 bg-ops-accent/10 text-[10px] font-mono text-blue-300 hover:bg-ops-accent/20 transition-colors">Save</button>
+                    <button id="btn-clear-today" class="px-3 py-1.5 rounded border border-ops-border text-[10px] font-mono text-ops-light hover:text-white hover:bg-ops-surface/60 transition-colors">Clear</button>
+                </div>
+            </div>
+            <div>
+                <div class="text-[10px] font-mono uppercase tracking-widest text-ops-light mb-2">Next Actions</div>
+                <div class="space-y-2">${nextActionsHtml}</div>
+            </div>
+        </div>
+    `;
+    wrap.appendChild(todayCard);
+
+    // Wire Today outcomes buttons
+    const btnSaveToday = todayCard.querySelector('#btn-save-today');
+    const btnClearToday = todayCard.querySelector('#btn-clear-today');
+    const outcomesTA = todayCard.querySelector('#today-outcomes');
+    if (btnSaveToday && outcomesTA) {
+        btnSaveToday.onclick = async () => {
+            btnSaveToday.disabled = true;
+            try {
+                const v = safeText(outcomesTA.value);
+                state.settings = state.settings && typeof state.settings === 'object' ? state.settings : {};
+                state.settings.todayOutcomes = v;
+                state.rerenderPauseUntil = Date.now() + 2000;
+                await saveSettingsPatch({ todayOutcomes: v });
+                state.rerenderPauseUntil = 0;
+            } catch (e) { alert(e?.message || 'Failed to save'); state.rerenderPauseUntil = 0; }
+            finally { btnSaveToday.disabled = false; }
+        };
+    }
+    if (btnClearToday && outcomesTA) {
+        btnClearToday.onclick = async () => {
+            outcomesTA.value = '';
+            try {
+                state.settings = state.settings && typeof state.settings === 'object' ? state.settings : {};
+                state.settings.todayOutcomes = '';
+                state.rerenderPauseUntil = Date.now() + 2000;
+                await saveSettingsPatch({ todayOutcomes: '' });
+                state.rerenderPauseUntil = 0;
+            } catch (e) { alert(e?.message || 'Failed to clear'); state.rerenderPauseUntil = 0; }
+        };
+    }
+
+    // ═══ 6. ACTIVITY FEED + Slack \u00b7 Inbox \u00b7 Team ═════════════════════
+    const feedRow = document.createElement('div');
+    feedRow.className = 'grid grid-cols-4 gap-3';
+
+    // Activity feed
+    const activityCard = document.createElement('div');
+    activityCard.className = 'border border-ops-border rounded-xl bg-ops-surface/30 p-4';
+    const activityRows = recentActivity.slice(0, 6).map((a) => {
+        const timeStr = a.time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const dateStr2 = a.time.toLocaleDateString([], { month: 'short', day: 'numeric' });
+        return `<div class="flex items-start gap-2">
+            <i class="fa-solid ${a.icon} text-[10px] mt-0.5 shrink-0"></i>
+            <div class="min-w-0">
+                <div class="text-[11px] text-white truncate">${escapeHtml(a.text)}</div>
+                <div class="text-[9px] font-mono text-ops-light/50">${escapeHtml(dateStr2)} ${escapeHtml(timeStr)}</div>
+            </div>
+        </div>`;
+    }).join('');
+    activityCard.innerHTML = `
+        <div class="flex items-center justify-between gap-3 mb-3">
+            <div class="text-[10px] font-mono uppercase tracking-widest text-ops-light flex items-center gap-2"><i class="fa-solid fa-clock-rotate-left text-sky-400"></i> Activity</div>
+        </div>
+        <div class="space-y-2">${activityRows || '<div class="text-[11px] text-ops-light/60">No recent activity.</div>'}</div>
+    `;
+    feedRow.appendChild(activityCard);
+
+    // Slack tile
+    const slackCard = document.createElement('div');
+    slackCard.className = 'border border-ops-border rounded-xl bg-ops-surface/30 p-4';
+    const slackRows = slackNew.length
+        ? slackNew.slice(0, 4).map((item) => {
+            const title = safeText(item?.title) || safeText(item?.subject) || 'Slack';
+            const preview = previewText(safeText(item?.content) || safeText(item?.text) || safeText(item?.body) || '', 80);
+            return `<div class="border border-ops-border rounded-lg bg-ops-bg/40 px-3 py-2"><div class="text-xs text-white truncate">${escapeHtml(title)}</div>${preview ? `<div class="mt-1 text-[11px] text-ops-light/80 truncate">${escapeHtml(preview)}</div>` : ''}</div>`;
+        }).join('')
+        : `<div class="text-[11px] text-ops-light/60">No new Slack messages.</div>`;
+    slackCard.innerHTML = `<div class="flex items-center justify-between gap-3 mb-3"><div class="text-[10px] font-mono uppercase tracking-widest text-ops-light flex items-center gap-2"><i class="fa-brands fa-slack text-purple-400"></i> Slack</div><button type="button" data-open-slack class="px-2 py-1 rounded border border-ops-border text-[10px] font-mono text-ops-light hover:text-white hover:bg-ops-surface/60 transition-colors">Open</button></div><div class="space-y-2">${slackRows}</div>`;
+    feedRow.appendChild(slackCard);
+
+    // Inbox preview
+    const inboxCard = document.createElement('div');
+    inboxCard.className = 'border border-ops-border rounded-xl bg-ops-surface/30 p-4';
+    const inboxRows = inboxNew.length
+        ? inboxNew.slice(0, 4).map((item) => {
+            const title = safeText(item?.title) || safeText(item?.subject) || 'Item';
+            const src = safeText(item?.source) || '';
+            return `<div class="border border-ops-border rounded-lg bg-ops-bg/40 px-3 py-2 flex items-center justify-between gap-3"><div class="text-xs text-white truncate min-w-0">${escapeHtml(title)}</div><span class="shrink-0 text-[10px] font-mono text-ops-light/60">${escapeHtml(src)}</span></div>`;
+        }).join('')
+        : `<div class="text-[11px] text-ops-light/60">Inbox zero. Nice.</div>`;
+    inboxCard.innerHTML = `<div class="flex items-center justify-between gap-3 mb-3"><div class="text-[10px] font-mono uppercase tracking-widest text-ops-light flex items-center gap-2"><i class="fa-solid fa-inbox text-amber-400"></i> Inbox</div><button type="button" data-open-inbox2 class="px-2 py-1 rounded border border-ops-border text-[10px] font-mono text-ops-light hover:text-white hover:bg-ops-surface/60 transition-colors">Open</button></div><div class="space-y-2">${inboxRows}</div>`;
+    feedRow.appendChild(inboxCard);
+
+    // Team tile
+    const teamCard = document.createElement('div');
+    teamCard.className = 'border border-ops-border rounded-xl bg-ops-surface/30 p-4';
+    const humanMembers = teamMembers.filter((m) => safeText(m?.role).toLowerCase() !== 'ai');
+    const teamRows = humanMembers.length
+        ? humanMembers.slice(0, 4).map((m) => {
+            const name = safeText(m?.name) || 'Member';
+            const role = safeText(m?.role) || '';
+            const slackId = safeText(m?.slackMemberId);
+            const pres = slackId && state.teamPresenceByMemberId?.[slackId];
+            const online = pres && String(pres.presence || '').toLowerCase() === 'active';
+            const dot = online ? '<span class="w-2 h-2 rounded-full bg-emerald-400 shrink-0"></span>' : '<span class="w-2 h-2 rounded-full bg-zinc-600 shrink-0"></span>';
+            return `<div class="border border-ops-border rounded-lg bg-ops-bg/40 px-3 py-2 flex items-center gap-3">${dot}<div class="min-w-0"><div class="text-xs text-white truncate">${escapeHtml(name)}</div>${role ? `<div class="text-[10px] font-mono text-ops-light/60">${escapeHtml(role)}</div>` : ''}</div></div>`;
+        }).join('')
+        : `<div class="text-[11px] text-ops-light/60">No team members configured.</div>`;
+    teamCard.innerHTML = `<div class="flex items-center justify-between gap-3 mb-3"><div class="text-[10px] font-mono uppercase tracking-widest text-ops-light flex items-center gap-2"><i class="fa-solid fa-users text-emerald-400"></i> Team</div><button type="button" data-open-team class="px-2 py-1 rounded border border-ops-border text-[10px] font-mono text-ops-light hover:text-white hover:bg-ops-surface/60 transition-colors">Open</button></div><div class="space-y-2">${teamRows}</div>`;
+    feedRow.appendChild(teamCard);
+    wrap.appendChild(feedRow);
+
+    // ═══ Due Next Week + Future Projects ══════════════════════════════
+    const nextWeekItems = Array.isArray(buckets.nextWeek) ? buckets.nextWeek : [];
+    const laterRow = document.createElement('div');
+    laterRow.className = 'grid grid-cols-2 gap-3';
+
+    const nextWeekCard = document.createElement('div');
+    nextWeekCard.className = 'border border-ops-border rounded-xl bg-ops-surface/30 p-4';
+    const nwRows = nextWeekItems.length
+        ? nextWeekItems.slice(0, 4).map((p) => `<button type="button" class="dash-project-btn w-full text-left px-3 py-2 rounded-lg border border-ops-border bg-ops-bg/40 hover:bg-ops-surface/60 transition-colors" data-pid="${escapeHtml(safeText(p?.id))}"><div class="text-xs text-white truncate">${escapeHtml(safeText(p?.name) || 'Untitled')}</div><div class="text-[10px] font-mono text-ops-light/70">${escapeHtml(safeText(p?.dueDate) || '')}</div></button>`).join('')
+        : `<div class="text-[11px] text-ops-light/60">Nothing due next week.</div>`;
+    nextWeekCard.innerHTML = `<div class="flex items-center justify-between gap-3 mb-3"><div class="text-[10px] font-mono uppercase tracking-widest text-ops-light flex items-center gap-2"><i class="fa-solid fa-calendar-check text-sky-400"></i> Due Next Week</div><span class="text-lg font-semibold text-white">${nextWeekItems.length}</span></div><div class="space-y-2">${nwRows}</div>`;
+    laterRow.appendChild(nextWeekCard);
+
+    const upcomingCard = document.createElement('div');
+    upcomingCard.className = 'border border-ops-border rounded-xl bg-ops-surface/30 p-4';
+    const upcoming = (Array.isArray(buckets.upcoming) ? buckets.upcoming : []).slice(0, 4);
+    const upRows = upcoming.length
+        ? upcoming.map((p) => `<button type="button" class="dash-project-btn w-full text-left px-3 py-2 rounded-lg border border-ops-border bg-ops-bg/40 hover:bg-ops-surface/60 transition-colors" data-pid="${escapeHtml(safeText(p?.id))}"><div class="text-xs text-white truncate">${escapeHtml(safeText(p?.name) || 'Untitled')}</div><div class="text-[10px] font-mono text-ops-light/70">${escapeHtml(safeText(p?.dueDate) || 'No due date')}</div></button>`).join('')
+        : `<div class="text-[11px] text-ops-light/60">No future projects.</div>`;
+    upcomingCard.innerHTML = `<div class="flex items-center justify-between gap-3 mb-3"><div class="text-[10px] font-mono uppercase tracking-widest text-ops-light flex items-center gap-2"><i class="fa-solid fa-forward text-ops-light/40"></i> Future Projects</div><button type="button" data-open-projects class="px-2 py-1 rounded border border-ops-border text-[10px] font-mono text-ops-light hover:text-white hover:bg-ops-surface/60 transition-colors">All Projects</button></div><div class="space-y-2">${upRows}</div>`;
+    laterRow.appendChild(upcomingCard);
+    wrap.appendChild(laterRow);
+
+    // ═══ 8. KEYBOARD SHORTCUTS OVERLAY ════════════════════════════════
+    const shortcutsPanel = document.createElement('div');
+    shortcutsPanel.id = 'dash-shortcuts-panel';
+    shortcutsPanel.className = 'hidden border border-ops-border rounded-xl bg-ops-surface/30 p-4';
+    shortcutsPanel.innerHTML = `
+        <div class="flex items-center justify-between gap-3 mb-3">
+            <div class="text-[10px] font-mono uppercase tracking-widest text-ops-light flex items-center gap-2"><i class="fa-solid fa-keyboard text-ops-light/60"></i> Keyboard Shortcuts</div>
+            <button id="dash-shortcuts-close" class="text-ops-light hover:text-white text-xs"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+        <div class="grid grid-cols-2 md:grid-cols-3 gap-x-6 gap-y-1 text-[11px]">
+            <div class="flex justify-between gap-2"><span class="text-ops-light/70">Dashboard</span><kbd class="font-mono text-white bg-ops-bg/60 px-1.5 rounded">G D</kbd></div>
+            <div class="flex justify-between gap-2"><span class="text-ops-light/70">Inbox</span><kbd class="font-mono text-white bg-ops-bg/60 px-1.5 rounded">G I</kbd></div>
+            <div class="flex justify-between gap-2"><span class="text-ops-light/70">Projects</span><kbd class="font-mono text-white bg-ops-bg/60 px-1.5 rounded">G P</kbd></div>
+            <div class="flex justify-between gap-2"><span class="text-ops-light/70">Calendar</span><kbd class="font-mono text-white bg-ops-bg/60 px-1.5 rounded">G C</kbd></div>
+            <div class="flex justify-between gap-2"><span class="text-ops-light/70">Team</span><kbd class="font-mono text-white bg-ops-bg/60 px-1.5 rounded">G T</kbd></div>
+            <div class="flex justify-between gap-2"><span class="text-ops-light/70">Settings</span><kbd class="font-mono text-white bg-ops-bg/60 px-1.5 rounded">G S</kbd></div>
+            <div class="flex justify-between gap-2"><span class="text-ops-light/70">New item</span><kbd class="font-mono text-white bg-ops-bg/60 px-1.5 rounded">N</kbd></div>
+            <div class="flex justify-between gap-2"><span class="text-ops-light/70">Command</span><kbd class="font-mono text-white bg-ops-bg/60 px-1.5 rounded">Ctrl K</kbd></div>
+            <div class="flex justify-between gap-2"><span class="text-ops-light/70">Sync</span><kbd class="font-mono text-white bg-ops-bg/60 px-1.5 rounded">R</kbd></div>
+        </div>
+    `;
+    wrap.appendChild(shortcutsPanel);
+
+    // ═══ Mount ════════════════════════════════════════════════════════
+    container.appendChild(wrap);
+
+    // ═══ Event wiring ════════════════════════════════════════════════
+    wrap.querySelector('button[data-open-inbox]')?.addEventListener('click', () => openInbox());
+    wrap.querySelector('button[data-open-inbox2]')?.addEventListener('click', () => openInbox());
+    wrap.querySelector('button[data-open-slack]')?.addEventListener('click', () => openInbox());
+    wrap.querySelector('button[data-open-calendar]')?.addEventListener('click', () => openCalendar());
+    wrap.querySelector('button[data-open-team]')?.addEventListener('click', () => openTeam());
+    wrap.querySelectorAll('button[data-open-projects]').forEach((b) => b.addEventListener('click', () => openProjects()));
+    calCard.querySelector('button[data-refresh-calls]')?.addEventListener('click', async () => {
+        await refreshDashboardCalls({ force: true });
+        renderMain();
+    });
+    wrap.querySelectorAll('.dash-project-btn').forEach((btn) => {
+        btn.addEventListener('click', () => { const pid = btn.dataset.pid; if (pid) openProject(pid); });
+    });
+
+    // Quick-add bar
+    const quickInput = wrap.querySelector('#dash-quick-input');
+    if (quickInput) {
+        quickInput.addEventListener('keydown', async (e) => {
+            if (e.key === 'Enter') {
+                const val = safeText(quickInput.value).trim();
+                if (!val) return;
+                quickInput.value = '';
+                try {
+                    await apiFetch('/api/inbox', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: val, source: 'quick-add', status: 'new' }) });
+                    await fetchState();
+                    renderMain();
+                } catch (err) {
+                    alert(err?.message || 'Failed to add item');
+                }
+            }
+        });
+    }
+    const quickProjectBtn = wrap.querySelector('#dash-quick-project');
+    if (quickProjectBtn) {
+        quickProjectBtn.addEventListener('click', () => createNewProjectPrompt());
+    }
+
+    // Focus timer
+    const timerToggle = wrap.querySelector('#dash-timer-toggle');
+    const timerReset = wrap.querySelector('#dash-timer-reset');
+    if (timerToggle) {
+        timerToggle.addEventListener('click', () => {
+            if (state.focusTimer.running) {
+                clearInterval(state.focusTimer.intervalId);
+                state.focusTimer.running = false;
+                state.focusTimer.intervalId = null;
+            } else {
+                state.focusTimer.running = true;
+                state.focusTimer.intervalId = setInterval(() => {
+                    if (state.focusTimer.remaining <= 0) {
+                        clearInterval(state.focusTimer.intervalId);
+                        state.focusTimer.running = false;
+                        state.focusTimer.intervalId = null;
+                        try { new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdHmBgYF9eXl+gYaGg36Af4F/fn5+').play(); } catch(ignored) {}
+                        alert('Focus session complete!');
+                        if (state.currentView === 'dashboard') renderMain();
+                        return;
+                    }
+                    state.focusTimer.remaining--;
+                    const disp = document.getElementById('dash-timer-display');
+                    if (disp) {
+                        const m2 = Math.floor(state.focusTimer.remaining / 60);
+                        const s2 = state.focusTimer.remaining % 60;
+                        disp.textContent = `${String(m2).padStart(2, '0')}:${String(s2).padStart(2, '0')}`;
+                    }
+                }, 1000);
+            }
+            if (state.currentView === 'dashboard') renderMain();
+        });
+    }
+    if (timerReset) {
+        timerReset.addEventListener('click', () => {
+            clearInterval(state.focusTimer.intervalId);
+            state.focusTimer.running = false;
+            state.focusTimer.intervalId = null;
+            state.focusTimer.remaining = state.focusTimer.duration;
+            if (state.currentView === 'dashboard') renderMain();
+        });
+    }
+
+    // Ask MARTY button
+    const askMarty = wrap.querySelector('#dash-ask-marty');
+    if (askMarty) {
+        askMarty.addEventListener('click', () => {
+            const input = document.getElementById('cmd-input');
+            if (input) { input.focus(); input.value = 'What should I focus on right now?'; }
+        });
+    }
+
+    // Shortcuts toggle
+    const shortcutsBtn = wrap.querySelector('#dash-shortcuts-btn');
+    const shortcutsPanelEl = wrap.querySelector('#dash-shortcuts-panel');
+    const shortcutsClose = wrap.querySelector('#dash-shortcuts-close');
+    if (shortcutsBtn && shortcutsPanelEl) {
+        shortcutsBtn.addEventListener('click', () => shortcutsPanelEl.classList.toggle('hidden'));
+    }
+    if (shortcutsClose && shortcutsPanelEl) {
+        shortcutsClose.addEventListener('click', () => shortcutsPanelEl.classList.add('hidden'));
+    }
 }
 
 function renderTodayPanel() {
@@ -5642,7 +6766,7 @@ async function renderDelete(id) {
 
 async function createNewProjectPrompt() {
     state.showNewProjectIntake = true;
-    await openDashboard();
+    await openProjects();
     setTimeout(() => {
         const nameEl = document.getElementById('np-name');
         try { nameEl?.focus(); } catch {}
@@ -5781,6 +6905,20 @@ async function autoDelegate(project) {
 /* --- Chat Interface --- */
 
 function toggleChat() {
+    const drawer = document.getElementById('neural-drawer');
+    const docked = drawer?.dataset?.martyDocked === '1';
+
+    // When MARTY is persistently docked, keep it visible.
+    if (docked) {
+        state.isChatOpen = true;
+        dockMartyToPersistentSlot();
+        applyMartyOpenState(true);
+        setStoredMartyOpen(true);
+        const input = document.getElementById('cmd-input');
+        input?.focus?.();
+        return;
+    }
+
     state.isChatOpen = !state.isChatOpen;
     applyMartyOpenState(state.isChatOpen);
     setStoredMartyOpen(state.isChatOpen);
