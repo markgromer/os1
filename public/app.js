@@ -1240,7 +1240,16 @@ function resetNewProjectDraft() {
 
 async function createProjectFromDraft() {
     const d = state.newProjectDraft || {};
-    const name = safeText(d.name).trim();
+    let name = safeText(d.name).trim();
+    if (!name) {
+        // Fallback: read live DOM value (draft listeners may not have run yet).
+        const nameEl = document.getElementById('np-name');
+        const liveName = safeText(nameEl?.value).trim();
+        if (liveName) {
+            name = liveName;
+            setNewProjectDraft({ name: liveName });
+        }
+    }
     if (!name) throw new Error('Project name is required');
 
     const project = {
