@@ -35,6 +35,13 @@ const state = {
         weekStartsOnMonday: false,
     },
 
+    auth: {
+        required: false,
+        authenticated: true,
+        lastCheckedAt: 0,
+        lastError: '',
+    },
+
     // Focus timer state (Pomodoro)
     focusTimer: {
         running: false,
@@ -51,6 +58,41 @@ const state = {
         { id: "ai", name: "Neural Core", role: "ai", avatar: "AI" },
     ],
 };
+
+let pollIntervalId = null;
+
+function stopPolling() {
+    if (pollIntervalId) {
+        try { clearInterval(pollIntervalId); } catch { /* ignore */ }
+        pollIntervalId = null;
+    }
+}
+
+function startPolling() {
+    stopPolling();
+    const seconds = Math.max(10, Number(state.uiPrefs.autoRefreshSeconds) || 30);
+    pollIntervalId = setInterval(fetchState, seconds * 1000);
+}
+
+async function refreshAuthStatus() {
+    try {
+        const token = getStoredAdminToken();
+        const headers = new Headers();
+        if (token) headers.set('Authorization', `Bearer ${token}`);
+        const r = await fetch('/api/auth/status', { headers });
+        const s = await r.json().catch(() => ({}));
+        state.auth.required = !!s.authRequired;
+        state.auth.authenticated = (s && typeof s === 'object' && 'authenticated' in s) ? !!s.authenticated : !state.auth.required;
+        state.auth.lastCheckedAt = Date.now();
+        if (state.auth.required && !state.auth.authenticated) {
+            stopPolling();
+        }
+        return s;
+    } catch (e) {
+        state.auth.lastCheckedAt = Date.now();
+        return null;
+    }
+}
 
 const THEME_STORAGE_KEY = 'opsTheme';
 const ADMIN_TOKEN_STORAGE_KEY = 'opsAdminToken';
@@ -1319,6 +1361,9 @@ async function init() {
         console.log("Initializing Neural Ops v2.4...");
         applyTheme(getStoredTheme() || 'dark');
         showLoading();
+
+        // Auth status is a public endpoint; check early so we can avoid a broken/empty UI.
+        await refreshAuthStatus();
         
         // Initial Fetch
         await Promise.all([
@@ -1338,7 +1383,9 @@ async function init() {
         ensureAiTeamMember();
         
         // Polling (Auto-Refresh)
-        setInterval(fetchState, Math.max(10, Number(state.uiPrefs.autoRefreshSeconds) || 30) * 1000);
+        if (!(state.auth.required && !state.auth.authenticated)) {
+            startPolling();
+        }
         
         console.log("System Online");
     } catch (e) {
@@ -1806,7 +1853,15 @@ function showError(msg) {
 async function fetchState() {
     try {
         const res = await apiFetch("/api/tasks");
-        if (!res.ok) throw new Error("Failed to load store");
+        if (!res.ok) {
+            if (res.status === 401 || res.status === 403) {
+                state.auth.lastError = 'Unauthorized (missing/invalid ADMIN_TOKEN).';
+                await refreshAuthStatus();
+                renderMain();
+                return;
+            }
+            throw new Error(`Failed to load store (${res.status})`);
+        }
         const store = await res.json();
         applyStore(store);
         
@@ -1833,6 +1888,12 @@ async function fetchState() {
 async function fetchSettings() {
     try {
         const res = await apiFetch("/api/settings");
+        if (res.status === 401 || res.status === 403) {
+            state.auth.lastError = 'Unauthorized (missing/invalid ADMIN_TOKEN).';
+            await refreshAuthStatus();
+            updateSystemStatus(false);
+            return;
+        }
         if(res.ok) {
             state.settings = await res.json();
             state.aiAvailable = !!state.settings.aiEnabled;
@@ -1851,6 +1912,8 @@ async function fetchSettings() {
             }
 
             syncMartyModelUi();
+        } else {
+            updateSystemStatus(false);
         }
     } catch(e) {
         console.warn("Settings unreachable", e);
@@ -2000,6 +2063,41 @@ function renderMain() {
     if (!container) return;
 
     container.innerHTML = "";
+
+    // If the server requires ADMIN_TOKEN and we're not authenticated,
+    // show a clear gate instead of rendering empty/disabled views.
+    if (state.auth.required && !state.auth.authenticated) {
+        setMainPortScrolling(true);
+        const wrap = document.createElement('div');
+        wrap.className = 'p-8 max-w-3xl';
+        wrap.innerHTML = `
+            <div class="border border-ops-border rounded-xl bg-ops-surface/40 p-6">
+                <div class="text-white font-semibold">Access Required</div>
+                <div class="text-xs text-ops-light mt-1">This server is protected by an admin token. Paste it once in Settings → Access to unlock projects, inbox, and MARTY.</div>
+                <div class="mt-4 flex flex-wrap gap-2">
+                    <button id="btn-open-access" class="px-3 py-2 rounded bg-blue-600 text-white text-xs hover:bg-blue-500">Open Settings</button>
+                    <button id="btn-recheck-auth" class="px-3 py-2 rounded bg-ops-bg border border-ops-border text-ops-light text-xs hover:text-white">Re-check</button>
+                </div>
+                ${state.auth.lastError ? `<div class="mt-3 text-[11px] font-mono text-amber-300">${escapeHtml(state.auth.lastError)}</div>` : ''}
+            </div>
+        `;
+        container.appendChild(wrap);
+
+        wrap.querySelector('#btn-open-access')?.addEventListener('click', async () => {
+            state.currentView = 'settings';
+            renderNav();
+            renderMain();
+            // focus token input if present
+            setTimeout(() => {
+                try { document.getElementById('set-admin-token')?.focus?.(); } catch { /* ignore */ }
+            }, 0);
+        });
+        wrap.querySelector('#btn-recheck-auth')?.addEventListener('click', async () => {
+            await refreshAuthStatus();
+            renderMain();
+        });
+        return;
+    }
 
     // Reduce full-page scrolling: scroll inside panes for data-heavy views.
     if (state.currentView === 'project' || state.currentView === 'projects' || state.currentView === 'dashboard' || state.currentView === 'inbox' || state.currentView === 'calendar' || state.currentView === 'team') {
@@ -3347,8 +3445,14 @@ function renderSettings(container) {
             }
 
             setStoredAdminToken(token);
+            await refreshAuthStatus();
+            await Promise.all([fetchState(), fetchSettings()]);
+            startPolling();
             alert('Admin token saved.');
-            renderSettings(container);
+            state.currentView = 'dashboard';
+            renderNav();
+            renderMain();
+            renderChat();
         } catch (e) {
             alert(e?.message || 'Failed to save admin token');
         }
