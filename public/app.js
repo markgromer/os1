@@ -6863,6 +6863,11 @@ function createTaskRow(task, showProjectLabel = false) {
 
                 dropdownEl.classList.remove('hidden');
                 div.style.zIndex = '50';
+                dropdownListEl.innerHTML = '';
+                
+                const humans = getHumanTeamMembers();
+                const names = humans.map((m) => m.name);
+
               if (!names.length) {
                   dropdownListEl.innerHTML = '<div class="px-2 py-2 text-zinc-500 text-xs italic">No team members.</div>';
                   return;
