@@ -145,6 +145,10 @@
             animation: martyBusy 0.9s ease-in-out infinite;
         }
 
+        .marty-orb.responding {
+            animation: martyRespond 0.55s ease-in-out infinite;
+        }
+
         @keyframes martyIdle {
             0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(59,130,246,0.45); }
             50% { transform: scale(1.08); box-shadow: 0 0 0 6px rgba(59,130,246,0.08); }
@@ -154,6 +158,46 @@
             0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(59,130,246,0.6); }
             70% { transform: scale(1.2); box-shadow: 0 0 0 10px rgba(59,130,246,0); }
             100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(59,130,246,0); }
+        }
+
+        @keyframes martyRespond {
+            0%, 100% { transform: translateY(0); box-shadow: 0 0 0 0 rgba(34,197,94,0.4); }
+            50% { transform: translateY(-1px); box-shadow: 0 0 0 6px rgba(34,197,94,0.08); }
+        }
+
+        #neural-drawer.marty-thinking {
+            box-shadow: 0 0 0 1px rgba(59,130,246,0.35), 0 18px 50px rgba(2,6,23,0.45);
+        }
+
+        #neural-drawer.marty-responding {
+            box-shadow: 0 0 0 1px rgba(16,185,129,0.35), 0 18px 50px rgba(2,6,23,0.45);
+        }
+
+        #neural-drawer {
+            min-width: 280px;
+            min-height: 260px;
+        }
+
+        #marty-resize-handle {
+            position: absolute;
+            right: 4px;
+            bottom: 4px;
+            width: 14px;
+            height: 14px;
+            cursor: nwse-resize;
+            opacity: 0.7;
+        }
+
+        #marty-resize-handle::before {
+            content: "";
+            position: absolute;
+            right: 0;
+            bottom: 0;
+            width: 10px;
+            height: 10px;
+            border-right: 2px solid rgb(var(--ops-border));
+            border-bottom: 2px solid rgb(var(--ops-border));
+            border-radius: 1px;
         }
     </style>
 </head>
@@ -191,7 +235,7 @@
                 </button>
                 <div class="h-4 w-px bg-ops-border"></div>
                 <button id="toggle-chat" class="text-ops-accent hover:text-blue-400 transition-colors text-xs font-medium flex items-center gap-2">
-                    <i class="fa-solid fa-bolt"></i> NEURAL LINK
+                    <i class="fa-solid fa-bolt"></i> MARTY
                 </button>
             </div>
         </header>
@@ -202,29 +246,38 @@
         </div>
     </main>
 
-    <!-- NEURAL DRAWER (Right) -->
-    <aside id="neural-drawer" class="w-96 border-l border-ops-border bg-ops-surface flex flex-col z-30 transition-transform duration-300 transform translate-x-0 shadow-2xl">
-        <div class="p-3 border-b border-ops-border flex justify-between items-center bg-zinc-900/50">
+    <!-- MARTY FLOATING PANEL -->
+    <aside id="neural-drawer" class="fixed right-6 bottom-6 w-[22rem] h-[32rem] border border-ops-border rounded-xl bg-ops-surface/95 backdrop-blur-sm flex flex-col z-40 shadow-2xl overflow-hidden">
+        <div id="marty-drag-handle" class="p-2.5 border-b border-ops-border flex justify-between items-center bg-zinc-900/50 cursor-move select-none">
             <div class="flex items-center gap-2 min-w-0">
                 <div id="marty-orb" class="marty-orb idle"></div>
-                <span class="text-xs font-mono font-bold text-ops-light tracking-widest uppercase truncate">
-                    <i class="fa-solid fa-microchip mr-2 text-ops-accent"></i>MARTY • Active Link
+                <span class="text-[11px] font-mono font-bold text-ops-light tracking-widest uppercase truncate">
+                    <i class="fa-solid fa-microchip mr-1.5 text-ops-accent"></i>MARTY
                 </span>
             </div>
-            <span id="ai-model-badge" class="px-1.5 py-0.5 rounded text-[10px] bg-blue-500/10 text-blue-400 border border-blue-500/20 font-mono">GPT-4o-Mini</span>
+            <div class="flex items-center gap-2">
+                <select id="marty-model-select" class="bg-ops-bg border border-ops-border rounded px-2 py-1 text-[10px] text-white font-mono focus:outline-none focus:ring-1 focus:ring-ops-accent">
+                    <option value="gpt-5">GPT-5</option>
+                    <option value="gpt-5-mini">GPT-5 Mini</option>
+                    <option value="gpt-4.1">GPT-4.1</option>
+                    <option value="gpt-4o">GPT-4o</option>
+                    <option value="gpt-4o-mini">GPT-4o Mini</option>
+                </select>
+                <span id="ai-model-badge" class="px-1.5 py-0.5 rounded text-[10px] bg-blue-500/10 text-blue-400 border border-blue-500/20 font-mono">GPT-4o-Mini</span>
+            </div>
         </div>
 
-        <div id="chat-stream" class="flex-1 overflow-y-auto p-4 space-y-4 font-mono text-xs">
+        <div id="chat-stream" class="flex-1 overflow-y-auto p-3 space-y-3 font-mono text-xs">
             <div class="text-center mt-10 opacity-30">
                 <i class="fa-solid fa-terminal text-2xl mb-2"></i>
                 <p>MARTY ready for directives.</p>
             </div>
         </div>
 
-        <div class="p-3 border-t border-ops-border bg-zinc-900">
+        <div class="p-2.5 border-t border-ops-border bg-zinc-900">
             <div class="relative">
                 <textarea id="cmd-input" rows="1" 
-                    class="w-full bg-ops-bg border border-ops-border rounded p-3 pr-10 text-white text-xs font-mono focus:border-ops-accent focus:outline-none focus:ring-1 focus:ring-ops-accent transition-all resize-none shadow-inner"
+                    class="w-full bg-ops-bg border border-ops-border rounded p-2.5 pr-10 text-white text-xs font-mono focus:border-ops-accent focus:outline-none focus:ring-1 focus:ring-ops-accent transition-all resize-none shadow-inner"
                     placeholder="Execute directive..."></textarea>
                 <button id="cmd-send" class="absolute right-2 bottom-2 text-ops-light hover:text-white transition-colors p-1">
                     <i class="fa-solid fa-arrow-turn-up"></i>
@@ -235,6 +288,7 @@
                 <span class="animate-pulse">///</span>
             </div>
         </div>
+        <div id="marty-resize-handle" aria-hidden="true"></div>
     </aside>
 
     <script src="app.js?v=ops2.6"></script>

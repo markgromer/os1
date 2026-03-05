@@ -68,6 +68,13 @@ const state = {
         events: [],
     },
 
+    dashboardGhl: {
+        loading: false,
+        fetchedAt: 0,
+        error: '',
+        snapshot: null,
+    },
+
     teamPresenceByMemberId: {},
     teamPresenceFetchedAt: 0,
     teamPresenceLoading: false,
@@ -100,7 +107,103 @@ const state = {
 
 const THEME_STORAGE_KEY = 'opsTheme';
 const ADMIN_TOKEN_STORAGE_KEY = 'opsAdminToken';
+const MARTY_PANEL_STORAGE_KEY = 'opsMartyPanel';
+const MARTY_PANEL_MIN_WIDTH = 280;
+const MARTY_PANEL_MIN_HEIGHT = 260;
+const MARTY_TYPING_ID = 'marty-typing-indicator';
+const MARTY_THINKING_LINES = [
+    'Mapping the battlefield...',
+    'Cross-checking every signal...',
+    'Sharpening the response...',
+    'Compiling operator-grade output...',
+];
+const MARTY_RESPONDING_LINES = [
+    'Delivering with intent.',
+    'Executing your directive.',
+    'Response locked and loaded.',
+    'Actionable answer inbound.',
+];
 const taskDoneUndoTimers = new Map();
+
+function normalizeModelLabel(model) {
+    const m = String(model || '').trim();
+    if (!m) return 'AI';
+    return m
+        .split(/[-_\s]+/)
+        .filter(Boolean)
+        .map((part) => part.length <= 3 ? part.toUpperCase() : (part[0].toUpperCase() + part.slice(1)))
+        .join('-');
+}
+
+function getDefaultMartyPanelLayout() {
+    const width = Math.min(420, Math.max(MARTY_PANEL_MIN_WIDTH, Math.floor(window.innerWidth * 0.33)));
+    const height = Math.min(640, Math.max(MARTY_PANEL_MIN_HEIGHT, Math.floor(window.innerHeight * 0.58)));
+    return {
+        x: Math.max(8, window.innerWidth - width - 24),
+        y: Math.max(8, window.innerHeight - height - 24),
+        width,
+        height,
+    };
+}
+
+function clampMartyPanelLayout(layout) {
+    const l = (layout && typeof layout === 'object') ? layout : {};
+    const width = Math.min(window.innerWidth - 8, Math.max(MARTY_PANEL_MIN_WIDTH, Number(l.width) || MARTY_PANEL_MIN_WIDTH));
+    const height = Math.min(window.innerHeight - 8, Math.max(MARTY_PANEL_MIN_HEIGHT, Number(l.height) || MARTY_PANEL_MIN_HEIGHT));
+    const maxX = Math.max(0, window.innerWidth - width - 8);
+    const maxY = Math.max(0, window.innerHeight - height - 8);
+    const x = Math.min(maxX, Math.max(0, Number(l.x) || 0));
+    const y = Math.min(maxY, Math.max(0, Number(l.y) || 0));
+    return { x, y, width, height };
+}
+
+function getStoredMartyPanelLayout() {
+    try {
+        const raw = String(localStorage.getItem(MARTY_PANEL_STORAGE_KEY) || '').trim();
+        if (!raw) return getDefaultMartyPanelLayout();
+        const parsed = JSON.parse(raw);
+        return clampMartyPanelLayout(parsed);
+    } catch {
+        return getDefaultMartyPanelLayout();
+    }
+}
+
+function setStoredMartyPanelLayout(layout) {
+    try {
+        localStorage.setItem(MARTY_PANEL_STORAGE_KEY, JSON.stringify(clampMartyPanelLayout(layout)));
+    } catch {
+        // ignore
+    }
+}
+
+function applyMartyPanelLayout(layout) {
+    const drawer = document.getElementById('neural-drawer');
+    if (!drawer) return;
+    const next = clampMartyPanelLayout(layout);
+    drawer.style.left = `${next.x}px`;
+    drawer.style.top = `${next.y}px`;
+    drawer.style.width = `${next.width}px`;
+    drawer.style.height = `${next.height}px`;
+    drawer.style.right = 'auto';
+    drawer.style.bottom = 'auto';
+}
+
+function syncMartyModelUi() {
+    const model = String(state.settings?.openaiModel || '').trim();
+    const badge = document.getElementById('ai-model-badge');
+    const select = document.getElementById('marty-model-select');
+    if (badge) badge.innerText = normalizeModelLabel(model || 'AI');
+    if (select) {
+        const options = Array.from(select.options).map((o) => String(o.value || '').trim());
+        if (model && !options.includes(model)) {
+            const custom = document.createElement('option');
+            custom.value = model;
+            custom.textContent = model;
+            select.appendChild(custom);
+        }
+        select.value = model || 'gpt-4o-mini';
+    }
+}
 
 function getStoredAdminToken() {
     try {
@@ -150,16 +253,179 @@ function isPortraitCompactMode() {
 }
 
 function setMartyPresence(mode = 'idle') {
+    const panel = document.getElementById('neural-drawer');
     const orb = document.getElementById('marty-orb');
     const statusText = document.getElementById('marty-state');
-    const busy = String(mode || '').toLowerCase() === 'busy';
+    const normalized = String(mode || '').toLowerCase();
+    const busy = normalized === 'busy';
+    const responding = normalized === 'responding';
+
+    if (panel) {
+        panel.classList.remove('marty-thinking', 'marty-responding');
+        if (busy) panel.classList.add('marty-thinking');
+        if (responding) panel.classList.add('marty-responding');
+    }
+
     if (orb) {
-        orb.classList.remove('idle', 'busy');
-        orb.classList.add(busy ? 'busy' : 'idle');
+        orb.classList.remove('idle', 'busy', 'responding');
+        if (busy) orb.classList.add('busy');
+        else if (responding) orb.classList.add('responding');
+        else orb.classList.add('idle');
     }
+
     if (statusText) {
-        statusText.textContent = busy ? 'MARTY PROCESSING...' : 'MARTY IDLE';
+        if (busy) {
+            const line = MARTY_THINKING_LINES[Math.floor(Math.random() * MARTY_THINKING_LINES.length)];
+            statusText.textContent = `MARTY THINKING • ${line}`;
+        } else if (responding) {
+            const line = MARTY_RESPONDING_LINES[Math.floor(Math.random() * MARTY_RESPONDING_LINES.length)];
+            statusText.textContent = `MARTY RESPONDING • ${line}`;
+        } else {
+            statusText.textContent = 'MARTY IDLE • READY FOR ORDERS';
+        }
     }
+}
+
+function removeMartyTypingIndicator() {
+    const stream = document.getElementById('chat-stream');
+    if (!stream) return;
+    const existing = stream.querySelector(`#${MARTY_TYPING_ID}`);
+    if (existing) existing.remove();
+}
+
+function showMartyTypingIndicator() {
+    const stream = document.getElementById('chat-stream');
+    if (!stream) return;
+    removeMartyTypingIndicator();
+
+    const line = MARTY_THINKING_LINES[Math.floor(Math.random() * MARTY_THINKING_LINES.length)];
+    const wrap = document.createElement('div');
+    wrap.id = MARTY_TYPING_ID;
+    wrap.className = 'flex flex-col gap-1 mb-4 animate-fade-in';
+    wrap.innerHTML = `
+        <span class="text-[10px] uppercase font-bold tracking-wider text-blue-400">MARTY</span>
+        <div class="p-2 rounded text-xs bg-zinc-800/60 text-zinc-200 border-l-2 border-blue-500 max-w-[90%] break-words shadow-sm">
+            <div class="flex items-center gap-2">
+                <span>${escapeHtml(line)}</span>
+                <span class="inline-flex items-center gap-1">
+                    <span class="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse"></span>
+                    <span class="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse [animation-delay:120ms]"></span>
+                    <span class="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse [animation-delay:240ms]"></span>
+                </span>
+            </div>
+        </div>
+    `;
+
+    stream.appendChild(wrap);
+    stream.scrollTop = stream.scrollHeight;
+}
+
+function initializeMartyWidget() {
+    const drawer = document.getElementById('neural-drawer');
+    const dragHandle = document.getElementById('marty-drag-handle');
+    const resizeHandle = document.getElementById('marty-resize-handle');
+    if (!drawer) return;
+
+    applyMartyPanelLayout(getStoredMartyPanelLayout());
+    syncMartyModelUi();
+    setMartyPresence('idle');
+
+    let drag = null;
+    let resize = null;
+
+    if (dragHandle) {
+        dragHandle.addEventListener('pointerdown', (e) => {
+            if (e.target && e.target.closest('button,select,input,textarea')) return;
+            const rect = drawer.getBoundingClientRect();
+            drag = {
+                pointerId: e.pointerId,
+                startX: e.clientX,
+                startY: e.clientY,
+                originX: rect.left,
+                originY: rect.top,
+            };
+            dragHandle.setPointerCapture?.(e.pointerId);
+            e.preventDefault();
+        });
+
+        dragHandle.addEventListener('pointermove', (e) => {
+            if (!drag || drag.pointerId !== e.pointerId) return;
+            const next = {
+                ...getStoredMartyPanelLayout(),
+                x: drag.originX + (e.clientX - drag.startX),
+                y: drag.originY + (e.clientY - drag.startY),
+                width: drawer.getBoundingClientRect().width,
+                height: drawer.getBoundingClientRect().height,
+            };
+            applyMartyPanelLayout(next);
+        });
+
+        const stopDrag = (e) => {
+            if (!drag || drag.pointerId !== e.pointerId) return;
+            const rect = drawer.getBoundingClientRect();
+            setStoredMartyPanelLayout({
+                x: rect.left,
+                y: rect.top,
+                width: rect.width,
+                height: rect.height,
+            });
+            dragHandle.releasePointerCapture?.(e.pointerId);
+            drag = null;
+        };
+
+        dragHandle.addEventListener('pointerup', stopDrag);
+        dragHandle.addEventListener('pointercancel', stopDrag);
+    }
+
+    if (resizeHandle) {
+        resizeHandle.addEventListener('pointerdown', (e) => {
+            const rect = drawer.getBoundingClientRect();
+            resize = {
+                pointerId: e.pointerId,
+                startX: e.clientX,
+                startY: e.clientY,
+                originW: rect.width,
+                originH: rect.height,
+                x: rect.left,
+                y: rect.top,
+            };
+            resizeHandle.setPointerCapture?.(e.pointerId);
+            e.preventDefault();
+        });
+
+        resizeHandle.addEventListener('pointermove', (e) => {
+            if (!resize || resize.pointerId !== e.pointerId) return;
+            const next = {
+                x: resize.x,
+                y: resize.y,
+                width: resize.originW + (e.clientX - resize.startX),
+                height: resize.originH + (e.clientY - resize.startY),
+            };
+            applyMartyPanelLayout(next);
+        });
+
+        const stopResize = (e) => {
+            if (!resize || resize.pointerId !== e.pointerId) return;
+            const rect = drawer.getBoundingClientRect();
+            setStoredMartyPanelLayout({
+                x: rect.left,
+                y: rect.top,
+                width: rect.width,
+                height: rect.height,
+            });
+            resizeHandle.releasePointerCapture?.(e.pointerId);
+            resize = null;
+        };
+
+        resizeHandle.addEventListener('pointerup', stopResize);
+        resizeHandle.addEventListener('pointercancel', stopResize);
+    }
+
+    window.addEventListener('resize', () => {
+        const next = clampMartyPanelLayout(getStoredMartyPanelLayout());
+        applyMartyPanelLayout(next);
+        setStoredMartyPanelLayout(next);
+    });
 }
 
 function applyTheme(theme) {
@@ -242,6 +508,13 @@ function getCommandPaletteItems() {
             hint: 'Action',
             keywords: 'google calls refresh calendar',
             run: async () => { await refreshDashboardCalls({ force: true }); },
+        },
+        {
+            id: 'refresh-ghl',
+            label: 'Refresh Mini GHL',
+            hint: 'Action',
+            keywords: 'ghl highlevel leadconnector dashboard refresh',
+            run: async () => { await refreshDashboardGhl({ force: true }); },
         },
     ];
 
@@ -568,6 +841,26 @@ async function refreshDashboardCalls({ force = false } = {}) {
     renderMain();
 }
 
+async function refreshDashboardGhl({ force = false } = {}) {
+    const configured = !!state.settings?.ghlConfigured;
+    if (!configured) {
+        state.dashboardGhl = { loading: false, fetchedAt: Date.now(), error: '', snapshot: null };
+        return;
+    }
+    if (state.dashboardGhl.loading) return;
+    const ageMs = Date.now() - (Number(state.dashboardGhl.fetchedAt) || 0);
+    if (!force && ageMs < 60_000) return;
+
+    state.dashboardGhl = { ...state.dashboardGhl, loading: true, error: '' };
+    try {
+        const data = await apiJson('/api/integrations/ghl/snapshot');
+        state.dashboardGhl = { loading: false, fetchedAt: Date.now(), error: '', snapshot: data };
+    } catch (e) {
+        state.dashboardGhl = { ...state.dashboardGhl, loading: false, fetchedAt: Date.now(), error: e?.message || 'Failed to load GHL snapshot' };
+    }
+    renderMain();
+}
+
 function setNewProjectDraft(patch) {
     const next = { ...(state.newProjectDraft || {}) };
     const p = (patch && typeof patch === 'object') ? patch : {};
@@ -671,6 +964,7 @@ async function init() {
         
         // Setup UI
         setupEventListeners();
+        initializeMartyWidget();
         await loadChatHistory();
         renderNav();
         renderMain();
@@ -1025,6 +1319,7 @@ function setupEventListeners() {
     // Chat Input
     const input = document.getElementById("cmd-input");
     const send = document.getElementById("cmd-send");
+    const modelSelect = document.getElementById('marty-model-select');
     
     if (input) {
         input.addEventListener("keypress", (e) => {
@@ -1037,6 +1332,19 @@ function setupEventListeners() {
     
     if (send) {
         send.addEventListener("click", handleChatSubmit);
+    }
+
+    if (modelSelect) {
+        modelSelect.addEventListener('change', async () => {
+            const model = safeText(modelSelect.value).trim();
+            if (!model) return;
+            try {
+                await saveSettingsPatch({ openaiModel: model });
+                syncMartyModelUi();
+            } catch (e) {
+                alert(e?.message || 'Failed to save model');
+            }
+        });
     }
 
     // Avoid auto-refresh re-rendering while typing.
@@ -1157,10 +1465,7 @@ async function fetchSettings() {
                 state.showCompleted = state.uiPrefs.defaultShowCompleted;
             }
 
-            const badge = document.getElementById('ai-model-badge');
-            if (badge) {
-                badge.innerText = state.settings.openaiModel || 'AI';
-            }
+            syncMartyModelUi();
         }
     } catch(e) {
         console.warn("Settings unreachable", e);
@@ -1375,6 +1680,31 @@ function inboxSourceMeta(sourceKey) {
     return map[key] || map.other;
 }
 
+function inboxBusinessLabel(item) {
+    const explicit = safeText(item?.businessLabel).trim();
+    if (explicit) return explicit;
+    const key = safeText(item?.businessKey).trim();
+    if (key === 'unmapped-legacy') return 'Unmapped/Legacy';
+
+    const text = safeText(item?.text).toLowerCase();
+    const marker = text.match(/•\s*([^:\n]+)\s*:/);
+    if (marker && marker[1]) return safeText(marker[1]).trim();
+    return 'Unmapped/Legacy';
+}
+
+function groupInboxItemsByBusiness(items) {
+    const list = Array.isArray(items) ? items : [];
+    const map = new Map();
+    for (const item of list) {
+        const label = inboxBusinessLabel(item);
+        if (!map.has(label)) map.set(label, []);
+        map.get(label).push(item);
+    }
+    return Array.from(map.entries())
+        .map(([label, grouped]) => ({ label, items: grouped }))
+        .sort((a, b) => b.items.length - a.items.length || a.label.localeCompare(b.label));
+}
+
 async function createInboxItem(text) {
     const cleanText = safeText(text).trim();
     if (!cleanText) throw new Error('Inbox text is required');
@@ -1481,47 +1811,68 @@ function renderInbox(container) {
         empty.innerHTML = '<div class="text-white font-semibold">Inbox is empty</div><div class="text-xs text-zinc-500 mt-1">Capture tasks, notes, and comms here first — then convert.</div>';
         list.appendChild(empty);
     } else {
-        for (const item of visible) {
-            const id = safeText(item?.id);
-            const status = safeText(item?.status) || 'New';
-            const createdAt = safeText(item?.createdAt);
-            const updatedAt = safeText(item?.updatedAt);
-            const projectId = safeText((state.inboxConvertProjectById && state.inboxConvertProjectById[id]) || item?.projectId);
-
-            const card = document.createElement('div');
-            card.className = 'border border-zinc-800 rounded-xl bg-zinc-900/30 p-4';
-            card.innerHTML = `
-                <div class="flex items-start justify-between gap-4">
+        const businessGroups = groupInboxItemsByBusiness(visible);
+        for (const group of businessGroups) {
+            const section = document.createElement('details');
+            section.className = 'border border-zinc-800 rounded-xl bg-zinc-900/20';
+            section.open = businessGroups.length <= 2 || group.label !== 'Unmapped/Legacy';
+            section.innerHTML = `
+                <summary class="cursor-pointer list-none px-4 py-3 flex items-center justify-between gap-3">
                     <div class="min-w-0">
-                        <div class="flex items-center gap-2">
-                            ${inboxStatusBadge(status)}
-                            ${inboxSourceBadge(item?.source)}
-                            <div class="text-[11px] text-zinc-500 font-mono">${escapeHtml(createdAt ? formatTimeFromIso(createdAt) : '')}${updatedAt && updatedAt !== createdAt ? ` • upd ${escapeHtml(formatTimeFromIso(updatedAt))}` : ''}</div>
-                        </div>
-                        <div class="mt-2 text-sm text-zinc-200 whitespace-pre-wrap break-words">${escapeHtml(safeText(item?.text))}</div>
-                        <div class="mt-3 flex flex-wrap items-center gap-2">
-                            <select data-inbox-project="${escapeHtml(id)}" class="bg-zinc-950/40 border border-zinc-800 rounded px-2 py-1 text-xs text-zinc-200">
-                                <option value="">Project (optional)</option>
-                                ${(Array.isArray(state.projects) ? state.projects : []).map((p) => `<option value="${escapeHtml(safeText(p?.id))}" ${safeText(p?.id) === projectId ? 'selected' : ''}>${escapeHtml(safeText(p?.name) || 'Project')}</option>`).join('')}
-                            </select>
-                            <button data-inbox-link-project="${escapeHtml(id)}" class="px-2 py-1 rounded border border-blue-600/40 bg-blue-600/20 text-[11px] font-mono text-blue-200 hover:bg-blue-600/30 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Link</button>
-                            <button data-inbox-create-project="${escapeHtml(id)}" class="px-2 py-1 rounded border border-emerald-600/40 bg-emerald-600/20 text-[11px] font-mono text-emerald-200 hover:bg-emerald-600/30 transition-colors transition-transform duration-150 ease-out active:translate-y-px">New Project</button>
-                            <button data-inbox-edit="${escapeHtml(id)}" class="px-2 py-1 rounded border border-zinc-800 text-[11px] font-mono text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Edit</button>
-                        </div>
+                        <div class="text-zinc-300 text-xxs font-mono uppercase tracking-widest">Business</div>
+                        <div class="text-sm text-white truncate">${escapeHtml(group.label)}</div>
                     </div>
-                    <div class="shrink-0 flex flex-col gap-2">
-                        <button data-inbox-triage="${escapeHtml(id)}" class="px-3 py-1.5 rounded border border-zinc-800 text-[11px] font-mono text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Triage</button>
-                        <button data-inbox-done="${escapeHtml(id)}" class="px-3 py-1.5 rounded bg-emerald-600/20 border border-emerald-600/40 text-[11px] font-mono text-emerald-200 hover:bg-emerald-600/30 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Done</button>
-                        <button data-inbox-archive="${escapeHtml(id)}" class="px-3 py-1.5 rounded bg-zinc-900/30 border border-zinc-800 text-[11px] font-mono text-zinc-200 hover:bg-zinc-800/40 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Archive</button>
-                    </div>
-                </div>
-                <div class="mt-4 flex flex-wrap gap-2">
-                    <button data-inbox-to-task="${escapeHtml(id)}" class="px-3 py-1.5 rounded bg-blue-600/20 border border-blue-600/40 text-[11px] font-mono text-blue-200 hover:bg-blue-600/30 transition-colors transition-transform duration-150 ease-out active:translate-y-px">→ Task</button>
-                    <button data-inbox-to-note="${escapeHtml(id)}" class="px-3 py-1.5 rounded bg-amber-600/20 border border-amber-600/40 text-[11px] font-mono text-amber-200 hover:bg-amber-600/30 transition-colors transition-transform duration-150 ease-out active:translate-y-px">→ Note</button>
-                    <button data-inbox-to-comm="${escapeHtml(id)}" class="px-3 py-1.5 rounded bg-indigo-600/20 border border-indigo-600/40 text-[11px] font-mono text-indigo-200 hover:bg-indigo-600/30 transition-colors transition-transform duration-150 ease-out active:translate-y-px">→ Comm</button>
-                </div>
+                    <div class="text-[11px] text-zinc-500 font-mono">${group.items.length} item${group.items.length === 1 ? '' : 's'}</div>
+                </summary>
+                <div class="px-4 pb-4 space-y-3 border-t border-zinc-800/60"></div>
             `;
-            list.appendChild(card);
+            list.appendChild(section);
+            const sectionBody = section.querySelector('div');
+            if (!sectionBody) continue;
+
+            for (const item of group.items) {
+                const id = safeText(item?.id);
+                const status = safeText(item?.status) || 'New';
+                const createdAt = safeText(item?.createdAt);
+                const updatedAt = safeText(item?.updatedAt);
+                const projectId = safeText((state.inboxConvertProjectById && state.inboxConvertProjectById[id]) || item?.projectId);
+
+                const card = document.createElement('div');
+                card.className = 'border border-zinc-800 rounded-xl bg-zinc-900/30 p-4';
+                card.innerHTML = `
+                    <div class="flex items-start justify-between gap-4">
+                        <div class="min-w-0">
+                            <div class="flex items-center gap-2 flex-wrap">
+                                ${inboxStatusBadge(status)}
+                                ${inboxSourceBadge(item?.source)}
+                                <span class="px-2 py-0.5 rounded border border-zinc-800 bg-zinc-950/40 text-[10px] font-mono text-zinc-300">${escapeHtml(inboxBusinessLabel(item))}</span>
+                                <div class="text-[11px] text-zinc-500 font-mono">${escapeHtml(createdAt ? formatTimeFromIso(createdAt) : '')}${updatedAt && updatedAt !== createdAt ? ` • upd ${escapeHtml(formatTimeFromIso(updatedAt))}` : ''}</div>
+                            </div>
+                            <div class="mt-2 text-sm text-zinc-200 whitespace-pre-wrap break-words">${escapeHtml(safeText(item?.text))}</div>
+                            <div class="mt-3 flex flex-wrap items-center gap-2">
+                                <select data-inbox-project="${escapeHtml(id)}" class="bg-zinc-950/40 border border-zinc-800 rounded px-2 py-1 text-xs text-zinc-200">
+                                    <option value="">Project (optional)</option>
+                                    ${(Array.isArray(state.projects) ? state.projects : []).map((p) => `<option value="${escapeHtml(safeText(p?.id))}" ${safeText(p?.id) === projectId ? 'selected' : ''}>${escapeHtml(safeText(p?.name) || 'Project')}</option>`).join('')}
+                                </select>
+                                <button data-inbox-link-project="${escapeHtml(id)}" class="px-2 py-1 rounded border border-blue-600/40 bg-blue-600/20 text-[11px] font-mono text-blue-200 hover:bg-blue-600/30 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Link</button>
+                                <button data-inbox-create-project="${escapeHtml(id)}" class="px-2 py-1 rounded border border-emerald-600/40 bg-emerald-600/20 text-[11px] font-mono text-emerald-200 hover:bg-emerald-600/30 transition-colors transition-transform duration-150 ease-out active:translate-y-px">New Project</button>
+                                <button data-inbox-edit="${escapeHtml(id)}" class="px-2 py-1 rounded border border-zinc-800 text-[11px] font-mono text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Edit</button>
+                            </div>
+                        </div>
+                        <div class="shrink-0 flex flex-col gap-2">
+                            <button data-inbox-triage="${escapeHtml(id)}" class="px-3 py-1.5 rounded border border-zinc-800 text-[11px] font-mono text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Triage</button>
+                            <button data-inbox-done="${escapeHtml(id)}" class="px-3 py-1.5 rounded bg-emerald-600/20 border border-emerald-600/40 text-[11px] font-mono text-emerald-200 hover:bg-emerald-600/30 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Done</button>
+                            <button data-inbox-archive="${escapeHtml(id)}" class="px-3 py-1.5 rounded bg-zinc-900/30 border border-zinc-800 text-[11px] font-mono text-zinc-200 hover:bg-zinc-800/40 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Archive</button>
+                        </div>
+                    </div>
+                    <div class="mt-4 flex flex-wrap gap-2">
+                        <button data-inbox-to-task="${escapeHtml(id)}" class="px-3 py-1.5 rounded bg-blue-600/20 border border-blue-600/40 text-[11px] font-mono text-blue-200 hover:bg-blue-600/30 transition-colors transition-transform duration-150 ease-out active:translate-y-px">→ Task</button>
+                        <button data-inbox-to-note="${escapeHtml(id)}" class="px-3 py-1.5 rounded bg-amber-600/20 border border-amber-600/40 text-[11px] font-mono text-amber-200 hover:bg-amber-600/30 transition-colors transition-transform duration-150 ease-out active:translate-y-px">→ Note</button>
+                        <button data-inbox-to-comm="${escapeHtml(id)}" class="px-3 py-1.5 rounded bg-indigo-600/20 border border-indigo-600/40 text-[11px] font-mono text-indigo-200 hover:bg-indigo-600/30 transition-colors transition-transform duration-150 ease-out active:translate-y-px">→ Comm</button>
+                    </div>
+                `;
+                sectionBody.appendChild(card);
+            }
         }
     }
 
@@ -2175,6 +2526,21 @@ function renderSettings(container) {
     // Quo (SMS/Calls)
     const quo = section('Quo (SMS/Calls)', 'Ingest inbound SMS and missed calls into Inbox (Twilio-style signature verified).');
     const quoBody = quo.querySelector('[data-slot="body"]');
+    const quoMapRaw = (state.settings && typeof state.settings.phoneBusinessMap === 'object' && state.settings.phoneBusinessMap)
+        ? state.settings.phoneBusinessMap
+        : {};
+    let quoMapEntries = Object.entries(quoMapRaw)
+        .map(([phone, business]) => ({ phone: safeText(phone), business: safeText(business) }))
+        .filter((row) => row.phone || row.business)
+        .slice(0, 6);
+    if (!quoMapEntries.length) {
+        quoMapEntries = [
+            { phone: '8886107667', business: 'Web Agency - PoopSites' },
+            { phone: '5207797667', business: 'Scoop Doggy Logs Pet Waste Removal' },
+            { phone: '5203162667', business: 'Personal Priority Line' },
+        ];
+    }
+    while (quoMapEntries.length < 3) quoMapEntries.push({ phone: '', business: '' });
     quoBody.innerHTML = `
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
@@ -2189,11 +2555,56 @@ function renderSettings(container) {
                 <div class="text-[11px] text-ops-light mt-1">Header: <span class="font-mono">X-Twilio-Signature</span></div>
             </div>
         </div>
+        <div class="mt-4 border border-ops-border rounded-lg p-3 bg-ops-bg/20">
+            <div class="text-xs text-white font-semibold">Business Routing (by destination number)</div>
+            <div class="text-[11px] text-ops-light mt-1">Map each business phone number (To) to a business name for SMS/call separation.</div>
+            <div class="mt-3 space-y-2">
+                ${quoMapEntries.map((row, idx) => `
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+                        <input data-quo-map-phone="${idx}" value="${escapeHtml(row.phone)}" placeholder="+15025550111" class="bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-xs font-mono" />
+                        <input data-quo-map-business="${idx}" value="${escapeHtml(row.business)}" placeholder="Business label (e.g. Freedom Scoopers)" class="bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-xs" />
+                    </div>
+                `).join('')}
+            </div>
+        </div>
         <div class="flex flex-wrap gap-2 mt-4">
             <button id="btn-save-quo" class="px-3 py-2 rounded bg-blue-600 text-white text-xs hover:bg-blue-500">Save Quo</button>
         </div>
     `;
     wrap.appendChild(quo);
+
+    // Mini GHL
+    const ghl = section('Mini GHL', 'Connect GoHighLevel/LeadConnector and show a compact dashboard snapshot.');
+    const ghlBody = ghl.querySelector('[data-slot="body"]');
+    ghlBody.innerHTML = `
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+                <label class="text-xs text-ops-light">API Key</label>
+                <input id="set-ghl-api-key" type="password" autocomplete="off" placeholder="(leave blank to keep existing)" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-sm" />
+                <div class="text-[11px] text-ops-light mt-1">Configured: ${state.settings.ghlConfigured ? 'Yes' : 'No'}${state.settings.ghlLocationId ? ` • Location ${escapeHtml(String(state.settings.ghlLocationId))}` : ''}</div>
+            </div>
+            <div>
+                <label class="text-xs text-ops-light">Location ID</label>
+                <input id="set-ghl-location-id" type="text" autocomplete="off" value="${escapeHtml(String(state.settings.ghlLocationId || ''))}" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-sm font-mono" />
+                <div class="text-[11px] text-ops-light mt-1">Used for opportunities, conversations, and upcoming appointments.</div>
+            </div>
+            <div>
+                <label class="text-xs text-ops-light">API Base URL (optional)</label>
+                <input id="set-ghl-api-base" type="text" autocomplete="off" value="${escapeHtml(String(state.settings.ghlApiBaseUrl || ''))}" placeholder="https://services.leadconnectorhq.com" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-sm font-mono" />
+            </div>
+            <div>
+                <label class="text-xs text-ops-light">Snapshot endpoint</label>
+                <div class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-xs font-mono">GET /api/integrations/ghl/snapshot</div>
+                <div class="text-[11px] text-ops-light mt-1">Reads and summarizes live GHL data for dashboard cards.</div>
+            </div>
+        </div>
+        <div class="flex flex-wrap gap-2 mt-4">
+            <button id="btn-save-ghl" class="px-3 py-2 rounded bg-blue-600 text-white text-xs hover:bg-blue-500">Save GHL</button>
+            <button id="btn-test-ghl" class="px-3 py-2 rounded bg-emerald-600 text-white text-xs hover:bg-emerald-500">Test Snapshot</button>
+        </div>
+        <div id="ghl-test-output" class="mt-3 hidden bg-ops-bg border border-ops-border rounded px-3 py-2 text-xs text-ops-light font-mono whitespace-pre-wrap"></div>
+    `;
+    wrap.appendChild(ghl);
 
     // MCP
     const m = section('MCP', 'Connect a local MCP server (stdio) so “Neural Link” can call MCP tools.');
@@ -2273,6 +2684,7 @@ function renderSettings(container) {
     delete safeSettings.slackOAuthConfigured;
     delete safeSettings.slackInstalled;
     delete safeSettings.quoConfigured;
+    delete safeSettings.ghlConfigured;
     advBody.innerHTML = `
         <label class="text-xs text-ops-light">Settings JSON</label>
         <textarea id="set-advanced-json" rows="10" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-xs font-mono">${JSON.stringify(safeSettings, null, 2)}</textarea>
@@ -2302,6 +2714,9 @@ function renderSettings(container) {
     const btnConnectSlack = document.getElementById('btn-connect-slack');
     const btnDisconnectSlack = document.getElementById('btn-disconnect-slack');
     const btnSaveQuo = document.getElementById('btn-save-quo');
+    const btnSaveGhl = document.getElementById('btn-save-ghl');
+    const btnTestGhl = document.getElementById('btn-test-ghl');
+    const ghlTestOutput = document.getElementById('ghl-test-output');
     const btnSaveAgent = document.getElementById('btn-save-agent');
     const btnSaveUi = document.getElementById('btn-save-ui');
     const btnSaveAdvanced = document.getElementById('btn-save-advanced');
@@ -2513,16 +2928,83 @@ function renderSettings(container) {
     if (btnSaveQuo) btnSaveQuo.onclick = async () => {
         try {
             const token = String(document.getElementById('set-quo-auth-token')?.value || '').trim();
-            if (!token) {
-                if (!state.settings.quoConfigured) throw new Error('Auth token is required');
-                alert('No changes to save.');
-                return;
+            const phoneInputs = Array.from(document.querySelectorAll('[data-quo-map-phone]'));
+            const businessInputs = Array.from(document.querySelectorAll('[data-quo-map-business]'));
+            const map = {};
+            const normalizePhone = (v) => String(v || '').replace(/[^\d+]/g, '').replace(/[^\d]/g, '');
+            for (let i = 0; i < Math.max(phoneInputs.length, businessInputs.length); i += 1) {
+                const phone = normalizePhone(phoneInputs[i]?.value || '');
+                const business = String(businessInputs[i]?.value || '').trim();
+                if (!phone || !business) continue;
+                map[phone] = business;
             }
-            await saveSettingsPatch({ quoAuthToken: token });
+
+            if (!token && !state.settings.quoConfigured && Object.keys(map).length === 0) {
+                throw new Error('Add auth token and at least one phone mapping');
+            }
+
+            const patch = { phoneBusinessMap: map };
+            if (token) patch.quoAuthToken = token;
+            await saveSettingsPatch(patch);
             alert('Quo settings saved.');
             renderSettings(container);
         } catch (e) {
             alert(e?.message || 'Failed to save Quo settings');
+        }
+    };
+
+    if (btnSaveGhl) btnSaveGhl.onclick = async () => {
+        try {
+            const apiKey = String(document.getElementById('set-ghl-api-key')?.value || '').trim();
+            const locationId = String(document.getElementById('set-ghl-location-id')?.value || '').trim();
+            const apiBaseUrl = String(document.getElementById('set-ghl-api-base')?.value || '').trim();
+
+            const patch = {
+                ghlLocationId: locationId,
+                ghlApiBaseUrl: apiBaseUrl,
+            };
+            if (apiKey) patch.ghlApiKey = apiKey;
+
+            if (!state.settings.ghlConfigured && !apiKey) throw new Error('API key is required for first-time setup');
+            if (!locationId) throw new Error('Location ID is required');
+
+            await saveSettingsPatch(patch);
+            alert('Mini GHL settings saved.');
+            await refreshDashboardGhl({ force: true });
+            renderSettings(container);
+        } catch (e) {
+            alert(e?.message || 'Failed to save Mini GHL settings');
+        }
+    };
+
+    if (btnTestGhl) btnTestGhl.onclick = async () => {
+        try {
+            if (ghlTestOutput) {
+                ghlTestOutput.classList.remove('hidden');
+                ghlTestOutput.textContent = 'Testing Mini GHL snapshot...';
+            }
+
+            const r = await apiFetch('/api/integrations/ghl/snapshot');
+            const data = await r.json().catch(() => ({}));
+            if (!r.ok || !data.ok) throw new Error(data?.error || 'Mini GHL snapshot failed');
+
+            const lines = [];
+            lines.push(`Location: ${String(data.locationId || 'n/a')}`);
+            lines.push(`Pipeline open: ${Number(data?.pipeline?.open || 0)} / total ${Number(data?.pipeline?.total || 0)}`);
+            lines.push(`Conversations unread: ${Number(data?.conversations?.unread || 0)} / total ${Number(data?.conversations?.total || 0)}`);
+            lines.push(`Appointments (7d): ${Number(data?.appointments?.upcoming || 0)}`);
+            if (Array.isArray(data?.warnings) && data.warnings.length) {
+                lines.push('');
+                lines.push(`Warnings: ${data.warnings.join(' | ')}`);
+            }
+            if (ghlTestOutput) ghlTestOutput.textContent = lines.join('\n');
+
+            state.dashboardGhl = { loading: false, fetchedAt: Date.now(), error: '', snapshot: data };
+        } catch (e) {
+            if (ghlTestOutput) {
+                ghlTestOutput.classList.remove('hidden');
+                ghlTestOutput.textContent = `Error: ${e?.message || 'Mini GHL snapshot failed'}`;
+            }
         }
     };
 
@@ -2603,6 +3085,7 @@ function renderSettings(container) {
             delete parsed.slackOAuthConfigured;
             delete parsed.slackInstalled;
             delete parsed.quoConfigured;
+            delete parsed.ghlConfigured;
 
             await saveSettingsPatch(parsed);
             alert('Advanced settings saved.');
@@ -2698,6 +3181,11 @@ function renderDashboard(container) {
     const calls = Array.isArray(state.dashboardCalls?.events) ? state.dashboardCalls.events : [];
     if (callsConnected) setTimeout(() => refreshDashboardCalls({ force: false }), 0);
     const nextCall = calls[0] || null;
+    const ghlConfigured = !!state.settings?.ghlConfigured;
+    const ghlSnapshot = (state.dashboardGhl && typeof state.dashboardGhl.snapshot === 'object') ? state.dashboardGhl.snapshot : null;
+    const ghlError = safeText(state.dashboardGhl?.error);
+    const ghlLoading = !!state.dashboardGhl?.loading;
+    if (ghlConfigured) setTimeout(() => refreshDashboardGhl({ force: false }), 0);
 
     const nowYmd = ymdToday();
     const atRiskProjects = activeProjects.filter((project) => {
@@ -2773,6 +3261,44 @@ function renderDashboard(container) {
     missionContainer.className = `${portraitCompact ? 'mb-3' : 'mb-6'} border border-zinc-800 rounded-xl bg-zinc-900/20 p-3`;
     missionContainer.innerHTML = `<div class="text-[10px] font-mono uppercase tracking-widest text-zinc-500 mb-2">Mission Control</div>`;
     missionContainer.appendChild(controlStrip);
+
+    const miniGhlCard = document.createElement('div');
+    miniGhlCard.className = 'mt-3 border border-zinc-800 rounded-lg bg-zinc-950/20 p-3';
+    const pipelineOpen = Number(ghlSnapshot?.pipeline?.open || 0);
+    const pipelineTotal = Number(ghlSnapshot?.pipeline?.total || 0);
+    const conversationsUnread = Number(ghlSnapshot?.conversations?.unread || 0);
+    const appointmentsUpcoming = Number(ghlSnapshot?.appointments?.upcoming || 0);
+    const warningText = Array.isArray(ghlSnapshot?.warnings) && ghlSnapshot.warnings.length
+        ? safeText(ghlSnapshot.warnings[0])
+        : '';
+    miniGhlCard.innerHTML = `
+        <div class="flex items-start justify-between gap-3">
+            <div>
+                <div class="text-[10px] font-mono uppercase tracking-widest text-zinc-500">Mini GHL</div>
+                <div class="text-sm text-zinc-100 mt-1">${escapeHtml(ghlConfigured ? (ghlLoading ? 'Refreshing snapshot...' : 'GoHighLevel snapshot') : 'Not configured')}</div>
+                <div class="text-[10px] font-mono text-zinc-500 mt-1">${escapeHtml(ghlConfigured ? (ghlError ? `Error: ${ghlError}` : (warningText || 'Pipeline • Conversations • Appointments (7d)')) : 'Set API key + Location ID in Settings')}</div>
+            </div>
+            <div class="shrink-0 flex gap-2">
+                <button data-mini-ghl-refresh class="px-2.5 py-1.5 rounded border border-zinc-800 text-[10px] font-mono text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors">Refresh</button>
+                <button data-mini-ghl-settings class="px-2.5 py-1.5 rounded border border-zinc-800 text-[10px] font-mono text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors">Settings</button>
+            </div>
+        </div>
+        <div class="mt-3 grid grid-cols-1 md:grid-cols-3 gap-2">
+            <div class="border border-zinc-800 rounded-md bg-zinc-950/30 px-2.5 py-2">
+                <div class="text-[10px] font-mono uppercase tracking-widest text-zinc-500">Pipeline</div>
+                <div class="text-sm text-zinc-100 mt-1">${ghlConfigured ? `${pipelineOpen} open / ${pipelineTotal}` : '—'}</div>
+            </div>
+            <div class="border border-zinc-800 rounded-md bg-zinc-950/30 px-2.5 py-2">
+                <div class="text-[10px] font-mono uppercase tracking-widest text-zinc-500">Unread Convos</div>
+                <div class="text-sm text-zinc-100 mt-1">${ghlConfigured ? `${conversationsUnread}` : '—'}</div>
+            </div>
+            <div class="border border-zinc-800 rounded-md bg-zinc-950/30 px-2.5 py-2">
+                <div class="text-[10px] font-mono uppercase tracking-widest text-zinc-500">Appointments (7d)</div>
+                <div class="text-sm text-zinc-100 mt-1">${ghlConfigured ? `${appointmentsUpcoming}` : '—'}</div>
+            </div>
+        </div>
+    `;
+    missionContainer.appendChild(miniGhlCard);
     content.appendChild(missionContainer);
 
     // New Project Intake
@@ -2858,15 +3384,7 @@ function renderDashboard(container) {
         .slice()
         .sort((a, b) => String(b?.createdAt || '').localeCompare(String(a?.createdAt || '')));
 
-    const unreadGroupsMap = new Map();
-    for (const item of unreadItems) {
-        const key = normalizeInboxSourceKey(item?.source);
-        if (!unreadGroupsMap.has(key)) unreadGroupsMap.set(key, []);
-        unreadGroupsMap.get(key).push(item);
-    }
-    const unreadGroups = Array.from(unreadGroupsMap.entries())
-        .map(([key, items]) => ({ key, items }))
-        .sort((a, b) => b.items.length - a.items.length)
+    const unreadGroups = groupInboxItemsByBusiness(unreadItems)
         .slice(0, portraitCompact ? 2 : 6);
 
     const unreadPanel = document.createElement('div');
@@ -2882,9 +3400,20 @@ function renderDashboard(container) {
 
         <div class="mt-3 ${unreadItems.length ? '' : 'hidden'} grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
             ${unreadGroups.map((group) => {
-                const meta = inboxSourceMeta(group.key);
                 const newest = group.items[0];
                 const newestTime = safeText(newest?.createdAt) ? formatTimeFromIso(newest.createdAt) : '';
+                const sourceSummary = (() => {
+                    const counts = {};
+                    for (const item of group.items) {
+                        const sKey = normalizeInboxSourceKey(item?.source);
+                        counts[sKey] = Number(counts[sKey] || 0) + 1;
+                    }
+                    return Object.entries(counts)
+                        .sort((a, b) => Number(b[1]) - Number(a[1]))
+                        .slice(0, 2)
+                        .map(([k, n]) => `${inboxSourceMeta(k).label}: ${n}`)
+                        .join(' • ');
+                })();
                 const previewButtons = group.items.slice(0, portraitCompact ? 2 : 4).map((item) => {
                     const id = safeText(item?.id);
                     const time = safeText(item?.createdAt) ? formatTimeFromIso(item.createdAt) : '';
@@ -2904,18 +3433,15 @@ function renderDashboard(container) {
                     <div class="group border border-zinc-800 rounded-lg bg-zinc-950/20 px-3 py-2 transition-colors hover:bg-zinc-900/40">
                         <div class="flex items-center justify-between gap-3">
                             <div class="min-w-0">
-                                <div class="text-[10px] font-mono uppercase tracking-widest text-zinc-500">Source</div>
-                                <div class="flex items-center gap-2 mt-0.5">
-                                    <i class="fa-solid ${meta.icon} ${meta.tone}"></i>
-                                    <div class="text-sm text-zinc-100 truncate">${escapeHtml(meta.label)}</div>
-                                </div>
+                                <div class="text-[10px] font-mono uppercase tracking-widest text-zinc-500">Business</div>
+                                <div class="text-sm text-zinc-100 truncate mt-0.5">${escapeHtml(group.label)}</div>
                             </div>
                             <div class="shrink-0 px-2 py-1 rounded border border-zinc-700 bg-zinc-900/40 text-xs font-mono text-zinc-200">${group.items.length}</div>
                         </div>
-                        <div class="mt-1 text-[10px] font-mono text-zinc-500">Latest: ${escapeHtml(newestTime || '—')}</div>
+                        <div class="mt-1 text-[10px] font-mono text-zinc-500">${escapeHtml(sourceSummary || 'Mixed sources')} • Latest: ${escapeHtml(newestTime || '—')}</div>
                         <div class="mt-2 max-h-0 opacity-0 overflow-hidden transition-all duration-200 ease-out group-hover:max-h-64 group-hover:opacity-100 space-y-1.5">
                             ${previewButtons}
-                            <button data-dash-open-inbox="group-${escapeHtml(group.key)}" class="w-full text-center px-2 py-1 rounded border border-zinc-800 text-[10px] font-mono text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors">Open full Inbox</button>
+                            <button data-dash-open-inbox="group-${escapeHtml(group.label)}" class="w-full text-center px-2 py-1 rounded border border-zinc-800 text-[10px] font-mono text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors">Open full Inbox</button>
                         </div>
                     </div>
                 `;
@@ -2923,10 +3449,18 @@ function renderDashboard(container) {
         </div>
         <div class="mt-3 ${unreadItems.length ? 'hidden' : ''} text-xs text-zinc-500">No new inbox items.</div>
     `;
-    const commsContainer = document.createElement('div');
-    commsContainer.className = `${portraitCompact ? 'mb-3' : 'mb-6'} border border-zinc-800 rounded-xl bg-zinc-900/20 p-3`;
-    commsContainer.innerHTML = `<div class="text-[10px] font-mono uppercase tracking-widest text-zinc-500 mb-2">Comms Radar</div>`;
-    commsContainer.appendChild(unreadPanel);
+    const commsContainer = document.createElement('details');
+    commsContainer.className = `${portraitCompact ? 'mb-3' : 'mb-6'} border border-zinc-800 rounded-xl bg-zinc-900/20`;
+    if (!portraitCompact) commsContainer.open = true;
+    commsContainer.innerHTML = `
+        <summary class="cursor-pointer list-none px-3 py-2 flex items-center justify-between gap-3">
+            <div class="text-[10px] font-mono uppercase tracking-widest text-zinc-500">Comms Radar</div>
+            <div class="text-[10px] font-mono text-zinc-500">${unreadItems.length} new</div>
+        </summary>
+        <div class="px-3 pb-3 border-t border-zinc-800/60"></div>
+    `;
+    const commsBody = commsContainer.querySelector('div');
+    if (commsBody) commsBody.appendChild(unreadPanel);
 
     const triageStatuses = ['New', 'Triaged', 'Done', 'Archived'];
     const triageBoard = document.createElement('div');
@@ -2955,6 +3489,7 @@ function renderDashboard(container) {
                                 const id = safeText(item?.id);
                                 const src = normalizeInboxSourceKey(item?.source);
                                 const srcMeta = inboxSourceMeta(src);
+                                const biz = inboxBusinessLabel(item);
                                 const text = safeText(item?.text).replace(/\s+/g, ' ').trim();
                                 const when = safeText(item?.updatedAt || item?.createdAt);
                                 return `
@@ -2964,6 +3499,7 @@ function renderDashboard(container) {
                                                 <div class="text-[10px] font-mono ${srcMeta.tone}">${escapeHtml(srcMeta.label)}</div>
                                                 <div class="text-[10px] font-mono text-zinc-500">${escapeHtml(formatTimeFromIso(when) || '—')}</div>
                                             </div>
+                                            <div class="text-[10px] font-mono text-zinc-500 truncate mt-0.5">${escapeHtml(biz)}</div>
                                             <div class="text-[11px] text-zinc-200 truncate mt-0.5" title="${escapeHtml(text)}">${escapeHtml(text || '(empty)')}</div>
                                         </button>
                                         <div class="mt-1.5 flex gap-1.5">
@@ -2995,7 +3531,7 @@ function renderDashboard(container) {
     deliveryContainer.appendChild(renderTodayPanel());
     content.appendChild(deliveryContainer);
 
-    commsContainer.appendChild(triageBoard);
+    if (commsBody) commsBody.appendChild(triageBoard);
     content.appendChild(commsContainer);
 
     wrap.appendChild(banner);
@@ -3299,6 +3835,20 @@ function renderDashboard(container) {
             undoTaskDoneWithUndo(id);
         });
     });
+
+    const btnMiniGhlRefresh = missionContainer.querySelector('button[data-mini-ghl-refresh]');
+    if (btnMiniGhlRefresh) {
+        btnMiniGhlRefresh.onclick = async () => {
+            await refreshDashboardGhl({ force: true });
+        };
+    }
+
+    const btnMiniGhlSettings = missionContainer.querySelector('button[data-mini-ghl-settings]');
+    if (btnMiniGhlSettings) {
+        btnMiniGhlSettings.onclick = async () => {
+            await openSettings();
+        };
+    }
 
     container.querySelectorAll('button[data-dash-open-inbox]').forEach((btn) => {
         btn.addEventListener('click', async () => {
@@ -5008,18 +5558,20 @@ function toggleChat() {
     state.isChatOpen = !state.isChatOpen;
     
     if (state.isChatOpen) {
-        drawer.classList.remove("translate-x-full");
+        drawer.classList.remove('hidden');
+        drawer.classList.add('flex');
     } else {
-        drawer.classList.add("translate-x-full");
+        drawer.classList.add('hidden');
+        drawer.classList.remove('flex');
     }
 }
 
 async function handleChatSubmit() {
     const input = document.getElementById("cmd-input");
-    const msg = input.value.trim();
+    const msg = safeText(input?.value).trim();
     if (!msg) return;
     
-    input.value = "";
+    if (input) input.value = "";
     
     // Add User Msg
     recordChatMessage("user", msg);
@@ -5029,6 +5581,7 @@ async function handleChatSubmit() {
     const status = document.getElementById("ai-status");
     if(status) status.style.opacity = "1";
     setMartyPresence('busy');
+    showMartyTypingIndicator();
     
     try {
         const res = await apiFetch("/api/chat", {
@@ -5042,6 +5595,8 @@ async function handleChatSubmit() {
         
         const data = await res.json();
         const reply = data.reply || data.text || "Command Processed.";
+        removeMartyTypingIndicator();
+        setMartyPresence('responding');
         recordChatMessage("ai", reply);
         addChatMessage("ai", reply);
         
@@ -5053,6 +5608,7 @@ async function handleChatSubmit() {
         renderMain();
         
     } catch (e) {
+        removeMartyTypingIndicator();
         recordChatMessage("ai", "Error: Connection Severed.");
         addChatMessage("ai", "Error: Connection Severed.");
     } finally {
@@ -5074,13 +5630,14 @@ function recordChatMessage(role, text) {
 function addChatMessage(role, text) {
     const stream = document.getElementById("chat-stream");
     if(!stream) return;
+    if (role === 'ai') removeMartyTypingIndicator();
     
     const div = document.createElement("div");
     div.className = "flex flex-col gap-1 mb-4 animate-fade-in";
     
     div.innerHTML = `
-        <span class="text-[10px] uppercase font-bold tracking-wider ${role === 'ai' ? 'text-blue-500' : 'text-zinc-500 text-right'}">${role === 'ai' ? 'MARTY' : 'Operator'}</span>
-        <div class="p-2 rounded text-xs ${role === 'ai' ? 'bg-zinc-800/50 text-zinc-300 border-l-2 border-blue-500' : 'bg-blue-900/10 text-blue-200 border-r-2 border-blue-500/50 self-end'} max-w-[90%] break-words shadow-sm">
+        <span class="text-[10px] uppercase font-bold tracking-wider ${role === 'ai' ? 'text-blue-400' : 'text-zinc-500 text-right'}">${role === 'ai' ? 'MARTY // DIRECT' : 'Operator'}</span>
+        <div class="p-2 rounded text-xs ${role === 'ai' ? 'bg-zinc-800/60 text-zinc-200 border-l-2 border-blue-500' : 'bg-blue-900/10 text-blue-200 border-r-2 border-blue-500/50 self-end'} max-w-[90%] break-words shadow-sm">
             ${text}
         </div>
     `;
@@ -5099,7 +5656,7 @@ function renderChat() {
     } else {
         stream.innerHTML = `<div class="text-center mt-10 opacity-30">
             <i class="fa-solid fa-terminal text-2xl mb-2"></i>
-            <p>MARTY ready for directives.</p>
+            <p>MARTY is online — sharp, curious, and ready to work.</p>
         </div>`;
     }
 }

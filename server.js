@@ -377,6 +377,7 @@ function sanitizeSettingsForClient(settings) {
   delete clone.slackClientSecret;
   delete clone.slackBotToken;
   delete clone.quoAuthToken;
+  delete clone.ghlApiKey;
   return clone;
 }
 
@@ -420,7 +421,67 @@ function matchProjectFromText(store, text) {
   return null;
 }
 
-async function addInboxIntegrationItem({ source, externalId, text, projectId = '', projectName = '' }) {
+function normalizePhoneForLookup(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const clean = raw.replace(/[^\d+]/g, '');
+  if (!clean) return '';
+  // Normalize to digit-only for matching across formatting styles.
+  return clean.replace(/[^\d]/g, '');
+}
+
+function phoneLookupKeys(value) {
+  const digits = normalizePhoneForLookup(value);
+  if (!digits) return [];
+  const keys = [digits];
+  if (digits.length > 10) keys.push(digits.slice(-10));
+  return Array.from(new Set(keys.filter(Boolean)));
+}
+
+function businessKeyFromLabel(label) {
+  const text = String(label || '').trim().toLowerCase();
+  const key = text.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  return key || 'unmapped-legacy';
+}
+
+function getPhoneBusinessMap(settings) {
+  const raw = settings && typeof settings === 'object' ? settings.phoneBusinessMap : null;
+  const out = {};
+  if (!raw || typeof raw !== 'object') return out;
+
+  if (Array.isArray(raw)) {
+    for (const row of raw) {
+      const phone = normalizePhoneForLookup(row?.phone || row?.number || row?.to || '');
+      const label = String(row?.business || row?.label || row?.name || '').trim();
+      if (!phone || !label) continue;
+      out[phone] = label;
+      if (phone.length > 10) out[phone.slice(-10)] = label;
+    }
+    return out;
+  }
+
+  for (const [phoneRaw, labelRaw] of Object.entries(raw)) {
+    const phone = normalizePhoneForLookup(phoneRaw);
+    const label = String(labelRaw || '').trim();
+    if (!phone || !label) continue;
+    out[phone] = label;
+    if (phone.length > 10) out[phone.slice(-10)] = label;
+  }
+  return out;
+}
+
+function resolveBusinessForInbound({ settings, toNumber }) {
+  const map = getPhoneBusinessMap(settings);
+  const keys = phoneLookupKeys(toNumber);
+  for (const k of keys) {
+    const label = String(map[k] || '').trim();
+    if (!label) continue;
+    return { businessKey: businessKeyFromLabel(label), businessLabel: label };
+  }
+  return { businessKey: 'unmapped-legacy', businessLabel: 'Unmapped/Legacy' };
+}
+
+async function addInboxIntegrationItem({ source, externalId, text, projectId = '', projectName = '', businessKey = '', businessLabel = '', toNumber = '', fromNumber = '', channel = '' }) {
   const cleanSource = typeof source === 'string' ? source.trim().slice(0, 32) : '';
   const cleanExternalId = typeof externalId === 'string' ? externalId.trim() : '';
   const cleanText = normalizeInboxText(text);
@@ -442,6 +503,11 @@ async function addInboxIntegrationItem({ source, externalId, text, projectId = '
       status: 'New',
       projectId,
       projectName,
+      businessKey,
+      businessLabel,
+      toNumber,
+      fromNumber,
+      channel,
       createdAt: ts,
       updatedAt: ts,
     });
@@ -726,6 +792,156 @@ async function getSlackOAuthConfig() {
   const clientSecret = (typeof process.env.SLACK_CLIENT_SECRET === 'string' ? process.env.SLACK_CLIENT_SECRET.trim() : '') || (typeof saved.slackClientSecret === 'string' ? saved.slackClientSecret.trim() : '');
   const botToken = (typeof process.env.SLACK_BOT_TOKEN === 'string' ? process.env.SLACK_BOT_TOKEN.trim() : '') || (typeof saved.slackBotToken === 'string' ? saved.slackBotToken.trim() : '');
   return { clientId, clientSecret, botToken, saved };
+}
+
+function normalizeHttpBaseUrl(value, fallback) {
+  const raw = typeof value === 'string' ? value.trim() : '';
+  const fb = typeof fallback === 'string' ? fallback.trim() : '';
+  const candidate = raw || fb;
+  if (!candidate) return '';
+  try {
+    const url = new URL(candidate);
+    if (!/^https?:$/i.test(url.protocol)) return '';
+    return `${url.origin}${url.pathname.replace(/\/+$/, '')}`;
+  } catch {
+    return '';
+  }
+}
+
+async function getGhlConfig() {
+  const saved = await readSettings();
+
+  const apiKey =
+    (typeof process.env.GHL_API_KEY === 'string' ? process.env.GHL_API_KEY.trim() : '') ||
+    (typeof process.env.LEADCONNECTOR_API_KEY === 'string' ? process.env.LEADCONNECTOR_API_KEY.trim() : '') ||
+    (typeof saved.ghlApiKey === 'string' ? saved.ghlApiKey.trim() : '');
+
+  const locationId =
+    (typeof process.env.GHL_LOCATION_ID === 'string' ? process.env.GHL_LOCATION_ID.trim() : '') ||
+    (typeof process.env.LEADCONNECTOR_LOCATION_ID === 'string' ? process.env.LEADCONNECTOR_LOCATION_ID.trim() : '') ||
+    (typeof saved.ghlLocationId === 'string' ? saved.ghlLocationId.trim() : '');
+
+  const apiBaseUrl = normalizeHttpBaseUrl(
+    (typeof process.env.GHL_API_BASE_URL === 'string' ? process.env.GHL_API_BASE_URL.trim() : '') ||
+      (typeof process.env.LEADCONNECTOR_API_BASE_URL === 'string' ? process.env.LEADCONNECTOR_API_BASE_URL.trim() : '') ||
+      (typeof saved.ghlApiBaseUrl === 'string' ? saved.ghlApiBaseUrl.trim() : ''),
+    'https://services.leadconnectorhq.com',
+  );
+
+  const apiVersion =
+    (typeof process.env.GHL_API_VERSION === 'string' ? process.env.GHL_API_VERSION.trim() : '') ||
+    (typeof saved.ghlApiVersion === 'string' ? saved.ghlApiVersion.trim() : '') ||
+    '2021-07-28';
+
+  return { apiKey, locationId, apiBaseUrl, apiVersion, saved };
+}
+
+async function ghlApiGet({ apiKey, apiBaseUrl, apiVersion, endpoint, params }) {
+  const token = typeof apiKey === 'string' ? apiKey.trim() : '';
+  if (!token) throw new Error('Missing GHL API key');
+
+  const base = normalizeHttpBaseUrl(apiBaseUrl, 'https://services.leadconnectorhq.com');
+  if (!base) throw new Error('Invalid GHL API base URL');
+
+  const ep = `/${String(endpoint || '').trim().replace(/^\/+/, '')}`;
+  const url = new URL(`${base}${ep}`);
+
+  for (const [k, v] of Object.entries(params || {})) {
+    if (v === undefined || v === null) continue;
+    const s = String(v).trim();
+    if (!s) continue;
+    url.searchParams.set(k, s);
+  }
+
+  const resp = await fetch(url.toString(), {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Version: String(apiVersion || '2021-07-28'),
+      Accept: 'application/json',
+      'User-Agent': 'Task-Tracker/1.0',
+    },
+  });
+
+  const json = await resp.json().catch(() => ({}));
+  if (!resp.ok) {
+    const err = typeof json?.message === 'string'
+      ? json.message
+      : (typeof json?.error === 'string' ? json.error : `HTTP ${resp.status}`);
+    throw new Error(err);
+  }
+
+  return json;
+}
+
+function pickFirstArray(value, preferredKeys = []) {
+  const obj = value && typeof value === 'object' ? value : null;
+  if (!obj) return [];
+
+  for (const key of preferredKeys) {
+    const arr = obj[key];
+    if (Array.isArray(arr)) return arr;
+  }
+
+  for (const v of Object.values(obj)) {
+    if (Array.isArray(v)) return v;
+  }
+
+  return [];
+}
+
+function statusLike(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function computeGhlSnapshot({ opportunities, conversations, appointments }) {
+  const opp = Array.isArray(opportunities) ? opportunities : [];
+  const conv = Array.isArray(conversations) ? conversations : [];
+  const appt = Array.isArray(appointments) ? appointments : [];
+
+  const wonSet = new Set(['won', 'closedwon', 'closed_won', 'success']);
+  const lostSet = new Set(['lost', 'closedlost', 'closed_lost', 'abandoned']);
+
+  let won = 0;
+  let lost = 0;
+  let open = 0;
+  for (const item of opp) {
+    const s = statusLike(item?.status || item?.stageStatus || item?.pipelineStageName || item?.pipelineStageId || item?.opportunityStatus);
+    if (wonSet.has(s)) {
+      won += 1;
+    } else if (lostSet.has(s)) {
+      lost += 1;
+    } else {
+      open += 1;
+    }
+  }
+
+  let unread = 0;
+  for (const item of conv) {
+    const unreadCount = Number(item?.unreadCount ?? item?.unread_count ?? item?.countUnread ?? 0);
+    if (Number.isFinite(unreadCount) && unreadCount > 0) {
+      unread += unreadCount;
+      continue;
+    }
+    const unreadFlag = item?.unread;
+    if (unreadFlag === true || String(unreadFlag || '').toLowerCase() === 'true') unread += 1;
+  }
+
+  return {
+    pipeline: {
+      total: opp.length,
+      open,
+      won,
+      lost,
+    },
+    conversations: {
+      total: conv.length,
+      unread,
+    },
+    appointments: {
+      upcoming: appt.length,
+    },
+  };
 }
 
 async function slackApiGet({ token, method, params }) {
@@ -1271,6 +1487,11 @@ function normalizeInboxItem(input) {
   const createdAt = typeof i.createdAt === 'string' ? i.createdAt : nowIso();
   const updatedAt = typeof i.updatedAt === 'string' ? i.updatedAt : createdAt;
   const converted = i.converted && typeof i.converted === 'object' ? i.converted : {};
+  const businessKey = typeof i.businessKey === 'string' ? i.businessKey.trim() : '';
+  const businessLabel = typeof i.businessLabel === 'string' ? i.businessLabel.trim() : '';
+  const toNumber = typeof i.toNumber === 'string' ? i.toNumber.trim() : '';
+  const fromNumber = typeof i.fromNumber === 'string' ? i.fromNumber.trim() : '';
+  const channel = typeof i.channel === 'string' ? i.channel.trim().slice(0, 32) : '';
 
   return {
     id: typeof i.id === 'string' && i.id.trim() ? i.id.trim() : makeId(),
@@ -1279,6 +1500,11 @@ function normalizeInboxItem(input) {
     status,
     projectId,
     projectName,
+    businessKey,
+    businessLabel,
+    toNumber,
+    fromNumber,
+    channel,
     createdAt,
     updatedAt,
     converted,
@@ -2442,6 +2668,9 @@ app.get('/api/settings', async (req, res) => {
     (typeof settings.quoAuthToken === 'string' && settings.quoAuthToken.trim()),
   );
 
+  const ghlConfig = await getGhlConfig();
+  const ghlConfigured = Boolean(ghlConfig.apiKey && ghlConfig.locationId);
+
   const mcp = getMcpConfigFromSettings(settings);
   const mcpEnabled = Boolean(mcp.enabled);
   const mcpConfigured = Boolean(mcpEnabled && mcp.command);
@@ -2460,6 +2689,7 @@ app.get('/api/settings', async (req, res) => {
     slackOAuthConfigured,
     slackInstalled,
     quoConfigured,
+    ghlConfigured,
     mcpEnabled,
     mcpConfigured,
   });
@@ -2616,6 +2846,98 @@ app.get('/api/integrations/google/upcoming', async (req, res) => {
     res.json(result);
   } catch (err) {
     res.status(500).json({ ok: false, error: err?.message || 'Failed to list events' });
+  }
+});
+
+app.get('/api/integrations/ghl/status', async (req, res) => {
+  try {
+    const { apiKey, locationId, apiBaseUrl, apiVersion } = await getGhlConfig();
+    const keyHint = apiKey && apiKey.length >= 4 ? `••••${apiKey.slice(-4)}` : '';
+    res.json({
+      ok: true,
+      configured: Boolean(apiKey && locationId),
+      hasApiKey: Boolean(apiKey),
+      hasLocationId: Boolean(locationId),
+      locationId: locationId || '',
+      apiBaseUrl: apiBaseUrl || '',
+      apiVersion: apiVersion || '2021-07-28',
+      keyHint,
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message || 'Failed to load GHL status' });
+  }
+});
+
+app.get('/api/integrations/ghl/snapshot', async (req, res) => {
+  try {
+    const { apiKey, locationId, apiBaseUrl, apiVersion } = await getGhlConfig();
+    if (!apiKey || !locationId) {
+      res.status(400).json({ ok: false, error: 'GHL is not configured. Add API key and Location ID in Settings.' });
+      return;
+    }
+
+    const now = new Date();
+    const in7Days = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+    const warnings = [];
+
+    let opportunities = [];
+    try {
+      const oppJson = await ghlApiGet({
+        apiKey,
+        apiBaseUrl,
+        apiVersion,
+        endpoint: '/opportunities/search',
+        params: { locationId, limit: 100 },
+      });
+      opportunities = pickFirstArray(oppJson, ['opportunities', 'items', 'data']);
+    } catch (err) {
+      warnings.push(`Opportunities: ${err?.message || 'failed'}`);
+    }
+
+    let conversations = [];
+    try {
+      const convJson = await ghlApiGet({
+        apiKey,
+        apiBaseUrl,
+        apiVersion,
+        endpoint: '/conversations/search',
+        params: { locationId, limit: 100 },
+      });
+      conversations = pickFirstArray(convJson, ['conversations', 'items', 'data']);
+    } catch (err) {
+      warnings.push(`Conversations: ${err?.message || 'failed'}`);
+    }
+
+    let appointments = [];
+    try {
+      const eventsJson = await ghlApiGet({
+        apiKey,
+        apiBaseUrl,
+        apiVersion,
+        endpoint: '/calendars/events',
+        params: {
+          locationId,
+          startTime: now.toISOString(),
+          endTime: in7Days.toISOString(),
+          limit: 100,
+        },
+      });
+      appointments = pickFirstArray(eventsJson, ['events', 'appointments', 'items', 'data']);
+    } catch (err) {
+      warnings.push(`Appointments: ${err?.message || 'failed'}`);
+    }
+
+    const snapshot = computeGhlSnapshot({ opportunities, conversations, appointments });
+    res.json({
+      ok: true,
+      configured: true,
+      fetchedAt: nowIso(),
+      locationId,
+      ...snapshot,
+      warnings,
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message || 'Failed to load GHL snapshot' });
   }
 });
 
@@ -3034,18 +3356,24 @@ app.post('/api/integrations/quo/sms', async (req, res) => {
       return;
     }
 
+    const routing = resolveBusinessForInbound({ settings, toNumber: to });
     const store = await readStore();
     const matched = matchProjectFromText(store, body);
     const lines = [];
-    lines.push(`SMS${from ? ` from ${from}` : ''}${to ? ` → ${to}` : ''}:`);
+    lines.push(`SMS${from ? ` from ${from}` : ''}${to ? ` → ${to}` : ''} • ${routing.businessLabel}:`);
     lines.push(body);
 
     await addInboxIntegrationItem({
-      source: 'quo',
+      source: 'sms',
       externalId: `sms:${sid || crypto.createHash('sha1').update(`${from}|${to}|${body}`).digest('hex')}`,
       text: lines.join('\n'),
       projectId: matched?.id || '',
       projectName: matched?.name || '',
+      businessKey: routing.businessKey,
+      businessLabel: routing.businessLabel,
+      toNumber: to,
+      fromNumber: from,
+      channel: 'sms',
     });
 
     debugWebhookLog('Quo SMS accepted', {
@@ -3133,11 +3461,17 @@ app.post('/api/integrations/quo/calls', async (req, res) => {
       return;
     }
 
-    const text = `Missed call${from ? ` from ${from}` : ''}${to ? ` → ${to}` : ''}${callStatus ? ` (${callStatus})` : ''}`;
+    const routing = resolveBusinessForInbound({ settings, toNumber: to });
+    const text = `Missed call${from ? ` from ${from}` : ''}${to ? ` → ${to}` : ''}${callStatus ? ` (${callStatus})` : ''} • ${routing.businessLabel}`;
     await addInboxIntegrationItem({
       source: 'call',
       externalId: `call:${callSid || crypto.createHash('sha1').update(`${from}|${to}|${callStatus}|${Date.now()}`).digest('hex')}`,
       text,
+      businessKey: routing.businessKey,
+      businessLabel: routing.businessLabel,
+      toNumber: to,
+      fromNumber: from,
+      channel: 'call',
     });
 
     debugWebhookLog('Quo call accepted', {
