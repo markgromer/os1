@@ -6822,8 +6822,12 @@ async function handleChatSubmit() {
                 projectId: state.currentProjectId || undefined
             })
         });
-        
-        const data = await res.json();
+
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+            throw new Error(data?.error || `Request failed (${res.status})`);
+        }
+
         const reply = data.reply || data.text || "Command Processed.";
         removeMartyTypingIndicator();
         setMartyPresence('responding');
@@ -6839,8 +6843,14 @@ async function handleChatSubmit() {
         
     } catch (e) {
         removeMartyTypingIndicator();
-        recordChatMessage("ai", "Error: Connection Severed.");
-        addChatMessage("ai", "Error: Connection Severed.");
+        const raw = safeText(e?.message || '').trim();
+        const lower = raw.toLowerCase();
+        let friendly = raw || 'Connection severed.';
+        if (lower.includes('unauthorized') || lower.includes('invalid admin token')) {
+            friendly = 'Unauthorized — paste ADMIN_TOKEN when prompted (reload if you dismissed it).';
+        }
+        recordChatMessage("ai", `Error: ${friendly}`);
+        addChatMessage("ai", `Error: ${friendly}`);
     } finally {
         if(status) status.style.opacity = "0";
         setMartyPresence('idle');
