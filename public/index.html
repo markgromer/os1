@@ -475,6 +475,42 @@
         .dash-stagger > *:nth-child(8) { animation-delay: 280ms; }
         .dash-stagger > *:nth-child(9) { animation-delay: 320ms; }
         .dash-stagger > *:nth-child(10) { animation-delay: 360ms; }
+        /* Landscape Layout Overrides */
+        html[data-layout="landscape"] .dash-stagger {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 1.25rem;
+            align-items: start;
+        }
+        html[data-layout="landscape"] .dash-stagger > * {
+            margin-top: 0 !important;
+        }
+        /* Make header, marty bar, and wide banners span full width */
+        html[data-layout="landscape"] .dash-stagger > *:nth-child(1),
+        html[data-layout="landscape"] .dash-stagger > *:nth-child(2),
+        html[data-layout="landscape"] .dash-stagger > *:nth-child(3),
+        html[data-layout="landscape"] .dash-stagger > *:nth-child(4) {
+            grid-column: 1 / -1;
+        }
+        
+        /* Magic: Flatten rows so cards flow evenly inside the grid */
+        html[data-layout="landscape"] .dash-stagger > .grid {
+            display: contents;
+        }
+
+        /* Project View Landscape Overrides (50/50 split) */
+        @media (min-width: 1024px) {
+            html[data-layout="landscape"] .xl\:grid-cols-3 {
+                grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+            }
+            html[data-layout="landscape"] .xl\:col-span-2 {
+                grid-column: span 1 / span 1 !important;
+            }
+            html[data-layout="landscape"] .p-6 {
+                padding: 2rem !important; /* more breathing room in landscape */
+            }
+        }
+
         @keyframes dashFadeUp {
             from { opacity: 0; transform: translateY(8px); }
             to   { opacity: 1; transform: translateY(0); }
@@ -513,6 +549,9 @@
                 </button>
                 <button id="sync-btn" class="text-ops-light hover:text-white transition-colors" title="Sync Data">
                     <i class="fa-solid fa-rotate"></i>
+                </button>
+                <button id="toggle-layout" class="text-ops-light hover:text-white transition-colors" title="Toggle Layout (Auto/Standard/Landscape)">
+                    <i class="fa-solid fa-table-columns"></i>
                 </button>
                 <button id="toggle-theme" class="text-ops-light hover:text-white transition-colors" title="Toggle light/dark">
                     <i class="fa-solid fa-moon"></i>

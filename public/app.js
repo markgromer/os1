@@ -21,6 +21,7 @@ const state = {
     projectCommunications: {},
 
     projectRightTabById: {},
+    bulkProjectDeleteSelectedById: {},
     dashboardCalls: { loading: false, fetchedAt: 0, error: '', events: [] },
     dashboardGhl: { loading: false, fetchedAt: 0, error: '', snapshot: null },
 
@@ -99,6 +100,7 @@ async function refreshAuthStatus() {
 }
 
 const THEME_STORAGE_KEY = 'opsTheme';
+const LAYOUT_STORAGE_KEY = 'opsLayout';
 const ADMIN_TOKEN_STORAGE_KEY = 'opsAdminToken';
 
 const MARTY_OPEN_STORAGE_KEY = 'opsMartyOpen';
@@ -830,6 +832,24 @@ function initializeMartyWidget() {
     });
 }
 
+
+function getStoredLayout() {
+    try { return localStorage.getItem('opsLayout') || 'standard'; } catch { return 'standard'; }
+}
+function setStoredLayout(l) {
+    try { localStorage.setItem('opsLayout', l); } catch {}
+}
+function applyLayout(l) {
+    state.layoutMode = l || 'standard';
+    try { document.documentElement.setAttribute('data-layout', state.layoutMode); } catch {}
+    
+    const btn = document.getElementById('toggle-layout');
+    const icon = btn ? btn.querySelector('i') : null;
+    if (icon) {
+        icon.className = `fa-solid ${state.layoutMode === 'landscape' ? 'fa-table-list' : 'fa-table-columns'}`;
+    }
+}
+
 function applyTheme(theme) {
     const t = (theme === 'light' || theme === 'dark') ? theme : 'dark';
     state.theme = t;
@@ -1401,6 +1421,8 @@ async function createProjectFromDraft() {
         importance: safeText(d.importance).trim() || 'Medium',
         risk: safeText(d.risk).trim() || 'None',
         agentBrief: safeText(d.agentBrief).trim(),
+        clientName: safeText(d.clientName).trim(),
+        clientPhone: safeText(d.clientPhone).trim(),
     };
 
     const store = await apiJson('/api/projects', {
@@ -1457,6 +1479,7 @@ async function init() {
     try {
         console.log("Initializing Neural Ops v2.4...");
         applyTheme(getStoredTheme() || 'dark');
+        applyLayout(getStoredLayout() || 'standard');
         showLoading();
 
         // Auth status is a public endpoint; check early so we can avoid a broken/empty UI.
@@ -1829,6 +1852,18 @@ function setupEventListeners() {
     // Theme Toggle
     const themeToggle = document.getElementById('toggle-theme');
     if (themeToggle) themeToggle.addEventListener('click', toggleTheme);
+
+    const layoutToggle = document.getElementById('toggle-layout');
+    if (layoutToggle) {
+        layoutToggle.addEventListener('click', () => {
+            const current = getStoredLayout();
+            const next = current === 'standard' ? 'landscape' : 'standard';
+            setStoredLayout(next);
+            applyLayout(next);
+            renderMain();
+        });
+    }
+
     
     // Chat Input
     const input = document.getElementById("cmd-input");
@@ -4114,6 +4149,14 @@ function renderProjects(container) {
                     <input id="np-due" type="date" value="${String(d.dueDate || '').replace(/\"/g, '&quot;')}" class="mt-1 w-full bg-zinc-950/40 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white" />
                 </div>
                 <div>
+                    <label class="text-[11px] text-zinc-400">Client Name</label>
+                    <input id="np-client-name" type="text" value="${String(d.clientName || '').replace(/\"/g, '&quot;')}" class="mt-1 w-full bg-zinc-950/40 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white" placeholder="Client Name" />
+                </div>
+                <div>
+                    <label class="text-[11px] text-zinc-400">Client Phone</label>
+                    <input id="np-client-phone" type="text" value="${String(d.clientPhone || '').replace(/\"/g, '&quot;')}" class="mt-1 w-full bg-zinc-950/40 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white" placeholder="+15551234567" />
+                </div>
+                <div>
                     <label class="text-[11px] text-zinc-400">Repo URL</label>
                     <input id="np-repo" type="text" value="${String(d.repoUrl || '').replace(/\"/g, '&quot;')}" class="mt-1 w-full bg-zinc-950/40 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white" placeholder="https://github.com/..." />
                 </div>
@@ -4243,6 +4286,8 @@ function renderProjects(container) {
     bind('np-name', 'name');
     bind('np-type', 'type');
     bind('np-status', 'status');
+    bind('np-client-name', 'clientName');
+    bind('np-client-phone', 'clientPhone');
     bind('np-value', 'projectValue');
     bind('np-due', 'dueDate');
     bind('np-repo', 'repoUrl');
@@ -4553,6 +4598,14 @@ function renderDashboardLegacy(container) {
                 <div>
                     <label class="text-[11px] text-zinc-400">Due date</label>
                     <input id="np-due" type="date" value="${String(d.dueDate || '').replace(/"/g, '&quot;')}" class="mt-1 w-full bg-zinc-950/40 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white" />
+                </div>
+                <div>
+                    <label class="text-[11px] text-zinc-400">Client Name</label>
+                    <input id="np-client-name" type="text" value="${String(d.clientName || '').replace(/\"/g, '&quot;')}" class="mt-1 w-full bg-zinc-950/40 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white" placeholder="Client Name" />
+                </div>
+                <div>
+                    <label class="text-[11px] text-zinc-400">Client Phone</label>
+                    <input id="np-client-phone" type="text" value="${String(d.clientPhone || '').replace(/\"/g, '&quot;')}" class="mt-1 w-full bg-zinc-950/40 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white" placeholder="+15551234567" />
                 </div>
                 <div>
                     <label class="text-[11px] text-zinc-400">Repo URL</label>
@@ -6216,6 +6269,16 @@ function renderProjectView(container) {
                         <input id="proj-am-email" class="w-full bg-zinc-950/40 border border-zinc-800 rounded px-3 py-2 text-xs font-mono text-zinc-200" placeholder="name@company.com" value="${escapeHtml(safeText(project.accountManagerEmail))}">
                     </div>
                 </div>
+                <div class="grid grid-cols-2 gap-2 mt-2">
+                    <div>
+                        <div class="text-zinc-500 text-xxs font-mono uppercase tracking-widest mb-1">Client Name</div>
+                        <input id="proj-client-name" class="w-full bg-zinc-950/40 border border-zinc-800 rounded px-3 py-2 text-xs font-mono text-zinc-200" placeholder="Client Name" value="${escapeHtml(safeText(project.clientName))}">
+                    </div>
+                    <div>
+                        <div class="text-zinc-500 text-xxs font-mono uppercase tracking-widest mb-1">Client Phone</div>
+                        <input id="proj-client-phone" class="w-full bg-zinc-950/40 border border-zinc-800 rounded px-3 py-2 text-xs font-mono text-zinc-200" placeholder="+15551234567" value="${escapeHtml(safeText(project.clientPhone))}">
+                    </div>
+                </div>
                 <button id="btn-save-details" class="w-full bg-zinc-800 hover:bg-zinc-700 text-zinc-200 px-3 py-2 rounded text-xs font-semibold uppercase tracking-wide transition-colors">Save</button>
             `;
             panel.appendChild(el);
@@ -6230,7 +6293,9 @@ function renderProjectView(container) {
                         const projectValue = safeText(el.querySelector('#proj-value')?.value).trim();
                         const accountManagerName = safeText(el.querySelector('#proj-am-name')?.value).trim();
                         const accountManagerEmail = safeText(el.querySelector('#proj-am-email')?.value).trim();
-                        await saveProjectPatch(project.id, { dueDate, status, projectValue, accountManagerName, accountManagerEmail });
+                        const clientName = safeText(el.querySelector('#proj-client-name')?.value).trim();
+                        const clientPhone = safeText(el.querySelector('#proj-client-phone')?.value).trim();
+                        await saveProjectPatch(project.id, { dueDate, status, projectValue, accountManagerName, accountManagerEmail, clientName, clientPhone });
                         alert('Saved.');
                         renderNav();
                         renderMain();

@@ -1747,19 +1747,33 @@ app.post('/api/integrations/slack/send-summary', async (req, res) => {
 
     let targetChannel = channel || '@christian';
 
-    if (targetChannel.startsWith('@')) {
-      const username = targetChannel.substring(1).toLowerCase();
+    // Slack does NOT allow posting directly to a user ID. For DMs, we must open
+    // (or reuse) an IM channel via conversations.open, then post to that channel.
+    if (typeof targetChannel === 'string' && targetChannel.trim().startsWith('@')) {
+      const username = targetChannel.trim().substring(1).toLowerCase();
       const users = await slackListWorkspaceUsers({ token: botToken });
-      const user = users.find(u => 
-        u.name?.toLowerCase() === username || 
-        u.profile?.display_name?.toLowerCase() === username ||
-        u.profile?.display_name_normalized?.toLowerCase() === username ||
-        u.profile?.real_name?.toLowerCase() === username ||
-        u.profile?.real_name_normalized?.toLowerCase() === username ||
-        u.profile?.email?.toLowerCase().startsWith(username)
+      const user = users.find((u) =>
+        u?.name?.toLowerCase() === username ||
+        u?.profile?.display_name?.toLowerCase() === username ||
+        u?.profile?.display_name_normalized?.toLowerCase() === username ||
+        u?.profile?.real_name?.toLowerCase() === username ||
+        u?.profile?.real_name_normalized?.toLowerCase() === username ||
+        u?.profile?.email?.toLowerCase().startsWith(username)
       );
-      if (user) {
-        targetChannel = user.id;
+
+      const userId = String(user?.id || '').trim();
+      if (userId) {
+        const opened = await slackApiPost({
+          token: botToken,
+          method: 'conversations.open',
+          body: { users: userId },
+        });
+        const dmChannelId = String(opened?.channel?.id || '').trim();
+        if (dmChannelId) {
+          targetChannel = dmChannelId;
+        } else {
+          console.warn(`Slack conversations.open returned no channel id for ${targetChannel}`);
+        }
       } else {
         console.warn(`Could not resolve Slack user for ${targetChannel}, trying literal`);
       }
@@ -1903,6 +1917,9 @@ function normalizeProject(input) {
   const accountManagerName = typeof input.accountManagerName === 'string' ? input.accountManagerName.trim() : '';
   const accountManagerEmail = typeof input.accountManagerEmail === 'string' ? input.accountManagerEmail.trim() : '';
 
+  const clientName = typeof input.clientName === 'string' ? input.clientName.trim() : '';
+  const clientPhone = typeof input.clientPhone === 'string' ? input.clientPhone.trim() : '';
+
   const workspacePath = typeof input.workspacePath === 'string' ? input.workspacePath.trim() : '';
   const airtableUrl = typeof input.airtableUrl === 'string' ? input.airtableUrl.trim() : '';
 
@@ -1923,6 +1940,8 @@ function normalizeProject(input) {
     status,
     accountManagerName,
     accountManagerEmail,
+    clientName,
+    clientPhone,
     workspacePath,
     airtableUrl,
     projectValue,
@@ -3201,13 +3220,18 @@ app.get('/api/integrations/slack/auth-url', async (req, res) => {
 
     const redirectUri = `${getBaseUrl(req)}/api/integrations/slack/oauth/callback`;
 
-    // Broad scopes for �I want it all� (messages + lookup for channels/users).
+    // Broad scopes for "I want it all" (messages + lookup for channels/users).
     const scope = [
       'users:read',
+      'users:read.email',
       'channels:read',
       'groups:read',
       'im:read',
       'mpim:read',
+      'im:write',
+      'mpim:write',
+      'conversations:write',
+      'chat:write',
       'channels:history',
       'groups:history',
       'im:history',
@@ -3315,6 +3339,26 @@ app.get('/api/integrations/slack/oauth/callback', async (req, res) => {
 
 // Configure Slack to send events to: POST /api/integrations/slack/events
 // Requires: SLACK_SIGNING_SECRET (env) or settings.slackSigningSecret
+// Diagnostics: GET /api/integrations/slack/diagnostics (requires ADMIN_TOKEN if enabled)
+app.get('/api/integrations/slack/diagnostics', async (req, res) => {
+  try {
+    const settings = await readSettings();
+    const hasEnvSigningSecret = typeof process.env.SLACK_SIGNING_SECRET === 'string' && process.env.SLACK_SIGNING_SECRET.trim();
+    const hasSavedSigningSecret = typeof settings.slackSigningSecret === 'string' && settings.slackSigningSecret.trim();
+    const hasEnvBotToken = typeof process.env.SLACK_BOT_TOKEN === 'string' && process.env.SLACK_BOT_TOKEN.trim();
+    const hasSavedBotToken = typeof settings.slackBotToken === 'string' && settings.slackBotToken.trim();
+    res.json({
+      ok: true,
+      configured: Boolean(hasEnvSigningSecret || hasSavedSigningSecret),
+      installed: Boolean(hasEnvBotToken || hasSavedBotToken),
+      debugWebhooks: DEBUG_WEBHOOKS,
+      note: 'Slack Events API requires a public HTTPS URL reachable by Slack.',
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message || 'Failed to load Slack diagnostics' });
+  }
+});
+
 app.post('/api/integrations/slack/events', async (req, res) => {
   try {
     const settings = await readSettings();
@@ -3328,6 +3372,18 @@ app.post('/api/integrations/slack/events', async (req, res) => {
 
     const verified = verifySlackRequest({ req, signingSecret });
     if (!verified.ok) {
+      debugWebhookLog('Slack events rejected', {
+        reason: verified.error,
+        contentType: req.headers['content-type'],
+        hasSignature: Boolean(req.headers['x-slack-signature']),
+        hasTimestamp: Boolean(req.headers['x-slack-request-timestamp']),
+        forwardedProto: req.headers['x-forwarded-proto'],
+        forwardedHost: req.headers['x-forwarded-host'],
+        host: req.get('host'),
+        method: req.method,
+        path: req.originalUrl || req.url,
+      });
+      // Return a concrete reason; Slack shows this in delivery logs.
       res.status(401).json({ ok: false, error: verified.error || 'Unauthorized' });
       return;
     }
@@ -3362,26 +3418,36 @@ app.post('/api/integrations/slack/events', async (req, res) => {
       return;
     }
 
-    // Optional: try to associate to a project if the message includes the project name.
-    const store = await readStore();
-    const matched = matchProjectFromText(store, text);
-    const channel = typeof ev.channel === 'string' ? ev.channel : '';
-    const user = typeof ev.user === 'string' ? ev.user : '';
-
-    const display = botToken
-      ? await formatSlackInboxText({ token: botToken, channelId: channel, userId: user, text })
-      : [`Slack${channel ? ` ${channel}` : ''}${user ? ` @${user}` : ''}:`, text].join(' ');
-    const externalId = `${teamId || 'team'}:${eventId || (typeof ev.ts === 'string' ? ev.ts : makeId())}`;
-
-    await addInboxIntegrationItem({
-      source: 'slack',
-      externalId,
-      text: display,
-      projectId: matched?.id || '',
-      projectName: matched?.name || '',
-    });
-
+    // ACK immediately. Slack expects a fast 2xx (typically within ~3 seconds).
+    // Do the heavier work (disk IO + optional Slack API lookups) asynchronously.
     res.json({ ok: true });
+
+    (async () => {
+      // Optional: try to associate to a project if the message includes the project name.
+      const store = await readStore();
+      const matched = matchProjectFromText(store, text);
+      const channel = typeof ev.channel === 'string' ? ev.channel : '';
+      const user = typeof ev.user === 'string' ? ev.user : '';
+
+      const display = botToken
+        ? await formatSlackInboxText({ token: botToken, channelId: channel, userId: user, text })
+        : [`Slack${channel ? ` ${channel}` : ''}${user ? ` @${user}` : ''}:`, text].join(' ');
+      const externalId = `${teamId || 'team'}:${eventId || (typeof ev.ts === 'string' ? ev.ts : makeId())}`;
+
+      await addInboxIntegrationItem({
+        source: 'slack',
+        externalId,
+        text: display,
+        projectId: matched?.id || '',
+        projectName: matched?.name || '',
+      });
+    })().catch((err) => {
+      debugWebhookLog('Slack events async failure', {
+        error: err?.message || 'unknown error',
+        eventId,
+        teamId,
+      });
+    });
   } catch (err) {
     // Slack expects fast 2xx responses; treat unexpected errors as 200 to prevent retries storms.
     res.json({ ok: true, error: err?.message || 'unknown error' });
