@@ -4633,9 +4633,9 @@ function renderDashboard(container) {
     const titleEl = document.getElementById('page-title');
     if (titleEl) titleEl.innerText = 'Dashboard';
 
+    /* ── Data gathering ─────────────────────────────────────────── */
     const activeProjects = getActiveProjects();
     const buckets = bucketProjectsByDueDate(activeProjects);
-
     const dueThisWeek =
         (Array.isArray(buckets.today) ? buckets.today.length : 0) +
         (Array.isArray(buckets.tomorrow) ? buckets.tomorrow.length : 0) +
@@ -4644,9 +4644,7 @@ function renderDashboard(container) {
     const inboxItems = Array.isArray(state.inboxItems) ? state.inboxItems : [];
     const inboxNew = inboxItems.filter((x) => String(x?.status || '').trim().toLowerCase() === 'new');
     const inboxNewCount = inboxNew.length;
-
     const teamMembers = Array.isArray(state.team) ? state.team : [];
-    const teamCount = teamMembers.length;
 
     const callsConnected = !!state.settings?.googleConnected;
     const calls = Array.isArray(state.dashboardCalls?.events) ? state.dashboardCalls.events : [];
@@ -4655,574 +4653,414 @@ function renderDashboard(container) {
     if (callsConnected) setTimeout(() => refreshDashboardCalls({ force: false }), 0);
 
     const slackNew = inboxNew.filter((x) => normalizeInboxSourceKey(x?.source) === 'slack');
+    const emailNew = inboxNew.filter((x) => normalizeInboxSourceKey(x?.source) === 'email');
+    const otherNew = inboxNew.filter((x) => { const k = normalizeInboxSourceKey(x?.source); return k !== 'slack' && k !== 'email'; });
 
     const nextActions = getTodayNextActions();
     const outcomes = safeText(state.settings?.todayOutcomes);
-
     const allTasks = Array.isArray(state.tasks) ? state.tasks : [];
     const today = ymdToday();
 
-    // --- Overdue items ---
-    const overdueTasks = allTasks.filter((t) => {
-        if (isDoneTask(t)) return false;
-        const due = safeText(t?.dueDate).trim();
-        return due && due < today;
-    });
-    const overdueProjects = activeProjects.filter((p) => {
-        const due = safeText(p?.dueDate).trim();
-        return due && due < today;
-    });
+    // Overdue
+    const overdueTasks = allTasks.filter((t) => { if (isDoneTask(t)) return false; const d = safeText(t?.dueDate).trim(); return d && d < today; });
+    const overdueProjects = activeProjects.filter((p) => { const d = safeText(p?.dueDate).trim(); return d && d < today; });
     const totalOverdue = overdueTasks.length + overdueProjects.length;
 
-    // --- Completed tasks this week (for streak chart) ---
+    // Week streaks
     const weekDays = [];
     const now = new Date();
     const dayOfWeek = now.getDay();
     const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
-    for (let i = 0; i < 7; i++) {
-        const d = new Date(now);
-        d.setDate(now.getDate() + mondayOffset + i);
-        const y = d.getFullYear();
-        const m = String(d.getMonth() + 1).padStart(2, '0');
-        const day = String(d.getDate()).padStart(2, '0');
-        weekDays.push({ label: ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][i], ymd: `${y}-${m}-${day}` });
-    }
+    for (let i = 0; i < 7; i++) { const d = new Date(now); d.setDate(now.getDate() + mondayOffset + i); weekDays.push({ label: ['M','T','W','T','F','S','S'][i], ymd: `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}` }); }
     const doneTasks = allTasks.filter((t) => isDoneTask(t));
-    const completionsByDay = weekDays.map((wd) => {
-        return doneTasks.filter((t) => {
-            const cAt = safeText(t?.completedAt || t?.updatedAt).trim().slice(0, 10);
-            return cAt === wd.ymd;
-        }).length;
-    });
-    const maxCompletions = Math.max(1, ...completionsByDay);
+    const completionsByDay = weekDays.map((wd) => doneTasks.filter((t) => safeText(t?.completedAt || t?.updatedAt).trim().slice(0,10) === wd.ymd).length);
+    const maxC = Math.max(1, ...completionsByDay);
+    const totalDoneWeek = completionsByDay.reduce((a,b) => a+b, 0);
 
-    // --- Activity feed (recent changes) ---
+    // Activity feed
     const recentActivity = [];
-    for (const t of allTasks) {
-        const updStr = safeText(t?.updatedAt || t?.completedAt || t?.createdAt).trim();
-        if (!updStr) continue;
-        const d = new Date(updStr);
-        if (Number.isNaN(d.getTime())) continue;
-        const done = isDoneTask(t);
-        recentActivity.push({
-            time: d,
-            text: done ? `Completed "${safeText(t?.title)}"` : `Updated "${safeText(t?.title)}"`,
-            icon: done ? 'fa-check-circle text-emerald-400' : 'fa-pen text-blue-400',
-        });
-    }
-    for (const item of inboxItems.slice(0, 20)) {
-        const cStr = safeText(item?.createdAt).trim();
-        if (!cStr) continue;
-        const d = new Date(cStr);
-        if (Number.isNaN(d.getTime())) continue;
-        recentActivity.push({
-            time: d,
-            text: `Inbox: "${safeText(item?.title || item?.subject)}"`,
-            icon: 'fa-inbox text-amber-400',
-        });
-    }
-    recentActivity.sort((a, b) => b.time - a.time);
+    for (const t of allTasks) { const u = safeText(t?.updatedAt||t?.completedAt||t?.createdAt).trim(); if (!u) continue; const d = new Date(u); if (Number.isNaN(d.getTime())) continue; recentActivity.push({ time: d, text: isDoneTask(t) ? `Completed "${safeText(t?.title)}"` : `Updated "${safeText(t?.title)}"`, icon: isDoneTask(t) ? 'fa-check-circle text-emerald-400' : 'fa-pen text-blue-400' }); }
+    for (const item of inboxItems.slice(0,20)) { const c = safeText(item?.createdAt).trim(); if (!c) continue; const d = new Date(c); if (Number.isNaN(d.getTime())) continue; recentActivity.push({ time: d, text: `Inbox: "${safeText(item?.title||item?.subject)}"`, icon: 'fa-inbox text-amber-400' }); }
+    recentActivity.sort((a,b) => b.time - a.time);
 
-    // --- MARTY suggestion ---
+    // MARTY insights (multi-line, Jarvis-style)
+    const martyInsights = [];
+    if (totalOverdue > 0) martyInsights.push({ icon: 'fa-triangle-exclamation text-red-400', text: `${totalOverdue} overdue item${totalOverdue>1?'s':''}. I\u2019d recommend triaging those first.` });
     const topAction = nextActions[0] || null;
-    let martySuggestion = '';
-    if (totalOverdue > 0) {
-        martySuggestion = `You have ${totalOverdue} overdue item${totalOverdue > 1 ? 's' : ''}. I'd recommend triaging those first.`;
-    } else if (topAction) {
-        const pr = Number(topAction?.priority) || 3;
-        martySuggestion = `Your top priority is "${safeText(topAction?.title)}" (P${pr}). Focus there next.`;
-    } else if (inboxNewCount > 3) {
-        martySuggestion = `${inboxNewCount} inbox items waiting. Consider processing your inbox to stay clear.`;
-    } else {
-        martySuggestion = 'All clear. Consider reviewing upcoming projects or setting today\'s outcomes.';
+    if (topAction) { const pr = Number(topAction?.priority)||3; martyInsights.push({ icon: 'fa-bullseye text-blue-400', text: `Top priority: "${safeText(topAction?.title)}" (P${pr}). Focus there next.` }); }
+    if (dueThisWeek > 0) martyInsights.push({ icon: 'fa-clock text-amber-400', text: `${dueThisWeek} project${dueThisWeek>1?'s':''} due this week \u2014 stay ahead.` });
+    if (inboxNewCount > 3) martyInsights.push({ icon: 'fa-inbox text-purple-400', text: `${inboxNewCount} inbox items accumulating. Consider a quick triage pass.` });
+    if (totalDoneWeek > 0) martyInsights.push({ icon: 'fa-chart-line text-emerald-400', text: `${totalDoneWeek} tasks completed this week. ${totalDoneWeek >= 5 ? 'Strong momentum.' : 'Keep it going.'}` });
+    if (!martyInsights.length) martyInsights.push({ icon: 'fa-circle-check text-emerald-400', text: 'All clear. Review upcoming projects or set today\u2019s outcomes.' });
+
+    /* ── Helper: expandable card wrapper ─────────────────────────── */
+    function makeCard(id, icon, iconColor, label, rightHtml, previewHtml, bodyHtml, opts) {
+        const el = document.createElement('div');
+        el.className = 'dash-card' + (opts?.extraClass ? ' '+opts.extraClass : '');
+        el.dataset.cardId = id;
+        const hasBody = !!bodyHtml;
+        el.innerHTML = `
+            <div class="dash-card-head flex items-center justify-between gap-2 px-3 py-2.5">
+                <div class="flex items-center gap-2 min-w-0">
+                    <i class="fa-solid ${icon} ${iconColor} text-[10px] shrink-0"></i>
+                    <span class="text-[10px] font-mono uppercase tracking-widest text-ops-light truncate">${label}</span>
+                </div>
+                <div class="flex items-center gap-2">
+                    ${rightHtml || ''}
+                    ${hasBody ? '<i class="fa-solid fa-chevron-down expand-chevron"></i>' : ''}
+                </div>
+            </div>
+            <div class="px-3 pb-2.5">${previewHtml}</div>
+            ${hasBody ? `<div class="dash-card-body px-3 pb-3">${bodyHtml}</div>` : ''}
+        `;
+        return el;
     }
 
-    // --- Build the scrollable dashboard ---
+    /* ── Build scrollable dashboard ──────────────────────────────── */
     const wrap = document.createElement('div');
-    wrap.className = 'h-full min-h-0 overflow-y-auto p-6 space-y-4';
+    wrap.className = 'h-full min-h-0 overflow-y-auto p-4 space-y-3 dash-stagger';
 
-    // ═══ 1. TIME-AWARE GREETING ═══════════════════════════════════════
+    // ═══ GREETING + STAT PILLS ═══════════════════════════════════════
     const hour = new Date().getHours();
     const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
-    const userName = safeText((Array.isArray(state.team) ? state.team : []).find((m) => safeText(m?.role).toLowerCase() === 'admin')?.name) || 'Operator';
-    const dateStr = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
-    const summaryParts = [];
-    if (totalOverdue) summaryParts.push(`${totalOverdue} overdue`);
-    if (dueThisWeek) summaryParts.push(`${dueThisWeek} due this week`);
-    if (calls.length) summaryParts.push(`${calls.length} call${calls.length > 1 ? 's' : ''} today`);
-    if (inboxNewCount) summaryParts.push(`${inboxNewCount} inbox items`);
-    const summaryLine = summaryParts.length ? summaryParts.join(' \u00b7 ') : 'All clear \u2014 nothing urgent.';
+    const userName = safeText(teamMembers.find((m) => safeText(m?.role).toLowerCase() === 'admin')?.name) || 'Operator';
+    const dateStr = new Date().toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
 
-    const greetingEl = document.createElement('div');
-    greetingEl.className = 'flex items-center justify-between gap-4';
-    greetingEl.innerHTML = `
+    const headerEl = document.createElement('div');
+    headerEl.className = 'flex flex-col sm:flex-row sm:items-center justify-between gap-2';
+    headerEl.innerHTML = `
         <div>
-            <div class="text-lg text-white font-semibold">${escapeHtml(greeting)}, ${escapeHtml(userName)}</div>
-            <div class="text-[11px] font-mono text-ops-light/70">${escapeHtml(dateStr)} \u00b7 ${escapeHtml(summaryLine)}</div>
+            <div class="text-base text-white font-semibold">${escapeHtml(greeting)}, ${escapeHtml(userName)}</div>
+            <div class="text-[10px] font-mono text-ops-light/60 mt-0.5">${escapeHtml(dateStr)}</div>
         </div>
-        <div class="text-[10px] font-mono text-ops-light/50 flex items-center gap-3">
-            <span class="cursor-pointer hover:text-ops-light" id="dash-shortcuts-btn" title="Keyboard Shortcuts"><i class="fa-solid fa-keyboard"></i> Shortcuts</span>
+        <div class="flex flex-wrap items-center gap-1.5">
+            ${totalOverdue ? `<span class="stat-pill" style="border-color:rgba(239,68,68,0.3);color:#fca5a5"><i class="fa-solid fa-triangle-exclamation text-[8px]"></i>${totalOverdue} overdue</span>` : ''}
+            ${dueThisWeek ? `<span class="stat-pill"><i class="fa-solid fa-fire text-[8px] text-amber-400"></i>${dueThisWeek} this week</span>` : ''}
+            ${calls.length ? `<span class="stat-pill"><i class="fa-solid fa-video text-[8px] text-blue-400"></i>${calls.length} call${calls.length>1?'s':''}</span>` : ''}
+            <span class="stat-pill"><i class="fa-solid fa-inbox text-[8px] text-purple-400"></i>${inboxNewCount} inbox</span>
+            <span class="stat-pill"><i class="fa-solid fa-check text-[8px] text-emerald-400"></i>${totalDoneWeek} done</span>
+            <span class="stat-pill cursor-pointer hover:text-white" id="dash-shortcuts-btn" title="Keyboard Shortcuts"><i class="fa-solid fa-keyboard text-[8px]"></i>?</span>
         </div>
     `;
-    wrap.appendChild(greetingEl);
+    wrap.appendChild(headerEl);
 
-    // ═══ 2. OVERDUE ALERT ═════════════════════════════════════════════
+    // ═══ MARTY AMBIENT INTELLIGENCE BAR ══════════════════════════════
+    const martyBar = document.createElement('div');
+    martyBar.className = 'marty-ambient dash-card';
+    martyBar.dataset.cardId = 'marty';
+    const primaryInsight = martyInsights[0];
+    const extraInsights = martyInsights.slice(1);
+    martyBar.innerHTML = `
+        <div class="dash-card-head flex items-center gap-3 px-3 py-2.5">
+            <div class="marty-status-dot shrink-0"></div>
+            <div class="flex items-center gap-2 min-w-0 flex-1">
+                <span class="text-[10px] font-mono uppercase tracking-widest text-blue-300">MARTY</span>
+                <span class="text-[9px] font-mono text-blue-400/40">\u2014 monitoring ${activeProjects.length} projects, ${allTasks.filter(t=>!isDoneTask(t)).length} tasks</span>
+            </div>
+            <div class="flex items-center gap-1.5 shrink-0">
+                <button id="dash-ask-marty" class="px-2 py-1 rounded border border-blue-500/25 bg-blue-500/10 text-[9px] font-mono text-blue-300 hover:bg-blue-500/20 transition-colors">Ask</button>
+                <button id="dash-brief-marty" class="px-2 py-1 rounded border border-blue-500/25 bg-blue-500/10 text-[9px] font-mono text-blue-300 hover:bg-blue-500/20 transition-colors">Brief me</button>
+                ${extraInsights.length ? '<i class="fa-solid fa-chevron-down expand-chevron"></i>' : ''}
+            </div>
+        </div>
+        <div class="px-3 pb-2.5">
+            <div class="marty-insight flex items-start gap-2">
+                <i class="fa-solid ${primaryInsight.icon} text-[10px] mt-0.5 shrink-0"></i>
+                <span class="text-[11px] leading-relaxed">${escapeHtml(primaryInsight.text)}</span>
+            </div>
+        </div>
+        ${extraInsights.length ? `<div class="dash-card-body px-3 pb-3"><div class="space-y-1.5">${extraInsights.map(ins => `<div class="marty-insight flex items-start gap-2"><i class="fa-solid ${ins.icon} text-[10px] mt-0.5 shrink-0"></i><span class="text-[11px] leading-relaxed">${escapeHtml(ins.text)}</span></div>`).join('')}</div></div>` : ''}
+    `;
+    wrap.appendChild(martyBar);
+
+    // ═══ OVERDUE ALERT ═══════════════════════════════════════════════
     if (totalOverdue > 0) {
         const alertEl = document.createElement('div');
-        alertEl.className = 'border border-red-500/40 rounded-xl bg-red-500/10 p-3 flex items-center gap-3';
+        alertEl.className = 'border border-red-500/30 rounded-xl bg-red-500/8 px-3 py-2.5 flex items-center gap-3';
+        const overdueNames = [...overdueTasks.slice(0,3).map(t=>safeText(t?.title)), ...overdueProjects.slice(0,2).map(p=>safeText(p?.name))];
         alertEl.innerHTML = `
-            <div class="w-8 h-8 rounded-lg flex items-center justify-center bg-red-500/20 text-red-400 shrink-0"><i class="fa-solid fa-triangle-exclamation"></i></div>
+            <div class="w-7 h-7 rounded-lg flex items-center justify-center bg-red-500/15 text-red-400 shrink-0 text-xs"><i class="fa-solid fa-triangle-exclamation"></i></div>
             <div class="min-w-0 flex-1">
-                <div class="text-xs text-red-300 font-semibold">${totalOverdue} Overdue Item${totalOverdue > 1 ? 's' : ''}</div>
-                <div class="text-[10px] font-mono text-red-400/70 truncate">${overdueTasks.slice(0, 3).map((t) => escapeHtml(safeText(t?.title))).join(' \u00b7 ')}${overdueProjects.length ? (overdueTasks.length ? ' \u00b7 ' : '') + overdueProjects.slice(0, 2).map((p) => escapeHtml(safeText(p?.name))).join(' \u00b7 ') : ''}</div>
+                <div class="text-[11px] text-red-300 font-semibold">${totalOverdue} Overdue</div>
+                <div class="text-[10px] font-mono text-red-400/60 truncate">${overdueNames.map(n=>escapeHtml(n)).join(' \u00b7 ')}</div>
             </div>
         `;
         wrap.appendChild(alertEl);
     }
 
-    // ═══ 3. QUICK-ADD BAR ═════════════════════════════════════════════
+    // ═══ QUICK-ADD BAR ═══════════════════════════════════════════════
     const quickAdd = document.createElement('div');
-    quickAdd.className = 'flex gap-2';
+    quickAdd.className = 'flex gap-1.5';
     quickAdd.innerHTML = `
-        <input id="dash-quick-input" type="text" class="flex-1 bg-ops-bg/60 border border-ops-border rounded-lg px-3 py-2 text-xs font-mono text-white placeholder-ops-light/40 focus:outline-none focus:ring-1 focus:ring-ops-accent" placeholder="Quick add: type a task name and hit Enter\u2026" />
-        <button id="dash-quick-project" class="px-3 py-2 rounded-lg border border-ops-border text-[10px] font-mono text-ops-light hover:text-white hover:bg-ops-surface/60 transition-colors shrink-0"><i class="fa-solid fa-folder-plus mr-1"></i>Project</button>
+        <input id="dash-quick-input" type="text" class="flex-1 bg-ops-bg/60 border border-ops-border rounded-lg px-3 py-1.5 text-[11px] font-mono text-white placeholder-ops-light/40 focus:outline-none focus:ring-1 focus:ring-ops-accent" placeholder="Quick add \u2014 type & hit Enter\u2026" />
+        <button id="dash-quick-project" class="px-2.5 py-1.5 rounded-lg border border-ops-border text-[9px] font-mono text-ops-light hover:text-white hover:bg-ops-surface/60 transition-colors shrink-0"><i class="fa-solid fa-folder-plus mr-1"></i>Project</button>
     `;
     wrap.appendChild(quickAdd);
 
-    // ═══ INBOX RADAR \u2014 full-width banner ══════════════════════════════
+    // ═══ INBOX RADAR (compact banner) ════════════════════════════════
     const radarBanner = document.createElement('div');
-    radarBanner.className = 'border border-ops-border rounded-xl bg-ops-surface/30 p-4 flex items-center justify-between gap-4';
-    const emailNew = inboxNew.filter((x) => normalizeInboxSourceKey(x?.source) === 'email');
-    const otherNew = inboxNew.filter((x) => { const k = normalizeInboxSourceKey(x?.source); return k !== 'slack' && k !== 'email'; });
+    radarBanner.className = 'dash-card';
+    radarBanner.dataset.cardId = 'radar';
+    const radarExtraRows = inboxNew.slice(0, 6).map(item => {
+        const t = safeText(item?.title||item?.subject)||'Item';
+        const s = safeText(item?.source)||'';
+        return `<div class="flex items-center justify-between gap-2 border border-ops-border rounded bg-ops-bg/40 px-2.5 py-1.5"><span class="text-[11px] text-white truncate">${escapeHtml(t)}</span><span class="text-[9px] font-mono text-ops-light/50 shrink-0">${escapeHtml(s)}</span></div>`;
+    }).join('');
     radarBanner.innerHTML = `
-        <div class="flex items-center gap-4 min-w-0">
-            <div class="w-10 h-10 rounded-lg flex items-center justify-center bg-blue-500/10 text-blue-400 shrink-0"><i class="fa-solid fa-satellite-dish text-lg"></i></div>
-            <div>
-                <div class="text-[10px] font-mono uppercase tracking-widest text-ops-light">Inbox Radar</div>
-                <div class="flex items-baseline gap-4 mt-1">
-                    <span class="text-2xl font-semibold text-white">${inboxNewCount}</span>
-                    <span class="text-[10px] font-mono text-ops-light/70">new items</span>
+        <div class="dash-card-head flex items-center justify-between gap-3 px-3 py-2.5">
+            <div class="flex items-center gap-3 min-w-0">
+                <i class="fa-solid fa-satellite-dish text-blue-400 text-xs shrink-0"></i>
+                <span class="text-[10px] font-mono uppercase tracking-widest text-ops-light">Inbox Radar</span>
+                <div class="flex items-center gap-3 text-[10px] font-mono text-ops-light/50">
+                    <span class="text-lg font-semibold text-white leading-none">${inboxNewCount}</span>
+                    <span><i class="fa-brands fa-slack text-purple-400 mr-0.5"></i>${slackNew.length}</span>
+                    <span><i class="fa-solid fa-envelope text-sky-400 mr-0.5"></i>${emailNew.length}</span>
+                    <span><i class="fa-solid fa-ellipsis text-ops-light/30 mr-0.5"></i>${otherNew.length}</span>
                 </div>
             </div>
-            <div class="flex items-center gap-4 ml-6 text-[10px] font-mono text-ops-light/60">
-                <span><i class="fa-brands fa-slack text-purple-400 mr-1"></i>${slackNew.length} slack</span>
-                <span><i class="fa-solid fa-envelope text-sky-400 mr-1"></i>${emailNew.length} email</span>
-                <span><i class="fa-solid fa-ellipsis text-ops-light/40 mr-1"></i>${otherNew.length} other</span>
+            <div class="flex items-center gap-1.5 shrink-0">
+                <button type="button" data-open-inbox class="px-2.5 py-1 rounded border border-ops-border text-[9px] font-mono text-ops-light hover:text-white hover:bg-ops-surface/60 transition-colors">Open Inbox</button>
+                ${inboxNew.length ? '<i class="fa-solid fa-chevron-down expand-chevron"></i>' : ''}
             </div>
         </div>
-        <button type="button" data-open-inbox class="px-4 py-2 rounded-lg border border-ops-border text-[11px] font-mono text-ops-light hover:text-white hover:bg-ops-surface/60 transition-colors shrink-0">Open Inbox</button>
+        ${inboxNew.length ? `<div class="dash-card-body px-3 pb-2.5"><div class="space-y-1">${radarExtraRows}</div></div>` : ''}
     `;
     wrap.appendChild(radarBanner);
 
-    // ═══ Calendar + Due Today + Due This Week ═════════════════════════
+    // ═══ URGENT ROW: Calendar + Due Today + Due This Week ════════════
     const urgentRow = document.createElement('div');
-    urgentRow.className = 'grid grid-cols-3 gap-3';
+    urgentRow.className = 'grid grid-cols-1 md:grid-cols-3 gap-2';
 
-    const calCard = document.createElement('div');
-    calCard.className = 'border border-ops-border rounded-xl bg-ops-surface/30 p-4';
-    let calRows = '';
-    if (!callsConnected) { calRows = `<div class="text-[11px] text-ops-light/60">Connect Google Calendar in Settings.</div>`; }
-    else if (callsError) { calRows = `<div class="text-[11px] text-amber-300">${escapeHtml(callsError)}</div>`; }
-    else if (callsLoading && !calls.length) { calRows = `<div class="text-[11px] text-ops-light/60">Loading\u2026</div>`; }
+    // Calendar card
+    let calPreview = '';
+    let calBody = '';
+    if (!callsConnected) { calPreview = `<div class="text-[10px] text-ops-light/50">Connect Google Calendar in Settings.</div>`; }
+    else if (callsError) { calPreview = `<div class="text-[10px] text-amber-300">${escapeHtml(callsError)}</div>`; }
+    else if (callsLoading && !calls.length) { calPreview = `<div class="text-[10px] text-ops-light/50">Loading\u2026</div>`; }
     else if (calls.length) {
-        calRows = calls.slice(0, 3).map((ev) => {
-            const time = formatTimeFromIso(ev.start);
-            const title = safeText(ev.summary) || 'Untitled';
-            const link = safeText(ev.meetingLink);
-            return `<div class="border border-ops-border rounded-lg bg-ops-bg/40 px-3 py-2 flex items-center justify-between gap-3">
-                <div class="min-w-0"><div class="text-xs text-white truncate">${escapeHtml(title)}</div><div class="text-[10px] font-mono text-ops-light/70">${escapeHtml(time || '')}</div></div>
-                ${link ? `<a class="shrink-0 text-[10px] font-mono text-ops-accent hover:underline" href="${escapeHtml(link)}" target="_blank" rel="noreferrer">Join</a>` : ''}
-            </div>`;
-        }).join('');
-    } else { calRows = `<div class="text-[11px] text-ops-light/60">No upcoming events.</div>`; }
-    calCard.innerHTML = `
-        <div class="flex items-center justify-between gap-3 mb-3">
-            <div class="text-[10px] font-mono uppercase tracking-widest text-ops-light flex items-center gap-2"><i class="fa-solid fa-calendar-days text-blue-400"></i> Calendar</div>
-            <div class="flex gap-1.5">
-                <button type="button" data-refresh-calls class="px-2 py-1 rounded border border-ops-border text-[10px] font-mono text-ops-light hover:text-white hover:bg-ops-surface/60 transition-colors">Refresh</button>
-                <button type="button" data-open-calendar class="px-2 py-1 rounded border border-ops-border text-[10px] font-mono text-ops-light hover:text-white hover:bg-ops-surface/60 transition-colors">Open</button>
-            </div>
-        </div>
-        <div class="space-y-2">${calRows}</div>
-    `;
+        const mkRow = (ev) => { const time = formatTimeFromIso(ev.start); const ti = safeText(ev.summary)||'Untitled'; const link = safeText(ev.meetingLink); return `<div class="flex items-center justify-between gap-2 border border-ops-border rounded bg-ops-bg/40 px-2.5 py-1.5"><div class="min-w-0"><div class="text-[11px] text-white truncate">${escapeHtml(ti)}</div><div class="text-[9px] font-mono text-ops-light/60">${escapeHtml(time||'')}</div></div>${link ? `<a class="shrink-0 text-[9px] font-mono text-ops-accent hover:underline" href="${escapeHtml(link)}" target="_blank" rel="noreferrer">Join</a>` : ''}</div>`; };
+        calPreview = calls.slice(0,2).map(mkRow).join('');
+        if (calls.length > 2) calBody = `<div class="space-y-1">${calls.slice(2).map(mkRow).join('')}</div>`;
+    } else { calPreview = `<div class="text-[10px] text-ops-light/50">No events today.</div>`; }
+    const calCardRight = `<div class="flex gap-1"><button type="button" data-refresh-calls class="px-1.5 py-0.5 rounded border border-ops-border text-[9px] font-mono text-ops-light hover:text-white transition-colors"><i class="fa-solid fa-rotate text-[8px]"></i></button><button type="button" data-open-calendar class="px-1.5 py-0.5 rounded border border-ops-border text-[9px] font-mono text-ops-light hover:text-white transition-colors">Open</button></div>`;
+    const calCard = makeCard('calendar', 'fa-calendar-days', 'text-blue-400', 'Calendar', calCardRight, `<div class="space-y-1">${calPreview}</div>`, calBody);
     urgentRow.appendChild(calCard);
 
+    // Due Today card
     const dueTodayItems = Array.isArray(buckets.today) ? buckets.today : [];
-    const dueTodayCard = document.createElement('div');
-    dueTodayCard.className = 'border border-ops-border rounded-xl bg-ops-surface/30 p-4';
-    const dueTodayRows = dueTodayItems.length
-        ? dueTodayItems.slice(0, 4).map((p) => `<button type="button" class="dash-project-btn w-full text-left px-3 py-2 rounded-lg border border-ops-border bg-ops-bg/40 hover:bg-ops-surface/60 transition-colors" data-pid="${escapeHtml(safeText(p?.id))}"><div class="text-xs text-white truncate">${escapeHtml(safeText(p?.name) || 'Untitled')}</div><div class="text-[10px] font-mono text-red-400/70">${escapeHtml(safeText(p?.dueDate) || '')}</div></button>`).join('')
-        : `<div class="text-[11px] text-ops-light/60">Nothing due today.</div>`;
-    dueTodayCard.innerHTML = `<div class="flex items-center justify-between gap-3 mb-3"><div class="text-[10px] font-mono uppercase tracking-widest text-ops-light flex items-center gap-2"><i class="fa-solid fa-fire text-red-400"></i> Due Today</div><span class="text-lg font-semibold text-white">${dueTodayItems.length}</span></div><div class="space-y-2">${dueTodayRows}</div>`;
+    const mkProjBtn = (p, color) => `<button type="button" class="dash-project-btn w-full text-left px-2.5 py-1.5 rounded border border-ops-border bg-ops-bg/40 hover:bg-ops-surface/60 transition-colors" data-pid="${escapeHtml(safeText(p?.id))}"><div class="text-[11px] text-white truncate">${escapeHtml(safeText(p?.name)||'Untitled')}</div><div class="text-[9px] font-mono ${color}">${escapeHtml(safeText(p?.dueDate)||'')}</div></button>`;
+    const dtPreview = dueTodayItems.length ? `<div class="space-y-1">${dueTodayItems.slice(0,2).map(p=>mkProjBtn(p,'text-red-400/70')).join('')}</div>` : `<div class="text-[10px] text-ops-light/50">Nothing due today.</div>`;
+    const dtBody = dueTodayItems.length > 2 ? `<div class="space-y-1">${dueTodayItems.slice(2).map(p=>mkProjBtn(p,'text-red-400/70')).join('')}</div>` : '';
+    const dueTodayCard = makeCard('due-today', 'fa-fire', 'text-red-400', 'Due Today', `<span class="text-sm font-semibold text-white">${dueTodayItems.length}</span>`, dtPreview, dtBody);
     urgentRow.appendChild(dueTodayCard);
 
-    const dueWeekItems = [...(Array.isArray(buckets.tomorrow) ? buckets.tomorrow : []), ...(Array.isArray(buckets.thisWeek) ? buckets.thisWeek : [])];
-    const dueWeekCard = document.createElement('div');
-    dueWeekCard.className = 'border border-ops-border rounded-xl bg-ops-surface/30 p-4';
-    const dueWeekRows = dueWeekItems.length
-        ? dueWeekItems.slice(0, 4).map((p) => `<button type="button" class="dash-project-btn w-full text-left px-3 py-2 rounded-lg border border-ops-border bg-ops-bg/40 hover:bg-ops-surface/60 transition-colors" data-pid="${escapeHtml(safeText(p?.id))}"><div class="text-xs text-white truncate">${escapeHtml(safeText(p?.name) || 'Untitled')}</div><div class="text-[10px] font-mono text-amber-400/70">${escapeHtml(safeText(p?.dueDate) || '')}</div></button>`).join('')
-        : `<div class="text-[11px] text-ops-light/60">Nothing else this week.</div>`;
-    dueWeekCard.innerHTML = `<div class="flex items-center justify-between gap-3 mb-3"><div class="text-[10px] font-mono uppercase tracking-widest text-ops-light flex items-center gap-2"><i class="fa-solid fa-calendar-week text-amber-400"></i> Due This Week</div><span class="text-lg font-semibold text-white">${dueWeekItems.length}</span></div><div class="space-y-2">${dueWeekRows}</div>`;
+    // Due This Week card
+    const dueWeekItems = [...(Array.isArray(buckets.tomorrow)?buckets.tomorrow:[]), ...(Array.isArray(buckets.thisWeek)?buckets.thisWeek:[])];
+    const dwPreview = dueWeekItems.length ? `<div class="space-y-1">${dueWeekItems.slice(0,2).map(p=>mkProjBtn(p,'text-amber-400/70')).join('')}</div>` : `<div class="text-[10px] text-ops-light/50">Nothing else this week.</div>`;
+    const dwBody = dueWeekItems.length > 2 ? `<div class="space-y-1">${dueWeekItems.slice(2).map(p=>mkProjBtn(p,'text-amber-400/70')).join('')}</div>` : '';
+    const dueWeekCard = makeCard('due-week', 'fa-calendar-week', 'text-amber-400', 'Due This Week', `<span class="text-sm font-semibold text-white">${dueWeekItems.length}</span>`, dwPreview, dwBody);
     urgentRow.appendChild(dueWeekCard);
     wrap.appendChild(urgentRow);
 
-    // ═══ 4. PROGRESS STREAKS + 5. MARTY SUGGESTIONS + 7. FOCUS TIMER ═
+    // ═══ MID ROW: Streaks + Focus Timer ══════════════════════════════
     const midRow = document.createElement('div');
-    midRow.className = 'grid grid-cols-3 gap-3';
+    midRow.className = 'grid grid-cols-1 sm:grid-cols-2 gap-2';
 
-    // -- Progress streaks (bar chart) --
-    const streakCard = document.createElement('div');
-    streakCard.className = 'border border-ops-border rounded-xl bg-ops-surface/30 p-4';
-    const barsHtml = weekDays.map((wd, i) => {
-        const count = completionsByDay[i];
-        const pct = Math.round((count / maxCompletions) * 100);
-        const isToday = wd.ymd === today;
+    // Streak chart
+    const barsHtml = weekDays.map((wd,i) => {
+        const count = completionsByDay[i]; const pct = Math.round((count/maxC)*100); const isToday = wd.ymd === today;
         const barColor = isToday ? 'bg-blue-400' : count > 0 ? 'bg-emerald-400/70' : 'bg-ops-border';
-        return `<div class="flex flex-col items-center gap-1 flex-1">
-            <div class="w-full rounded-sm ${barColor}" style="height:${Math.max(4, pct * 0.6)}px" title="${count} completed"></div>
-            <span class="text-[9px] font-mono ${isToday ? 'text-blue-400 font-bold' : 'text-ops-light/50'}">${wd.label}</span>
-            <span class="text-[9px] font-mono text-ops-light/40">${count}</span>
-        </div>`;
+        return `<div class="flex flex-col items-center gap-0.5 flex-1"><div class="w-full rounded-sm ${barColor}" style="height:${Math.max(3, pct*0.5)}px" title="${count}"></div><span class="text-[8px] font-mono ${isToday?'text-blue-400 font-bold':'text-ops-light/40'}">${wd.label}</span></div>`;
     }).join('');
-    const totalDoneThisWeek = completionsByDay.reduce((a, b) => a + b, 0);
-    streakCard.innerHTML = `
-        <div class="flex items-center justify-between gap-3 mb-3">
-            <div class="text-[10px] font-mono uppercase tracking-widest text-ops-light flex items-center gap-2"><i class="fa-solid fa-chart-bar text-emerald-400"></i> Week Progress</div>
-            <span class="text-xs font-mono text-ops-light/60">${totalDoneThisWeek} done</span>
-        </div>
-        <div class="flex items-end gap-1 h-16">${barsHtml}</div>
-    `;
+    const streakPreview = `<div class="flex items-end gap-0.5 h-12">${barsHtml}</div>`;
+    const streakCard = makeCard('streaks', 'fa-chart-bar', 'text-emerald-400', 'Week', `<span class="text-[10px] font-mono text-ops-light/50">${totalDoneWeek} done</span>`, streakPreview, '');
     midRow.appendChild(streakCard);
 
-    // -- MARTY Suggestion --
-    const suggestCard = document.createElement('div');
-    suggestCard.className = 'border border-blue-500/20 rounded-xl bg-blue-500/5 p-4';
-    suggestCard.innerHTML = `
-        <div class="flex items-center gap-2 mb-3">
-            <div class="w-6 h-6 rounded-full bg-blue-500/20 flex items-center justify-center"><i class="fa-solid fa-microchip text-blue-400 text-[10px]"></i></div>
-            <div class="text-[10px] font-mono uppercase tracking-widest text-blue-300">MARTY Suggests</div>
-        </div>
-        <div class="text-xs text-blue-200/90 leading-relaxed">${escapeHtml(martySuggestion)}</div>
-        <button id="dash-ask-marty" class="mt-3 px-3 py-1.5 rounded border border-blue-500/30 bg-blue-500/10 text-[10px] font-mono text-blue-300 hover:bg-blue-500/20 transition-colors">Ask MARTY</button>
-    `;
-    midRow.appendChild(suggestCard);
-
-    // -- Focus Timer --
-    const timerCard = document.createElement('div');
-    timerCard.className = 'border border-ops-border rounded-xl bg-ops-surface/30 p-4';
-    const mins = Math.floor(state.focusTimer.remaining / 60);
+    // Focus Timer
+    const mins = Math.floor(state.focusTimer.remaining/60);
     const secs = state.focusTimer.remaining % 60;
-    const timerDisplay = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
-    const pctElapsed = ((state.focusTimer.duration - state.focusTimer.remaining) / state.focusTimer.duration) * 100;
-    timerCard.innerHTML = `
-        <div class="flex items-center justify-between gap-3 mb-3">
-            <div class="text-[10px] font-mono uppercase tracking-widest text-ops-light flex items-center gap-2"><i class="fa-solid fa-hourglass-half text-orange-400"></i> Focus Timer</div>
-        </div>
-        <div class="text-center">
-            <div id="dash-timer-display" class="text-3xl font-mono font-semibold ${state.focusTimer.running ? 'text-orange-400' : 'text-white'}">${timerDisplay}</div>
-            <div class="mt-2 w-full h-1.5 rounded-full bg-ops-border overflow-hidden">
-                <div class="h-full rounded-full bg-orange-400 transition-all" style="width:${pctElapsed}%"></div>
+    const timerDisp = `${String(mins).padStart(2,'0')}:${String(secs).padStart(2,'0')}`;
+    const pctEl = ((state.focusTimer.duration - state.focusTimer.remaining)/state.focusTimer.duration)*100;
+    const timerPreview = `
+        <div class="flex items-center gap-3">
+            <div id="dash-timer-display" class="text-2xl font-mono font-semibold ${state.focusTimer.running?'text-orange-400':'text-white'} tabular-nums">${timerDisp}</div>
+            <div class="flex-1 h-1.5 rounded-full bg-ops-border overflow-hidden"><div class="h-full rounded-full bg-orange-400 transition-all" style="width:${pctEl}%"></div></div>
+            <div class="flex gap-1 shrink-0">
+                <button id="dash-timer-toggle" class="px-2 py-1 rounded border ${state.focusTimer.running?'border-red-500/30 bg-red-500/10 text-red-300':'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'} text-[9px] font-mono transition-colors">${state.focusTimer.running?'Pause':'Start'}</button>
+                <button id="dash-timer-reset" class="px-2 py-1 rounded border border-ops-border text-[9px] font-mono text-ops-light hover:text-white transition-colors">Reset</button>
             </div>
-            <div class="flex items-center justify-center gap-2 mt-3">
-                <button id="dash-timer-toggle" class="px-3 py-1.5 rounded border ${state.focusTimer.running ? 'border-red-500/40 bg-red-500/10 text-red-300' : 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'} text-[10px] font-mono hover:opacity-80 transition-colors">${state.focusTimer.running ? 'Pause' : 'Start'}</button>
-                <button id="dash-timer-reset" class="px-3 py-1.5 rounded border border-ops-border text-[10px] font-mono text-ops-light hover:text-white hover:bg-ops-surface/60 transition-colors">Reset</button>
-            </div>
-        </div>
-    `;
+        </div>`;
+    const timerCard = makeCard('timer', 'fa-hourglass-half', 'text-orange-400', 'Focus', '', timerPreview, '');
     midRow.appendChild(timerCard);
     wrap.appendChild(midRow);
 
-    // ═══ Today's Focus (outcomes + next actions) ══════════════════════
-    const todayCard = document.createElement('div');
-    todayCard.className = 'border border-ops-border rounded-xl bg-ops-surface/30 p-4';
+    // ═══ TODAY'S FOCUS (outcomes + next actions) ═════════════════════
     const nextActionsHtml = nextActions.length
-        ? nextActions.slice(0, 6).map((t) => {
-            const pr = Number(t?.priority) || 3;
-            const prColor = pr === 1 ? 'text-red-400' : pr === 2 ? 'text-amber-400' : 'text-ops-light/60';
-            const project = safeText(t?.project) || '';
-            const due = safeText(t?.dueDate) || '';
-            return `<div class="flex items-center gap-3 border border-ops-border rounded-lg bg-ops-bg/40 px-3 py-2">
-                    <span class="${prColor} text-[10px] font-mono font-bold shrink-0">P${pr}</span>
-                    <div class="min-w-0 flex-1">
-                        <div class="text-xs text-white truncate">${escapeHtml(safeText(t?.title) || 'Untitled')}</div>
-                        <div class="text-[10px] font-mono text-ops-light/70 truncate">${escapeHtml(project)}${due ? ` \u00b7 ${escapeHtml(due)}` : ''}</div>
-                    </div>
-                </div>`;
+        ? nextActions.slice(0,3).map((t) => {
+            const pr = Number(t?.priority)||3;
+            const prColor = pr===1?'text-red-400':pr===2?'text-amber-400':'text-ops-light/50';
+            const project = safeText(t?.project)||'';
+            return `<div class="flex items-center gap-2 border border-ops-border rounded bg-ops-bg/40 px-2.5 py-1.5"><span class="${prColor} text-[9px] font-mono font-bold shrink-0">P${pr}</span><div class="min-w-0 flex-1"><div class="text-[11px] text-white truncate">${escapeHtml(safeText(t?.title)||'Untitled')}</div>${project?`<div class="text-[9px] font-mono text-ops-light/50 truncate">${escapeHtml(project)}</div>`:''}</div></div>`;
         }).join('')
-        : `<div class="text-[11px] text-ops-light/60">No next actions. Nice.</div>`;
+        : `<div class="text-[10px] text-ops-light/50">No next actions.</div>`;
+    const extraActions = nextActions.length > 3 ? nextActions.slice(3,10).map((t) => {
+        const pr = Number(t?.priority)||3; const prColor = pr===1?'text-red-400':pr===2?'text-amber-400':'text-ops-light/50';
+        return `<div class="flex items-center gap-2 border border-ops-border rounded bg-ops-bg/40 px-2.5 py-1.5"><span class="${prColor} text-[9px] font-mono font-bold shrink-0">P${pr}</span><div class="min-w-0 flex-1"><div class="text-[11px] text-white truncate">${escapeHtml(safeText(t?.title)||'Untitled')}</div></div></div>`;
+    }).join('') : '';
 
-    todayCard.innerHTML = `
-        <div class="flex items-center justify-between gap-3 mb-4">
-            <div class="text-[10px] font-mono uppercase tracking-widest text-ops-light flex items-center gap-2"><i class="fa-solid fa-crosshairs text-ops-accent"></i> Today's Focus</div>
+    const focusEl = document.createElement('div');
+    focusEl.className = 'dash-card';
+    focusEl.dataset.cardId = 'focus';
+    focusEl.innerHTML = `
+        <div class="dash-card-head flex items-center justify-between gap-2 px-3 py-2.5">
+            <div class="flex items-center gap-2"><i class="fa-solid fa-crosshairs text-ops-accent text-[10px]"></i><span class="text-[10px] font-mono uppercase tracking-widest text-ops-light">Today's Focus</span></div>
+            ${extraActions ? '<i class="fa-solid fa-chevron-down expand-chevron"></i>' : ''}
         </div>
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-                <div class="text-[10px] font-mono uppercase tracking-widest text-ops-light mb-2">Top Outcomes</div>
-                <textarea id="today-outcomes" rows="4" class="w-full bg-ops-bg/60 border border-ops-border rounded-lg px-3 py-2 text-xs font-mono text-white resize-none focus:outline-none focus:ring-1 focus:ring-ops-accent" placeholder="1) \u2026\n2) \u2026\n3) \u2026">${escapeHtml(outcomes)}</textarea>
-                <div class="flex gap-2 mt-2">
-                    <button id="btn-save-today" class="px-3 py-1.5 rounded border border-ops-accent/40 bg-ops-accent/10 text-[10px] font-mono text-blue-300 hover:bg-ops-accent/20 transition-colors">Save</button>
-                    <button id="btn-clear-today" class="px-3 py-1.5 rounded border border-ops-border text-[10px] font-mono text-ops-light hover:text-white hover:bg-ops-surface/60 transition-colors">Clear</button>
+        <div class="px-3 pb-2.5">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                    <div class="text-[9px] font-mono uppercase tracking-widest text-ops-light/60 mb-1.5">Outcomes</div>
+                    <textarea id="today-outcomes" rows="3" class="w-full bg-ops-bg/60 border border-ops-border rounded-lg px-2.5 py-1.5 text-[11px] font-mono text-white resize-none focus:outline-none focus:ring-1 focus:ring-ops-accent" placeholder="1) \u2026  2) \u2026  3) \u2026">${escapeHtml(outcomes)}</textarea>
+                    <div class="flex gap-1.5 mt-1.5">
+                        <button id="btn-save-today" class="px-2.5 py-1 rounded border border-ops-accent/30 bg-ops-accent/10 text-[9px] font-mono text-blue-300 hover:bg-ops-accent/20 transition-colors">Save</button>
+                        <button id="btn-clear-today" class="px-2.5 py-1 rounded border border-ops-border text-[9px] font-mono text-ops-light hover:text-white transition-colors">Clear</button>
+                    </div>
+                </div>
+                <div>
+                    <div class="text-[9px] font-mono uppercase tracking-widest text-ops-light/60 mb-1.5">Next Actions</div>
+                    <div class="space-y-1">${nextActionsHtml}</div>
                 </div>
             </div>
-            <div>
-                <div class="text-[10px] font-mono uppercase tracking-widest text-ops-light mb-2">Next Actions</div>
-                <div class="space-y-2">${nextActionsHtml}</div>
-            </div>
         </div>
+        ${extraActions ? `<div class="dash-card-body px-3 pb-3"><div class="text-[9px] font-mono uppercase tracking-widest text-ops-light/60 mb-1.5">More Actions</div><div class="space-y-1">${extraActions}</div></div>` : ''}
     `;
-    wrap.appendChild(todayCard);
+    wrap.appendChild(focusEl);
 
-    // Wire Today outcomes buttons
-    const btnSaveToday = todayCard.querySelector('#btn-save-today');
-    const btnClearToday = todayCard.querySelector('#btn-clear-today');
-    const outcomesTA = todayCard.querySelector('#today-outcomes');
-    if (btnSaveToday && outcomesTA) {
-        btnSaveToday.onclick = async () => {
-            btnSaveToday.disabled = true;
-            try {
-                const v = safeText(outcomesTA.value);
-                state.settings = state.settings && typeof state.settings === 'object' ? state.settings : {};
-                state.settings.todayOutcomes = v;
-                state.rerenderPauseUntil = Date.now() + 2000;
-                await saveSettingsPatch({ todayOutcomes: v });
-                state.rerenderPauseUntil = 0;
-            } catch (e) { alert(e?.message || 'Failed to save'); state.rerenderPauseUntil = 0; }
-            finally { btnSaveToday.disabled = false; }
-        };
-    }
-    if (btnClearToday && outcomesTA) {
-        btnClearToday.onclick = async () => {
-            outcomesTA.value = '';
-            try {
-                state.settings = state.settings && typeof state.settings === 'object' ? state.settings : {};
-                state.settings.todayOutcomes = '';
-                state.rerenderPauseUntil = Date.now() + 2000;
-                await saveSettingsPatch({ todayOutcomes: '' });
-                state.rerenderPauseUntil = 0;
-            } catch (e) { alert(e?.message || 'Failed to clear'); state.rerenderPauseUntil = 0; }
-        };
-    }
+    // Wire outcomes
+    const outcomesTA = focusEl.querySelector('#today-outcomes');
+    const btnSave = focusEl.querySelector('#btn-save-today');
+    const btnClear = focusEl.querySelector('#btn-clear-today');
+    if (btnSave && outcomesTA) { btnSave.onclick = async () => { btnSave.disabled = true; try { const v = safeText(outcomesTA.value); state.settings = state.settings && typeof state.settings === 'object' ? state.settings : {}; state.settings.todayOutcomes = v; state.rerenderPauseUntil = Date.now()+2000; await saveSettingsPatch({todayOutcomes:v}); state.rerenderPauseUntil = 0; } catch(e) { alert(e?.message||'Failed'); state.rerenderPauseUntil = 0; } finally { btnSave.disabled = false; } }; }
+    if (btnClear && outcomesTA) { btnClear.onclick = async () => { outcomesTA.value=''; try { state.settings = state.settings && typeof state.settings === 'object' ? state.settings : {}; state.settings.todayOutcomes=''; state.rerenderPauseUntil = Date.now()+2000; await saveSettingsPatch({todayOutcomes:''}); state.rerenderPauseUntil = 0; } catch(e) { alert(e?.message||'Failed'); state.rerenderPauseUntil = 0; } }; }
 
-    // ═══ 6. ACTIVITY FEED + Slack \u00b7 Inbox \u00b7 Team ═════════════════════
+    // ═══ FEED ROW: Activity + Slack + Inbox + Team ══════════════════
     const feedRow = document.createElement('div');
-    feedRow.className = 'grid grid-cols-4 gap-3';
+    feedRow.className = 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2';
 
-    // Activity feed
-    const activityCard = document.createElement('div');
-    activityCard.className = 'border border-ops-border rounded-xl bg-ops-surface/30 p-4';
-    const activityRows = recentActivity.slice(0, 6).map((a) => {
-        const timeStr = a.time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        const dateStr2 = a.time.toLocaleDateString([], { month: 'short', day: 'numeric' });
-        return `<div class="flex items-start gap-2">
-            <i class="fa-solid ${a.icon} text-[10px] mt-0.5 shrink-0"></i>
-            <div class="min-w-0">
-                <div class="text-[11px] text-white truncate">${escapeHtml(a.text)}</div>
-                <div class="text-[9px] font-mono text-ops-light/50">${escapeHtml(dateStr2)} ${escapeHtml(timeStr)}</div>
-            </div>
-        </div>`;
-    }).join('');
-    activityCard.innerHTML = `
-        <div class="flex items-center justify-between gap-3 mb-3">
-            <div class="text-[10px] font-mono uppercase tracking-widest text-ops-light flex items-center gap-2"><i class="fa-solid fa-clock-rotate-left text-sky-400"></i> Activity</div>
-        </div>
-        <div class="space-y-2">${activityRows || '<div class="text-[11px] text-ops-light/60">No recent activity.</div>'}</div>
-    `;
-    feedRow.appendChild(activityCard);
+    // Activity
+    const actPreview = recentActivity.slice(0,3).map(a => { const ts = a.time.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}); return `<div class="flex items-start gap-1.5"><i class="fa-solid ${a.icon} text-[9px] mt-0.5 shrink-0"></i><div class="min-w-0"><div class="text-[10px] text-white truncate">${escapeHtml(a.text)}</div><div class="text-[8px] font-mono text-ops-light/40">${escapeHtml(ts)}</div></div></div>`; }).join('');
+    const actBody = recentActivity.length > 3 ? recentActivity.slice(3,10).map(a => { const ts = a.time.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}); return `<div class="flex items-start gap-1.5"><i class="fa-solid ${a.icon} text-[9px] mt-0.5 shrink-0"></i><div class="min-w-0"><div class="text-[10px] text-white truncate">${escapeHtml(a.text)}</div><div class="text-[8px] font-mono text-ops-light/40">${escapeHtml(ts)}</div></div></div>`; }).join('') : '';
+    const actCard = makeCard('activity', 'fa-clock-rotate-left', 'text-sky-400', 'Activity', '', `<div class="space-y-1.5">${actPreview || '<div class="text-[10px] text-ops-light/50">No recent activity.</div>'}</div>`, actBody ? `<div class="space-y-1.5">${actBody}</div>` : '');
+    feedRow.appendChild(actCard);
 
-    // Slack tile
-    const slackCard = document.createElement('div');
-    slackCard.className = 'border border-ops-border rounded-xl bg-ops-surface/30 p-4';
-    const slackRows = slackNew.length
-        ? slackNew.slice(0, 4).map((item) => {
-            const title = safeText(item?.title) || safeText(item?.subject) || 'Slack';
-            const preview = previewText(safeText(item?.content) || safeText(item?.text) || safeText(item?.body) || '', 80);
-            return `<div class="border border-ops-border rounded-lg bg-ops-bg/40 px-3 py-2"><div class="text-xs text-white truncate">${escapeHtml(title)}</div>${preview ? `<div class="mt-1 text-[11px] text-ops-light/80 truncate">${escapeHtml(preview)}</div>` : ''}</div>`;
-        }).join('')
-        : `<div class="text-[11px] text-ops-light/60">No new Slack messages.</div>`;
-    slackCard.innerHTML = `<div class="flex items-center justify-between gap-3 mb-3"><div class="text-[10px] font-mono uppercase tracking-widest text-ops-light flex items-center gap-2"><i class="fa-brands fa-slack text-purple-400"></i> Slack</div><button type="button" data-open-slack class="px-2 py-1 rounded border border-ops-border text-[10px] font-mono text-ops-light hover:text-white hover:bg-ops-surface/60 transition-colors">Open</button></div><div class="space-y-2">${slackRows}</div>`;
+    // Slack
+    const slackPreview = slackNew.length ? slackNew.slice(0,2).map(item => { const t = safeText(item?.title)||safeText(item?.subject)||'Slack'; const p = previewText(safeText(item?.content)||safeText(item?.text)||safeText(item?.body)||'',60); return `<div class="border border-ops-border rounded bg-ops-bg/40 px-2.5 py-1.5"><div class="text-[11px] text-white truncate">${escapeHtml(t)}</div>${p?`<div class="text-[9px] text-ops-light/60 truncate mt-0.5">${escapeHtml(p)}</div>`:''}</div>`; }).join('') : '<div class="text-[10px] text-ops-light/50">No Slack messages.</div>';
+    const slackBody = slackNew.length > 2 ? slackNew.slice(2,6).map(item => { const t = safeText(item?.title)||'Slack'; return `<div class="border border-ops-border rounded bg-ops-bg/40 px-2.5 py-1.5"><div class="text-[11px] text-white truncate">${escapeHtml(t)}</div></div>`; }).join('') : '';
+    const slackCard = makeCard('slack', 'fa-slack', 'text-purple-400', 'Slack', `<button type="button" data-open-slack class="px-1.5 py-0.5 rounded border border-ops-border text-[9px] font-mono text-ops-light hover:text-white transition-colors">Open</button>`, `<div class="space-y-1">${slackPreview}</div>`, slackBody ? `<div class="space-y-1">${slackBody}</div>` : '');
+    slackCard.querySelector('.dash-card-head i.fa-slack')?.classList.replace('fa-solid', 'fa-brands');
     feedRow.appendChild(slackCard);
 
-    // Inbox preview
-    const inboxCard = document.createElement('div');
-    inboxCard.className = 'border border-ops-border rounded-xl bg-ops-surface/30 p-4';
-    const inboxRows = inboxNew.length
-        ? inboxNew.slice(0, 4).map((item) => {
-            const title = safeText(item?.title) || safeText(item?.subject) || 'Item';
-            const src = safeText(item?.source) || '';
-            return `<div class="border border-ops-border rounded-lg bg-ops-bg/40 px-3 py-2 flex items-center justify-between gap-3"><div class="text-xs text-white truncate min-w-0">${escapeHtml(title)}</div><span class="shrink-0 text-[10px] font-mono text-ops-light/60">${escapeHtml(src)}</span></div>`;
-        }).join('')
-        : `<div class="text-[11px] text-ops-light/60">Inbox zero. Nice.</div>`;
-    inboxCard.innerHTML = `<div class="flex items-center justify-between gap-3 mb-3"><div class="text-[10px] font-mono uppercase tracking-widest text-ops-light flex items-center gap-2"><i class="fa-solid fa-inbox text-amber-400"></i> Inbox</div><button type="button" data-open-inbox2 class="px-2 py-1 rounded border border-ops-border text-[10px] font-mono text-ops-light hover:text-white hover:bg-ops-surface/60 transition-colors">Open</button></div><div class="space-y-2">${inboxRows}</div>`;
+    // Inbox
+    const inboxPreview = inboxNew.length ? inboxNew.slice(0,2).map(item => { const t = safeText(item?.title)||safeText(item?.subject)||'Item'; const s = safeText(item?.source)||''; return `<div class="flex items-center justify-between gap-2 border border-ops-border rounded bg-ops-bg/40 px-2.5 py-1.5"><span class="text-[11px] text-white truncate">${escapeHtml(t)}</span><span class="text-[9px] font-mono text-ops-light/50 shrink-0">${escapeHtml(s)}</span></div>`; }).join('') : '<div class="text-[10px] text-ops-light/50">Inbox zero.</div>';
+    const inboxBody = inboxNew.length > 2 ? inboxNew.slice(2,8).map(item => { const t = safeText(item?.title)||'Item'; const s = safeText(item?.source)||''; return `<div class="flex items-center justify-between gap-2 border border-ops-border rounded bg-ops-bg/40 px-2.5 py-1.5"><span class="text-[11px] text-white truncate">${escapeHtml(t)}</span><span class="text-[9px] font-mono text-ops-light/50 shrink-0">${escapeHtml(s)}</span></div>`; }).join('') : '';
+    const inboxCard = makeCard('inbox', 'fa-inbox', 'text-amber-400', 'Inbox', `<button type="button" data-open-inbox2 class="px-1.5 py-0.5 rounded border border-ops-border text-[9px] font-mono text-ops-light hover:text-white transition-colors">Open</button>`, `<div class="space-y-1">${inboxPreview}</div>`, inboxBody ? `<div class="space-y-1">${inboxBody}</div>` : '');
     feedRow.appendChild(inboxCard);
 
-    // Team tile
-    const teamCard = document.createElement('div');
-    teamCard.className = 'border border-ops-border rounded-xl bg-ops-surface/30 p-4';
-    const humanMembers = teamMembers.filter((m) => safeText(m?.role).toLowerCase() !== 'ai');
-    const teamRows = humanMembers.length
-        ? humanMembers.slice(0, 4).map((m) => {
-            const name = safeText(m?.name) || 'Member';
-            const role = safeText(m?.role) || '';
-            const slackId = safeText(m?.slackMemberId);
-            const pres = slackId && state.teamPresenceByMemberId?.[slackId];
-            const online = pres && String(pres.presence || '').toLowerCase() === 'active';
-            const dot = online ? '<span class="w-2 h-2 rounded-full bg-emerald-400 shrink-0"></span>' : '<span class="w-2 h-2 rounded-full bg-zinc-600 shrink-0"></span>';
-            return `<div class="border border-ops-border rounded-lg bg-ops-bg/40 px-3 py-2 flex items-center gap-3">${dot}<div class="min-w-0"><div class="text-xs text-white truncate">${escapeHtml(name)}</div>${role ? `<div class="text-[10px] font-mono text-ops-light/60">${escapeHtml(role)}</div>` : ''}</div></div>`;
-        }).join('')
-        : `<div class="text-[11px] text-ops-light/60">No team members configured.</div>`;
-    teamCard.innerHTML = `<div class="flex items-center justify-between gap-3 mb-3"><div class="text-[10px] font-mono uppercase tracking-widest text-ops-light flex items-center gap-2"><i class="fa-solid fa-users text-emerald-400"></i> Team</div><button type="button" data-open-team class="px-2 py-1 rounded border border-ops-border text-[10px] font-mono text-ops-light hover:text-white hover:bg-ops-surface/60 transition-colors">Open</button></div><div class="space-y-2">${teamRows}</div>`;
+    // Team
+    const humanMembers = teamMembers.filter(m => safeText(m?.role).toLowerCase() !== 'ai');
+    const teamPreview = humanMembers.length ? humanMembers.slice(0,3).map(m => { const name = safeText(m?.name)||'Member'; const role = safeText(m?.role)||''; const sid = safeText(m?.slackMemberId); const pres = sid && state.teamPresenceByMemberId?.[sid]; const on = pres && String(pres.presence||'').toLowerCase()==='active'; const dot = on ? '<span class="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0"></span>' : '<span class="w-1.5 h-1.5 rounded-full bg-zinc-600 shrink-0"></span>'; return `<div class="flex items-center gap-2 border border-ops-border rounded bg-ops-bg/40 px-2.5 py-1.5">${dot}<div class="min-w-0"><div class="text-[11px] text-white truncate">${escapeHtml(name)}</div>${role?`<div class="text-[9px] font-mono text-ops-light/50">${escapeHtml(role)}</div>`:''}</div></div>`; }).join('') : '<div class="text-[10px] text-ops-light/50">No team members.</div>';
+    const teamBody = humanMembers.length > 3 ? humanMembers.slice(3).map(m => { const name = safeText(m?.name)||'Member'; return `<div class="flex items-center gap-2 border border-ops-border rounded bg-ops-bg/40 px-2.5 py-1.5"><span class="w-1.5 h-1.5 rounded-full bg-zinc-600 shrink-0"></span><div class="text-[11px] text-white truncate">${escapeHtml(name)}</div></div>`; }).join('') : '';
+    const teamCard = makeCard('team', 'fa-users', 'text-emerald-400', 'Team', `<button type="button" data-open-team class="px-1.5 py-0.5 rounded border border-ops-border text-[9px] font-mono text-ops-light hover:text-white transition-colors">Open</button>`, `<div class="space-y-1">${teamPreview}</div>`, teamBody ? `<div class="space-y-1">${teamBody}</div>` : '');
     feedRow.appendChild(teamCard);
     wrap.appendChild(feedRow);
 
-    // ═══ Due Next Week + Future Projects ══════════════════════════════
+    // ═══ LATER ROW: Next Week + Future Projects ═════════════════════
     const nextWeekItems = Array.isArray(buckets.nextWeek) ? buckets.nextWeek : [];
     const laterRow = document.createElement('div');
-    laterRow.className = 'grid grid-cols-2 gap-3';
+    laterRow.className = 'grid grid-cols-1 sm:grid-cols-2 gap-2';
 
-    const nextWeekCard = document.createElement('div');
-    nextWeekCard.className = 'border border-ops-border rounded-xl bg-ops-surface/30 p-4';
-    const nwRows = nextWeekItems.length
-        ? nextWeekItems.slice(0, 4).map((p) => `<button type="button" class="dash-project-btn w-full text-left px-3 py-2 rounded-lg border border-ops-border bg-ops-bg/40 hover:bg-ops-surface/60 transition-colors" data-pid="${escapeHtml(safeText(p?.id))}"><div class="text-xs text-white truncate">${escapeHtml(safeText(p?.name) || 'Untitled')}</div><div class="text-[10px] font-mono text-ops-light/70">${escapeHtml(safeText(p?.dueDate) || '')}</div></button>`).join('')
-        : `<div class="text-[11px] text-ops-light/60">Nothing due next week.</div>`;
-    nextWeekCard.innerHTML = `<div class="flex items-center justify-between gap-3 mb-3"><div class="text-[10px] font-mono uppercase tracking-widest text-ops-light flex items-center gap-2"><i class="fa-solid fa-calendar-check text-sky-400"></i> Due Next Week</div><span class="text-lg font-semibold text-white">${nextWeekItems.length}</span></div><div class="space-y-2">${nwRows}</div>`;
-    laterRow.appendChild(nextWeekCard);
+    const nwPreview = nextWeekItems.length ? `<div class="space-y-1">${nextWeekItems.slice(0,2).map(p=>mkProjBtn(p,'text-ops-light/60')).join('')}</div>` : '<div class="text-[10px] text-ops-light/50">Nothing due next week.</div>';
+    const nwBody = nextWeekItems.length > 2 ? `<div class="space-y-1">${nextWeekItems.slice(2).map(p=>mkProjBtn(p,'text-ops-light/60')).join('')}</div>` : '';
+    const nwCard = makeCard('next-week', 'fa-calendar-check', 'text-sky-400', 'Next Week', `<span class="text-sm font-semibold text-white">${nextWeekItems.length}</span>`, nwPreview, nwBody);
+    laterRow.appendChild(nwCard);
 
-    const upcomingCard = document.createElement('div');
-    upcomingCard.className = 'border border-ops-border rounded-xl bg-ops-surface/30 p-4';
-    const upcoming = (Array.isArray(buckets.upcoming) ? buckets.upcoming : []).slice(0, 4);
-    const upRows = upcoming.length
-        ? upcoming.map((p) => `<button type="button" class="dash-project-btn w-full text-left px-3 py-2 rounded-lg border border-ops-border bg-ops-bg/40 hover:bg-ops-surface/60 transition-colors" data-pid="${escapeHtml(safeText(p?.id))}"><div class="text-xs text-white truncate">${escapeHtml(safeText(p?.name) || 'Untitled')}</div><div class="text-[10px] font-mono text-ops-light/70">${escapeHtml(safeText(p?.dueDate) || 'No due date')}</div></button>`).join('')
-        : `<div class="text-[11px] text-ops-light/60">No future projects.</div>`;
-    upcomingCard.innerHTML = `<div class="flex items-center justify-between gap-3 mb-3"><div class="text-[10px] font-mono uppercase tracking-widest text-ops-light flex items-center gap-2"><i class="fa-solid fa-forward text-ops-light/40"></i> Future Projects</div><button type="button" data-open-projects class="px-2 py-1 rounded border border-ops-border text-[10px] font-mono text-ops-light hover:text-white hover:bg-ops-surface/60 transition-colors">All Projects</button></div><div class="space-y-2">${upRows}</div>`;
-    laterRow.appendChild(upcomingCard);
+    const upcoming = (Array.isArray(buckets.upcoming)?buckets.upcoming:[]).slice(0,6);
+    const upPreview = upcoming.length ? `<div class="space-y-1">${upcoming.slice(0,2).map(p=>mkProjBtn(p,'text-ops-light/60')).join('')}</div>` : '<div class="text-[10px] text-ops-light/50">No future projects.</div>';
+    const upBody = upcoming.length > 2 ? `<div class="space-y-1">${upcoming.slice(2).map(p=>mkProjBtn(p,'text-ops-light/60')).join('')}</div>` : '';
+    const upCard = makeCard('upcoming', 'fa-forward', 'text-ops-light/40', 'Future Projects', `<button type="button" data-open-projects class="px-1.5 py-0.5 rounded border border-ops-border text-[9px] font-mono text-ops-light hover:text-white transition-colors">All</button>`, upPreview, upBody);
+    laterRow.appendChild(upCard);
     wrap.appendChild(laterRow);
 
-    // ═══ 8. KEYBOARD SHORTCUTS OVERLAY ════════════════════════════════
+    // ═══ KEYBOARD SHORTCUTS (hidden) ════════════════════════════════
     const shortcutsPanel = document.createElement('div');
     shortcutsPanel.id = 'dash-shortcuts-panel';
-    shortcutsPanel.className = 'hidden border border-ops-border rounded-xl bg-ops-surface/30 p-4';
+    shortcutsPanel.className = 'hidden dash-card p-3';
     shortcutsPanel.innerHTML = `
-        <div class="flex items-center justify-between gap-3 mb-3">
-            <div class="text-[10px] font-mono uppercase tracking-widest text-ops-light flex items-center gap-2"><i class="fa-solid fa-keyboard text-ops-light/60"></i> Keyboard Shortcuts</div>
+        <div class="flex items-center justify-between gap-2 mb-2">
+            <span class="text-[10px] font-mono uppercase tracking-widest text-ops-light flex items-center gap-2"><i class="fa-solid fa-keyboard text-ops-light/50"></i> Shortcuts</span>
             <button id="dash-shortcuts-close" class="text-ops-light hover:text-white text-xs"><i class="fa-solid fa-xmark"></i></button>
         </div>
-        <div class="grid grid-cols-2 md:grid-cols-3 gap-x-6 gap-y-1 text-[11px]">
-            <div class="flex justify-between gap-2"><span class="text-ops-light/70">Dashboard</span><kbd class="font-mono text-white bg-ops-bg/60 px-1.5 rounded">G D</kbd></div>
-            <div class="flex justify-between gap-2"><span class="text-ops-light/70">Inbox</span><kbd class="font-mono text-white bg-ops-bg/60 px-1.5 rounded">G I</kbd></div>
-            <div class="flex justify-between gap-2"><span class="text-ops-light/70">Projects</span><kbd class="font-mono text-white bg-ops-bg/60 px-1.5 rounded">G P</kbd></div>
-            <div class="flex justify-between gap-2"><span class="text-ops-light/70">Calendar</span><kbd class="font-mono text-white bg-ops-bg/60 px-1.5 rounded">G C</kbd></div>
-            <div class="flex justify-between gap-2"><span class="text-ops-light/70">Team</span><kbd class="font-mono text-white bg-ops-bg/60 px-1.5 rounded">G T</kbd></div>
-            <div class="flex justify-between gap-2"><span class="text-ops-light/70">Settings</span><kbd class="font-mono text-white bg-ops-bg/60 px-1.5 rounded">G S</kbd></div>
-            <div class="flex justify-between gap-2"><span class="text-ops-light/70">New item</span><kbd class="font-mono text-white bg-ops-bg/60 px-1.5 rounded">N</kbd></div>
-            <div class="flex justify-between gap-2"><span class="text-ops-light/70">Command</span><kbd class="font-mono text-white bg-ops-bg/60 px-1.5 rounded">Ctrl K</kbd></div>
-            <div class="flex justify-between gap-2"><span class="text-ops-light/70">Sync</span><kbd class="font-mono text-white bg-ops-bg/60 px-1.5 rounded">R</kbd></div>
+        <div class="grid grid-cols-3 gap-x-4 gap-y-0.5 text-[10px]">
+            <div class="flex justify-between gap-1"><span class="text-ops-light/60">Dashboard</span><kbd class="font-mono text-white bg-ops-bg/60 px-1 rounded text-[9px]">G D</kbd></div>
+            <div class="flex justify-between gap-1"><span class="text-ops-light/60">Inbox</span><kbd class="font-mono text-white bg-ops-bg/60 px-1 rounded text-[9px]">G I</kbd></div>
+            <div class="flex justify-between gap-1"><span class="text-ops-light/60">Projects</span><kbd class="font-mono text-white bg-ops-bg/60 px-1 rounded text-[9px]">G P</kbd></div>
+            <div class="flex justify-between gap-1"><span class="text-ops-light/60">Calendar</span><kbd class="font-mono text-white bg-ops-bg/60 px-1 rounded text-[9px]">G C</kbd></div>
+            <div class="flex justify-between gap-1"><span class="text-ops-light/60">Team</span><kbd class="font-mono text-white bg-ops-bg/60 px-1 rounded text-[9px]">G T</kbd></div>
+            <div class="flex justify-between gap-1"><span class="text-ops-light/60">Settings</span><kbd class="font-mono text-white bg-ops-bg/60 px-1 rounded text-[9px]">G S</kbd></div>
+            <div class="flex justify-between gap-1"><span class="text-ops-light/60">New item</span><kbd class="font-mono text-white bg-ops-bg/60 px-1 rounded text-[9px]">N</kbd></div>
+            <div class="flex justify-between gap-1"><span class="text-ops-light/60">Command</span><kbd class="font-mono text-white bg-ops-bg/60 px-1 rounded text-[9px]">\u2318K</kbd></div>
+            <div class="flex justify-between gap-1"><span class="text-ops-light/60">Sync</span><kbd class="font-mono text-white bg-ops-bg/60 px-1 rounded text-[9px]">R</kbd></div>
         </div>
     `;
     wrap.appendChild(shortcutsPanel);
 
-    // ═══ Mount ════════════════════════════════════════════════════════
+    // ═══ MOUNT ═══════════════════════════════════════════════════════
     container.appendChild(wrap);
 
-    // ═══ Event wiring ════════════════════════════════════════════════
-    wrap.querySelector('button[data-open-inbox]')?.addEventListener('click', () => openInbox());
-    wrap.querySelector('button[data-open-inbox2]')?.addEventListener('click', () => openInbox());
-    wrap.querySelector('button[data-open-slack]')?.addEventListener('click', () => openInbox());
-    wrap.querySelector('button[data-open-calendar]')?.addEventListener('click', () => openCalendar());
-    wrap.querySelector('button[data-open-team]')?.addEventListener('click', () => openTeam());
-    wrap.querySelectorAll('button[data-open-projects]').forEach((b) => b.addEventListener('click', () => openProjects()));
-    calCard.querySelector('button[data-refresh-calls]')?.addEventListener('click', async () => {
-        await refreshDashboardCalls({ force: true });
-        renderMain();
-    });
-    wrap.querySelectorAll('.dash-project-btn').forEach((btn) => {
-        btn.addEventListener('click', () => { const pid = btn.dataset.pid; if (pid) openProject(pid); });
+    // ═══ EVENT WIRING ════════════════════════════════════════════════
+    // Expandable cards
+    wrap.querySelectorAll('.dash-card').forEach(card => {
+        const head = card.querySelector('.dash-card-head');
+        const body = card.querySelector('.dash-card-body');
+        if (head && body) {
+            head.addEventListener('click', (e) => {
+                if (e.target.closest('button') || e.target.closest('a')) return;
+                card.classList.toggle('expanded');
+            });
+        }
     });
 
-    // Quick-add bar
+    // Nav buttons
+    wrap.querySelectorAll('button[data-open-inbox]').forEach(b => b.addEventListener('click', () => openInbox()));
+    wrap.querySelector('button[data-open-inbox2]')?.addEventListener('click', () => openInbox());
+    wrap.querySelectorAll('button[data-open-slack]').forEach(b => b.addEventListener('click', () => openInbox()));
+    wrap.querySelector('button[data-open-calendar]')?.addEventListener('click', () => openCalendar());
+    wrap.querySelectorAll('button[data-open-team]').forEach(b => b.addEventListener('click', () => openTeam()));
+    wrap.querySelectorAll('button[data-open-projects]').forEach(b => b.addEventListener('click', () => openProjects()));
+    calCard.querySelector('button[data-refresh-calls]')?.addEventListener('click', async () => { await refreshDashboardCalls({force:true}); renderMain(); });
+    wrap.querySelectorAll('.dash-project-btn').forEach(btn => { btn.addEventListener('click', () => { const pid = btn.dataset.pid; if (pid) openProject(pid); }); });
+
+    // Quick-add
     const quickInput = wrap.querySelector('#dash-quick-input');
-    if (quickInput) {
-        quickInput.addEventListener('keydown', async (e) => {
-            if (e.key === 'Enter') {
-                const val = safeText(quickInput.value).trim();
-                if (!val) return;
-                quickInput.value = '';
-                try {
-                    await apiFetch('/api/inbox', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: val, source: 'quick-add', status: 'new' }) });
-                    await fetchState();
-                    renderMain();
-                } catch (err) {
-                    alert(err?.message || 'Failed to add item');
-                }
-            }
-        });
-    }
-    const quickProjectBtn = wrap.querySelector('#dash-quick-project');
-    if (quickProjectBtn) {
-        quickProjectBtn.addEventListener('click', () => createNewProjectPrompt());
-    }
+    if (quickInput) { quickInput.addEventListener('keydown', async (e) => { if (e.key === 'Enter') { const val = safeText(quickInput.value).trim(); if (!val) return; quickInput.value = ''; try { await apiFetch('/api/inbox', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:val,source:'quick-add',status:'new'})}); await fetchState(); renderMain(); } catch(err) { alert(err?.message||'Failed'); } } }); }
+    wrap.querySelector('#dash-quick-project')?.addEventListener('click', () => createNewProjectPrompt());
 
     // Focus timer
     const timerToggle = wrap.querySelector('#dash-timer-toggle');
     const timerReset = wrap.querySelector('#dash-timer-reset');
-    if (timerToggle) {
-        timerToggle.addEventListener('click', () => {
-            if (state.focusTimer.running) {
-                clearInterval(state.focusTimer.intervalId);
-                state.focusTimer.running = false;
-                state.focusTimer.intervalId = null;
-            } else {
-                state.focusTimer.running = true;
-                state.focusTimer.intervalId = setInterval(() => {
-                    if (state.focusTimer.remaining <= 0) {
-                        clearInterval(state.focusTimer.intervalId);
-                        state.focusTimer.running = false;
-                        state.focusTimer.intervalId = null;
-                        try { new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdHmBgYF9eXl+gYaGg36Af4F/fn5+').play(); } catch(ignored) {}
-                        alert('Focus session complete!');
-                        if (state.currentView === 'dashboard') renderMain();
-                        return;
-                    }
-                    state.focusTimer.remaining--;
-                    const disp = document.getElementById('dash-timer-display');
-                    if (disp) {
-                        const m2 = Math.floor(state.focusTimer.remaining / 60);
-                        const s2 = state.focusTimer.remaining % 60;
-                        disp.textContent = `${String(m2).padStart(2, '0')}:${String(s2).padStart(2, '0')}`;
-                    }
-                }, 1000);
-            }
-            if (state.currentView === 'dashboard') renderMain();
-        });
-    }
-    if (timerReset) {
-        timerReset.addEventListener('click', () => {
-            clearInterval(state.focusTimer.intervalId);
-            state.focusTimer.running = false;
-            state.focusTimer.intervalId = null;
-            state.focusTimer.remaining = state.focusTimer.duration;
-            if (state.currentView === 'dashboard') renderMain();
-        });
-    }
+    if (timerToggle) { timerToggle.addEventListener('click', () => { if (state.focusTimer.running) { clearInterval(state.focusTimer.intervalId); state.focusTimer.running = false; state.focusTimer.intervalId = null; } else { state.focusTimer.running = true; state.focusTimer.intervalId = setInterval(() => { if (state.focusTimer.remaining <= 0) { clearInterval(state.focusTimer.intervalId); state.focusTimer.running = false; state.focusTimer.intervalId = null; try { new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdHmBgYF9eXl+gYaGg36Af4F/fn5+').play(); } catch(ignored) {} alert('Focus session complete!'); if (state.currentView==='dashboard') renderMain(); return; } state.focusTimer.remaining--; const disp = document.getElementById('dash-timer-display'); if (disp) { const mm = Math.floor(state.focusTimer.remaining/60); const ss = state.focusTimer.remaining%60; disp.textContent = `${String(mm).padStart(2,'0')}:${String(ss).padStart(2,'0')}`; } }, 1000); } if (state.currentView==='dashboard') renderMain(); }); }
+    if (timerReset) { timerReset.addEventListener('click', () => { clearInterval(state.focusTimer.intervalId); state.focusTimer.running = false; state.focusTimer.intervalId = null; state.focusTimer.remaining = state.focusTimer.duration; if (state.currentView==='dashboard') renderMain(); }); }
 
-    // Ask MARTY button
-    const askMarty = wrap.querySelector('#dash-ask-marty');
-    if (askMarty) {
-        askMarty.addEventListener('click', () => {
-            const input = document.getElementById('cmd-input');
-            if (input) { input.focus(); input.value = 'What should I focus on right now?'; }
-        });
-    }
+    // MARTY buttons
+    wrap.querySelector('#dash-ask-marty')?.addEventListener('click', () => { const inp = document.getElementById('cmd-input'); if (inp) { inp.focus(); inp.value = 'What should I focus on right now?'; } });
+    wrap.querySelector('#dash-brief-marty')?.addEventListener('click', () => { const inp = document.getElementById('cmd-input'); if (inp) { inp.focus(); inp.value = 'Give me a brief status update on everything.'; } });
 
-    // Shortcuts toggle
+    // Shortcuts
     const shortcutsBtn = wrap.querySelector('#dash-shortcuts-btn');
     const shortcutsPanelEl = wrap.querySelector('#dash-shortcuts-panel');
     const shortcutsClose = wrap.querySelector('#dash-shortcuts-close');
-    if (shortcutsBtn && shortcutsPanelEl) {
-        shortcutsBtn.addEventListener('click', () => shortcutsPanelEl.classList.toggle('hidden'));
-    }
-    if (shortcutsClose && shortcutsPanelEl) {
-        shortcutsClose.addEventListener('click', () => shortcutsPanelEl.classList.add('hidden'));
-    }
+    if (shortcutsBtn && shortcutsPanelEl) shortcutsBtn.addEventListener('click', () => shortcutsPanelEl.classList.toggle('hidden'));
+    if (shortcutsClose && shortcutsPanelEl) shortcutsClose.addEventListener('click', () => shortcutsPanelEl.classList.add('hidden'));
 }
 
 function renderTodayPanel() {

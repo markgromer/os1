@@ -227,6 +227,124 @@
         body.marty-popout-mode #marty-resize-handle {
             display: none;
         }
+
+        /* ═══ Dashboard Card System ═══════════════════════════════════════ */
+        .dash-card {
+            border: 1px solid rgb(var(--ops-border));
+            border-radius: 0.75rem;
+            background: rgb(var(--ops-surface) / 0.3);
+            transition: border-color 0.25s ease, box-shadow 0.25s ease;
+        }
+        .dash-card:hover {
+            border-color: rgb(var(--ops-accent) / 0.25);
+            box-shadow: 0 0 0 1px rgb(var(--ops-accent) / 0.08), 0 4px 16px rgb(0 0 0 / 0.15);
+        }
+        .dash-card-head {
+            cursor: pointer;
+            user-select: none;
+        }
+        .dash-card-body {
+            max-height: 0;
+            overflow: hidden;
+            opacity: 0;
+            transition: max-height 0.35s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.25s ease, padding 0.25s ease;
+            padding-top: 0;
+        }
+        .dash-card.expanded .dash-card-body {
+            max-height: 800px;
+            opacity: 1;
+            padding-top: 0.5rem;
+        }
+        .dash-card .expand-chevron {
+            transition: transform 0.25s ease;
+            font-size: 9px;
+            color: rgb(var(--ops-light) / 0.4);
+        }
+        .dash-card.expanded .expand-chevron {
+            transform: rotate(180deg);
+            color: rgb(var(--ops-accent));
+        }
+
+        /* MARTY Ambient Intelligence Bar */
+        .marty-ambient {
+            background: linear-gradient(135deg, rgb(59 130 246 / 0.06), rgb(16 185 129 / 0.04));
+            border: 1px solid rgb(59 130 246 / 0.15);
+            border-radius: 0.75rem;
+            transition: border-color 0.3s, box-shadow 0.3s;
+        }
+        .marty-ambient:hover {
+            border-color: rgb(59 130 246 / 0.3);
+            box-shadow: 0 0 20px rgb(59 130 246 / 0.08);
+        }
+        .marty-status-dot {
+            width: 6px; height: 6px; border-radius: 50%;
+            background: rgb(59 130 246);
+            animation: martyDotPulse 2.5s ease-in-out infinite;
+        }
+        @keyframes martyDotPulse {
+            0%, 100% { opacity: 0.5; box-shadow: 0 0 0 0 rgb(59 130 246 / 0.4); }
+            50% { opacity: 1; box-shadow: 0 0 0 4px rgb(59 130 246 / 0); }
+        }
+        .marty-insight {
+            padding: 6px 10px;
+            border-radius: 6px;
+            background: rgb(59 130 246 / 0.06);
+            border-left: 2px solid rgb(59 130 246 / 0.3);
+            font-size: 11px;
+            color: rgb(var(--ops-text) / 0.8);
+            transition: background 0.2s;
+        }
+        .marty-insight:hover {
+            background: rgb(59 130 246 / 0.1);
+        }
+
+        /* Stat pill */
+        .stat-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 2px 8px;
+            border-radius: 999px;
+            font-size: 10px;
+            font-family: 'JetBrains Mono', monospace;
+            border: 1px solid rgb(var(--ops-border));
+            background: rgb(var(--ops-bg) / 0.6);
+            color: rgb(var(--ops-light));
+            transition: all 0.2s;
+        }
+        .stat-pill:hover {
+            color: white;
+            border-color: rgb(var(--ops-accent) / 0.3);
+        }
+
+        /* Responsive main layout */
+        @media (max-width: 1024px) {
+            #main-port {
+                grid-template-columns: 1fr !important;
+            }
+            #marty-port {
+                display: none !important;
+            }
+        }
+
+        /* Smooth fade-in for dashboard items */
+        .dash-stagger > * {
+            animation: dashFadeUp 0.3s ease-out both;
+        }
+        .dash-stagger > *:nth-child(1) { animation-delay: 0ms; }
+        .dash-stagger > *:nth-child(2) { animation-delay: 40ms; }
+        .dash-stagger > *:nth-child(3) { animation-delay: 80ms; }
+        .dash-stagger > *:nth-child(4) { animation-delay: 120ms; }
+        .dash-stagger > *:nth-child(5) { animation-delay: 160ms; }
+        .dash-stagger > *:nth-child(6) { animation-delay: 200ms; }
+        .dash-stagger > *:nth-child(7) { animation-delay: 240ms; }
+        .dash-stagger > *:nth-child(8) { animation-delay: 280ms; }
+        .dash-stagger > *:nth-child(9) { animation-delay: 320ms; }
+        .dash-stagger > *:nth-child(10) { animation-delay: 360ms; }
+        @keyframes dashFadeUp {
+            from { opacity: 0; transform: translateY(8px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
     </style>
 </head>
 <body class="h-screen flex text-sm overflow-hidden antialiased">
@@ -323,6 +441,6 @@
         <div id="marty-resize-handle" aria-hidden="true"></div>
     </aside>
 
-    <script src="app.js?v=ops3.6"></script>
+    <script src="app.js?v=ops3.7"></script>
 </body>
 </html>
