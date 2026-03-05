@@ -1685,19 +1685,39 @@ function setupEventListeners() {
     const input = document.getElementById("cmd-input");
     const send = document.getElementById("cmd-send");
     const modelSelect = document.getElementById('marty-model-select');
-    
+
+    // Submit behavior (robust across browsers):
+    // - Enter submits, Shift+Enter inserts newline
+    // - Click send submits
+    const onChatKeyDown = (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            handleChatSubmit();
+        }
+    };
+
     if (input) {
-        input.addEventListener("keypress", (e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                handleChatSubmit();
-            }
+        input.addEventListener('keydown', onChatKeyDown);
+    }
+
+    if (send) {
+        send.addEventListener('click', (e) => {
+            e.preventDefault();
+            handleChatSubmit();
         });
     }
-    
-    if (send) {
-        send.addEventListener("click", handleChatSubmit);
-    }
+
+    // Fallback delegation in case the drawer is re-created.
+    document.addEventListener('keydown', (e) => {
+        const t = e.target;
+        if (t && t.id === 'cmd-input') onChatKeyDown(e);
+    });
+    document.addEventListener('click', (e) => {
+        const btn = e.target?.closest?.('#cmd-send');
+        if (!btn) return;
+        e.preventDefault();
+        handleChatSubmit();
+    });
 
     if (modelSelect) {
         modelSelect.addEventListener('change', async () => {
