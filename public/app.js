@@ -2556,6 +2556,7 @@ function normalizeInboxSourceKey(source) {
     const s = String(source || '').trim().toLowerCase();
     if (!s) return 'other';
     if (s.includes('fireflies')) return 'fireflies';
+    if (s.includes('crm') || s.includes('hubspot') || s.includes('salesforce') || s.includes('pipedrive')) return 'crm';
     if (s.includes('email') || s.includes('gmail') || s.includes('outlook')) return 'email';
     if (s.includes('sms') || s.includes('quo') || s.includes('twilio') || s.includes('text')) return 'sms';
     if (s.includes('call') || s.includes('voice')) return 'call';
@@ -2567,6 +2568,7 @@ function inboxSourceMeta(sourceKey) {
     const key = safeText(sourceKey).trim().toLowerCase();
     const map = {
         fireflies: { label: 'Fireflies', icon: 'fa-microphone-lines', tone: 'text-violet-300' },
+        crm: { label: 'CRM', icon: 'fa-address-card', tone: 'text-emerald-300' },
         email: { label: 'Email', icon: 'fa-envelope', tone: 'text-blue-300' },
         sms: { label: 'SMS', icon: 'fa-comment-sms', tone: 'text-emerald-300' },
         call: { label: 'Calls', icon: 'fa-phone', tone: 'text-amber-300' },
@@ -3410,6 +3412,39 @@ function renderSettings(container) {
     `;
     wrap.appendChild(f);
 
+    // CRM
+    const crm = section('CRM', 'Ingest new leads/messages into Inbox via a secure webhook (shared secret).');
+    const crmBody = crm.querySelector('[data-slot="body"]');
+    crmBody.innerHTML = `
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+                <label class="text-xs text-ops-light">API Base URL (optional)</label>
+                <input id="set-crm-api-base" type="text" autocomplete="off" placeholder="https://api.yourcrm.com" value="${String(state.settings.crmApiBaseUrl || '').replace(/\"/g, '&quot;')}" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-sm" />
+                <div class="text-[11px] text-ops-light mt-1">Used later for pull/sync. Webhook works without it.</div>
+            </div>
+            <div>
+                <label class="text-xs text-ops-light">API Key (optional)</label>
+                <input id="set-crm-api-key" type="password" autocomplete="off" placeholder="(leave blank to keep existing)" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-sm" />
+                <div class="text-[11px] text-ops-light mt-1">Kept server-side (never shown again once saved).</div>
+            </div>
+            <div>
+                <label class="text-xs text-ops-light">Webhook Secret</label>
+                <input id="set-crm-webhook-secret" type="password" autocomplete="off" placeholder="(not shown once saved)" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-sm" />
+                <div class="text-[11px] text-ops-light mt-1">Configured: ${state.settings.crmConfigured ? 'Yes' : 'No'}</div>
+            </div>
+            <div>
+                <label class="text-xs text-ops-light">Webhook</label>
+                <div class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-xs font-mono">POST /api/integrations/crm/webhook</div>
+                <div class="text-[11px] text-ops-light mt-1">Header: <span class="font-mono">X-CRM-Secret</span></div>
+            </div>
+        </div>
+        <div class="flex flex-wrap gap-2 mt-4">
+            <button id="btn-generate-crm" class="px-3 py-2 rounded bg-ops-bg border border-ops-border text-ops-light text-xs hover:text-white">Generate secret</button>
+            <button id="btn-save-crm" class="px-3 py-2 rounded bg-blue-600 text-white text-xs hover:bg-blue-500">Save CRM</button>
+        </div>
+    `;
+    wrap.appendChild(crm);
+
     // Slack
     const slack = section('Slack', 'Ingest Slack messages into Inbox via Slack Events API (signature verified).');
     const slackBody = slack.querySelector('[data-slot="body"]');
@@ -3634,6 +3669,8 @@ function renderSettings(container) {
     const googleUpcomingOutput = document.getElementById('google-upcoming-output');
     const btnGenFireflies = document.getElementById('btn-generate-fireflies');
     const btnSaveFireflies = document.getElementById('btn-save-fireflies');
+    const btnGenCrm = document.getElementById('btn-generate-crm');
+    const btnSaveCrm = document.getElementById('btn-save-crm');
     const btnSaveSlack = document.getElementById('btn-save-slack');
     const btnConnectSlack = document.getElementById('btn-connect-slack');
     const btnDisconnectSlack = document.getElementById('btn-disconnect-slack');
@@ -3861,6 +3898,33 @@ function renderSettings(container) {
             renderSettings(container);
         } catch (e) {
             alert(e?.message || 'Failed to save Fireflies settings');
+        }
+    };
+
+    if (btnGenCrm) btnGenCrm.onclick = () => {
+        const el = document.getElementById('set-crm-webhook-secret');
+        if (el) el.value = generateSecret();
+    };
+
+    if (btnSaveCrm) btnSaveCrm.onclick = async () => {
+        try {
+            const crmApiBaseUrl = String(document.getElementById('set-crm-api-base')?.value || '').trim();
+            const crmApiKey = String(document.getElementById('set-crm-api-key')?.value || '').trim();
+            const crmWebhookSecret = String(document.getElementById('set-crm-webhook-secret')?.value || '').trim();
+
+            const patch = { crmApiBaseUrl };
+            if (crmApiKey) patch.crmApiKey = crmApiKey;
+            if (crmWebhookSecret) patch.crmWebhookSecret = crmWebhookSecret;
+
+            if (!crmWebhookSecret && !state.settings.crmConfigured) {
+                throw new Error('Webhook secret is required');
+            }
+
+            await saveSettingsPatch(patch);
+            alert('CRM settings saved.');
+            renderSettings(container);
+        } catch (e) {
+            alert(e?.message || 'Failed to save CRM settings');
         }
     };
 

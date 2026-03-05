@@ -221,6 +221,7 @@ function isPublicApiRoute(req) {
   if (method === 'POST' && p === '/api/auth/logout') return true;
   if (method === 'GET' && p === '/api/auth/status') return true;
   if (method === 'POST' && p === '/api/integrations/slack/events') return true;
+  if (method === 'POST' && p === '/api/integrations/crm/webhook') return true;
   if (method === 'POST' && p === '/api/integrations/quo/sms') return true;
   if (method === 'POST' && p === '/api/integrations/quo/calls') return true;
   if (method === 'POST' && p === '/api/integrations/fireflies/ingest') return true;
@@ -387,12 +388,22 @@ function sanitizeSettingsForClient(settings) {
   delete clone.googleClientSecret;
   delete clone.googleTokens;
   delete clone.firefliesSecret;
+  delete clone.crmApiKey;
+  delete clone.crmWebhookSecret;
   delete clone.slackSigningSecret;
   delete clone.slackClientSecret;
   delete clone.slackBotToken;
   delete clone.quoAuthToken;
   delete clone.ghlApiKey;
   return clone;
+}
+
+async function getCrmConfig() {
+  const saved = await readSettings();
+  const apiBaseUrl = typeof saved.crmApiBaseUrl === 'string' ? saved.crmApiBaseUrl.trim() : '';
+  const apiKey = (typeof process.env.CRM_API_KEY === 'string' ? process.env.CRM_API_KEY.trim() : '') || (typeof saved.crmApiKey === 'string' ? saved.crmApiKey.trim() : '');
+  const webhookSecret = (typeof process.env.CRM_WEBHOOK_SECRET === 'string' ? process.env.CRM_WEBHOOK_SECRET.trim() : '') || (typeof saved.crmWebhookSecret === 'string' ? saved.crmWebhookSecret.trim() : '');
+  return { apiBaseUrl, apiKey, webhookSecret, saved };
 }
 
 function safeTimingEqual(a, b) {
@@ -2784,6 +2795,9 @@ app.get('/api/settings', async (req, res) => {
     (typeof process.env.FIREFLIES_SECRET === 'string' ? process.env.FIREFLIES_SECRET.trim() : '') ||
     (typeof process.env.FIREFLIES_WEBHOOK_SECRET === 'string' ? process.env.FIREFLIES_WEBHOOK_SECRET.trim() : '');
   const firefliesConfigured = Boolean(envFirefliesSecret || (typeof settings.firefliesSecret === 'string' && settings.firefliesSecret.trim()));
+
+  const crmWebhookSecret = (typeof process.env.CRM_WEBHOOK_SECRET === 'string' ? process.env.CRM_WEBHOOK_SECRET.trim() : '') || (typeof settings.crmWebhookSecret === 'string' ? settings.crmWebhookSecret.trim() : '');
+  const crmConfigured = Boolean(crmWebhookSecret);
   const slackConfigured = Boolean(
     (typeof process.env.SLACK_SIGNING_SECRET === 'string' && process.env.SLACK_SIGNING_SECRET.trim()) ||
     (typeof settings.slackSigningSecret === 'string' && settings.slackSigningSecret.trim()),
@@ -2821,6 +2835,7 @@ app.get('/api/settings', async (req, res) => {
     googleConfigured,
     googleConnected,
     firefliesConfigured,
+    crmConfigured,
     slackConfigured,
     slackOAuthConfigured,
     slackInstalled,
@@ -3201,6 +3216,112 @@ app.post('/api/integrations/fireflies/ingest', async (req, res) => {
   });
 
   await writeLock;
+});
+
+// Integrations: Generic CRM webhook -> Inbox
+// Configure your CRM to POST JSON to: /api/integrations/crm/webhook
+// Verify with header: X-CRM-Secret (recommended) or env CRM_WEBHOOK_SECRET
+app.get('/api/integrations/crm/status', async (req, res) => {
+  try {
+    const { apiBaseUrl, apiKey, webhookSecret } = await getCrmConfig();
+    res.json({
+      ok: true,
+      configured: Boolean(webhookSecret),
+      hasApiBaseUrl: Boolean(apiBaseUrl),
+      hasApiKey: Boolean(apiKey),
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message || 'Failed to load CRM status' });
+  }
+});
+
+app.post('/api/integrations/crm/webhook', async (req, res) => {
+  try {
+    const presented = typeof req.headers['x-crm-secret'] === 'string' ? req.headers['x-crm-secret'].trim() : '';
+    const { webhookSecret } = await getCrmConfig();
+    const expected = String(webhookSecret || '').trim();
+    if (!expected || !presented || !safeTimingEqual(presented, expected)) {
+      debugWebhookLog('CRM webhook rejected', {
+        reason: !expected ? 'CRM webhook secret not configured' : 'Invalid secret',
+        contentType: req.headers['content-type'],
+        hasSecret: Boolean(presented),
+        forwardedProto: req.headers['x-forwarded-proto'],
+        forwardedHost: req.headers['x-forwarded-host'],
+        host: req.get('host'),
+        method: req.method,
+        path: req.originalUrl || req.url,
+      });
+      res.status(401).json({ ok: false, error: 'Unauthorized' });
+      return;
+    }
+
+    const payload = req.body && typeof req.body === 'object' ? req.body : {};
+
+    const leadId = firstNonEmptyString(
+      payload,
+      ['id', 'leadId', 'contactId', 'opportunityId', 'data.id', 'data.leadId', 'data.contactId'],
+      ['id', 'leadid', 'contactid', 'opportunityid'],
+    );
+    const name = firstNonEmptyString(
+      payload,
+      ['name', 'fullName', 'contact.name', 'contact.fullName', 'data.name', 'data.fullName'],
+      ['name', 'fullname', 'contactname'],
+    );
+    const phone = firstNonEmptyString(
+      payload,
+      ['phone', 'phoneNumber', 'mobile', 'contact.phone', 'contact.phoneNumber', 'data.phone', 'data.phoneNumber'],
+      ['phone', 'phonenumber', 'mobile'],
+    );
+    const email = firstNonEmptyString(
+      payload,
+      ['email', 'contact.email', 'data.email'],
+      ['email'],
+    );
+    const source = firstNonEmptyString(
+      payload,
+      ['source', 'utm_source', 'channel', 'form', 'page', 'campaign', 'data.source', 'data.channel'],
+      ['source', 'channel', 'campaign', 'form'],
+    );
+    const message = firstNonEmptyString(
+      payload,
+      ['message', 'notes', 'body', 'text', 'summary', 'data.message', 'data.notes', 'data.body', 'data.text'],
+      ['message', 'notes', 'body', 'text', 'summary'],
+    );
+    const projectName = firstNonEmptyString(
+      payload,
+      ['projectName', 'project.name', 'data.projectName', 'data.project.name'],
+      ['projectname', 'project'],
+    );
+
+    const lines = [];
+    lines.push('📥 CRM');
+    if (source) lines.push(`Source: ${source}`);
+    if (name) lines.push(`Name: ${name}`);
+    if (phone) lines.push(`Phone: ${phone}`);
+    if (email) lines.push(`Email: ${email}`);
+    if (message) {
+      lines.push('');
+      lines.push(message);
+    }
+
+    const externalId = leadId
+      ? `lead:${leadId}`
+      : `payload:${crypto.createHash('sha1').update(JSON.stringify(payload)).digest('hex')}`;
+
+    await addInboxIntegrationItem({
+      source: 'crm',
+      externalId,
+      text: lines.join('\n').trimEnd(),
+      projectId: '',
+      projectName: projectName || '',
+      fromNumber: phone || '',
+      channel: 'crm',
+    });
+
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message || 'CRM webhook failed' });
+  }
 });
 
 // Integrations: Slack Events API -> Inbox
