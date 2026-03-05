@@ -141,6 +141,27 @@ function setStoredTheme(theme) {
     }
 }
 
+function isPortraitCompactMode() {
+    try {
+        return window.innerHeight > window.innerWidth && window.innerWidth <= 1100;
+    } catch {
+        return false;
+    }
+}
+
+function setMartyPresence(mode = 'idle') {
+    const orb = document.getElementById('marty-orb');
+    const statusText = document.getElementById('marty-state');
+    const busy = String(mode || '').toLowerCase() === 'busy';
+    if (orb) {
+        orb.classList.remove('idle', 'busy');
+        orb.classList.add(busy ? 'busy' : 'idle');
+    }
+    if (statusText) {
+        statusText.textContent = busy ? 'MARTY PROCESSING...' : 'MARTY IDLE';
+    }
+}
+
 function applyTheme(theme) {
     const t = (theme === 'light' || theme === 'dark') ? theme : 'dark';
     state.theme = t;
@@ -697,6 +718,13 @@ function applyStore(store) {
 
 function safeText(v) {
     return (typeof v === 'string') ? v : '';
+}
+
+function previewText(text, maxLen = 160) {
+    const s = safeText(text).replace(/\s+/g, ' ').trim();
+    if (!s) return '';
+    if (s.length <= maxLen) return s;
+    return `${s.slice(0, Math.max(0, maxLen - 1)).trimEnd()}…`;
 }
 
 async function promptDatePicker({ title, label, defaultValue }) {
@@ -2602,6 +2630,8 @@ function renderDashboard(container) {
     const completedTasks = state.tasks.filter(t => isDoneTask(t)).length;
     const progress = totalTasks === 0 ? 0 : Math.round((completedTasks / totalTasks) * 100);
     
+    const portraitCompact = isPortraitCompactMode();
+
     const wrap = document.createElement('div');
     wrap.className = 'h-full flex flex-col min-h-0';
 
@@ -2641,7 +2671,7 @@ function renderDashboard(container) {
     `;
 
     const content = document.createElement("div");
-    content.className = "flex-1 min-h-0 overflow-y-auto p-6";
+    content.className = `flex-1 min-h-0 overflow-y-auto ${portraitCompact ? 'p-3' : 'p-6'}`;
     const buckets = bucketProjectsByDueDate(activeProjects);
 
     const allInboxItems = Array.isArray(state.inboxItems) ? state.inboxItems : [];
@@ -2706,7 +2736,7 @@ function renderDashboard(container) {
             : `<div class="mt-2 text-[10px] font-mono text-zinc-600">No action</div>`);
 
     const controlStrip = document.createElement('div');
-    controlStrip.className = 'grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3';
+    controlStrip.className = `grid grid-cols-1 ${portraitCompact ? 'md:grid-cols-2' : 'md:grid-cols-2 xl:grid-cols-5'} gap-3`;
     controlStrip.innerHTML = `
         <button data-strip-action="focus" class="group text-left border border-zinc-800 rounded-xl bg-zinc-900/30 p-3 hover:bg-zinc-900/50 transition-colors">
             <div class="text-[10px] font-mono uppercase tracking-widest text-zinc-500">Today Outcomes</div>
@@ -2740,7 +2770,7 @@ function renderDashboard(container) {
     `;
 
     const missionContainer = document.createElement('div');
-    missionContainer.className = 'mb-6 border border-zinc-800 rounded-xl bg-zinc-900/20 p-3';
+    missionContainer.className = `${portraitCompact ? 'mb-3' : 'mb-6'} border border-zinc-800 rounded-xl bg-zinc-900/20 p-3`;
     missionContainer.innerHTML = `<div class="text-[10px] font-mono uppercase tracking-widest text-zinc-500 mb-2">Mission Control</div>`;
     missionContainer.appendChild(controlStrip);
     content.appendChild(missionContainer);
@@ -2836,7 +2866,8 @@ function renderDashboard(container) {
     }
     const unreadGroups = Array.from(unreadGroupsMap.entries())
         .map(([key, items]) => ({ key, items }))
-        .sort((a, b) => b.items.length - a.items.length);
+        .sort((a, b) => b.items.length - a.items.length)
+        .slice(0, portraitCompact ? 2 : 6);
 
     const unreadPanel = document.createElement('div');
     unreadPanel.className = 'mb-6 border border-zinc-800 rounded-xl bg-zinc-900/30 p-4';
@@ -2854,7 +2885,7 @@ function renderDashboard(container) {
                 const meta = inboxSourceMeta(group.key);
                 const newest = group.items[0];
                 const newestTime = safeText(newest?.createdAt) ? formatTimeFromIso(newest.createdAt) : '';
-                const previewButtons = group.items.slice(0, 4).map((item) => {
+                const previewButtons = group.items.slice(0, portraitCompact ? 2 : 4).map((item) => {
                     const id = safeText(item?.id);
                     const time = safeText(item?.createdAt) ? formatTimeFromIso(item.createdAt) : '';
                     const text = safeText(item?.text).replace(/\s+/g, ' ').trim();
@@ -2893,7 +2924,7 @@ function renderDashboard(container) {
         <div class="mt-3 ${unreadItems.length ? 'hidden' : ''} text-xs text-zinc-500">No new inbox items.</div>
     `;
     const commsContainer = document.createElement('div');
-    commsContainer.className = 'mb-6 border border-zinc-800 rounded-xl bg-zinc-900/20 p-3';
+    commsContainer.className = `${portraitCompact ? 'mb-3' : 'mb-6'} border border-zinc-800 rounded-xl bg-zinc-900/20 p-3`;
     commsContainer.innerHTML = `<div class="text-[10px] font-mono uppercase tracking-widest text-zinc-500 mb-2">Comms Radar</div>`;
     commsContainer.appendChild(unreadPanel);
 
@@ -2912,7 +2943,7 @@ function renderDashboard(container) {
             ${triageStatuses.map((status) => {
                 const items = allInboxItems
                     .filter((x) => String(x?.status || '').toLowerCase() === status.toLowerCase())
-                    .slice(0, 4);
+                    .slice(0, portraitCompact ? 2 : 4);
                 return `
                     <div class="border border-zinc-800 rounded-lg bg-zinc-950/20 p-2.5">
                         <div class="flex items-center justify-between gap-2 mb-2">
@@ -2949,11 +2980,8 @@ function renderDashboard(container) {
             }).join('')}
         </div>
     `;
-    commsContainer.appendChild(triageBoard);
-    content.appendChild(commsContainer);
-
     const deliveryContainer = document.createElement('div');
-    deliveryContainer.className = 'mb-6 border border-zinc-800 rounded-xl bg-zinc-900/20 p-3';
+    deliveryContainer.className = `${portraitCompact ? 'mb-3' : 'mb-6'} border border-zinc-800 rounded-xl bg-zinc-900/20 p-3`;
     deliveryContainer.innerHTML = `<div class="text-[10px] font-mono uppercase tracking-widest text-zinc-500 mb-2">Delivery Board</div>`;
     deliveryContainer.appendChild(renderProjectBuckets(buckets, { bulkMode: !!state.dashboardBulkMode }));
 
@@ -2966,6 +2994,9 @@ function renderDashboard(container) {
     // Today panel (secondary)
     deliveryContainer.appendChild(renderTodayPanel());
     content.appendChild(deliveryContainer);
+
+    commsContainer.appendChild(triageBoard);
+    content.appendChild(commsContainer);
 
     wrap.appendChild(banner);
     wrap.appendChild(content);
@@ -4115,6 +4146,7 @@ function renderProjectView(container) {
         if (tab === 'scratch') {
             const scratchpadText = safeText(state.projectScratchpads?.[project.id]?.text);
             const scratchpadUpdatedAt = safeText(state.projectScratchpads?.[project.id]?.updatedAt);
+            const scratchPreview = previewText(scratchpadText, 220);
             const el = document.createElement('div');
             el.className = 'space-y-3';
             el.innerHTML = `
@@ -4122,8 +4154,21 @@ function renderProjectView(container) {
                     <div class="text-zinc-400 text-xxs font-mono uppercase tracking-widest">Scratchpad</div>
                     <div class="text-zinc-600 text-[10px] font-mono">${scratchpadUpdatedAt ? `updated ${new Date(scratchpadUpdatedAt).toLocaleString()}` : ''}</div>
                 </div>
-                <textarea id="proj-scratchpad" rows="10" class="w-full bg-zinc-950/40 border border-zinc-800 rounded px-3 py-2 text-xs font-mono text-zinc-200 resize-none" placeholder="Quick notes, deliverables, blockers...">${escapeHtml(scratchpadText)}</textarea>
+                <textarea id="proj-scratchpad" rows="8" class="w-full bg-zinc-950/40 border border-zinc-800 rounded px-3 py-2 text-xs font-mono text-zinc-200 resize-none" placeholder="Quick notes, deliverables, blockers...">${escapeHtml(scratchpadText)}</textarea>
                 <button id="btn-save-scratch" class="w-full bg-zinc-800 hover:bg-zinc-700 text-zinc-200 px-3 py-2 rounded text-xs font-semibold uppercase tracking-wide transition-colors">Save</button>
+                <div class="h-px bg-zinc-800"></div>
+                ${scratchpadText
+                    ? `<details class="border border-zinc-800 rounded-md bg-zinc-950/30 p-3">
+                        <summary class="cursor-pointer list-none flex items-center justify-between gap-3">
+                            <div>
+                                <div class="text-zinc-300 text-xxs font-mono uppercase tracking-widest">Scratch snapshot</div>
+                                <div class="mt-1 text-xs text-zinc-300">${escapeHtml(scratchPreview || '(empty)')}</div>
+                            </div>
+                            <div class="text-[10px] text-zinc-500 font-mono">Expand</div>
+                        </summary>
+                        <div class="mt-2 text-xs text-zinc-200 whitespace-pre-wrap font-mono border-t border-zinc-800 pt-2">${escapeHtml(scratchpadText)}</div>
+                    </details>`
+                    : `<div class="text-zinc-600 italic text-sm">No saved scratch content yet.</div>`}
             `;
             panel.appendChild(el);
 
@@ -4134,7 +4179,7 @@ function renderProjectView(container) {
                     saveScratchBtn.disabled = true;
                     try {
                         await saveScratchpad(project.id, scratchArea.value);
-                        alert('Scratchpad saved.');
+                        await fetchState();
                         renderMain();
                     } catch (e) {
                         alert(e?.message || 'Failed to save scratchpad');
@@ -4154,11 +4199,18 @@ function renderProjectView(container) {
                     const date = safeText(n.date);
                     const title = safeText(n.title);
                     const content = safeText(n.content);
+                    const preview = previewText(content, 220);
                     return `
-                        <div class="border border-zinc-800 rounded-md bg-zinc-950/30 p-3">
-                            <div class="text-zinc-300 text-xxs font-mono uppercase tracking-widest">${escapeHtml(kind)}${date ? ` • ${escapeHtml(date)}` : ''}${title ? ` • ${escapeHtml(title)}` : ''}</div>
-                            <div class="mt-2 text-xs text-zinc-200 whitespace-pre-wrap font-mono">${escapeHtml(content)}</div>
-                        </div>
+                        <details class="border border-zinc-800 rounded-md bg-zinc-950/30 p-3">
+                            <summary class="cursor-pointer list-none flex items-center justify-between gap-3">
+                                <div class="min-w-0">
+                                    <div class="text-zinc-300 text-xxs font-mono uppercase tracking-widest">${escapeHtml(kind)}${date ? ` • ${escapeHtml(date)}` : ''}${title ? ` • ${escapeHtml(title)}` : ''}</div>
+                                    <div class="mt-1 text-xs text-zinc-300 truncate">${escapeHtml(preview || '(empty)')}</div>
+                                </div>
+                                <div class="text-[10px] text-zinc-500 font-mono">Expand</div>
+                            </summary>
+                            <div class="mt-2 text-xs text-zinc-200 whitespace-pre-wrap font-mono border-t border-zinc-800 pt-2">${escapeHtml(content)}</div>
+                        </details>
                     `;
                 }).join('')
                 : `<div class="text-zinc-600 italic text-sm">No notes yet.</div>`;
@@ -4196,6 +4248,7 @@ function renderProjectView(container) {
                         const content = safeText(el.querySelector('#note-content')?.value);
                         if (!content.trim()) throw new Error('Note content is required');
                         await addProjectNote(project.id, { kind, date, title, content });
+                        await fetchState();
                         el.querySelector('#note-content').value = '';
                         el.querySelector('#note-title').value = '';
                         renderMain();
@@ -4261,12 +4314,19 @@ function renderProjectView(container) {
                     const date = safeText(c.date);
                     const subject = safeText(c.subject) || 'No Subject';
                     const bodyText = safeText(c.body);
+                    const preview = previewText(bodyText || subject, 220);
                     return `
-                        <div class="border border-zinc-800 rounded-md bg-zinc-950/30 p-3">
-                            <div class="text-zinc-500 text-xxs font-mono uppercase tracking-widest">${escapeHtml(ctype)} • ${escapeHtml(direction)}${date ? ` • ${escapeHtml(date)}` : ''}</div>
-                            <div class="mt-1 text-xs text-zinc-200 font-mono">${escapeHtml(subject)}</div>
-                            ${bodyText ? `<div class=\"mt-2 text-xs text-zinc-300 whitespace-pre-wrap font-mono\">${escapeHtml(bodyText)}</div>` : ''}
-                        </div>
+                        <details class="border border-zinc-800 rounded-md bg-zinc-950/30 p-3">
+                            <summary class="cursor-pointer list-none flex items-center justify-between gap-3">
+                                <div class="min-w-0">
+                                    <div class="text-zinc-500 text-xxs font-mono uppercase tracking-widest">${escapeHtml(ctype)} • ${escapeHtml(direction)}${date ? ` • ${escapeHtml(date)}` : ''}</div>
+                                    <div class="mt-1 text-xs text-zinc-200 font-mono truncate">${escapeHtml(subject)}</div>
+                                    <div class="mt-1 text-xs text-zinc-300 truncate">${escapeHtml(preview || '(empty)')}</div>
+                                </div>
+                                <div class="text-[10px] text-zinc-500 font-mono">Expand</div>
+                            </summary>
+                            ${bodyText ? `<div class=\"mt-2 text-xs text-zinc-300 whitespace-pre-wrap font-mono border-t border-zinc-800 pt-2\">${escapeHtml(bodyText)}</div>` : ''}
+                        </details>
                     `;
                 }).join('')
                 : `<div class="text-zinc-600 italic text-sm">No communications yet.</div>`;
@@ -4968,6 +5028,7 @@ async function handleChatSubmit() {
     // Show Thinking
     const status = document.getElementById("ai-status");
     if(status) status.style.opacity = "1";
+    setMartyPresence('busy');
     
     try {
         const res = await apiFetch("/api/chat", {
@@ -4996,6 +5057,7 @@ async function handleChatSubmit() {
         addChatMessage("ai", "Error: Connection Severed.");
     } finally {
         if(status) status.style.opacity = "0";
+        setMartyPresence('idle');
     }
 }
 
@@ -5017,7 +5079,7 @@ function addChatMessage(role, text) {
     div.className = "flex flex-col gap-1 mb-4 animate-fade-in";
     
     div.innerHTML = `
-        <span class="text-[10px] uppercase font-bold tracking-wider ${role === 'ai' ? 'text-blue-500' : 'text-zinc-500 text-right'}">${role === 'ai' ? 'Neural Core' : 'Operator'}</span>
+        <span class="text-[10px] uppercase font-bold tracking-wider ${role === 'ai' ? 'text-blue-500' : 'text-zinc-500 text-right'}">${role === 'ai' ? 'MARTY' : 'Operator'}</span>
         <div class="p-2 rounded text-xs ${role === 'ai' ? 'bg-zinc-800/50 text-zinc-300 border-l-2 border-blue-500' : 'bg-blue-900/10 text-blue-200 border-r-2 border-blue-500/50 self-end'} max-w-[90%] break-words shadow-sm">
             ${text}
         </div>
@@ -5037,7 +5099,7 @@ function renderChat() {
     } else {
         stream.innerHTML = `<div class="text-center mt-10 opacity-30">
             <i class="fa-solid fa-terminal text-2xl mb-2"></i>
-            <p>Ready for directives.</p>
+            <p>MARTY ready for directives.</p>
         </div>`;
     }
 }
