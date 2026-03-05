@@ -1,0 +1,14 @@
+﻿
+    const routing = resolveBusinessForInbound({ settings, toNumber: to });
+    const store = await readStore();
+    const matched = matchProjectFromText(store, body);
+    const lines = [];
+    lines.push(`SMS${from ? ` from ${from}` : ''}${to ? ` ? ${to}` : ''} ï¿½ ${routing.businessLabel}:`);
+    lines.push(body);
+
+    await addInboxIntegrationItem({
+      source: 'sms',
+      externalId: `sms:${sid || crypto.createHash('sha1').update(`${from}|${to}|${body}`).digest('hex')}`,
+      text: lines.join('\n'),
+      projectId: matched?.id || '',
+      projectName: matched?.name || '',

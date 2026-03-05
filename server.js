@@ -3476,8 +3476,25 @@ app.post('/api/integrations/quo/sms', async (req, res) => {
     const routing = resolveBusinessForInbound({ settings, toNumber: to });
     const store = await readStore();
     const matched = matchProjectFromText(store, body);
+
+    const senderKey = normalizePhoneForLookup(from);
+    let finalProjectName = matched?.name || '';
+    let fromLabel = from || '';
+
+    const pMap = store.settings?.senderProjectMap || settings.senderProjectMap || {};
+    if (pMap[senderKey]) {
+      fromLabel = pMap[senderKey].projectName;
+      if (!finalProjectName) {
+          finalProjectName = fromLabel;
+          if (matched) { matched.id = pMap[senderKey].projectId; }
+      }
+    }
+
     const lines = [];
-    lines.push(`SMS${from ? ` from ${from}` : ''}${to ? ` ? ${to}` : ''} � ${routing.businessLabel}:`);
+    lines.push(`📱 SMS • ${routing.businessLabel}`);
+    lines.push(`From: ${fromLabel}`);
+    lines.push(`To: ${to}`);
+    lines.push(``);
     lines.push(body);
 
     await addInboxIntegrationItem({
@@ -3485,7 +3502,7 @@ app.post('/api/integrations/quo/sms', async (req, res) => {
       externalId: `sms:${sid || crypto.createHash('sha1').update(`${from}|${to}|${body}`).digest('hex')}`,
       text: lines.join('\n'),
       projectId: matched?.id || '',
-      projectName: matched?.name || '',
+      projectName: finalProjectName,
       businessKey: routing.businessKey,
       businessLabel: routing.businessLabel,
       toNumber: to,
