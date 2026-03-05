@@ -175,7 +175,7 @@ function startBackupScheduler() {
   if (typeof timer.unref === 'function') timer.unref();
 }
 
-const ADMIN_TOKEN = typeof process.env.ADMIN_TOKEN === 'string' ? process.env.ADMIN_TOKEN.trim() : 'stbhat654c';
+const ADMIN_TOKEN = typeof process.env.ADMIN_TOKEN === 'string' ? process.env.ADMIN_TOKEN.trim() : '';
 const AUTH_COOKIE_NAME = 'ops_admin_token';
 const AUTH_COOKIE_MAX_AGE_SEC = 60 * 60 * 24 * 30;
 
