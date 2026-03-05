@@ -3791,9 +3791,12 @@ function renderProjects(container) {
     }
 
     const bind = (id, key) => {
-        const el = document.getElementById(id);
+        const el = intake.querySelector('#' + id);
         if (!el) return;
         el.addEventListener('input', () => {
+            setNewProjectDraft({ [key]: el.value });
+        });
+        el.addEventListener('change', () => {
             setNewProjectDraft({ [key]: el.value });
         });
     };
@@ -3837,6 +3840,12 @@ function renderProjects(container) {
     if (btnCreate) {
         btnCreate.onclick = async () => {
             setError('');
+            // Snapshot all form fields into draft before validating
+            const fields = {np_name:'name',np_type:'type',np_status:'status',np_value:'projectValue',np_due:'dueDate',np_repo:'repoUrl',np_docs:'docsUrl',np_invoice:'stripeInvoiceUrl',np_workspace:'workspacePath',np_brief:'agentBrief'};
+            for (const [elId, key] of Object.entries(fields)) {
+                const el = intake.querySelector('#' + elId.replace('_','-'));
+                if (el) setNewProjectDraft({ [key]: el.value });
+            }
             btnCreate.disabled = true;
             const original = btnCreate.textContent;
             btnCreate.textContent = 'Creating...';
@@ -4455,9 +4464,12 @@ function renderDashboardLegacy(container) {
     }
 
     const bind = (id, key) => {
-        const el = document.getElementById(id);
+        const el = intake.querySelector('#' + id);
         if (!el) return;
         el.addEventListener('input', () => {
+            setNewProjectDraft({ [key]: el.value });
+        });
+        el.addEventListener('change', () => {
             setNewProjectDraft({ [key]: el.value });
         });
     };
@@ -4501,6 +4513,12 @@ function renderDashboardLegacy(container) {
     if (btnCreate) {
         btnCreate.onclick = async () => {
             setError('');
+            // Snapshot all form fields into draft before validating
+            const fields = {np_name:'name',np_type:'type',np_status:'status',np_value:'projectValue',np_due:'dueDate',np_repo:'repoUrl',np_docs:'docsUrl',np_invoice:'stripeInvoiceUrl',np_workspace:'workspacePath',np_brief:'agentBrief'};
+            for (const [elId, key] of Object.entries(fields)) {
+                const el = intake.querySelector('#' + elId.replace('_','-'));
+                if (el) setNewProjectDraft({ [key]: el.value });
+            }
             btnCreate.disabled = true;
             const original = btnCreate.textContent;
             btnCreate.textContent = 'Creating...';
