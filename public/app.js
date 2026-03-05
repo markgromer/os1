@@ -2668,6 +2668,31 @@ function renderSettings(container) {
         return el;
     };
 
+    // Access (admin token)
+    const access = section('Access', 'If this server is protected (ADMIN_TOKEN), paste it once here. Stored locally in this browser.');
+    const accessBody = access.querySelector('[data-slot="body"]');
+    const storedAdminToken = getStoredAdminToken();
+    const tokenHint = storedAdminToken ? `••••${escapeHtml(storedAdminToken.slice(-4))}` : 'None';
+    accessBody.innerHTML = `
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+                <label class="text-xs text-ops-light">Admin Token</label>
+                <input id="set-admin-token" type="password" autocomplete="off" placeholder="Paste ADMIN_TOKEN..." class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-sm" />
+                <div class="text-[11px] text-ops-light mt-1">Current: ${tokenHint}</div>
+            </div>
+            <div>
+                <label class="text-xs text-ops-light">Server Auth Status</label>
+                <div id="auth-status-line" class="mt-1 text-[11px] font-mono text-ops-light border border-ops-border rounded px-3 py-2 bg-ops-bg/40">Status: checking…</div>
+                <div class="text-[11px] text-ops-light mt-1">If prompts are blocked, use this panel instead.</div>
+            </div>
+        </div>
+        <div class="flex gap-2 mt-4">
+            <button id="btn-save-auth" class="px-3 py-2 rounded bg-blue-600 text-white text-xs hover:bg-blue-500">Save Token</button>
+            <button id="btn-clear-auth" class="px-3 py-2 rounded bg-ops-bg border border-ops-border text-ops-light text-xs hover:text-white">Clear Token</button>
+        </div>
+    `;
+    wrap.appendChild(access);
+
     // AI
     const ai = section('AI', 'Configure OpenAI key/model used for “Neural Link”.');
     const aiBody = ai.querySelector('[data-slot="body"]');
@@ -3255,6 +3280,8 @@ function renderSettings(container) {
     container.appendChild(wrap);
 
     // Wire actions
+    const btnSaveAuth = document.getElementById('btn-save-auth');
+    const btnClearAuth = document.getElementById('btn-clear-auth');
     const btnSaveAi = document.getElementById('btn-save-ai');
     const btnClearAi = document.getElementById('btn-clear-ai');
     const btnSaveGoogle = document.getElementById('btn-save-google');
@@ -3280,6 +3307,67 @@ function renderSettings(container) {
     const btnSaveMcp = document.getElementById('btn-save-mcp');
     const btnTestMcp = document.getElementById('btn-test-mcp');
     const mcpToolsOutput = document.getElementById('mcp-tools-output');
+
+    const refreshAuthStatus = async () => {
+        const line = document.getElementById('auth-status-line');
+        if (!line) return;
+        try {
+            const token = getStoredAdminToken();
+            const headers = new Headers();
+            if (token) headers.set('Authorization', `Bearer ${token}`);
+            const r = await fetch('/api/auth/status', { headers });
+            const s = await r.json().catch(() => ({}));
+            const required = !!s.authRequired;
+            const authed = (s && typeof s === 'object' && 'authenticated' in s) ? !!s.authenticated : !required;
+            line.textContent = `Status: ${required ? 'Required' : 'Not required'} / ${authed ? 'Authenticated' : 'Not authenticated'}`;
+        } catch {
+            line.textContent = 'Status: unavailable';
+        }
+    };
+
+    refreshAuthStatus();
+
+    if (btnSaveAuth) btnSaveAuth.onclick = async () => {
+        try {
+            const token = String(document.getElementById('set-admin-token')?.value || '').trim();
+            if (!token) {
+                alert('Paste a token first.');
+                return;
+            }
+
+            // Verify with server (also sets HttpOnly cookie when auth is enabled)
+            const r = await fetch('/api/auth/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ token, remember: true }),
+            });
+            const data = await r.json().catch(() => ({}));
+            if (!r.ok || data?.ok === false) {
+                throw new Error(data?.error || `Invalid token (${r.status})`);
+            }
+
+            setStoredAdminToken(token);
+            alert('Admin token saved.');
+            renderSettings(container);
+        } catch (e) {
+            alert(e?.message || 'Failed to save admin token');
+        }
+    };
+
+    if (btnClearAuth) btnClearAuth.onclick = async () => {
+        try {
+            setStoredAdminToken('');
+            try {
+                await fetch('/api/auth/logout', { method: 'POST' });
+            } catch {
+                // ignore
+            }
+            alert('Admin token cleared.');
+            renderSettings(container);
+        } catch (e) {
+            alert(e?.message || 'Failed to clear admin token');
+        }
+    };
 
     const refreshGoogleStatus = async () => {
         try {
