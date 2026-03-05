@@ -109,6 +109,7 @@ const MARTY_SYNC_STORAGE_KEY = 'opsMartySyncEvent';
 
 const MARTY_PANEL_MIN_WIDTH = 320;
 const MARTY_PANEL_MIN_HEIGHT = 420;
+const MARTY_TYPING_ID = 'marty-typing-indicator';
 
 const MARTY_THINKING_LINES = [
     'SCANNING',

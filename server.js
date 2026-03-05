@@ -1,4 +1,4 @@
-import crypto from 'node:crypto';
+﻿import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import { exec } from 'node:child_process';
 import os from 'node:os';
@@ -2241,7 +2241,7 @@ async function aiNextActions({ project, notes, tasks }) {
 
   const payload = {
     model,
-    temperature: 0.4,
+
     messages: [
       {
         role: 'system',
@@ -2394,7 +2394,7 @@ async function aiProjectAssistant({ project, scratchpad, noteEntries, communicat
 
   const payload = {
     model,
-    temperature: 0.4,
+
     messages,
     tools,
     tool_choice: 'auto',
@@ -2560,7 +2560,7 @@ async function aiTranscriptProposal({ project, transcript, tasks, noteEntries })
 
   const payload = {
     model,
-    temperature: 0.2,
+
     messages: [
       {
         role: 'system',
@@ -4979,7 +4979,7 @@ app.post('/api/ai/agent', async (req, res) => {
             { role: 'system', content: systemPrompt },
             { role: 'user', content: context }
           ],
-          temperature: 0.1
+
         }),
       });
       
