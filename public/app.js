@@ -20,6 +20,10 @@ const state = {
     projectNoteEntries: {},
     projectCommunications: {},
 
+    projectRightTabById: {},
+    dashboardCalls: { loading: false, fetchedAt: 0, error: '', events: [] },
+    dashboardGhl: { loading: false, fetchedAt: 0, error: '', snapshot: null },
+
     chatHistory: [],
     globalChatHistory: [],
     isChatOpen: true,
@@ -5234,6 +5238,9 @@ function setActiveProjectTab(projectId, tab) {
     const pid = safeText(projectId);
     const t = safeText(tab);
     if (!pid) return;
+    if (!state.projectRightTabById || typeof state.projectRightTabById !== 'object') {
+        state.projectRightTabById = {};
+    }
     state.projectRightTabById[pid] = t;
 }
 
