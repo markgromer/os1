@@ -1397,6 +1397,10 @@ async function createProjectFromDraft() {
         docsUrl: safeText(d.docsUrl).trim(),
         stripeInvoiceUrl: safeText(d.stripeInvoiceUrl).trim(),
         workspacePath: safeText(d.workspacePath).trim(),
+        priority: safeText(d.priority).trim() || 'Medium',
+        importance: safeText(d.importance).trim() || 'Medium',
+        risk: safeText(d.risk).trim() || 'None',
+        agentBrief: safeText(d.agentBrief).trim(),
     };
 
     const store = await apiJson('/api/projects', {
@@ -2632,6 +2636,7 @@ function renderInbox(container) {
                                 ${inboxStatusBadge(status)}
                                 ${inboxSourceBadge(item?.source)}
                                 <span class="px-2 py-0.5 rounded border border-zinc-800 bg-zinc-950/40 text-[10px] font-mono text-zinc-300">${escapeHtml(inboxBusinessLabel(item))}</span>
+                                  ${(item?.sender || item?.fromNumber) ? `<span class="px-2 py-0.5 rounded border border-zinc-500/30 bg-zinc-800/40 text-[10px] font-mono text-zinc-300">From: ${escapeHtml(item?.sender || item?.fromNumber)}</span>` : ""}
                                 <div class="text-[11px] text-zinc-500 font-mono">${escapeHtml(createdAt ? formatTimeFromIso(createdAt) : '')}${updatedAt && updatedAt !== createdAt ? ` • upd ${escapeHtml(formatTimeFromIso(updatedAt))}` : ''}</div>
                             </div>
                             <div class="mt-2 text-sm text-zinc-200 whitespace-pre-wrap break-words">${escapeHtml(safeText(item?.text))}</div>
@@ -3996,7 +4001,7 @@ function renderProjects(container) {
 
     // New Project Intake
     const intake = document.createElement('div');
-    intake.className = 'mb-6 border border-zinc-800 rounded-xl bg-zinc-900/30 p-4';
+    intake.className = 'mb-10 border border-white/10 rounded-2xl bg-white/5 backdrop-blur-xl p-5 shadow-2xl';
 
     const d = state.newProjectDraft || {};
     intake.innerHTML = `
@@ -4071,45 +4076,56 @@ function renderProjects(container) {
     content.appendChild(intake);
 
     const makeProjectListCard = (title, projects, emptyText) => {
-        const card = document.createElement('div');
-        card.className = 'border border-zinc-800 rounded-xl bg-zinc-900/30';
+        const wrap = document.createElement('div');
         const list = Array.isArray(projects) ? projects : [];
-        card.innerHTML = `
-            <div class="px-4 py-3 border-b border-zinc-800 flex items-center justify-between gap-3">
-                <div class="text-white text-sm font-semibold">${escapeHtml(title)}</div>
-                <div class="text-xs font-mono text-zinc-500">${list.length}</div>
+        wrap.innerHTML = `
+            <div class="flex items-center justify-between gap-3 mb-4">
+                <div class="text-white text-lg font-semibold tracking-tight">${escapeHtml(title)}</div>
+                <div class="text-xs font-mono text-zinc-500 bg-black/20 px-2 py-0.5 rounded-full border border-white/5">${list.length}</div>
             </div>
-            <div class="p-2" data-project-list></div>
+            <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4" data-project-list></div>
         `;
-        const body = card.querySelector('[data-project-list]');
+        const body = wrap.querySelector('[data-project-list]');
         if (body) {
             if (!list.length) {
                 const empty = document.createElement('div');
-                empty.className = 'p-3 text-zinc-600 italic text-sm';
+                empty.className = 'col-span-full p-4 border border-white/5 rounded-xl text-zinc-500 italic text-sm bg-black/10';
                 empty.innerText = emptyText || 'None.';
                 body.appendChild(empty);
             } else {
                 for (const p of list) {
-                    const row = document.createElement('button');
-                    row.type = 'button';
-                    row.className = 'w-full text-left px-3 py-2 rounded-lg hover:bg-zinc-800/60 transition-colors';
-                    row.innerHTML = `
-                        <div class="flex items-center justify-between gap-3">
-                            <div class="min-w-0">
-                                <div class="text-zinc-200 text-sm font-medium truncate">${escapeHtml(safeText(p?.name) || 'Untitled')}</div>
-                                <div class="text-[10px] font-mono text-zinc-500 truncate">${escapeHtml(safeText(p?.type) || 'Other')} • ${escapeHtml(safeText(p?.status) || 'Active')}</div>
+                    const card = document.createElement('button');
+                    card.type = 'button';
+                    // Glassy Card
+                    card.className = 'group w-full text-left p-4 rounded-xl border border-white/10 bg-white/5 backdrop-blur-md hover:bg-white/10 hover:border-white/20 transition-all duration-300 hover:-translate-y-1 hover:shadow-xl relative overflow-hidden flex flex-col gap-3 min-h-[120px]';
+                    card.innerHTML = `
+                        <div class="absolute inset-0 bg-gradient-to-br from-blue-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
+                        <div class="relative z-10 flex items-start justify-between gap-3">
+                            <div class="min-w-0 flex-1">
+                                <div class="text-white text-base font-semibold truncate tracking-tight">${escapeHtml(safeText(p?.name) || 'Untitled')}</div>
+                                <div class="text-xs text-zinc-400 mt-0.5 max-w-[90%] truncate">${escapeHtml(safeText(p?.agentBrief) || 'No brief provided...')}</div>
                             </div>
-                            <div class="shrink-0 text-[10px] font-mono uppercase tracking-widest px-2 py-1 rounded border ${safeText(p?.dueDate) ? 'text-blue-300 border-blue-500/30 bg-zinc-950/30' : 'text-zinc-600 border-zinc-800 bg-zinc-950/20'}">${safeText(p?.dueDate) ? `Due ${escapeHtml(safeText(p?.dueDate))}` : 'No due'}</div>
+                            <div class="shrink-0 text-[10px] font-mono px-2 py-1 rounded-full border ${safeText(p?.dueDate) ? 'text-blue-300 border-blue-500/30 bg-blue-500/10' : 'text-zinc-500 border-zinc-800 bg-black/20'}">
+                                ${safeText(p?.dueDate) ? `Due ${escapeHtml(safeText(p?.dueDate))}` : 'No due date'}
+                            </div>
+                        </div>
+                        <div class="relative z-10 mt-auto flex items-center gap-2">
+                            <span class="text-[10px] font-mono uppercase tracking-wider px-2 py-1 rounded border border-white/10 bg-black/20 text-emerald-300">
+                                ${escapeHtml(safeText(p?.status) || 'Active')}
+                            </span>
+                            <span class="text-[10px] font-mono uppercase tracking-wider px-2 py-1 rounded border border-white/10 bg-black/20 text-purple-300">
+                                ${escapeHtml(safeText(p?.type) || 'Other')}
+                            </span>
                         </div>
                     `;
-                    row.onclick = async () => {
+                    card.onclick = async () => {
                         if (p?.id) await openProject(p.id);
                     };
-                    body.appendChild(row);
+                    body.appendChild(card);
                 }
             }
         }
-        return card;
+        return wrap;
     };
 
     content.appendChild(makeProjectListCard('Active Projects', activeProjects, 'None.'));
@@ -4194,7 +4210,7 @@ function renderProjects(container) {
         btnCreate.onclick = async () => {
             setError('');
             // Snapshot all form fields into draft before validating
-            const fields = {np_name:'name',np_type:'type',np_status:'status',np_value:'projectValue',np_due:'dueDate',np_repo:'repoUrl',np_docs:'docsUrl',np_invoice:'stripeInvoiceUrl',np_workspace:'workspacePath',np_brief:'agentBrief'};
+            const fields = {np_name:'name',np_type:'type',np_status:'status',np_value:'projectValue',np_due:'dueDate',np_repo:'repoUrl',np_docs:'docsUrl',np_invoice:'stripeInvoiceUrl',np_workspace:'workspacePath',np_brief:'agentBrief',np_priority:'priority',np_importance:'importance',np_risk:'risk'};
             for (const [elId, key] of Object.entries(fields)) {
                 const el = intake.querySelector('#' + elId.replace('_','-'));
                 if (el) setNewProjectDraft({ [key]: el.value });
@@ -4426,7 +4442,7 @@ function renderDashboardLegacy(container) {
 
     // New Project Intake
     const intake = document.createElement('div');
-    intake.className = 'mb-6 border border-zinc-800 rounded-xl bg-zinc-900/30 p-4';
+    intake.className = 'mb-10 border border-white/10 rounded-2xl bg-white/5 backdrop-blur-xl p-5 shadow-2xl';
 
     const d = state.newProjectDraft || {};
     intake.innerHTML = `
@@ -4867,7 +4883,7 @@ function renderDashboardLegacy(container) {
         btnCreate.onclick = async () => {
             setError('');
             // Snapshot all form fields into draft before validating
-            const fields = {np_name:'name',np_type:'type',np_status:'status',np_value:'projectValue',np_due:'dueDate',np_repo:'repoUrl',np_docs:'docsUrl',np_invoice:'stripeInvoiceUrl',np_workspace:'workspacePath',np_brief:'agentBrief'};
+            const fields = {np_name:'name',np_type:'type',np_status:'status',np_value:'projectValue',np_due:'dueDate',np_repo:'repoUrl',np_docs:'docsUrl',np_invoice:'stripeInvoiceUrl',np_workspace:'workspacePath',np_brief:'agentBrief',np_priority:'priority',np_importance:'importance',np_risk:'risk'};
             for (const [elId, key] of Object.entries(fields)) {
                 const el = intake.querySelector('#' + elId.replace('_','-'));
                 if (el) setNewProjectDraft({ [key]: el.value });
@@ -6753,8 +6769,8 @@ function escapeHtml(str) {
 
 function createTaskRow(task, showProjectLabel = false) {
     const div = document.createElement("div");
-    div.className = `group flex items-center gap-4 p-3 rounded border border-zinc-800/50 bg-zinc-900/30 hover:bg-zinc-800/50 hover:border-zinc-700 transition-all ${isDoneTask(task) ? 'opacity-50' : ''}`;
-    
+    div.className = `task-row-container relative z-10 group flex items-center gap-4 p-3 rounded border border-zinc-800/50 bg-zinc-900/30 hover:bg-zinc-800/50 hover:border-zinc-700 transition-all ${isDoneTask(task) ? 'opacity-50' : ''}`;
+
     // Status Checkbox
     const checkbox = document.createElement("div");
     checkbox.className = `min-w-[1.25rem] h-5 rounded border ${isDoneTask(task) ? 'bg-emerald-500 border-emerald-500' : 'border-zinc-600 hover:border-blue-500'} cursor-pointer flex items-center justify-center transition-colors`;
@@ -6808,49 +6824,131 @@ function createTaskRow(task, showProjectLabel = false) {
     const avatarTxt = ownerObj?.avatar ? ownerObj.avatar : ownerName[0];
     
     const assigneeHtml = `
-        <div class="flex items-center gap-1.5 hover:text-zinc-300 cursor-pointer" title="Reassign">
-            <div class="w-4 h-4 rounded-full bg-zinc-700 flex items-center justify-center text-[10px] text-white font-bold uppercase">${avatarTxt}</div>
-            <span>${ownerName}</span>
-        </div>
-    `;
-    
-    metaRow.innerHTML = assigneeHtml;
-    const reassignEl = metaRow.querySelector('div[title="Reassign"]');
-    if (reassignEl) {
-        reassignEl.addEventListener('click', async (e) => {
-            e.stopPropagation();
-            const humans = getHumanTeamMembers();
-            const names = humans.map((m) => m.name);
-            if (!names.length) return alert('No team members configured. Add them in Settings → Team.');
-            const next = prompt(`Reassign owner (available: ${names.join(', ')})`, ownerName === 'Unassigned' ? '' : ownerName);
-            const picked = safeText(next).trim();
-            if (!picked) return;
-            if (!names.includes(picked)) return alert('Pick an existing team member name.');
+          <div class="flex items-center gap-1.5 cursor-pointer relative" title="Delegate Task">
+              <button class="flex items-center gap-1.5 px-2 py-1 rounded bg-zinc-800/50 hover:bg-zinc-700/80 border border-zinc-700/50 text-xs transition-colors">
+                  <div class="w-4 h-4 rounded-full bg-zinc-600 flex items-center justify-center text-[10px] text-white font-bold uppercase">${avatarTxt}</div>
+                  <span class="text-zinc-300 font-medium">${ownerName === 'Unassigned' ? 'Delegate' : ownerName}</span>
+                  <i class="fa-solid fa-chevron-down text-[8px] text-zinc-500 ml-1"></i>
+              </button>
+              <div class="assignee-dropdown hidden absolute top-full left-0 mt-1 w-64 bg-zinc-800 border border-zinc-700 rounded-lg shadow-xl z-50 overflow-hidden text-sm max-h-64 overflow-y-auto">
+                <div class="px-3 py-2 text-xs font-bold text-zinc-400 uppercase tracking-widest border-b border-zinc-700 bg-zinc-900/50">Delegate to...</div>
+                <div class="p-1 dropdown-list flex flex-col gap-0.5"></div>
+              </div>
+          </div>
+      `;
 
-            const counts = getOpenTaskCountByOwner();
-            const limit = getWipLimitForOwner(picked);
-            const current = Number(counts[picked] || 0);
-            if (current >= limit) {
-                const ok = confirm(`${picked} is at WIP limit (${current}/${limit}). Assign anyway?`);
-                if (!ok) return;
-            }
+      metaRow.innerHTML = assigneeHtml;
+      const reassignEl = metaRow.querySelector('div[title="Delegate Task"]');
+      const dropdownEl = metaRow.querySelector('.assignee-dropdown');
+      const dropdownListEl = metaRow.querySelector('.dropdown-list');
+      
+      if (reassignEl && dropdownEl && dropdownListEl) {
+          reassignEl.addEventListener('click', async (e) => {
+              e.stopPropagation();
+              
+              // Toggle or close others
+              document.querySelectorAll('.assignee-dropdown:not(.hidden)').forEach(el => {
+                  if (el !== dropdownEl) el.classList.add('hidden');
+              });
+                
+                // Reset z-indexes globally to prevent clipping
+                document.querySelectorAll('.task-row-container').forEach(el => el.style.zIndex = '10');
 
-            const res = await apiFetch(`/api/tasks/${task.id}`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ baseRevision: state.revision, patch: { owner: picked } })
-            });
-            if (!res.ok) {
-                await fetchState();
-                alert('Failed to reassign (store changed). Try again.');
-                return;
-            }
-            const store = await res.json();
-            applyStore(store);
-            renderNav();
-            renderMain();
-        });
-    }
+                const isHidden = dropdownEl.classList.contains('hidden');
+                if (!isHidden) {
+                    dropdownEl.classList.add('hidden');
+                    div.style.zIndex = '10';
+                    return;
+                }
+
+                dropdownEl.classList.remove('hidden');
+                div.style.zIndex = '50';
+              if (!names.length) {
+                  dropdownListEl.innerHTML = '<div class="px-2 py-2 text-zinc-500 text-xs italic">No team members.</div>';
+                  return;
+              }
+              
+              // Close when clicking outside
+              const closeDropdown = (ec) => {
+                  if (!reassignEl.contains(ec.target)) {
+                      dropdownEl.classList.add('hidden');
+                      div.style.zIndex = '10';
+                      document.removeEventListener('click', closeDropdown);
+                  }
+              };
+              document.addEventListener('click', closeDropdown);
+
+              const counts = getOpenTaskCountByOwner();
+
+              const addOption = (picked, display, subtext) => {
+                  const opt = document.createElement('div');
+                  opt.className = 'w-full text-left px-2 py-1.5 rounded hover:bg-zinc-700 transition-colors flex items-center justify-between cursor-pointer';
+                  opt.innerHTML = `<span class="font-medium">${escapeHtml(display)}</span> ${subtext ? `<span class="text-[10px] text-zinc-500 flex items-center gap-1.5">${subtext}</span>` : ''}`;
+
+                  opt.onclick = async (ev) => {
+                      ec = ev || window.event;
+                      ec.stopPropagation();
+                      dropdownEl.classList.add('hidden');
+                      document.removeEventListener('click', closeDropdown);
+                      
+                      if (!picked) return;
+                      
+                      const limit = getWipLimitForOwner(picked);
+                      const current = Number(counts[picked] || 0);
+                      if (current >= limit && picked !== 'Unassigned') {
+                          const ok = confirm(`${picked} is at WIP limit (${current}/${limit}). Assign anyway?`);
+                          if (!ok) return;
+                      }
+
+                      const res = await apiFetch(`/api/tasks/${task.id}`, {
+                          method: 'PUT',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ baseRevision: state.revision, patch: { owner: picked === 'Unassigned' ? '' : picked } })
+                      });
+                      if (!res.ok) {
+                          await fetchState();
+                          alert('Failed to reassign (store changed). Try again.');
+                          return;
+                      }
+                      const store = await res.json();
+                      applyStore(store);
+                      renderNav();
+                      renderMain();
+                  };
+                  dropdownListEl.appendChild(opt);
+              };
+              
+              addOption('Unassigned', 'Unassigned', '');
+              
+              const scored = humans.map((m) => {
+                  const name = safeText(m?.name).trim();
+                  const current = Number(counts[name] || 0);
+                  const limit = Number(m?.wipLimit) > 0 ? Number(m.wipLimit) : Infinity;
+                  const remaining = limit === Infinity ? Infinity : (limit - current);
+                  const skill = computeSkillScore(task, m);
+                  return { name, current, limit, remaining, skill };
+              }).filter((x) => x.name);
+
+              scored.sort((a, b) => {
+                  if (b.skill !== a.skill) return b.skill - a.skill;
+                  return a.current - b.current;
+              });
+              
+              const topCandidate = (scored.length > 0 && scored[0].remaining > 0) ? scored[0].name : null;
+
+              scored.forEach(c => {
+                  let sub = `${c.current} tasks`;
+                  if (c.remaining <= 0) sub = `<span class="text-amber-500">${c.current}/${c.limit} max</span>`;
+                  
+                  let htmlSub = sub;
+                  if (c.name === topCandidate) {
+                      htmlSub = `<span class="px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-400 text-[9px] uppercase tracking-wider font-bold shadow-[0_0_8px_rgba(59,130,246,0.3)]"><i class="fa-solid fa-bolt mr-1"></i>Rec</span>` + htmlSub;
+                  }
+
+                  addOption(c.name, c.name, htmlSub);
+              });
+          });
+      }
 
     if (showProjectLabel) {
         metaRow.innerHTML += `<span class="text-zinc-600">•</span><span>${task.project || "General"}</span>`;
@@ -7212,7 +7310,7 @@ async function handleChatSubmit() {
         removeMartyTypingIndicator();
         setMartyPresence('responding');
         recordChatMessage("ai", reply);
-        addChatMessage("ai", reply);
+        addChatMessage("ai", reply, true);
         
         // Refresh state in case AI changed things
         await fetchState();
@@ -7252,22 +7350,77 @@ function recordChatMessage(role, text) {
     });
 }
 
-function addChatMessage(role, text) {
+function addChatMessage(role, text, animate = false) {
     const stream = document.getElementById("chat-stream");
     if(!stream) return;
     if (role === 'ai') removeMartyTypingIndicator();
-    
+
     const div = document.createElement("div");
-    div.className = "flex flex-col gap-1 mb-4 animate-fade-in";
+    div.className = "flex flex-col gap-1.5 mb-5 animate-fade-in";
+
+    // Glass style bubbles
+    const bubbleClasses = role === 'ai' 
+        ? 'bg-ops-surface/80 backdrop-blur border border-white/10 text-white rounded-br-2xl rounded-bl-sm rounded-t-2xl px-4 py-3 shadow-md'
+        : 'bg-blue-600/20 backdrop-blur border border-blue-500/30 text-blue-50 rounded-bl-2xl rounded-br-sm rounded-t-2xl px-4 py-3 self-end shadow-md';
+
+    const header = document.createElement("span");
+    header.className = `text-[9px] uppercase font-bold tracking-widest ${role === 'ai' ? 'text-blue-400 ml-1' : 'text-zinc-400 text-right mr-1'}`;
+    header.innerText = role === 'ai' ? 'MARTY // DIRECT' : 'Operator';
+
+    const bubble = document.createElement("div");
+    bubble.className = `text-[13px] leading-relaxed max-w-[85%] break-words ${bubbleClasses}`;
     
-    div.innerHTML = `
-        <span class="text-[10px] uppercase font-bold tracking-wider ${role === 'ai' ? 'text-blue-400' : 'text-zinc-500 text-right'}">${role === 'ai' ? 'MARTY // DIRECT' : 'Operator'}</span>
-        <div class="p-2 rounded text-xs ${role === 'ai' ? 'bg-zinc-800/60 text-zinc-200 border-l-2 border-blue-500' : 'bg-blue-900/10 text-blue-200 border-r-2 border-blue-500/50 self-end'} max-w-[90%] break-words shadow-sm">
-            ${text}
-        </div>
-    `;
+    // Parse Markdown safely
+    const parsedHTML = typeof marked === 'function' ? marked.parse(text) : escapeHtml(text).replace(/\n/g, '<br/>');
+
+    if (animate && role === 'ai') {
+        bubble.innerHTML = '';
+        div.appendChild(header);
+        div.appendChild(bubble);
+        stream.appendChild(div);
+        stream.scrollTop = stream.scrollHeight;
+        
+        // Typewriter effect using HTML safe streaming
+        let tempDiv = document.createElement('div');
+        tempDiv.innerHTML = parsedHTML;
+        
+        // Very basic text walker for typewriter
+        let textNodes = [];
+        let htmlClone = tempDiv.cloneNode(true);
+        let currentPos = 0;
+        let speed = 8; // ms per char
+        
+        // Simplified raw typewriter
+        bubble.innerHTML = '<span class="typing-cursor"></span>';
+        let rawHtml = parsedHTML;
+        let i = 0;
+        
+        function typeWriter() {
+            if (i < rawHtml.length) {
+                // Skip HTML tags
+                if (rawHtml.charAt(i) === '<') {
+                    let tagEnd = rawHtml.indexOf('>', i);
+                    if (tagEnd !== -1) {
+                        i = tagEnd + 1;
+                    }
+                }
+                bubble.innerHTML = rawHtml.substring(0, i) + '<span class="inline-block w-1.5 h-3 ml-0.5 align-middle bg-blue-400 animate-pulse"></span>';
+                i++;
+                stream.scrollTop = stream.scrollHeight;
+                setTimeout(typeWriter, speed);
+            } else {
+                bubble.innerHTML = rawHtml;
+                stream.scrollTop = stream.scrollHeight;
+            }
+        }
+        typeWriter();
+    } else {
+        bubble.innerHTML = parsedHTML;
+        div.appendChild(header);
+        div.appendChild(bubble);
+        stream.appendChild(div);
+    }
     
-    stream.appendChild(div);
     stream.scrollTop = stream.scrollHeight;
 }
 
@@ -7307,3 +7460,5 @@ async function loadChatHistory() {
     // Global chat is local-only.
     state.chatHistory = state.globalChatHistory;
 }
+
+

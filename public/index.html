@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>OS.1 // Operator System</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script>
@@ -37,31 +38,47 @@
     </script>
     <style>
         :root {
-            /* Dark (default) */
-            --ops-bg: 9 9 11;
-            --ops-surface: 24 24 27;
-            --ops-border: 39 39 42;
-            --ops-light: 161 161 170;
-            --ops-text: 228 228 231;
-            --ops-accent: 59 130 246;
+            /* Dark (default) Black & Red Glass */
+            --ops-bg: 0 0 0;
+            --ops-surface: 14 6 6;
+            --ops-border: 50 15 15; /* Subtly red glass borders */
+            --ops-light: 228 228 231;
+            --ops-text: 244 244 245;
+            --ops-accent: 220 38 38; /* Red-600 */
             --ops-success: 16 185 129;
             --ops-warning: 245 158 11;
-            --ops-danger: 239 68 68;
+            --ops-danger: 185 28 28; /* Red-700 */
 
-            --ops-scroll-thumb: 39 39 42;
-            --ops-scroll-thumb-hover: 63 63 70;
+            --ops-scroll-thumb: 60 20 20;
+            --ops-scroll-thumb-hover: 100 30 30;
+        }
+
+        body {
+            /* A deep, space-like mesh background that looks amazing under glass */
+            background-color: #070000;
+            background-image: 
+                radial-gradient(at 10% 10%, rgba(220, 38, 38, 0.25) 0%, transparent 40%),
+                radial-gradient(at 90% 90%, rgba(185, 28, 28, 0.2) 0%, transparent 40%),
+                radial-gradient(at 80% 20%, rgba(153, 27, 27, 0.15) 0%, transparent 35%),
+                radial-gradient(at 20% 80%, rgba(239, 68, 68, 0.15) 0%, transparent 40%);
+            background-attachment: fixed;
+            color: #f4f4f5;
+        }
+
+        html {
+            background-color: #000000;
         }
 
         html[data-theme="light"] {
             /* Light (zinc palette) */
             --ops-bg: 250 250 250;
             --ops-surface: 255 255 255;
-            --ops-border: 228 228 231;
-            --ops-light: 82 82 91;
-            --ops-text: 24 24 27;
+            --ops-border: 212 212 216;
+            --ops-light: 63 63 70;
+            --ops-text: 0 0 0;
 
-            --ops-scroll-thumb: 212 212 216;
-            --ops-scroll-thumb-hover: 161 161 170;
+            --ops-scroll-thumb: 161 161 170;
+            --ops-scroll-thumb-hover: 113 113 122;
         }
 
         /* Light theme overrides for commonly-used Zinc utility classes.
@@ -77,21 +94,32 @@
         html[data-theme="light"] .bg-zinc-800\/40 { background-color: rgb(244 244 245 / 0.8) !important; }
         html[data-theme="light"] .bg-zinc-800\/50 { background-color: rgb(244 244 245 / 0.9) !important; }
 
-        html[data-theme="light"] .border-zinc-800 { border-color: rgb(228 228 231) !important; }
-        html[data-theme="light"] .border-zinc-700 { border-color: rgb(212 212 216) !important; }
-        html[data-theme="light"] .border-zinc-800\/50 { border-color: rgb(228 228 231 / 0.7) !important; }
+        html[data-theme="light"] .border-zinc-800 { border-color: rgb(212 212 216) !important; }
+        html[data-theme="light"] .border-zinc-700 { border-color: rgb(161 161 170) !important; }
+        html[data-theme="light"] .border-zinc-800\/50 { border-color: rgb(212 212 216 / 0.7) !important; }
+        html[data-theme="light"] .border-white\/20 { border-color: rgb(0 0 0 / 0.25) !important; }
+        html[data-theme="light"] .border-white\/10 { border-color: rgb(0 0 0 / 0.15) !important; }
+        html[data-theme="light"] .border-white\/5 { border-color: rgb(0 0 0 / 0.08) !important; }
+        html[data-theme="light"] .bg-white\/10 { background-color: rgb(0 0 0 / 0.08) !important; }
+        html[data-theme="light"] .bg-white\/5 { background-color: rgb(0 0 0 / 0.04) !important; }
 
-        html[data-theme="light"] .text-white { color: rgb(24 24 27) !important; }
-        html[data-theme="light"] .text-zinc-200 { color: rgb(24 24 27) !important; }
-        html[data-theme="light"] .text-zinc-300 { color: rgb(39 39 42) !important; }
-        html[data-theme="light"] .text-zinc-400 { color: rgb(63 63 70) !important; }
-        html[data-theme="light"] .text-zinc-500 { color: rgb(82 82 91) !important; }
-        html[data-theme="light"] .text-zinc-600 { color: rgb(113 113 122) !important; }
+        html[data-theme="light"] .text-white { color: rgb(0 0 0) !important; font-weight: 600; }
+        html[data-theme="light"] .text-zinc-200 { color: rgb(9 9 11) !important; font-weight: 500; }
+        html[data-theme="light"] .text-zinc-300 { color: rgb(24 24 27) !important; font-weight: 500; }
+        html[data-theme="light"] .text-zinc-400 { color: rgb(39 39 42) !important; font-weight: 500; }
+        html[data-theme="light"] .text-zinc-500 { color: rgb(63 63 70) !important; }
+        html[data-theme="light"] .text-zinc-600 { color: rgb(82 82 91) !important; }
 
         body {
             background-color: rgb(var(--ops-bg));
             color: rgb(var(--ops-text));
             position: relative;
+            background-image: 
+                radial-gradient(at 10% 10%, rgb(var(--ops-accent) / 0.25) 0%, transparent 40%),
+                radial-gradient(at 90% 90%, rgb(var(--ops-danger) / 0.2) 0%, transparent 40%),
+                radial-gradient(at 80% 20%, rgb(220 38 38 / 0.15) 0%, transparent 35%),
+                radial-gradient(at 20% 80%, rgb(185 28 28 / 0.15) 0%, transparent 40%);
+            background-attachment: fixed;
         }
 
         /* Subtle ambient background glow (uses existing theme tokens only) */
@@ -102,10 +130,10 @@
             pointer-events: none;
             z-index: 0;
             background:
-                radial-gradient(900px 520px at 18% 10%, rgb(var(--ops-accent) / 0.12), transparent 60%),
-                radial-gradient(820px 520px at 85% 18%, rgb(var(--ops-success) / 0.08), transparent 58%),
-                radial-gradient(980px 620px at 55% 100%, rgb(var(--ops-warning) / 0.07), transparent 62%);
-            filter: saturate(120%);
+                radial-gradient(900px 520px at 18% 10%, rgb(var(--ops-accent) / 0.18), transparent 60%),
+                radial-gradient(820px 520px at 85% 18%, rgb(var(--ops-danger) / 0.15), transparent 58%),
+                radial-gradient(980px 620px at 55% 100%, rgb(var(--ops-accent) / 0.12), transparent 62%);
+            filter: saturate(160%);
         }
 
         /* Ensure app UI stays above glow */
@@ -453,10 +481,10 @@
         }
     </style>
 </head>
-<body class="h-screen flex text-sm overflow-hidden antialiased">
-    
+<body class="h-screen flex text-sm overflow-hidden antialiased selection:bg-red-500/30 selection:text-red-200">
+
     <!-- COMMAND BAR (Left) -->
-    <aside id="command-bar" class="w-16 border-r border-ops-border flex flex-col items-center py-4 bg-ops-surface z-30">
+    <aside id="command-bar" class="w-16 border-r border-ops-border flex flex-col items-center py-4 bg-ops-surface/60 backdrop-blur-2xl z-30 shadow-2xl">
         <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-600 to-blue-400 mb-6 flex items-center justify-center font-mono font-bold text-white text-[10px] leading-none shadow-lg shadow-blue-500/20" title="OS.1 — Operator System 1">
             OS.1
         </div>
@@ -471,9 +499,9 @@
     </aside>
 
     <!-- CONTENT (Center) -->
-    <main id="workspace-main" class="flex-1 flex flex-col min-w-0 bg-ops-bg relative">
+    <main id="workspace-main" class="flex-1 flex flex-col min-w-0 bg-ops-bg/30 backdrop-blur-md relative z-10">
         <!-- Header -->
-        <header class="h-12 border-b border-ops-border flex items-center justify-between px-6 bg-ops-bg/80 backdrop-blur-sm z-20">
+        <header class="h-12 border-b border-ops-border flex items-center justify-between px-6 bg-ops-bg/40 backdrop-blur-xl z-20">
             <div class="flex items-center gap-3">
                 <h1 id="page-title" class="font-semibold text-white tracking-tight">Dashboard</h1>
                 <span id="page-meta" class="text-xs text-ops-light px-2 py-0.5 rounded bg-ops-surface border border-ops-border hidden"></span>
@@ -500,8 +528,8 @@
     </main>
 
     <!-- MARTY FLOATING PANEL -->
-    <aside id="neural-drawer" class="fixed right-6 bottom-6 w-[22rem] h-[32rem] border border-ops-border rounded-xl bg-ops-surface/95 backdrop-blur-sm flex flex-col z-40 shadow-2xl overflow-hidden">
-        <div id="marty-drag-handle" class="p-2.5 border-b border-ops-border flex justify-between items-center bg-zinc-900/50 cursor-move select-none">
+    <aside id="neural-drawer" class="fixed right-6 bottom-6 w-[22rem] h-[32rem] border border-white/10 rounded-2xl bg-ops-surface/50 backdrop-blur-2xl flex flex-col z-40 shadow-[0_8px_32px_rgba(0,0,0,0.5)] overflow-hidden transition-all duration-300">
+        <div id="marty-drag-handle" class="p-2.5 border-b border-white/5 flex justify-between items-center bg-white/5 cursor-move select-none">
             <div class="flex items-center gap-2 min-w-0">
                 <div id="marty-orb" class="marty-orb idle"></div>
                 <span class="text-[11px] font-mono font-bold text-ops-light tracking-widest uppercase truncate">
@@ -532,10 +560,10 @@
 
         <div class="p-2.5 border-t border-ops-border bg-zinc-900">
             <div class="relative">
-                <textarea id="cmd-input" rows="1" 
-                    class="w-full bg-ops-bg border border-ops-border rounded p-2.5 pr-10 text-white text-xs font-mono focus:border-ops-accent focus:outline-none focus:ring-1 focus:ring-ops-accent transition-all resize-none shadow-inner"
+                <textarea id="cmd-input" rows="1"
+                    class="w-full bg-black/20 border border-white/10 rounded-xl p-3 pr-10 text-white text-xs font-mono focus:border-ops-accent focus:outline-none focus:ring-1 focus:ring-ops-accent transition-all resize-none shadow-inner"
                     placeholder="Execute directive..."></textarea>
-                <button id="cmd-send" class="absolute right-2 bottom-2 text-ops-light hover:text-white transition-colors p-1">
+                <button id="cmd-send" class="absolute right-3 bottom-2.5 text-ops-light hover:text-white transition-colors p-1">
                     <i class="fa-solid fa-arrow-turn-up"></i>
                 </button>
             </div>

@@ -1,4 +1,4 @@
-﻿import crypto from 'node:crypto';
+import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import { exec } from 'node:child_process';
 import os from 'node:os';
@@ -355,7 +355,7 @@ async function getAiConfig() {
 
   const source = envKey ? 'env' : savedKey ? 'saved' : 'none';
   const last4 = apiKey && apiKey.length >= 4 ? apiKey.slice(-4) : '';
-  const keyHint = last4 ? `••••${last4}` : '';
+  const keyHint = last4 ? `����${last4}` : '';
   const settingsUpdatedAt = typeof saved.updatedAt === 'string' ? saved.updatedAt : '';
 
   return {
@@ -510,21 +510,35 @@ async function addInboxIntegrationItem({ source, externalId, text, projectId = '
     }
 
     const ts = nowIso();
-    const nextItem = normalizeInboxItem({
-      id,
-      source: cleanSource,
-      text: cleanText,
-      status: 'New',
-      projectId,
-      projectName,
-      businessKey,
-      businessLabel,
-      toNumber,
-      fromNumber,
-      channel,
-      createdAt: ts,
-      updatedAt: ts,
-    });
+
+      let finalProjectId = projectId;
+      let finalProjectName = projectName;
+      const senderKey = fromNumber || "";
+      if (!finalProjectId && senderKey && store.senderProjectMap && store.senderProjectMap[senderKey]) {
+        const autoProjId = store.senderProjectMap[senderKey];
+        const autoProj = (store.projects || []).find(p => p.id === autoProjId);
+        if (autoProj) {
+          finalProjectId = autoProj.id;
+          finalProjectName = autoProj.name;
+        }
+      }
+
+      const nextItem = normalizeInboxItem({
+        id,
+        source: cleanSource,
+        text: cleanText,
+        status: "New",
+        projectId: finalProjectId,
+        projectName: finalProjectName,
+        businessKey,
+        businessLabel,
+        toNumber,
+        fromNumber,
+        sender: senderKey,
+        channel,
+        createdAt: ts,
+        updatedAt: ts,
+      });
 
     const nextStore = {
       ...store,
@@ -614,7 +628,7 @@ function verifyQuoWebhookRequest({ req, twilioAuthToken, webhookToken }) {
   }
 
   const presented = extractWebhookSharedSecret(req);
-  if (!presented) return { ok: false, error: 'Missing webhook token (set Authorization: Bearer …, X-Quo-Token, or ?token=...)' };
+  if (!presented) return { ok: false, error: 'Missing webhook token (set Authorization: Bearer �, X-Quo-Token, or ?token=...)' };
   if (!safeTimingEqual(presented, secret)) return { ok: false, error: 'Invalid webhook token' };
   return { ok: true };
 }
@@ -1505,7 +1519,8 @@ function normalizeInboxItem(input) {
   const businessLabel = typeof i.businessLabel === 'string' ? i.businessLabel.trim() : '';
   const toNumber = typeof i.toNumber === 'string' ? i.toNumber.trim() : '';
   const fromNumber = typeof i.fromNumber === 'string' ? i.fromNumber.trim() : '';
-  const channel = typeof i.channel === 'string' ? i.channel.trim().slice(0, 32) : '';
+    const sender = typeof i.sender === 'string' ? i.sender.trim() : (fromNumber || '');
+    const channel = typeof i.channel === 'string' ? i.channel.trim().slice(0, 32) : '';
 
   return {
     id: typeof i.id === 'string' && i.id.trim() ? i.id.trim() : makeId(),
@@ -1518,8 +1533,9 @@ function normalizeInboxItem(input) {
     businessLabel,
     toNumber,
     fromNumber,
-    channel,
-    createdAt,
+      sender,
+      channel,
+      createdAt,
     updatedAt,
     converted,
   };
@@ -1817,6 +1833,11 @@ function normalizeProject(input) {
   const repoUrl = safeUrl(input.repoUrl);
   const docsUrl = safeUrl(input.docsUrl);
 
+  const priority = safeEnum(input.priority, ['High', 'Medium', 'Low'], 'Medium');
+  const importance = safeEnum(input.importance, ['High', 'Medium', 'Low'], 'Medium');
+  const risk = safeEnum(input.risk, ['High', 'Medium', 'Low', 'None'], 'None');
+  const agentBrief = typeof input.agentBrief === 'string' ? input.agentBrief.trim() : '';
+
   return {
     name,
     type,
@@ -1830,6 +1851,10 @@ function normalizeProject(input) {
     stripeInvoiceUrl,
     repoUrl,
     docsUrl,
+    priority,
+    importance,
+    risk,
+    agentBrief,
   };
 }
 
@@ -2145,7 +2170,7 @@ function tryHandleDeterministicTaskRequest(store, message, projectId) {
   if (deduped.length === 0) {
     return {
       handled: true,
-      reply: `"${project.name}" already has the usual starter tasks for a ${type} project. Tell me what’s missing and I’ll add it.`
+      reply: `"${project.name}" already has the usual starter tasks for a ${type} project. Tell me what�s missing and I�ll add it.`
     };
   }
 
@@ -2199,7 +2224,7 @@ async function aiNextActions({ project, notes, tasks }) {
       .filter(Boolean);
 
     const bullets = lines
-      .map((l) => l.replace(/^[-*•]\s+/, '').replace(/^\d+\.\s+/, '').trim())
+      .map((l) => l.replace(/^[-*�]\s+/, '').replace(/^\d+\.\s+/, '').trim())
       .filter((l) => l.length >= 6)
       .slice(0, 8);
 
@@ -2302,7 +2327,7 @@ async function aiProjectAssistant({ project, scratchpad, noteEntries, communicat
     const lastUser = [...recentChat].reverse().find((m) => m.role === 'user')?.content || '';
     const lines = [];
     lines.push(`I don't have real AI enabled (OPENAI_API_KEY not set).`);
-    lines.push(`Project: ${projectName}${projectType ? ` (${projectType})` : ''}${projectDue ? ` due ${projectDue}` : ''} • ${projectStatus}`);
+    lines.push(`Project: ${projectName}${projectType ? ` (${projectType})` : ''}${projectDue ? ` due ${projectDue}` : ''} � ${projectStatus}`);
     if (accountManagerName) lines.push(`Account manager: ${accountManagerName}`);
     lines.push('');
 
@@ -2494,8 +2519,8 @@ function heuristicallyExtractActionItems(transcript) {
       pushTitle(l.replace(/^(todo|to-do)\s*:\s*/i, ''));
       continue;
     }
-    if (/^[-*•]\s+/.test(l)) {
-      pushTitle(l.replace(/^[-*•]\s+/, ''));
+    if (/^[-*�]\s+/.test(l)) {
+      pushTitle(l.replace(/^[-*�]\s+/, ''));
       continue;
     }
     if (/^\d+\.\s+/.test(l)) {
@@ -2535,7 +2560,7 @@ async function aiTranscriptProposal({ project, transcript, tasks, noteEntries })
     const recapLines = [];
     recapLines.push('Quick update:');
     recapLines.push('');
-    recapLines.push('What we covered: (imported transcript — review)');
+    recapLines.push('What we covered: (imported transcript � review)');
     recapLines.push('');
     if (actionItems.length) {
       recapLines.push('Next steps:');
@@ -2866,7 +2891,7 @@ app.get('/api/integrations/google/upcoming', async (req, res) => {
 app.get('/api/integrations/ghl/status', async (req, res) => {
   try {
     const { apiKey, locationId, apiBaseUrl, apiVersion } = await getGhlConfig();
-    const keyHint = apiKey && apiKey.length >= 4 ? `••••${apiKey.slice(-4)}` : '';
+    const keyHint = apiKey && apiKey.length >= 4 ? `����${apiKey.slice(-4)}` : '';
     res.json({
       ok: true,
       configured: Boolean(apiKey && locationId),
@@ -3082,7 +3107,7 @@ app.post('/api/integrations/fireflies/ingest', async (req, res) => {
 });
 
 // Integrations: Slack Events API -> Inbox
-// Slack OAuth (install + bot token) is optional, but enables richer Inbox labels and “all the things”.
+// Slack OAuth (install + bot token) is optional, but enables richer Inbox labels and �all the things�.
 // Set a public BASE_URL so Slack can redirect back to your instance.
 app.get('/api/integrations/slack/auth-url', async (req, res) => {
   try {
@@ -3098,7 +3123,7 @@ app.get('/api/integrations/slack/auth-url', async (req, res) => {
 
     const redirectUri = `${getBaseUrl(req)}/api/integrations/slack/oauth/callback`;
 
-    // Broad scopes for “I want it all” (messages + lookup for channels/users).
+    // Broad scopes for �I want it all� (messages + lookup for channels/users).
     const scope = [
       'users:read',
       'channels:read',
@@ -3374,7 +3399,7 @@ app.post('/api/integrations/quo/sms', async (req, res) => {
     const store = await readStore();
     const matched = matchProjectFromText(store, body);
     const lines = [];
-    lines.push(`SMS${from ? ` from ${from}` : ''}${to ? ` → ${to}` : ''} • ${routing.businessLabel}:`);
+    lines.push(`SMS${from ? ` from ${from}` : ''}${to ? ` ? ${to}` : ''} � ${routing.businessLabel}:`);
     lines.push(body);
 
     await addInboxIntegrationItem({
@@ -3476,7 +3501,7 @@ app.post('/api/integrations/quo/calls', async (req, res) => {
     }
 
     const routing = resolveBusinessForInbound({ settings, toNumber: to });
-    const text = `Missed call${from ? ` from ${from}` : ''}${to ? ` → ${to}` : ''}${callStatus ? ` (${callStatus})` : ''} • ${routing.businessLabel}`;
+    const text = `Missed call${from ? ` from ${from}` : ''}${to ? ` ? ${to}` : ''}${callStatus ? ` (${callStatus})` : ''} � ${routing.businessLabel}`;
     await addInboxIntegrationItem({
       source: 'call',
       externalId: `call:${callSid || crypto.createHash('sha1').update(`${from}|${to}|${callStatus}|${Date.now()}`).digest('hex')}`,
@@ -3563,7 +3588,7 @@ app.put('/api/settings/openai', async (req, res) => {
     };
     await writeSettings(next);
     const last4 = openaiApiKey && openaiApiKey.length >= 4 ? openaiApiKey.slice(-4) : '';
-    const keyHint = last4 ? `••••${last4}` : '';
+    const keyHint = last4 ? `����${last4}` : '';
     res.json({
       ok: true,
       aiEnabled: Boolean(openaiApiKey),
@@ -3605,12 +3630,26 @@ app.post('/api/inbox', async (req, res) => {
     }
 
     const ts = nowIso();
-    const nextItem = {
-      ...item,
-      status: 'New',
-      createdAt: ts,
-      updatedAt: ts,
-    };
+    let finalProjectId = item.projectId;
+      let finalProjectName = item.projectName;
+      const senderKey = item.sender || item.fromNumber || "";
+      if (!finalProjectId && senderKey && store.senderProjectMap && store.senderProjectMap[senderKey]) {
+        const autoProjId = store.senderProjectMap[senderKey];
+        const autoProj = (store.projects || []).find(p => p.id === autoProjId);
+        if (autoProj) {
+          finalProjectId = autoProj.id;
+          finalProjectName = autoProj.name;
+        }
+      }
+
+      const nextItem = {
+        ...item,
+        projectId: finalProjectId,
+        projectName: finalProjectName,
+        status: "New",
+        createdAt: ts,
+        updatedAt: ts,
+      };
 
     const nextStore = {
       ...store,
@@ -3712,19 +3751,40 @@ app.post('/api/inbox/:id/link-project', async (req, res) => {
 
     const ts = nowIso();
     const current = list[idx];
-    const nextItem = normalizeInboxItem({
-      ...current,
-      projectId: String(project.id || ''),
-      projectName: String(project.name || ''),
-      status: current?.status === 'New' ? 'Triaged' : current?.status,
-      updatedAt: ts,
+    const matchSender = current.sender || current.fromNumber || '';
+    
+    const nextList = list.map((item, i) => {
+      if (i === idx) {
+        return normalizeInboxItem({
+          ...item,
+          projectId: String(project.id || ''),
+          projectName: String(project.name || ''),
+          status: item.status === 'New' ? 'Triaged' : item.status,
+          updatedAt: ts,
+        });
+      }
+      
+      const itemSender = item.sender || item.fromNumber || '';
+      if (matchSender && itemSender === matchSender && (!item.projectId || item.projectId === item.id)) {
+        return normalizeInboxItem({
+          ...item,
+          projectId: String(project.id || ''),
+          projectName: String(project.name || ''),
+          status: item.status === 'New' ? 'Triaged' : item.status,
+          updatedAt: ts,
+        });
+      }
+      return item;
     });
 
-    const nextList = [...list];
-    nextList[idx] = nextItem;
+    const nextSenderProjectMap = { ...(store.senderProjectMap || {}) };
+    if (matchSender) {
+      nextSenderProjectMap[matchSender] = String(project.id || '');
+    }
 
     const nextStore = {
       ...store,
+      senderProjectMap: nextSenderProjectMap,
       revision: store.revision + 1,
       updatedAt: ts,
       inboxItems: nextList,
@@ -4073,7 +4133,7 @@ app.post('/api/projects/bulk-update', async (req, res) => {
     const projects = Array.isArray(store.projects) ? store.projects : [];
     const missing = projectIds.filter((id) => !projects.some((p) => p.id === id));
     if (missing.length) {
-      res.status(404).json({ error: `Project not found: ${missing.slice(0, 3).join(', ')}${missing.length > 3 ? '…' : ''}` });
+      res.status(404).json({ error: `Project not found: ${missing.slice(0, 3).join(', ')}${missing.length > 3 ? '�' : ''}` });
       return;
     }
 
@@ -5403,24 +5463,24 @@ async function aiAgentAction(message, store, projectId = null) {
           .slice(0, 12);
 
         const lines = [];
-        lines.push(`Project: ${effectiveProject.name}${effectiveProject.type ? ` (${effectiveProject.type})` : ''} • ${effectiveProject.status || 'Active'}${effectiveProject.dueDate ? ` • due ${effectiveProject.dueDate}` : ''}`);
+        lines.push(`Project: ${effectiveProject.name}${effectiveProject.type ? ` (${effectiveProject.type})` : ''} � ${effectiveProject.status || 'Active'}${effectiveProject.dueDate ? ` � due ${effectiveProject.dueDate}` : ''}`);
         lines.push('');
         lines.push(`Open tasks: ${open.length} (showing top ${sorted.length})`);
         sorted.forEach((t, i) => {
-          const due = t.dueDate ? ` • due ${t.dueDate}` : '';
+          const due = t.dueDate ? ` � due ${t.dueDate}` : '';
           const pri = `P${Number(t.priority ?? 2)}`;
           const st = t.status ? String(t.status) : 'Next';
-          lines.push(`${i + 1}. [${pri}] ${t.title} — ${st}${due}`);
+          lines.push(`${i + 1}. [${pri}] ${t.title} � ${st}${due}`);
         });
         lines.push('');
         lines.push('AI is not enabled (OPENAI_API_KEY not set), but I can still show you everything in the tracker.');
-        lines.push('If you want deeper reasoning/rewrites, set the key in Settings → OpenAI.');
+        lines.push('If you want deeper reasoning/rewrites, set the key in Settings ? OpenAI.');
         return { content: lines.join('\n') };
       }
 
       return {
         content:
-          "AI is not enabled (OPENAI_API_KEY not set). Tell me a project name and I can summarize its tasks/notes/scratchpad from the tracker, or enable OpenAI in Settings → OpenAI for full conversational reasoning.",
+          "AI is not enabled (OPENAI_API_KEY not set). Tell me a project name and I can summarize its tasks/notes/scratchpad from the tracker, or enable OpenAI in Settings ? OpenAI for full conversational reasoning.",
       };
     }
 
@@ -5753,3 +5813,9 @@ app.listen(PORT, async () => {
   // eslint-disable-next-line no-console
   console.log(`Task Tracker running on http://localhost:${PORT}`);
 });
+
+
+
+
+
+
