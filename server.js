@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import fs from 'node:fs/promises';
 import { exec } from 'node:child_process';
 import os from 'node:os';
@@ -13,6 +14,12 @@ const app = express();
 // When running behind SiteGround / reverse proxies, trust forwarded headers.
 app.set('trust proxy', true);
 const PORT = process.env.PORT ? Number(process.env.PORT) : 3030;
+
+const DEFAULT_BUSINESS_KEY = 'personal';
+const requestContext = new AsyncLocalStorage();
+
+let cachedActiveBusinessKey = DEFAULT_BUSINESS_KEY;
+let cachedBusinesses = [{ key: DEFAULT_BUSINESS_KEY, name: 'Personal', phoneNumbers: [] }];
 
 const DEBUG_WEBHOOKS = String(process.env.DEBUG_WEBHOOKS || '').trim().toLowerCase() === 'true';
 
@@ -32,6 +39,116 @@ app.use(express.urlencoded({
   },
 }));
 
+function normalizeBusinessKey(input) {
+  const raw = typeof input === 'string' ? input.trim().toLowerCase() : '';
+  if (!raw) return '';
+  // allow already-sanitized keys; convert label-like strings to slugs
+  const key = raw.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64);
+  return key;
+}
+
+function normalizeBusinessName(input) {
+  const raw = typeof input === 'string' ? input.trim() : '';
+  return raw.slice(0, 80);
+}
+
+function normalizeBusinessPhoneNumbers(input) {
+  const out = [];
+  const seen = new Set();
+  const list = Array.isArray(input)
+    ? input
+    : (typeof input === 'string' ? input.split(/[\n,;]+/g) : []);
+
+  for (const item of list) {
+    const raw = String(item || '').trim();
+    if (!raw) continue;
+    const val = raw.slice(0, 32);
+    if (seen.has(val)) continue;
+    seen.add(val);
+    out.push(val);
+  }
+  return out.slice(0, 20);
+}
+
+function normalizeBusinessesList(input) {
+  const list = Array.isArray(input) ? input : [];
+  const out = [];
+  const seen = new Set();
+
+  for (const row of list) {
+    const r = row && typeof row === 'object' ? row : {};
+    const name = normalizeBusinessName(r.name || r.label || r.business || '');
+    const key = normalizeBusinessKey(r.key || r.businessKey || '') || normalizeBusinessKey(name);
+    const phoneNumbers = normalizeBusinessPhoneNumbers(r.phoneNumbers || r.phones || r.phoneNumbersRaw || r.phoneRouting || []);
+    if (!name || !key) continue;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ key, name, phoneNumbers });
+  }
+
+  if (!seen.has(DEFAULT_BUSINESS_KEY)) {
+    out.unshift({ key: DEFAULT_BUSINESS_KEY, name: 'Personal', phoneNumbers: [] });
+  }
+
+  return out;
+}
+
+function getBusinessConfigFromSettings(settings) {
+  const s = settings && typeof settings === 'object' ? settings : {};
+  const businesses = normalizeBusinessesList(s.businesses);
+  const activeBusinessKey = normalizeBusinessKey(s.activeBusinessKey || s.activeBusiness || '') || DEFAULT_BUSINESS_KEY;
+
+  const keys = new Set(businesses.map((b) => b.key));
+  const finalActive = keys.has(activeBusinessKey) ? activeBusinessKey : DEFAULT_BUSINESS_KEY;
+
+  return { businesses, activeBusinessKey: finalActive };
+}
+
+async function refreshBusinessCacheFromSettings() {
+  try {
+    const saved = await readSettings();
+    const cfg = getBusinessConfigFromSettings(saved);
+    cachedActiveBusinessKey = cfg.activeBusinessKey;
+    cachedBusinesses = cfg.businesses;
+  } catch {
+    // best-effort cache
+  }
+}
+
+function getBusinessKeyFromContext() {
+  const store = requestContext.getStore();
+  const key = normalizeBusinessKey(store?.businessKey || '');
+  return key || cachedActiveBusinessKey || DEFAULT_BUSINESS_KEY;
+}
+
+function withBusinessKey(businessKey, fn) {
+  const key = normalizeBusinessKey(businessKey) || cachedActiveBusinessKey || DEFAULT_BUSINESS_KEY;
+  return requestContext.run({ businessKey: key }, fn);
+}
+
+function getBusinessKeyFromRequest(req) {
+  const headerKey = typeof req?.get === 'function' ? req.get('x-business-key') : '';
+  const queryKey = typeof req?.query?.businessKey === 'string' ? req.query.businessKey : '';
+  const bodyKey = typeof req?.body?.businessKey === 'string' ? req.body.businessKey : '';
+  return normalizeBusinessKey(headerKey || queryKey || bodyKey);
+}
+
+// Attach a per-request business context.
+// - If client sends X-Business-Key, we honor it.
+// - Otherwise we fall back to the server's saved active business key.
+app.use((req, res, next) => {
+  const incoming = getBusinessKeyFromRequest(req);
+  const key = incoming || cachedActiveBusinessKey || DEFAULT_BUSINESS_KEY;
+  requestContext.run({ businessKey: key }, () => {
+    try {
+      res.setHeader('X-Business-Key', key);
+    } catch {
+      // ignore
+    }
+    next();
+  });
+});
+
 function resolveDirFromEnv(envValue) {
   const raw = typeof envValue === 'string' ? envValue.trim() : '';
   if (!raw) return '';
@@ -44,6 +161,15 @@ function resolveDirFromEnv(envValue) {
 
 const DATA_DIR = resolveDirFromEnv(process.env.TASK_TRACKER_DATA_DIR || process.env.DATA_DIR) || path.join(process.cwd(), 'data');
 const DATA_FILE = path.join(DATA_DIR, 'tasks.json');
+
+const BUSINESS_DATA_DIR = path.join(DATA_DIR, 'businesses');
+
+function getStoreFileForBusiness(businessKey) {
+  const key = normalizeBusinessKey(businessKey) || DEFAULT_BUSINESS_KEY;
+  // Keep backwards-compat: Personal uses the legacy data/tasks.json file.
+  if (key === DEFAULT_BUSINESS_KEY) return DATA_FILE;
+  return path.join(BUSINESS_DATA_DIR, key, 'tasks.json');
+}
 
 const APP_NAME = 'Task Tracker';
 
@@ -159,10 +285,29 @@ async function backupCriticalFiles({ force = false } = {}) {
   const shouldTasks = force || shouldCreateBackupForKey('tasks');
   const shouldSettings = force || shouldCreateBackupForKey('settings');
 
+  // Personal/legacy store
   if (shouldTasks) {
     const ok = await writeBackupSnapshot({ sourceFile: DATA_FILE, prefix: 'tasks' });
     if (ok) markBackupForKey('tasks');
   }
+
+  // Per-business stores (best-effort)
+  try {
+    const settings = await readSettings();
+    const cfg = getBusinessConfigFromSettings(settings);
+    const extra = (Array.isArray(cfg.businesses) ? cfg.businesses : []).map((b) => b.key).filter((k) => k && k !== DEFAULT_BUSINESS_KEY);
+    for (const key of extra) {
+      const cacheKey = `tasks:${key}`;
+      const should = force || shouldCreateBackupForKey(cacheKey);
+      if (!should) continue;
+      const file = getStoreFileForBusiness(key);
+      const ok = await writeBackupSnapshot({ sourceFile: file, prefix: `tasks-${key}` });
+      if (ok) markBackupForKey(cacheKey);
+    }
+  } catch {
+    // ignore extra backup errors
+  }
+
   if (shouldSettings) {
     const ok = await writeBackupSnapshot({ sourceFile: SETTINGS_FILE, prefix: 'settings' });
     if (ok) markBackupForKey('settings');
@@ -340,6 +485,9 @@ async function writeSettings(next) {
   const tmpFile = `${SETTINGS_FILE}.tmp-${crypto.randomBytes(6).toString('hex')}`;
   await fs.writeFile(tmpFile, JSON.stringify(next, null, 2) + '\n', 'utf8');
   await fs.rename(tmpFile, SETTINGS_FILE);
+  refreshBusinessCacheFromSettings().catch(() => {
+    // best-effort
+  });
   backupCriticalFiles().catch(() => {
     // backup is best-effort
   });
@@ -685,14 +833,28 @@ function getPhoneBusinessMap(settings) {
 }
 
 function resolveBusinessForInbound({ settings, toNumber }) {
-  const map = getPhoneBusinessMap(settings);
   const keys = phoneLookupKeys(toNumber);
+  if (keys.length) {
+    const cfg = getBusinessConfigFromSettings(settings);
+    for (const b of (Array.isArray(cfg.businesses) ? cfg.businesses : [])) {
+      const nums = Array.isArray(b?.phoneNumbers) ? b.phoneNumbers : [];
+      for (const n of nums) {
+        const nk = phoneLookupKeys(n);
+        if (!nk.length) continue;
+        if (nk.some((k) => keys.includes(k))) {
+          return { businessKey: normalizeBusinessKey(b?.key || '') || businessKeyFromLabel(b?.name || ''), businessLabel: String(b?.name || '').trim() || 'Business' };
+        }
+      }
+    }
+  }
+
+  const map = getPhoneBusinessMap(settings);
   for (const k of keys) {
     const label = String(map[k] || '').trim();
     if (!label) continue;
     return { businessKey: businessKeyFromLabel(label), businessLabel: label };
   }
-  return { businessKey: 'unmapped-legacy', businessLabel: 'Unmapped/Legacy' };
+  return { businessKey: DEFAULT_BUSINESS_KEY, businessLabel: 'Personal' };
 }
 
 async function addInboxIntegrationItem({ source, externalId, text, projectId = '', projectName = '', businessKey = '', businessLabel = '', toNumber = '', fromNumber = '', channel = '' }) {
@@ -704,7 +866,9 @@ async function addInboxIntegrationItem({ source, externalId, text, projectId = '
 
   let created = true;
 
-  writeLock = writeLock.then(async () => {
+  const targetBusinessKey = normalizeBusinessKey(businessKey) || getBusinessKeyFromContext();
+
+  writeLock = writeLock.then(() => withBusinessKey(targetBusinessKey, async () => {
     const store = await readStore();
     const list = Array.isArray(store.inboxItems) ? store.inboxItems : [];
     if (cleanExternalId && list.some((x) => String(x?.id || '') === id)) {
@@ -752,7 +916,7 @@ async function addInboxIntegrationItem({ source, externalId, text, projectId = '
       inboxItems: [nextItem, ...list].slice(0, 500),
     };
     await writeStore(nextStore);
-  });
+  }));
 
   await writeLock;
   return { ok: true, created, id };
@@ -1794,17 +1958,19 @@ async function googleListUpcomingEvents({ days = 7, max = 25 } = {}) {
 }
 
 async function ensureStoreExists() {
-  await fs.mkdir(DATA_DIR, { recursive: true });
+  const file = getStoreFileForBusiness(getBusinessKeyFromContext());
+  await fs.mkdir(path.dirname(file), { recursive: true });
   try {
-    await fs.access(DATA_FILE);
+    await fs.access(file);
   } catch {
-    await fs.writeFile(DATA_FILE, JSON.stringify(EMPTY_STORE, null, 2) + '\n', 'utf8');
+    await fs.writeFile(file, JSON.stringify(EMPTY_STORE, null, 2) + '\n', 'utf8');
   }
 }
 
 async function readStore() {
   await ensureStoreExists();
-  const raw = await fs.readFile(DATA_FILE, 'utf8');
+  const file = getStoreFileForBusiness(getBusinessKeyFromContext());
+  const raw = await fs.readFile(file, 'utf8');
   const parsed = JSON.parse(raw);
   if (!parsed || typeof parsed !== 'object') return structuredClone(EMPTY_STORE);
 
@@ -2193,9 +2359,10 @@ app.get('/api/integrations/slack/team-presence', async (req, res) => {
 async function writeStore(nextStore) {
   await ensureStoreExists();
 
-  const tmpFile = `${DATA_FILE}.tmp-${crypto.randomBytes(6).toString('hex')}`;
+  const file = getStoreFileForBusiness(getBusinessKeyFromContext());
+  const tmpFile = `${file}.tmp-${crypto.randomBytes(6).toString('hex')}`;
   await fs.writeFile(tmpFile, JSON.stringify(nextStore, null, 2) + '\n', 'utf8');
-  await fs.rename(tmpFile, DATA_FILE);
+  await fs.rename(tmpFile, file);
   backupCriticalFiles().catch(() => {
     // backup is best-effort
   });
@@ -3188,6 +3355,74 @@ app.put('/api/settings', async (req, res) => {
   await writeLock;
 });
 
+// Businesses
+app.get('/api/businesses', async (req, res) => {
+  try {
+    const saved = await readSettings();
+    const cfg = getBusinessConfigFromSettings(saved);
+    res.json({ ok: true, activeBusinessKey: cfg.activeBusinessKey, businesses: cfg.businesses });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message || 'Failed to load businesses' });
+  }
+});
+
+app.put('/api/businesses', async (req, res) => {
+  const incomingBusinesses = Array.isArray(req.body?.businesses) ? req.body.businesses : [];
+  const incomingActive = normalizeBusinessKey(req.body?.activeBusinessKey || req.body?.activeBusiness || '');
+
+  writeLock = writeLock.then(async () => {
+    const saved = await readSettings();
+    const currentCfg = getBusinessConfigFromSettings(saved);
+
+    const merged = {
+      ...saved,
+      businesses: normalizeBusinessesList(incomingBusinesses),
+      activeBusinessKey: incomingActive || currentCfg.activeBusinessKey,
+      updatedAt: nowIso(),
+    };
+
+    const finalCfg = getBusinessConfigFromSettings(merged);
+    const next = { ...merged, businesses: finalCfg.businesses, activeBusinessKey: finalCfg.activeBusinessKey };
+    await writeSettings(next);
+    res.json({ ok: true, activeBusinessKey: finalCfg.activeBusinessKey, businesses: finalCfg.businesses });
+  });
+
+  await writeLock;
+});
+
+app.post('/api/businesses/active', async (req, res) => {
+  const key = normalizeBusinessKey(req.body?.key || req.body?.businessKey || '');
+  if (!key) {
+    res.status(400).json({ ok: false, error: 'key is required' });
+    return;
+  }
+
+  writeLock = writeLock.then(async () => {
+    const saved = await readSettings();
+    const cfg = getBusinessConfigFromSettings(saved);
+
+    let businesses = Array.isArray(cfg.businesses) ? cfg.businesses : [];
+    if (!businesses.some((b) => b.key === key)) {
+      // If you activate an unknown key, auto-add it with a title-cased label.
+      const label = key.split('-').filter(Boolean).map((w) => w.slice(0, 1).toUpperCase() + w.slice(1)).join(' ');
+      businesses = [...businesses, { key, name: label || key }];
+    }
+
+    const next = {
+      ...saved,
+      businesses,
+      activeBusinessKey: key,
+      updatedAt: nowIso(),
+    };
+
+    const finalCfg = getBusinessConfigFromSettings(next);
+    await writeSettings({ ...next, businesses: finalCfg.businesses, activeBusinessKey: finalCfg.activeBusinessKey });
+    res.json({ ok: true, activeBusinessKey: finalCfg.activeBusinessKey, businesses: finalCfg.businesses });
+  });
+
+  await writeLock;
+});
+
 // Integrations: Google Calendar
 app.get('/api/integrations/google/status', async (req, res) => {
   const { clientId, clientSecret, calendarId, tokens } = await getGoogleOAuthConfig();
@@ -4045,21 +4280,26 @@ app.post('/api/integrations/quo/sms', async (req, res) => {
     }
 
     const routing = resolveBusinessForInbound({ settings, toNumber: to });
-    const store = await readStore();
-    const matched = matchProjectFromText(store, body);
 
-    const senderKey = normalizePhoneForLookup(from);
-    let finalProjectName = matched?.name || '';
-    let fromLabel = from || '';
+    const { matched, finalProjectName, fromLabel } = await withBusinessKey(routing.businessKey, async () => {
+      const businessStore = await readStore();
+      const match = matchProjectFromText(businessStore, body);
 
-    const pMap = store.settings?.senderProjectMap || settings.senderProjectMap || {};
-    if (pMap[senderKey]) {
-      fromLabel = pMap[senderKey].projectName;
-      if (!finalProjectName) {
-          finalProjectName = fromLabel;
-          if (matched) { matched.id = pMap[senderKey].projectId; }
+      const senderKey = normalizePhoneForLookup(from);
+      let projName = match?.name || '';
+      let label = from || '';
+
+      const pMap = businessStore.senderProjectMap || settings.senderProjectMap || {};
+      if (pMap && typeof pMap === 'object' && pMap[senderKey]) {
+        label = pMap[senderKey].projectName;
+        if (!projName) {
+          projName = label;
+          if (match) { match.id = pMap[senderKey].projectId; }
+        }
       }
-    }
+
+      return { matched: match, finalProjectName: projName, fromLabel: label };
+    });
 
     const lines = [];
     lines.push(`📱 SMS • ${routing.businessLabel}`);
@@ -4317,6 +4557,53 @@ app.get('/api/inbox', async (req, res) => {
   const store = await readStore();
   const items = Array.isArray(store.inboxItems) ? store.inboxItems : [];
   res.json({ revision: store.revision, updatedAt: store.updatedAt, items });
+});
+
+// Inbox Radar (cross-business)
+// Returns inbox items across all businesses for dashboard radar.
+app.get('/api/inbox/radar', async (req, res) => {
+  try {
+    const limitRaw = Number(req.query?.limit);
+    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(200, Math.floor(limitRaw))) : 50;
+    const status = typeof req.query?.status === 'string' ? req.query.status.trim() : 'New';
+    const statusLower = status.toLowerCase();
+
+    const settings = await readSettings();
+    const cfg = getBusinessConfigFromSettings(settings);
+    const businesses = Array.isArray(cfg.businesses) ? cfg.businesses : [];
+
+    const all = [];
+    for (const b of businesses) {
+      const bizKey = normalizeBusinessKey(b?.key || '');
+      const bizName = typeof b?.name === 'string' ? b.name.trim() : '';
+      if (!bizKey) continue;
+
+      const store = await withBusinessKey(bizKey, async () => readStore());
+      const items = Array.isArray(store?.inboxItems) ? store.inboxItems : [];
+      for (const item of items) {
+        const it = item && typeof item === 'object' ? item : {};
+        const itStatus = String(it.status || '').trim();
+        if (statusLower && itStatus.toLowerCase() !== statusLower) continue;
+        all.push({
+          ...it,
+          businessKey: typeof it.businessKey === 'string' && it.businessKey.trim() ? it.businessKey.trim() : bizKey,
+          businessLabel: typeof it.businessLabel === 'string' && it.businessLabel.trim() ? it.businessLabel.trim() : (bizName || bizKey),
+        });
+      }
+    }
+
+    const timeValue = (x) => {
+      const t = typeof x?.updatedAt === 'string' && x.updatedAt.trim() ? x.updatedAt : (typeof x?.createdAt === 'string' ? x.createdAt : '');
+      const ms = Date.parse(t);
+      return Number.isFinite(ms) ? ms : 0;
+    };
+
+    all.sort((a, b) => timeValue(b) - timeValue(a));
+    const items = all.slice(0, limit);
+    res.json({ ok: true, status: status || 'New', limit, items });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message || 'Failed to load radar' });
+  }
 });
 
 app.post('/api/inbox', async (req, res) => {
@@ -6512,7 +6799,10 @@ app.post('/api/chat', async (req, res) => {
 });
 
 app.listen(PORT, async () => {
-  await ensureStoreExists();
+  await refreshBusinessCacheFromSettings();
+  await withBusinessKey(DEFAULT_BUSINESS_KEY, async () => {
+    await ensureStoreExists();
+  });
   await backupCriticalFiles({ force: true }).catch(() => {
     // ignore startup backup errors
   });

@@ -32,6 +32,9 @@ const state = {
     settings: {
         openaiModel: "gpt-4o-mini",
     },
+
+    businesses: [],
+    activeBusinessKey: 'personal',
     uiPrefs: {
         weekStartsOnMonday: false,
     },
@@ -103,6 +106,8 @@ const THEME_STORAGE_KEY = 'opsTheme';
 const LAYOUT_STORAGE_KEY = 'opsLayout';
 const ADMIN_TOKEN_STORAGE_KEY = 'opsAdminToken';
 
+const BUSINESS_KEY_STORAGE_KEY = 'opsBusinessKey';
+
 const MARTY_OPEN_STORAGE_KEY = 'opsMartyOpen';
 const MARTY_DETACHED_STORAGE_KEY = 'opsMartyDetached';
 const MARTY_PANEL_STORAGE_KEY = 'opsMartyPanel';
@@ -167,6 +172,99 @@ function getStoredMartyOpen() {
     } catch {
         return true;
     }
+}
+
+function setStoredBusinessKey(key) {
+    try {
+        localStorage.setItem(BUSINESS_KEY_STORAGE_KEY, safeText(key).trim());
+    } catch {
+        // ignore
+    }
+}
+
+function getStoredBusinessKey() {
+    try {
+        const raw = String(localStorage.getItem(BUSINESS_KEY_STORAGE_KEY) || '').trim();
+        return raw;
+    } catch {
+        return '';
+    }
+}
+
+function normalizeBusinessKey(input) {
+    const raw = safeText(input).trim().toLowerCase();
+    if (!raw) return '';
+    return raw.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64);
+}
+
+function businessAbbrev(name, key) {
+    const n = safeText(name).trim();
+    if (n) {
+        const parts = n.split(/\s+/g).filter(Boolean);
+        if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+        if (parts.length === 1 && parts[0].length >= 2) return parts[0].slice(0, 2).toUpperCase();
+        if (parts.length === 1 && parts[0].length === 1) return parts[0][0].toUpperCase();
+    }
+    const k = safeText(key).trim();
+    return (k ? k.slice(0, 2) : 'B').toUpperCase();
+}
+
+function applyBusinessConfig(cfg) {
+    const businesses = Array.isArray(cfg?.businesses) ? cfg.businesses : [];
+    state.businesses = businesses
+        .map((b) => ({
+            key: normalizeBusinessKey(b?.key || ''),
+            name: safeText(b?.name || '').trim(),
+            phoneNumbers: Array.isArray(b?.phoneNumbers) ? b.phoneNumbers.map((x) => safeText(x).trim()).filter(Boolean) : [],
+        }))
+        .filter((b) => b.key && b.name);
+
+    const serverActive = normalizeBusinessKey(cfg?.activeBusinessKey || cfg?.activeBusiness || '');
+    const stored = normalizeBusinessKey(getStoredBusinessKey());
+    const keys = new Set(state.businesses.map((b) => b.key));
+    const next = (stored && keys.has(stored)) ? stored : (serverActive && keys.has(serverActive)) ? serverActive : keys.has('personal') ? 'personal' : (state.businesses[0]?.key || 'personal');
+
+    state.activeBusinessKey = next;
+    setStoredBusinessKey(next);
+}
+
+async function fetchBusinesses() {
+    const data = await apiJson('/api/businesses');
+    applyBusinessConfig(data);
+    return data;
+}
+
+async function setActiveBusinessKey(key, { persistServer = true } = {}) {
+    const next = normalizeBusinessKey(key);
+    if (!next) return;
+    if (next === normalizeBusinessKey(state.activeBusinessKey)) return;
+
+    state.activeBusinessKey = next;
+    setStoredBusinessKey(next);
+    if (persistServer) {
+        try {
+            await apiJson('/api/businesses/active', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ key: next })
+            });
+        } catch {
+            // ignore server persistence failures
+        }
+    }
+
+    state.currentProjectId = null;
+    state.currentView = 'dashboard';
+    showLoading();
+    await Promise.all([
+        fetchState(),
+        fetchSettings(),
+        loadChatHistory(),
+    ]);
+    renderNav();
+    renderMain();
+    renderChat();
+    broadcastMartyContext();
 }
 
 function getStoredMartyDetached() {
@@ -1484,6 +1582,13 @@ async function init() {
 
         // Auth status is a public endpoint; check early so we can avoid a broken/empty UI.
         await refreshAuthStatus();
+
+        // Businesses (workspace selection)
+        await fetchBusinesses().catch(() => {
+            // best-effort; fall back to local storage / default
+            const stored = normalizeBusinessKey(getStoredBusinessKey());
+            state.activeBusinessKey = stored || 'personal';
+        });
         
         // Initial Fetch
         await Promise.all([
@@ -1624,6 +1729,10 @@ async function apiFetch(url, options) {
     const headers = new Headers(opts.headers || {});
     const token = getStoredAdminToken();
     if (token) headers.set('Authorization', `Bearer ${token}`);
+
+    const businessKey = normalizeBusinessKey(getStoredBusinessKey() || state.activeBusinessKey || '');
+    if (businessKey) headers.set('X-Business-Key', businessKey);
+
     opts.headers = headers;
 
     let res = await fetch(url, opts);
@@ -2179,6 +2288,20 @@ function renderNav() {
     
     // Preserve Create Button if it exists? No, rebuild.
     nav.innerHTML = "";
+
+    // Businesses (workspaces)
+    const businesses = Array.isArray(state.businesses) && state.businesses.length ? state.businesses : [{ key: 'personal', name: 'Personal' }];
+    for (const b of businesses) {
+        const k = normalizeBusinessKey(b.key);
+        const name = safeText(b.name).trim() || k;
+        if (!k) continue;
+        const active = normalizeBusinessKey(state.activeBusinessKey) === k;
+        nav.appendChild(createNavIcon('', `Business: ${name}`, () => setActiveBusinessKey(k), active, businessAbbrev(name, k)));
+    }
+
+    const bizSep = document.createElement('div');
+    bizSep.className = 'h-px w-8 bg-zinc-800 mx-auto my-2';
+    nav.appendChild(bizSep);
     
     nav.appendChild(createNavIcon("fa-grip", "Dashboard", () => openDashboard(), state.currentView === "dashboard"));
     nav.appendChild(createNavIcon("fa-inbox", "Inbox", () => openInbox(), state.currentView === "inbox"));
@@ -3037,6 +3160,158 @@ function renderSettings(container) {
         </div>
     `;
     wrap.appendChild(access);
+
+    // Businesses
+    const bizSection = section('Businesses', 'Each business is a separate workspace (projects, tasks, inbox).');
+    const bizBody = bizSection.querySelector('[data-slot="body"]');
+    const businesses = Array.isArray(state.businesses) && state.businesses.length ? state.businesses : [{ key: 'personal', name: 'Personal' }];
+    const activeKey = normalizeBusinessKey(state.activeBusinessKey) || 'personal';
+
+    bizBody.innerHTML = `
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+                <label class="text-xs text-ops-light">Active business</label>
+                <select id="biz-active" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-sm">
+                    ${businesses.map((b) => {
+                        const k = normalizeBusinessKey(b.key);
+                        const nm = escapeHtml(safeText(b.name).trim() || k);
+                        const sel = k === activeKey ? 'selected' : '';
+                        return `<option value="${escapeHtml(k)}" ${sel}>${nm}</option>`;
+                    }).join('')}
+                </select>
+                <div class="text-[11px] text-ops-light mt-1">Switching changes the whole workspace.</div>
+                <div class="flex gap-2 mt-3 flex-wrap">
+                    <button id="btn-biz-switch" class="px-3 py-2 rounded bg-blue-600 text-white text-xs hover:bg-blue-500">Switch</button>
+                    <button id="btn-biz-add" class="px-3 py-2 rounded bg-ops-bg border border-ops-border text-ops-light text-xs hover:text-white">Add business</button>
+                    <button id="btn-biz-delete" class="px-3 py-2 rounded bg-ops-bg border border-ops-border text-ops-light text-xs hover:text-red-300">Delete</button>
+                    <button id="btn-biz-save-routing" class="px-3 py-2 rounded bg-ops-bg border border-ops-border text-ops-light text-xs hover:text-white">Save phone routing</button>
+                </div>
+            </div>
+            <div>
+                <label class="text-xs text-ops-light">Businesses</label>
+                <div class="mt-1 space-y-2">
+                    ${businesses.map((b) => {
+                        const k = normalizeBusinessKey(b.key);
+                        const nm = escapeHtml(safeText(b.name).trim() || k);
+                        const phones = Array.isArray(b.phoneNumbers) ? b.phoneNumbers : [];
+                        const badge = k === activeKey ? '<span class="ml-2 text-[10px] px-2 py-0.5 rounded bg-blue-600/20 border border-blue-600/40 text-blue-200">Active</span>' : '';
+                        return `
+                            <div class="border border-ops-border rounded-lg bg-ops-bg/30 p-3">
+                                <div class="flex items-center justify-between gap-2">
+                                    <div class="min-w-0">
+                                        <div class="text-white text-sm font-semibold truncate">${nm}${badge}</div>
+                                        <div class="text-[11px] text-ops-light mt-0.5 font-mono">${escapeHtml(k)}</div>
+                                        <div class="text-[11px] text-ops-light mt-2">Phone numbers (inbound routing)</div>
+                                        <textarea rows="2" data-biz-phones="${escapeHtml(k)}" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-xs font-mono" placeholder="+15551234567\n+15557654321">${escapeHtml(phones.join('\n'))}</textarea>
+                                        <div class="text-[11px] text-ops-light/70 mt-1">One per line (or comma-separated).</div>
+                                    </div>
+                                </div>
+                            </div>
+                        `;
+                    }).join('')}
+                </div>
+            </div>
+        </div>
+    `;
+    wrap.appendChild(bizSection);
+
+    const bizSelect = bizBody.querySelector('#biz-active');
+    const btnBizSwitch = bizBody.querySelector('#btn-biz-switch');
+    const btnBizAdd = bizBody.querySelector('#btn-biz-add');
+    const btnBizDelete = bizBody.querySelector('#btn-biz-delete');
+    const btnBizSaveRouting = bizBody.querySelector('#btn-biz-save-routing');
+
+    if (btnBizSwitch && bizSelect) {
+        btnBizSwitch.onclick = async () => {
+            const key = normalizeBusinessKey(bizSelect.value);
+            await setActiveBusinessKey(key);
+        };
+    }
+
+    if (btnBizAdd) {
+        btnBizAdd.onclick = async () => {
+            const name = safeText(window.prompt('Business name (e.g., Scoop Doggy Logs):') || '').trim();
+            if (!name) return;
+            const key = normalizeBusinessKey(name);
+            if (!key) {
+                alert('Could not generate a key from that name.');
+                return;
+            }
+            if (businesses.some((b) => normalizeBusinessKey(b.key) === key)) {
+                alert('That business already exists.');
+                return;
+            }
+            const nextBusinesses = [...businesses, { key, name, phoneNumbers: [] }];
+            try {
+                const resp = await apiJson('/api/businesses', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ businesses: nextBusinesses, activeBusinessKey: state.activeBusinessKey })
+                });
+                applyBusinessConfig(resp);
+                renderNav();
+                renderSettings(container);
+            } catch (e) {
+                alert(e?.message || 'Failed to add business');
+            }
+        };
+    }
+
+    if (btnBizSaveRouting) {
+        btnBizSaveRouting.onclick = async () => {
+            const inputs = Array.from(bizBody.querySelectorAll('textarea[data-biz-phones]'));
+            const nextBusinesses = businesses.map((b) => {
+                const k = normalizeBusinessKey(b.key);
+                const ta = inputs.find((el) => normalizeBusinessKey(el.getAttribute('data-biz-phones')) === k);
+                const raw = safeText(ta?.value || '').trim();
+                const phoneNumbers = raw ? raw.split(/[\n,;]+/g).map((s) => safeText(s).trim()).filter(Boolean) : [];
+                return { ...b, key: k, phoneNumbers };
+            });
+            btnBizSaveRouting.disabled = true;
+            try {
+                const resp = await apiJson('/api/businesses', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ businesses: nextBusinesses, activeBusinessKey: state.activeBusinessKey })
+                });
+                applyBusinessConfig(resp);
+                renderNav();
+                renderSettings(container);
+            } catch (e) {
+                alert(e?.message || 'Failed to save phone routing');
+            } finally {
+                btnBizSaveRouting.disabled = false;
+            }
+        };
+    }
+
+    if (btnBizDelete && bizSelect) {
+        btnBizDelete.onclick = async () => {
+            const key = normalizeBusinessKey(bizSelect.value);
+            if (!key) return;
+            if (key === 'personal') {
+                alert('Personal cannot be deleted.');
+                return;
+            }
+            const b = businesses.find((x) => normalizeBusinessKey(x.key) === key);
+            const label = safeText(b?.name).trim() || key;
+            if (!confirm(`Delete business “${label}”? This does not delete the data file automatically.`)) return;
+            const nextBusinesses = businesses.filter((x) => normalizeBusinessKey(x.key) !== key);
+            const nextActive = (normalizeBusinessKey(state.activeBusinessKey) === key) ? 'personal' : state.activeBusinessKey;
+            try {
+                const resp = await apiJson('/api/businesses', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ businesses: nextBusinesses, activeBusinessKey: nextActive })
+                });
+                applyBusinessConfig(resp);
+                renderNav();
+                renderSettings(container);
+            } catch (e) {
+                alert(e?.message || 'Failed to delete business');
+            }
+        };
+    }
 
     // AI
     const ai = section('AI', 'Configure OpenAI key/model used for “Neural Link”.');
@@ -5531,60 +5806,93 @@ function renderDashboard(container) {
         if (Number.isNaN(d.getTime())) return '';
         return d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
     };
-    const radarExtraRows = inboxNew.slice(0, 8).map(item => {
-        const status = safeText(item?.status).trim() || 'New';
-        const sourceKey = normalizeInboxSourceKey(item?.source);
-        const meta = inboxSourceMeta(sourceKey);
-        const iconCls = meta.icon === 'fa-slack' ? 'fa-brands fa-slack' : `fa-solid ${meta.icon}`;
-        const business = inboxBusinessLabel(item);
-        const stamp = formatInboxStamp(safeText(item?.updatedAt) || safeText(item?.createdAt));
+    const makeRadarHtml = (items) => {
+        const list = Array.isArray(items) ? items : [];
+        const slack = list.filter((x) => normalizeInboxSourceKey(x?.source) === 'slack');
+        const email = list.filter((x) => normalizeInboxSourceKey(x?.source) === 'email');
+        const other = list.filter((x) => { const k = normalizeInboxSourceKey(x?.source); return k !== 'slack' && k !== 'email'; });
 
-        const fullText = safeText(item?.text) || safeText(item?.content) || safeText(item?.body) || safeText(item?.message) || '';
-        const snippet = previewText(fullText, 140);
-        const explicitTitle = safeText(item?.title) || safeText(item?.subject) || '';
-        const titleLine = explicitTitle.trim() || snippet || 'Inbox item';
-        const subLine = (explicitTitle.trim() && snippet && snippet !== titleLine) ? snippet : '';
+        const radarExtraRows = list.slice(0, 8).map(item => {
+            const status = safeText(item?.status).trim() || 'New';
+            const sourceKey = normalizeInboxSourceKey(item?.source);
+            const meta = inboxSourceMeta(sourceKey);
+            const iconCls = meta.icon === 'fa-slack' ? 'fa-brands fa-slack' : `fa-solid ${meta.icon}`;
+            const business = inboxBusinessLabel(item);
+            const stamp = formatInboxStamp(safeText(item?.updatedAt) || safeText(item?.createdAt));
 
-        return `
-            <div class="border border-ops-border rounded bg-ops-bg/40 px-2.5 py-2">
-                <div class="flex items-start justify-between gap-2">
-                    <div class="min-w-0 flex-1">
-                        <div class="flex items-center gap-1.5 flex-wrap">
-                            <span class="px-1.5 py-0.5 rounded border border-ops-border text-[9px] font-mono text-ops-light/70">${escapeHtml(status)}</span>
-                            <span class="px-1.5 py-0.5 rounded border border-ops-border text-[9px] font-mono ${meta.tone} flex items-center gap-1">
-                                <i class="${iconCls} text-[9px]"></i>
-                                ${escapeHtml(meta.label)}
-                            </span>
-                            <span class="px-1.5 py-0.5 rounded border border-ops-border text-[9px] font-mono text-ops-light/50">${escapeHtml(business)}</span>
-                            ${stamp ? `<span class="text-[9px] font-mono text-ops-light/40">${escapeHtml(stamp)}</span>` : ''}
+            const fullText = safeText(item?.text) || safeText(item?.content) || safeText(item?.body) || safeText(item?.message) || '';
+            const snippet = previewText(fullText, 140);
+            const explicitTitle = safeText(item?.title) || safeText(item?.subject) || '';
+            const titleLine = explicitTitle.trim() || snippet || 'Inbox item';
+            const subLine = (explicitTitle.trim() && snippet && snippet !== titleLine) ? snippet : '';
+
+            return `
+                <div class="border border-ops-border rounded bg-ops-bg/40 px-2.5 py-2">
+                    <div class="flex items-start justify-between gap-2">
+                        <div class="min-w-0 flex-1">
+                            <div class="flex items-center gap-1.5 flex-wrap">
+                                <span class="px-1.5 py-0.5 rounded border border-ops-border text-[9px] font-mono text-ops-light/70">${escapeHtml(status)}</span>
+                                <span class="px-1.5 py-0.5 rounded border border-ops-border text-[9px] font-mono ${meta.tone} flex items-center gap-1">
+                                    <i class="${iconCls} text-[9px]"></i>
+                                    ${escapeHtml(meta.label)}
+                                </span>
+                                <span class="px-1.5 py-0.5 rounded border border-ops-border text-[9px] font-mono text-ops-light/50">${escapeHtml(business)}</span>
+                                ${stamp ? `<span class="text-[9px] font-mono text-ops-light/40">${escapeHtml(stamp)}</span>` : ''}
+                            </div>
+                            <div class="mt-1 text-[11px] text-white truncate">${escapeHtml(titleLine)}</div>
+                            ${subLine ? `<div class="mt-0.5 text-[10px] text-ops-light/60 truncate">${escapeHtml(subLine)}</div>` : ''}
                         </div>
-                        <div class="mt-1 text-[11px] text-white truncate">${escapeHtml(titleLine)}</div>
-                        ${subLine ? `<div class="mt-0.5 text-[10px] text-ops-light/60 truncate">${escapeHtml(subLine)}</div>` : ''}
                     </div>
                 </div>
-            </div>
-        `;
-    }).join('');
-    radarBanner.innerHTML = `
-        <div class="dash-card-head flex items-center justify-between gap-3 px-3 py-2.5">
-            <div class="flex items-center gap-3 min-w-0">
-                <i class="fa-solid fa-satellite-dish text-blue-400 text-xs shrink-0"></i>
-                <span class="text-[10px] font-mono uppercase tracking-widest text-ops-light">Inbox Radar</span>
-                <div class="flex items-center gap-3 text-[10px] font-mono text-ops-light/50">
-                    <span class="text-lg font-semibold text-white leading-none">${inboxNewCount}</span>
-                    <span><i class="fa-brands fa-slack text-purple-400 mr-0.5"></i>${slackNew.length}</span>
-                    <span><i class="fa-solid fa-envelope text-sky-400 mr-0.5"></i>${emailNew.length}</span>
-                    <span><i class="fa-solid fa-ellipsis text-ops-light/30 mr-0.5"></i>${otherNew.length}</span>
+            `;
+        }).join('');
+
+        return `
+            <div class="dash-card-head flex items-center justify-between gap-3 px-3 py-2.5">
+                <div class="flex items-center gap-3 min-w-0">
+                    <i class="fa-solid fa-satellite-dish text-blue-400 text-xs shrink-0"></i>
+                    <span class="text-[10px] font-mono uppercase tracking-widest text-ops-light">Inbox Radar</span>
+                    <div class="flex items-center gap-3 text-[10px] font-mono text-ops-light/50">
+                        <span class="text-lg font-semibold text-white leading-none">${list.length}</span>
+                        <span><i class="fa-brands fa-slack text-purple-400 mr-0.5"></i>${slack.length}</span>
+                        <span><i class="fa-solid fa-envelope text-sky-400 mr-0.5"></i>${email.length}</span>
+                        <span><i class="fa-solid fa-ellipsis text-ops-light/30 mr-0.5"></i>${other.length}</span>
+                    </div>
+                </div>
+                <div class="flex items-center gap-1.5 shrink-0">
+                    <button type="button" data-open-inbox class="px-2.5 py-1 rounded border border-ops-border text-[9px] font-mono text-ops-light hover:text-white hover:bg-ops-surface/60 transition-colors">Open Inbox</button>
+                    ${list.length ? '<i class="fa-solid fa-chevron-down expand-chevron"></i>' : ''}
                 </div>
             </div>
-            <div class="flex items-center gap-1.5 shrink-0">
-                <button type="button" data-open-inbox class="px-2.5 py-1 rounded border border-ops-border text-[9px] font-mono text-ops-light hover:text-white hover:bg-ops-surface/60 transition-colors">Open Inbox</button>
-                ${inboxNew.length ? '<i class="fa-solid fa-chevron-down expand-chevron"></i>' : ''}
-            </div>
-        </div>
-        ${inboxNew.length ? `<div class="dash-card-body px-3 pb-2.5"><div class="space-y-1">${radarExtraRows}</div></div>` : ''}
-    `;
+            ${list.length ? `<div class="dash-card-body px-3 pb-2.5"><div class="space-y-1">${radarExtraRows}</div></div>` : ''}
+        `;
+    };
+
+    radarBanner.innerHTML = makeRadarHtml(inboxNew);
     wrap.appendChild(radarBanner);
+
+    // Upgrade radar to cross-business feed (best-effort).
+    setTimeout(async () => {
+        try {
+            const data = await apiJson('/api/inbox/radar?status=New&limit=60');
+            const items = Array.isArray(data?.items) ? data.items : [];
+            if (state.currentView !== 'dashboard') return;
+            radarBanner.innerHTML = makeRadarHtml(items);
+
+            // Re-wire events (innerHTML replacement removes listeners).
+            radarBanner.querySelector('button[data-open-inbox]')?.addEventListener('click', () => openInbox());
+            const head = radarBanner.querySelector('.dash-card-head');
+            const body = radarBanner.querySelector('.dash-card-body');
+            if (head && body) {
+                head.addEventListener('click', (e) => {
+                    if (e.target.closest('button') || e.target.closest('a')) return;
+                    radarBanner.classList.toggle('expanded');
+                });
+            }
+        } catch {
+            // ignore
+        }
+    }, 0);
 
     // ═══ URGENT ROW: Calendar + Due Today + Due This Week ════════════
     const urgentRow = document.createElement('div');
