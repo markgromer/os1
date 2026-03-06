@@ -3693,18 +3693,21 @@ app.get('/api/integrations/slack/auth-url', async (req, res) => {
 
     const redirectUri = `${getBaseUrl(req)}/api/integrations/slack/oauth/callback`;
 
-    // Broad scopes for "I want it all" (messages + lookup for channels/users).
+    // Minimal bot scopes needed for:
+    // - Slack Events API message.* events (history scopes)
+    // - posting (chat:write)
+    // - DM open + lookups (conversations:write + users/channels read)
+    // Some scopes (notably mpim:write) can trigger Slack's invalid_scope depending on app configuration,
+    // so keep the default list conservative.
     const scope = [
+      'chat:write',
+      'conversations:write',
       'users:read',
       'users:read.email',
       'channels:read',
       'groups:read',
       'im:read',
       'mpim:read',
-      'im:write',
-      'mpim:write',
-      'conversations:write',
-      'chat:write',
       'channels:history',
       'groups:history',
       'im:history',
