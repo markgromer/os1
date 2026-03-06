@@ -1300,6 +1300,11 @@ async function slackApiGet({ token, method, params }) {
   const json = await resp.json().catch(() => ({}));
   if (!resp.ok || !json || json.ok !== true) {
     const err = typeof json?.error === 'string' ? json.error : `HTTP ${resp.status}`;
+    const needed = typeof json?.needed === 'string' ? json.needed.trim() : '';
+    const provided = typeof json?.provided === 'string' ? json.provided.trim() : '';
+    if (err === 'missing_scope' && (needed || provided)) {
+      throw new Error(`missing_scope (needed: ${needed || 'unknown'}, provided: ${provided || 'unknown'}). Disconnect + Connect Slack to reinstall with updated scopes.`);
+    }
     throw new Error(err);
   }
   return json;
@@ -1329,6 +1334,11 @@ async function slackApiPost({ token, method, body }) {
   const json = await resp.json().catch(() => ({}));
   if (!resp.ok || !json || json.ok !== true) {
     const err = typeof json?.error === 'string' ? json.error : `HTTP ${resp.status}`;
+    const needed = typeof json?.needed === 'string' ? json.needed.trim() : '';
+    const provided = typeof json?.provided === 'string' ? json.provided.trim() : '';
+    if (err === 'missing_scope' && (needed || provided)) {
+      throw new Error(`missing_scope (needed: ${needed || 'unknown'}, provided: ${provided || 'unknown'}). Disconnect + Connect Slack to reinstall with updated scopes.`);
+    }
     throw new Error(err);
   }
   return json;
@@ -3693,25 +3703,17 @@ app.get('/api/integrations/slack/auth-url', async (req, res) => {
 
     const redirectUri = `${getBaseUrl(req)}/api/integrations/slack/oauth/callback`;
 
-    // Minimal bot scopes needed for:
-    // - Slack Events API message.* events (history scopes)
-    // - posting (chat:write)
-    // - DM open + lookups (conversations:write + users/channels read)
-    // Some scopes (notably mpim:write) can trigger Slack's invalid_scope depending on app configuration,
-    // so keep the default list conservative.
+    // Minimal, modern bot scopes for this app:
+    // - Send test message: chat.postMessage -> chat:write
+    // - Open DM: conversations.open -> conversations:write
+    // - Label channels/users in Inbox: conversations.info + users.info -> conversations:read + users:read
+    // Keep this list conservative to avoid Slack's invalid_scope during install.
     const scope = [
       'chat:write',
+      'conversations:read',
       'conversations:write',
       'users:read',
       'users:read.email',
-      'channels:read',
-      'groups:read',
-      'im:read',
-      'mpim:read',
-      'channels:history',
-      'groups:history',
-      'im:history',
-      'mpim:history',
     ].join(',');
 
     const params = new URLSearchParams({
