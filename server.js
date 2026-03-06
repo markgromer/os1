@@ -435,7 +435,12 @@ async function getGa4Config() {
   const clientEmail = typeof parsed?.client_email === 'string' ? parsed.client_email.trim() : '';
   const privateKey = typeof parsed?.private_key === 'string' ? parsed.private_key : '';
 
-  return { propertyId, clientEmail, privateKey, saved };
+  const { tokens } = await getGoogleOAuthConfig();
+  const googleConnected = Boolean(tokens && typeof tokens === 'object' && tokens.refresh_token);
+  const googleScope = googleConnected ? String(tokens.scope || '') : '';
+  const googleHasAnalyticsScope = googleConnected ? googleScope.includes('https://www.googleapis.com/auth/analytics.readonly') || googleScope.includes('analytics.readonly') : false;
+
+  return { propertyId, clientEmail, privateKey, googleConnected, googleHasAnalyticsScope, saved };
 }
 
 function ga4IsoDate(d) {
@@ -476,20 +481,56 @@ async function ga4RunDailyReport({ propertyId, clientEmail, privateKey, date }) 
   return { sessions, users };
 }
 
+async function ga4RunDailyReportOAuth({ req, propertyId, date }) {
+  const { clientId, clientSecret, tokens, saved } = await getGoogleOAuthConfig();
+  if (!clientId || !isLikelyGoogleClientId(clientId)) throw new Error('Google OAuth client is not configured');
+  if (!tokens || !tokens.refresh_token) throw new Error('Google is not connected');
+
+  const redirectBase = req ? getBaseUrl(req) : getDefaultBaseUrl();
+  const redirectUri = `${redirectBase}/api/integrations/google/callback`;
+
+  const fresh = await ensureFreshGoogleTokens({ clientId, clientSecret, tokens, saved });
+  const oauth2 = buildOAuthClient({ clientId, clientSecret: clientSecret || '', redirectUri });
+  oauth2.setCredentials(fresh.tokens);
+
+  const analyticsdata = google.analyticsdata({ version: 'v1beta', auth: oauth2 });
+  const resp = await analyticsdata.properties.runReport({
+    property: `properties/${propertyId}`,
+    requestBody: {
+      dateRanges: [{ startDate: date, endDate: date }],
+      metrics: [{ name: 'sessions' }, { name: 'totalUsers' }],
+    },
+  });
+
+  const row = Array.isArray(resp?.data?.rows) ? resp.data.rows[0] : null;
+  const metricValues = Array.isArray(row?.metricValues) ? row.metricValues : [];
+  const sessions = ga4ToInt(metricValues?.[0]?.value);
+  const users = ga4ToInt(metricValues?.[1]?.value);
+  return { sessions, users };
+}
+
 let ga4PullRunning = false;
-async function runGa4DailySummary({ force = false } = {}) {
+async function runGa4DailySummary({ force = false, req = null } = {}) {
   if (ga4PullRunning) return { ok: true, skipped: true, reason: 'Already running' };
   ga4PullRunning = true;
   try {
-    const { propertyId, clientEmail, privateKey, saved } = await getGa4Config();
-    const configured = Boolean(propertyId && clientEmail && privateKey);
-    if (!configured) return { ok: true, skipped: true, reason: 'GA4 not configured' };
+    const { propertyId, clientEmail, privateKey, googleConnected, googleHasAnalyticsScope, saved } = await getGa4Config();
+    const serviceAccountReady = Boolean(propertyId && clientEmail && privateKey);
+    const oauthReady = Boolean(propertyId && googleConnected && googleHasAnalyticsScope);
+    if (!serviceAccountReady && !oauthReady) {
+      if (!propertyId) return { ok: true, skipped: true, reason: 'GA4 property not set' };
+      if (!googleConnected) return { ok: true, skipped: true, reason: 'Google not connected' };
+      if (!googleHasAnalyticsScope) return { ok: true, skipped: true, reason: 'Google connected without GA4 scope (reconnect)' };
+      return { ok: true, skipped: true, reason: 'GA4 not configured' };
+    }
 
     const date = ga4YesterdayIsoDate();
     const last = typeof saved.ga4LastDailySummaryDate === 'string' ? saved.ga4LastDailySummaryDate.trim() : '';
     if (!force && last === date) return { ok: true, skipped: true, reason: 'Already summarized' };
 
-    const { sessions, users } = await ga4RunDailyReport({ propertyId, clientEmail, privateKey, date });
+    const { sessions, users } = serviceAccountReady
+      ? await ga4RunDailyReport({ propertyId, clientEmail, privateKey, date })
+      : await ga4RunDailyReportOAuth({ req, propertyId, date });
     const lines = [];
     lines.push(`📈 GA4 Daily Summary (${date})`);
     lines.push(`Property: ${propertyId}`);
@@ -2944,7 +2985,10 @@ app.get('/api/settings', async (req, res) => {
   const effectiveGa4PropertyId = envGa4PropertyId || savedGa4PropertyId;
   const envGa4ServiceAccountJson = typeof process.env.GA4_SERVICE_ACCOUNT_JSON === 'string' ? process.env.GA4_SERVICE_ACCOUNT_JSON.trim() : '';
   const savedGa4ServiceAccountJson = typeof settings.ga4ServiceAccountJson === 'string' ? settings.ga4ServiceAccountJson.trim() : '';
-  const ga4Configured = Boolean(effectiveGa4PropertyId && (envGa4ServiceAccountJson || savedGa4ServiceAccountJson));
+  const ga4ServiceAccountConfigured = Boolean(envGa4ServiceAccountJson || savedGa4ServiceAccountJson);
+  const googleScope = settings.googleTokens && typeof settings.googleTokens === 'object' ? String(settings.googleTokens.scope || '') : '';
+  const googleHasAnalyticsScope = googleConnected ? googleScope.includes('https://www.googleapis.com/auth/analytics.readonly') || googleScope.includes('analytics.readonly') : false;
+  const ga4Configured = Boolean(effectiveGa4PropertyId && ((googleConnected && googleHasAnalyticsScope) || ga4ServiceAccountConfigured));
   const slackConfigured = Boolean(
     (typeof process.env.SLACK_SIGNING_SECRET === 'string' && process.env.SLACK_SIGNING_SECRET.trim()) ||
     (typeof settings.slackSigningSecret === 'string' && settings.slackSigningSecret.trim()),
@@ -3047,7 +3091,10 @@ app.get('/api/integrations/google/auth-url', async (req, res) => {
     access_type: 'offline',
     prompt: 'consent',
     include_granted_scopes: 'true',
-    scope: 'https://www.googleapis.com/auth/calendar',
+    scope: [
+      'https://www.googleapis.com/auth/calendar',
+      'https://www.googleapis.com/auth/analytics.readonly',
+    ].join(' '),
     state,
   });
   if (usePkce) {
@@ -3387,11 +3434,13 @@ app.get('/api/integrations/crm/status', async (req, res) => {
 // Or env: GA4_PROPERTY_ID + GA4_SERVICE_ACCOUNT_JSON
 app.get('/api/integrations/ga4/status', async (req, res) => {
   try {
-    const { propertyId, clientEmail, privateKey, saved } = await getGa4Config();
+    const { propertyId, clientEmail, privateKey, googleConnected, googleHasAnalyticsScope, saved } = await getGa4Config();
     res.json({
       ok: true,
-      configured: Boolean(propertyId && clientEmail && privateKey),
+      configured: Boolean(propertyId && ((googleConnected && googleHasAnalyticsScope) || (clientEmail && privateKey))),
       hasPropertyId: Boolean(propertyId),
+      googleConnected,
+      googleHasAnalyticsScope,
       hasServiceAccount: Boolean(clientEmail && privateKey),
       lastDailySummaryDate: typeof saved.ga4LastDailySummaryDate === 'string' ? saved.ga4LastDailySummaryDate : '',
       lastDailySummaryAt: typeof saved.ga4LastDailySummaryAt === 'string' ? saved.ga4LastDailySummaryAt : '',
@@ -3403,7 +3452,7 @@ app.get('/api/integrations/ga4/status', async (req, res) => {
 });
 
 app.post('/api/integrations/ga4/pull-now', async (req, res) => {
-  const result = await runGa4DailySummary({ force: true });
+  const result = await runGa4DailySummary({ force: true, req });
   if (!result.ok) {
     res.status(500).json(result);
     return;

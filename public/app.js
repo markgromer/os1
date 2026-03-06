@@ -3458,9 +3458,9 @@ function renderSettings(container) {
                 <div class="text-[11px] text-ops-light mt-1">Find in GA4 Admin → Property Settings.</div>
             </div>
             <div>
-                <label class="text-xs text-ops-light">Service Account JSON</label>
-                <textarea id="set-ga4-service-account" rows="6" placeholder="{\n  \"type\": \"service_account\", ...\n}" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-xs font-mono" spellcheck="false"></textarea>
-                <div class="text-[11px] text-ops-light mt-1">Not shown once saved. Grant the service account <span class="font-mono">Viewer</span> access to the GA4 property.</div>
+                <label class="text-xs text-ops-light">Google Connection</label>
+                <div class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-xs">Uses the Google Connect flow above (Calendar section).</div>
+                <div class="text-[11px] text-ops-light mt-1">If you connected before GA4 was added, click <span class="font-mono">Disconnect</span> then <span class="font-mono">Connect</span> to grant GA4 read access.</div>
             </div>
         </div>
         <div class="text-[11px] text-ops-light mt-2">Configured: ${state.settings.ga4Configured ? 'Yes' : 'No'} • Endpoint: <span class="font-mono">POST /api/integrations/ga4/pull-now</span></div>
@@ -3962,16 +3962,9 @@ function renderSettings(container) {
     if (btnSaveGa4) btnSaveGa4.onclick = async () => {
         try {
             const ga4PropertyId = String(document.getElementById('set-ga4-property-id')?.value || '').trim();
-            const ga4ServiceAccountJson = String(document.getElementById('set-ga4-service-account')?.value || '').trim();
-
             if (!ga4PropertyId) throw new Error('GA4 Property ID is required');
 
             const patch = { ga4PropertyId };
-            if (ga4ServiceAccountJson) patch.ga4ServiceAccountJson = ga4ServiceAccountJson;
-
-            if (!ga4ServiceAccountJson && !state.settings.ga4Configured) {
-                throw new Error('Service account JSON is required');
-            }
 
             await saveSettingsPatch(patch);
             alert('GA4 settings saved.');
