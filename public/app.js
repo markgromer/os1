@@ -3215,6 +3215,46 @@ function renderSettings(container) {
     `;
     wrap.appendChild(bizSection);
 
+    // Airtable (per-business)
+    const at = section('Airtable (this business)', 'Connect Airtable Clients to auto-create projects in this business workspace.');
+    const atBody = at.querySelector('[data-slot="body"]');
+    atBody.innerHTML = `
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+                <label class="text-xs text-ops-light">Airtable Personal Access Token (PAT)</label>
+                <input id="set-airtable-pat" type="password" autocomplete="off" placeholder="pat..." class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-sm" />
+                <div class="text-[11px] text-ops-light mt-1">Stored server-side for the active business only.</div>
+            </div>
+            <div>
+                <label class="text-xs text-ops-light">Airtable link (paste)</label>
+                <input id="set-airtable-link" type="text" autocomplete="off" placeholder="https://airtable.com/app.../tbl.../viw..." class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-sm" />
+                <div class="text-[11px] text-ops-light mt-1">We’ll extract Base/Table/View IDs automatically.</div>
+            </div>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
+            <div>
+                <label class="text-xs text-ops-light">Base ID</label>
+                <input id="set-airtable-base" type="text" autocomplete="off" placeholder="app..." class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-sm font-mono" />
+            </div>
+            <div>
+                <label class="text-xs text-ops-light">Clients table ID</label>
+                <input id="set-airtable-table" type="text" autocomplete="off" placeholder="tbl..." class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-sm font-mono" />
+            </div>
+            <div>
+                <label class="text-xs text-ops-light">Clients view ID (optional)</label>
+                <input id="set-airtable-view" type="text" autocomplete="off" placeholder="viw..." class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-sm font-mono" />
+            </div>
+        </div>
+        <div class="text-[11px] text-ops-light mt-2" id="airtable-status-line">Status: checking...</div>
+        <div class="flex flex-wrap gap-2 mt-4">
+            <button id="btn-save-airtable" class="px-3 py-2 rounded bg-blue-600 text-white text-xs hover:bg-blue-500">Save Airtable</button>
+            <button id="btn-test-airtable" class="px-3 py-2 rounded bg-ops-bg border border-ops-border text-ops-light text-xs hover:text-white">Test (preview clients)</button>
+            <button id="btn-sync-airtable" class="px-3 py-2 rounded bg-emerald-600 text-white text-xs hover:bg-emerald-500">Sync clients → projects</button>
+        </div>
+        <div id="airtable-output" class="mt-3 hidden bg-ops-bg border border-ops-border rounded px-3 py-2 text-xs text-ops-light font-mono whitespace-pre-wrap"></div>
+    `;
+    wrap.appendChild(at);
+
     const bizSelect = bizBody.querySelector('#biz-active');
     const btnBizSwitch = bizBody.querySelector('#btn-biz-switch');
     const btnBizAdd = bizBody.querySelector('#btn-biz-add');
@@ -4011,6 +4051,12 @@ function renderSettings(container) {
     const btnTestMcp = document.getElementById('btn-test-mcp');
     const mcpToolsOutput = document.getElementById('mcp-tools-output');
 
+    const btnSaveAirtable = document.getElementById('btn-save-airtable');
+    const btnTestAirtable = document.getElementById('btn-test-airtable');
+    const btnSyncAirtable = document.getElementById('btn-sync-airtable');
+    const airtableStatusLine = document.getElementById('airtable-status-line');
+    const airtableOutput = document.getElementById('airtable-output');
+
     const refreshAuthStatus = async () => {
         const line = document.getElementById('auth-status-line');
         if (!line) return;
@@ -4095,6 +4141,140 @@ function renderSettings(container) {
     };
 
     refreshGoogleStatus();
+
+    const parseAirtableIdsFromUrl = (urlStr) => {
+        const raw = safeText(urlStr).trim();
+        if (!raw) return { baseId: '', tableId: '', viewId: '' };
+        const baseId = (raw.match(/app[a-zA-Z0-9]+/g) || [])[0] || '';
+        const tableId = (raw.match(/tbl[a-zA-Z0-9]+/g) || [])[0] || '';
+        const viewId = (raw.match(/viw[a-zA-Z0-9]+/g) || [])[0] || '';
+        return { baseId, tableId, viewId };
+    };
+
+    const setAirtableOutput = (txt) => {
+        if (!airtableOutput) return;
+        const t = safeText(txt);
+        airtableOutput.textContent = t;
+        airtableOutput.classList.toggle('hidden', !t);
+    };
+
+    const refreshAirtableStatus = async () => {
+        try {
+            const r = await apiFetch('/api/integrations/airtable/config');
+            const s = await r.json().catch(() => ({}));
+            if (!r.ok || s?.ok === false) throw new Error(s?.error || 'Failed to load Airtable status');
+
+            const baseEl = document.getElementById('set-airtable-base');
+            const tableEl = document.getElementById('set-airtable-table');
+            const viewEl = document.getElementById('set-airtable-view');
+            if (baseEl && !String(baseEl.value || '').trim()) baseEl.value = String(s.baseId || '');
+            if (tableEl && !String(tableEl.value || '').trim()) tableEl.value = String(s.clientsTableId || '');
+            if (viewEl && !String(viewEl.value || '').trim()) viewEl.value = String(s.clientsViewId || '');
+
+            if (airtableStatusLine) {
+                const configured = !!s.configured;
+                const hint = safeText(s.tokenHint || '');
+                airtableStatusLine.textContent = `Status: ${configured ? 'Configured' : 'Not configured'}${hint ? ` / Token ${hint}` : ''}`;
+            }
+        } catch {
+            if (airtableStatusLine) airtableStatusLine.textContent = 'Status: unavailable';
+        }
+    };
+
+    refreshAirtableStatus();
+
+    const atLink = document.getElementById('set-airtable-link');
+    if (atLink) {
+        atLink.addEventListener('input', () => {
+            const baseEl = document.getElementById('set-airtable-base');
+            const tableEl = document.getElementById('set-airtable-table');
+            const viewEl = document.getElementById('set-airtable-view');
+            const { baseId, tableId, viewId } = parseAirtableIdsFromUrl(atLink.value);
+            if (baseEl && baseId) baseEl.value = baseId;
+            if (tableEl && tableId) tableEl.value = tableId;
+            if (viewEl && viewId) viewEl.value = viewId;
+        });
+    }
+
+    if (btnSaveAirtable) btnSaveAirtable.onclick = async () => {
+        const prev = btnSaveAirtable.textContent;
+        btnSaveAirtable.disabled = true;
+        btnSaveAirtable.textContent = 'Saving…';
+        try {
+            setAirtableOutput('');
+            const pat = String(document.getElementById('set-airtable-pat')?.value || '').trim();
+            const baseId = String(document.getElementById('set-airtable-base')?.value || '').trim();
+            const clientsTableId = String(document.getElementById('set-airtable-table')?.value || '').trim();
+            const clientsViewId = String(document.getElementById('set-airtable-view')?.value || '').trim();
+            if (!baseId || !clientsTableId) throw new Error('Base ID and Clients table ID are required. Paste the Airtable link to auto-fill.');
+
+            const body = { baseId, clientsTableId, clientsViewId };
+            if (pat) body.pat = pat;
+
+            const resp = await apiJson('/api/integrations/airtable/config', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            });
+
+            const patEl = document.getElementById('set-airtable-pat');
+            if (patEl) patEl.value = '';
+            await refreshAirtableStatus();
+            alert(resp?.configured ? 'Airtable saved.' : 'Airtable saved (still not configured).');
+        } catch (e) {
+            alert(e?.message || 'Failed to save Airtable');
+        } finally {
+            btnSaveAirtable.disabled = false;
+            btnSaveAirtable.textContent = prev;
+        }
+    };
+
+    if (btnTestAirtable) btnTestAirtable.onclick = async () => {
+        const prev = btnTestAirtable.textContent;
+        btnTestAirtable.disabled = true;
+        btnTestAirtable.textContent = 'Testing…';
+        try {
+            const r = await apiFetch('/api/integrations/airtable/clients/preview');
+            const data = await r.json().catch(() => ({}));
+            if (!r.ok || data?.ok === false) throw new Error(data?.error || 'Preview failed');
+            const lines = [];
+            lines.push(`Preview: ${Number(data.count) || 0} record(s)`);
+            for (const rec of (data.records || [])) {
+                lines.push(`- ${safeText(rec.name) || '(Unnamed)'} (${safeText(rec.id)})`);
+            }
+            setAirtableOutput(lines.join('\n'));
+        } catch (e) {
+            setAirtableOutput('');
+            alert(e?.message || 'Failed to test Airtable');
+        } finally {
+            btnTestAirtable.disabled = false;
+            btnTestAirtable.textContent = prev;
+        }
+    };
+
+    if (btnSyncAirtable) btnSyncAirtable.onclick = async () => {
+        const prev = btnSyncAirtable.textContent;
+        btnSyncAirtable.disabled = true;
+        btnSyncAirtable.textContent = 'Syncing…';
+        try {
+            const r = await apiFetch('/api/integrations/airtable/clients/sync', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ limit: 200 }),
+            });
+            const data = await r.json().catch(() => ({}));
+            if (!r.ok || data?.ok === false) throw new Error(data?.error || 'Sync failed');
+            setAirtableOutput(`Synced. Created: ${Number(data.created) || 0}, Skipped: ${Number(data.skipped) || 0}, Fetched: ${Number(data.totalFetched) || 0}`);
+            await fetchState();
+            renderNav();
+        } catch (e) {
+            setAirtableOutput('');
+            alert(e?.message || 'Failed to sync Airtable');
+        } finally {
+            btnSyncAirtable.disabled = false;
+            btnSyncAirtable.textContent = prev;
+        }
+    };
 
     if (btnSaveAi) btnSaveAi.onclick = async () => {
         try {

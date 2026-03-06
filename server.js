@@ -547,6 +547,8 @@ function sanitizeSettingsForClient(settings) {
   delete clone.slackBotToken;
   delete clone.quoAuthToken;
   delete clone.ghlApiKey;
+  delete clone.airtableByBusinessKey;
+  delete clone.airtablePat;
   return clone;
 }
 
@@ -2401,6 +2403,95 @@ function safeUrl(input) {
   return s;
 }
 
+function normalizeAirtableId(input) {
+  const s = String(input || '').trim();
+  if (!s) return '';
+  // Airtable IDs are typically like appXXXX, tblXXXX, viwXXXX
+  return s.slice(0, 64);
+}
+
+function normalizeAirtableBusinessConfig(input) {
+  const cfg = input && typeof input === 'object' ? input : {};
+  const pat = typeof cfg.pat === 'string' ? cfg.pat.trim() : '';
+  const baseId = normalizeAirtableId(cfg.baseId);
+  const clientsTableId = normalizeAirtableId(cfg.clientsTableId || cfg.tableId || cfg.clientsTable);
+  const clientsViewId = normalizeAirtableId(cfg.clientsViewId || cfg.viewId || cfg.clientsView);
+  const updatedAt = typeof cfg.updatedAt === 'string' ? cfg.updatedAt : '';
+  return { pat, baseId, clientsTableId, clientsViewId, updatedAt };
+}
+
+function getAirtableConfigForBusiness(settings, businessKey) {
+  const s = settings && typeof settings === 'object' ? settings : {};
+  const map = s.airtableByBusinessKey && typeof s.airtableByBusinessKey === 'object' ? s.airtableByBusinessKey : {};
+  const key = normalizeBusinessKey(businessKey) || DEFAULT_BUSINESS_KEY;
+  return normalizeAirtableBusinessConfig(map?.[key] || {});
+}
+
+function airtableTokenHint(pat) {
+  const t = typeof pat === 'string' ? pat.trim() : '';
+  if (!t || t.length < 4) return '';
+  return `••••${t.slice(-4)}`;
+}
+
+function pickAirtableClientName(fields) {
+  const f = fields && typeof fields === 'object' ? fields : {};
+  const preferred = ['Client', 'Client Name', 'Name', 'Company', 'Company Name', 'Business', 'Organization'];
+  for (const k of preferred) {
+    const v = f[k];
+    if (typeof v === 'string' && v.trim()) return v.trim();
+  }
+  for (const v of Object.values(f)) {
+    if (typeof v === 'string' && v.trim()) return v.trim();
+    if (Array.isArray(v) && v.length && typeof v[0] === 'string' && String(v[0]).trim()) return String(v[0]).trim();
+  }
+  return '';
+}
+
+async function airtableListRecords({ pat, baseId, tableId, viewId, maxRecords = 50 } = {}) {
+  const token = typeof pat === 'string' ? pat.trim() : '';
+  const b = normalizeAirtableId(baseId);
+  const t = normalizeAirtableId(tableId);
+  const v = normalizeAirtableId(viewId);
+  const max = Math.min(200, Math.max(1, Number(maxRecords) || 50));
+  if (!token) return { ok: false, error: 'Missing Airtable PAT' };
+  if (!b || !t) return { ok: false, error: 'Missing Airtable base/table id' };
+
+  const items = [];
+  let offset = '';
+  for (let page = 0; page < 5; page++) {
+    const params = new URLSearchParams();
+    params.set('pageSize', String(Math.min(100, max)));
+    if (v) params.set('view', v);
+    if (offset) params.set('offset', offset);
+    const url = `https://api.airtable.com/v0/${encodeURIComponent(b)}/${encodeURIComponent(t)}?${params.toString()}`;
+
+    const resp = await fetch(url, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      const msg = typeof data?.error?.message === 'string' ? data.error.message : '';
+      return { ok: false, error: msg || `Airtable request failed (${resp.status})` };
+    }
+
+    const records = Array.isArray(data?.records) ? data.records : [];
+    for (const r of records) {
+      items.push(r);
+      if (items.length >= max) break;
+    }
+
+    if (items.length >= max) break;
+    offset = typeof data?.offset === 'string' ? data.offset : '';
+    if (!offset) break;
+  }
+
+  return { ok: true, records: items };
+}
+
 function normalizeProject(input) {
   const name = typeof input.name === 'string' ? input.name.trim() : '';
   if (!name) throw new Error('Project name is required');
@@ -3418,6 +3509,187 @@ app.post('/api/businesses/active', async (req, res) => {
     const finalCfg = getBusinessConfigFromSettings(next);
     await writeSettings({ ...next, businesses: finalCfg.businesses, activeBusinessKey: finalCfg.activeBusinessKey });
     res.json({ ok: true, activeBusinessKey: finalCfg.activeBusinessKey, businesses: finalCfg.businesses });
+  });
+
+  await writeLock;
+});
+
+// Integrations: Airtable (per-business)
+app.get('/api/integrations/airtable/config', async (req, res) => {
+  try {
+    const settings = await readSettings();
+    const key = getBusinessKeyFromContext();
+    const cfg = getAirtableConfigForBusiness(settings, key);
+    res.json({
+      ok: true,
+      businessKey: key,
+      configured: Boolean(cfg.pat && cfg.baseId && cfg.clientsTableId),
+      tokenHint: airtableTokenHint(cfg.pat),
+      baseId: cfg.baseId,
+      clientsTableId: cfg.clientsTableId,
+      clientsViewId: cfg.clientsViewId,
+      updatedAt: cfg.updatedAt || '',
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message || 'Failed to load Airtable config' });
+  }
+});
+
+app.put('/api/integrations/airtable/config', async (req, res) => {
+  const body = req.body && typeof req.body === 'object' ? req.body : {};
+  const incoming = normalizeAirtableBusinessConfig(body);
+  const key = getBusinessKeyFromContext();
+
+  writeLock = writeLock.then(async () => {
+    const settings = await readSettings();
+    const map = settings.airtableByBusinessKey && typeof settings.airtableByBusinessKey === 'object' ? settings.airtableByBusinessKey : {};
+    const current = getAirtableConfigForBusiness(settings, key);
+    const next = {
+      ...current,
+      baseId: incoming.baseId || current.baseId,
+      clientsTableId: incoming.clientsTableId || current.clientsTableId,
+      clientsViewId: incoming.clientsViewId || current.clientsViewId,
+      pat: incoming.pat || current.pat,
+      updatedAt: nowIso(),
+    };
+    await writeSettings({
+      ...settings,
+      airtableByBusinessKey: {
+        ...map,
+        [key]: next,
+      },
+      updatedAt: nowIso(),
+    });
+
+    res.json({
+      ok: true,
+      businessKey: key,
+      configured: Boolean(next.pat && next.baseId && next.clientsTableId),
+      tokenHint: airtableTokenHint(next.pat),
+      baseId: next.baseId,
+      clientsTableId: next.clientsTableId,
+      clientsViewId: next.clientsViewId,
+      updatedAt: next.updatedAt,
+    });
+  });
+
+  await writeLock;
+});
+
+app.get('/api/integrations/airtable/clients/preview', async (req, res) => {
+  try {
+    const settings = await readSettings();
+    const key = getBusinessKeyFromContext();
+    const cfg = getAirtableConfigForBusiness(settings, key);
+    if (!cfg.pat || !cfg.baseId || !cfg.clientsTableId) {
+      res.status(400).json({ ok: false, error: 'Airtable is not configured for this business.' });
+      return;
+    }
+
+    const out = await airtableListRecords({
+      pat: cfg.pat,
+      baseId: cfg.baseId,
+      tableId: cfg.clientsTableId,
+      viewId: cfg.clientsViewId,
+      maxRecords: 5,
+    });
+    if (!out.ok) {
+      res.status(400).json({ ok: false, error: out.error || 'Failed to fetch Airtable records' });
+      return;
+    }
+
+    const records = (out.records || []).map((r) => ({
+      id: typeof r?.id === 'string' ? r.id : '',
+      createdTime: typeof r?.createdTime === 'string' ? r.createdTime : '',
+      name: pickAirtableClientName(r?.fields),
+      fieldKeys: r?.fields && typeof r.fields === 'object' ? Object.keys(r.fields).slice(0, 20) : [],
+    }));
+
+    res.json({ ok: true, businessKey: key, count: records.length, records });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message || 'Failed to preview clients' });
+  }
+});
+
+app.post('/api/integrations/airtable/clients/sync', async (req, res) => {
+  const limitRaw = Number(req.body?.limit);
+  const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(500, Math.floor(limitRaw))) : 200;
+  const key = getBusinessKeyFromContext();
+
+  writeLock = writeLock.then(async () => {
+    const settings = await readSettings();
+    const cfg = getAirtableConfigForBusiness(settings, key);
+    if (!cfg.pat || !cfg.baseId || !cfg.clientsTableId) {
+      res.status(400).json({ ok: false, error: 'Airtable is not configured for this business.' });
+      return;
+    }
+
+    const out = await airtableListRecords({
+      pat: cfg.pat,
+      baseId: cfg.baseId,
+      tableId: cfg.clientsTableId,
+      viewId: cfg.clientsViewId,
+      maxRecords: limit,
+    });
+    if (!out.ok) {
+      res.status(400).json({ ok: false, error: out.error || 'Failed to fetch Airtable clients' });
+      return;
+    }
+
+    await withBusinessKey(key, async () => {
+      const store = await readStore();
+      const existing = Array.isArray(store.projects) ? store.projects : [];
+      const existingByAirtableUrl = new Set(existing.map((p) => String(p?.airtableUrl || '').trim()).filter(Boolean));
+
+      let created = 0;
+      let skipped = 0;
+
+      const toCreate = [];
+      for (const r of (out.records || [])) {
+        const recordId = typeof r?.id === 'string' ? r.id : '';
+        if (!recordId) continue;
+        const recordUrl = `https://airtable.com/${cfg.baseId}/${cfg.clientsTableId}/${recordId}`;
+        if (existingByAirtableUrl.has(recordUrl)) {
+          skipped++;
+          continue;
+        }
+
+        const name = pickAirtableClientName(r?.fields) || `Airtable Client ${recordId}`;
+        const normalized = normalizeProject({
+          name,
+          type: 'Workflow',
+          status: 'Active',
+          clientName: name,
+          airtableUrl: recordUrl,
+          agentBrief: `Imported from Airtable (Clients)\nRecord: ${recordId}`,
+        });
+
+        const ts = nowIso();
+        const project = {
+          id: makeId(),
+          ...normalized,
+          createdAt: ts,
+          updatedAt: ts,
+        };
+        toCreate.push(project);
+        existingByAirtableUrl.add(recordUrl);
+        created++;
+      }
+
+      const ts = nowIso();
+      const nextStore = {
+        ...store,
+        revision: store.revision + 1,
+        updatedAt: ts,
+        projects: [...toCreate, ...existing],
+      };
+
+      if (toCreate.length) {
+        await writeStore(nextStore);
+      }
+
+      res.json({ ok: true, businessKey: key, created, skipped, totalFetched: (out.records || []).length });
+    });
   });
 
   await writeLock;
