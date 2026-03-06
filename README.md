@@ -70,6 +70,55 @@ The blueprint mounts a persistent disk at `/var/data/task-tracker` and stores:
 - Quo/Twilio SMS: `https://<your-render-url>/api/integrations/quo/sms`
 - Quo/Twilio calls: `https://<your-render-url>/api/integrations/quo/calls`
 
+## MCP on Render (Option 1: stdio servers in same container)
+
+This app supports MCP (Model Context Protocol) servers over **stdio**. On Render, this means OS.1 spawns MCP servers as child processes inside the same container.
+
+### Why this is the easiest option
+
+- No extra services to deploy
+- No extra networking/auth between services
+- Tools can be called as needed (best-effort, on-demand)
+
+### Multi-server setup (recommended)
+
+In **Settings → Advanced**, add an `mcpServers` array. Each server must have a unique `name`.
+
+Example:
+
+```json
+{
+   "mcpServers": [
+      {
+         "name": "crm",
+         "enabled": true,
+         "command": "node",
+         "args": "crm-mcp-server.js",
+         "cwd": "/opt/render/project/src"
+      },
+      {
+         "name": "slack",
+         "enabled": true,
+         "command": "node",
+         "args": "slack-mcp-server.js",
+         "cwd": "/opt/render/project/src"
+      }
+   ]
+}
+```
+
+Tool names are **namespaced** as:
+
+- `crm.<toolName>`
+- `slack.<toolName>`
+
+Example: call `crm.search_leads` or `slack.post_message` depending on what your MCP server exposes.
+
+### Notes / best practices
+
+- Prefer putting secrets in Render **env vars** (not in `args`), so they are not stored/shown in Settings.
+- Ensure the MCP server code is available in the container (in this repo, or installed as a dependency) so the `command`/`args` works at runtime.
+
 ### Fireflies payload notes
 
 - `summary` is required.

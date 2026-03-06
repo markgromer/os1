@@ -3448,7 +3448,7 @@ function renderSettings(container) {
     wrap.appendChild(crm);
 
     // GA4
-    const ga4 = section('GA4 (Analytics)', 'Pull a daily GA4 summary into Inbox using a Google service account.');
+    const ga4 = section('GA4 (Analytics)', 'Pull a daily GA4 summary into Inbox using your Google connection.');
     const ga4Body = ga4.querySelector('[data-slot="body"]');
     ga4Body.innerHTML = `
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -3489,6 +3489,11 @@ function renderSettings(container) {
                 <div class="text-[11px] text-ops-light mt-1">Redirect URI: <span class="font-mono">/api/integrations/slack/oauth/callback</span></div>
             </div>
             <div>
+                <label class="text-xs text-ops-light">Bot Token (optional)</label>
+                <input id="set-slack-bot-token" type="password" autocomplete="off" placeholder="xoxb-... (leave blank to keep existing)" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-sm" />
+                <div class="text-[11px] text-ops-light mt-1">Needed for “Send test”. Prefer using <span class="font-mono">Connect</span> to install.</div>
+            </div>
+            <div>
                 <label class="text-xs text-ops-light">Signing Secret</label>
                 <input id="set-slack-signing-secret" type="password" autocomplete="off" placeholder="(leave blank to keep existing)" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-sm" />
                 <div class="text-[11px] text-ops-light mt-1">Configured: ${state.settings.slackConfigured ? 'Yes' : 'No'}</div>
@@ -3498,12 +3503,20 @@ function renderSettings(container) {
                 <div class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-xs font-mono">POST /api/integrations/slack/events</div>
                 <div class="text-[11px] text-ops-light mt-1">Slack headers: <span class="font-mono">X-Slack-Signature</span>, <span class="font-mono">X-Slack-Request-Timestamp</span></div>
             </div>
+            <div>
+                <label class="text-xs text-ops-light">Test target (optional)</label>
+                <input id="set-slack-test-target" type="text" autocomplete="off" placeholder="#general or @you" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-sm" />
+                <div class="text-[11px] text-ops-light mt-1">Uses your Slack bot token to post a quick test.</div>
+            </div>
         </div>
         <div class="flex flex-wrap gap-2 mt-4">
             <button id="btn-save-slack" class="px-3 py-2 rounded bg-blue-600 text-white text-xs hover:bg-blue-500">Save Slack</button>
             <button id="btn-connect-slack" class="px-3 py-2 rounded bg-emerald-600 text-white text-xs hover:bg-emerald-500">Connect</button>
             <button id="btn-disconnect-slack" class="px-3 py-2 rounded bg-ops-bg border border-ops-border text-ops-light text-xs hover:text-white">Disconnect</button>
+            <button id="btn-diag-slack" class="px-3 py-2 rounded bg-ops-bg border border-ops-border text-ops-light text-xs hover:text-white">Diagnostics</button>
+            <button id="btn-test-slack" class="px-3 py-2 rounded bg-emerald-600 text-white text-xs hover:bg-emerald-500">Send test</button>
         </div>
+        <div id="slack-test-output" class="mt-3 hidden bg-ops-bg border border-ops-border rounded px-3 py-2 text-xs text-ops-light font-mono whitespace-pre-wrap"></div>
     `;
     wrap.appendChild(slack);
 
@@ -3591,19 +3604,21 @@ function renderSettings(container) {
     wrap.appendChild(ghl);
 
     // MCP
-    const m = section('MCP', 'Connect a local MCP server (stdio) so “Neural Link” can call MCP tools.');
+    const m = section('MCP', 'Run MCP servers alongside this app (stdio) so “Neural Link” can call MCP tools (Render-friendly).');
     const mBody = m.querySelector('[data-slot="body"]');
     const mcp = (state.settings && state.settings.mcp && typeof state.settings.mcp === 'object') ? state.settings.mcp : {};
-    const mcpEnabled = !!mcp.enabled;
+    const mcpEnabled = !!state.settings.mcpEnabled;
     const mcpCommand = String(mcp.command || '');
     const mcpArgs = Array.isArray(mcp.args) ? mcp.args.map(String).join(' ') : String(mcp.args || '');
     const mcpCwd = String(mcp.cwd || '');
+    const mcpServers = Array.isArray(state.settings.mcpServers) ? state.settings.mcpServers : [];
+    const mcpServersEnabled = mcpServers.filter((s) => s && typeof s === 'object' && s.enabled).length;
     mBody.innerHTML = `
         <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div class="flex items-center gap-2 md:col-span-3">
                 <input id="set-mcp-enabled" type="checkbox" class="accent-blue-500" ${mcpEnabled ? 'checked' : ''} />
                 <label for="set-mcp-enabled" class="text-xs text-ops-light">Enable MCP</label>
-                <div class="text-[11px] text-ops-light ml-3">Configured: ${state.settings.mcpConfigured ? 'Yes' : 'No'}</div>
+                <div class="text-[11px] text-ops-light ml-3">Configured: ${state.settings.mcpConfigured ? 'Yes' : 'No'}${mcpServers.length ? ` • Servers: ${mcpServersEnabled}/${mcpServers.length}` : ''}</div>
             </div>
             <div class="md:col-span-1">
                 <label class="text-xs text-ops-light">Command</label>
@@ -3619,6 +3634,7 @@ function renderSettings(container) {
                 <label class="text-xs text-ops-light">Working directory (optional)</label>
                 <input id="set-mcp-cwd" type="text" autocomplete="off" placeholder="C:\\path\\to\\workspace" value="${mcpCwd.replace(/"/g, '&quot;')}" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-sm" />
             </div>
+            <div class="md:col-span-3 text-[11px] text-ops-light">Multi-server (recommended): set <span class="font-mono">mcpServers</span> in Advanced Settings JSON, then call tools as <span class="font-mono">serverName.toolName</span> (example <span class="font-mono">crm.search</span>).</div>
         </div>
         <div class="flex flex-wrap gap-2 mt-4">
             <button id="btn-save-mcp" class="px-3 py-2 rounded bg-blue-600 text-white text-xs hover:bg-blue-500">Save MCP</button>
@@ -3705,6 +3721,9 @@ function renderSettings(container) {
     const btnSaveSlack = document.getElementById('btn-save-slack');
     const btnConnectSlack = document.getElementById('btn-connect-slack');
     const btnDisconnectSlack = document.getElementById('btn-disconnect-slack');
+    const btnDiagSlack = document.getElementById('btn-diag-slack');
+    const btnTestSlack = document.getElementById('btn-test-slack');
+    const slackTestOutput = document.getElementById('slack-test-output');
     const btnSaveQuo = document.getElementById('btn-save-quo');
     const btnSaveGhl = document.getElementById('btn-save-ghl');
     const btnTestGhl = document.getElementById('btn-test-ghl');
@@ -3990,6 +4009,7 @@ function renderSettings(container) {
                 if (data.date) lines.push(`Date: ${data.date}`);
                 if (typeof data.sessions === 'number') lines.push(`Sessions: ${data.sessions}`);
                 if (typeof data.users === 'number') lines.push(`Users: ${data.users}`);
+                if ('inboxCreated' in (data || {})) lines.push(`Inbox: ${data.inboxCreated ? 'created' : 'already exists (deduped)'}`);
                 ga4PullOutput.textContent = lines.join('\n') || 'OK';
             }
             await fetchState();
@@ -4008,11 +4028,13 @@ function renderSettings(container) {
             const signingSecret = String(document.getElementById('set-slack-signing-secret')?.value || '').trim();
             const clientId = String(document.getElementById('set-slack-client-id')?.value || '').trim();
             const clientSecret = String(document.getElementById('set-slack-client-secret')?.value || '').trim();
+            const botToken = String(document.getElementById('set-slack-bot-token')?.value || '').trim();
 
             const patch = {};
             if (signingSecret) patch.slackSigningSecret = signingSecret;
             if (clientId) patch.slackClientId = clientId;
             if (clientSecret) patch.slackClientSecret = clientSecret;
+            if (botToken) patch.slackBotToken = botToken;
 
             if (!Object.keys(patch).length) {
                 if (!state.settings.slackConfigured) throw new Error('Signing secret is required');
@@ -4026,6 +4048,53 @@ function renderSettings(container) {
             renderSettings(container);
         } catch (e) {
             alert(e?.message || 'Failed to save Slack settings');
+        }
+    };
+
+    if (btnDiagSlack) btnDiagSlack.onclick = async () => {
+        try {
+            if (slackTestOutput) {
+                slackTestOutput.classList.remove('hidden');
+                slackTestOutput.textContent = 'Loading Slack diagnostics...';
+            }
+            const r = await apiFetch('/api/integrations/slack/diagnostics');
+            const data = await r.json().catch(() => ({}));
+            if (!r.ok || !data.ok) throw new Error(data?.error || 'Failed to load diagnostics');
+            if (slackTestOutput) slackTestOutput.textContent = JSON.stringify(data, null, 2);
+        } catch (e) {
+            if (slackTestOutput) {
+                slackTestOutput.classList.remove('hidden');
+                slackTestOutput.textContent = `Error: ${e?.message || 'Failed to load diagnostics'}`;
+            }
+        }
+    };
+
+    if (btnTestSlack) btnTestSlack.onclick = async () => {
+        try {
+            const target = String(document.getElementById('set-slack-test-target')?.value || '').trim();
+            if (!target) throw new Error('Enter a test target like @yourname (DM) or a channel ID (C123...).');
+            if (slackTestOutput) {
+                slackTestOutput.classList.remove('hidden');
+                slackTestOutput.textContent = 'Sending Slack test message...';
+            }
+            const payload = {
+                text: `Task Tracker Slack test (${new Date().toISOString()})`,
+            };
+            payload.channel = target;
+
+            const r = await apiFetch('/api/integrations/slack/send-summary', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            const data = await r.json().catch(() => ({}));
+            if (!r.ok) throw new Error(data?.error || `Slack test failed (${r.status})`);
+            if (slackTestOutput) slackTestOutput.textContent = JSON.stringify(data, null, 2);
+        } catch (e) {
+            if (slackTestOutput) {
+                slackTestOutput.classList.remove('hidden');
+                slackTestOutput.textContent = `Error: ${e?.message || 'Slack test failed'}`;
+            }
         }
     };
 

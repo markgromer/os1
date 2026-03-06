@@ -537,7 +537,7 @@ async function runGa4DailySummary({ force = false, req = null } = {}) {
     lines.push(`Sessions: ${sessions}`);
     lines.push(`Users: ${users}`);
 
-    await addInboxIntegrationItem({
+    const inbox = await addInboxIntegrationItem({
       source: 'ga4',
       externalId: `daily:${propertyId}:${date}`,
       text: lines.join('\n'),
@@ -552,7 +552,15 @@ async function runGa4DailySummary({ force = false, req = null } = {}) {
       updatedAt: nowIso(),
     };
     await writeSettings(next);
-    return { ok: true, skipped: false, date, sessions, users };
+    return {
+      ok: true,
+      skipped: false,
+      date,
+      sessions,
+      users,
+      inboxCreated: Boolean(inbox?.created),
+      inboxId: typeof inbox?.id === 'string' ? inbox.id : '',
+    };
   } catch (err) {
     try {
       const saved = await readSettings();
@@ -694,12 +702,17 @@ async function addInboxIntegrationItem({ source, externalId, text, projectId = '
   const id = cleanExternalId ? `${cleanSource}:${cleanExternalId}` : makeId();
   if (!cleanText) return { ok: false, error: 'Missing text' };
 
+  let created = true;
+
   writeLock = writeLock.then(async () => {
     const store = await readStore();
     const list = Array.isArray(store.inboxItems) ? store.inboxItems : [];
     if (cleanExternalId && list.some((x) => String(x?.id || '') === id)) {
+      created = false;
       return;
     }
+
+    created = true;
 
     const ts = nowIso();
 
@@ -742,7 +755,7 @@ async function addInboxIntegrationItem({ source, externalId, text, projectId = '
   });
 
   await writeLock;
-  return { ok: true };
+  return { ok: true, created, id };
 }
 
 function verifySlackRequest({ req, signingSecret }) {
@@ -842,6 +855,87 @@ function getMcpConfigFromSettings(settings) {
   const args = Array.isArray(raw.args) ? raw.args.map((v) => String(v)).join(' ') : typeof raw.args === 'string' ? raw.args : '';
   const cwd = typeof raw.cwd === 'string' ? raw.cwd.trim() : '';
   return { enabled, command, args, cwd };
+}
+
+function normalizeMcpServerName(name) {
+  const s = typeof name === 'string' ? name.trim().toLowerCase() : '';
+  if (!s) return '';
+  const cleaned = s.replace(/[^a-z0-9_-]/g, '');
+  return cleaned.slice(0, 32);
+}
+
+function getMcpServersFromSettings(settings) {
+  const raw = settings && typeof settings === 'object' ? settings.mcpServers : null;
+  const list = Array.isArray(raw) ? raw : [];
+  const out = [];
+  for (const row of list) {
+    if (!row || typeof row !== 'object') continue;
+    const name = normalizeMcpServerName(row.name || row.server || row.id || '');
+    if (!name) continue;
+    const enabled = Boolean(row.enabled);
+    const command = typeof row.command === 'string' ? row.command.trim() : '';
+    const args = Array.isArray(row.args) ? row.args.map((v) => String(v)).join(' ') : typeof row.args === 'string' ? row.args : '';
+    const cwd = typeof row.cwd === 'string' ? row.cwd.trim() : '';
+    out.push({ name, enabled, command, args, cwd });
+  }
+
+  // Dedupe by name; last one wins.
+  const byName = new Map();
+  for (const s of out) byName.set(s.name, s);
+  return Array.from(byName.values());
+}
+
+function getMcpEffectiveSettings(settings) {
+  const legacy = getMcpConfigFromSettings(settings);
+  const servers = getMcpServersFromSettings(settings);
+  const anyServerEnabled = servers.some((s) => s.enabled);
+  const anyServerConfigured = servers.some((s) => s.enabled && s.command);
+  const enabled = Boolean(legacy.enabled || anyServerEnabled);
+  const configured = Boolean((legacy.enabled && legacy.command) || anyServerConfigured);
+  return { legacy, servers, enabled, configured };
+}
+
+function resolveMcpTarget(settings, fullToolName) {
+  const { legacy, servers } = getMcpEffectiveSettings(settings);
+  const raw = typeof fullToolName === 'string' ? fullToolName.trim() : '';
+  const dot = raw.indexOf('.');
+  const prefix = dot > 0 ? normalizeMcpServerName(raw.slice(0, dot)) : '';
+  const toolName = dot > 0 ? raw.slice(dot + 1) : raw;
+
+  if (prefix) {
+    const server = servers.find((s) => s.name === prefix);
+    if (server && server.enabled && server.command) {
+      return { ok: true, target: { kind: 'server', name: server.name, config: server }, toolName };
+    }
+  }
+
+  if (legacy.enabled && legacy.command) {
+    return { ok: true, target: { kind: 'legacy', name: 'legacy', config: legacy }, toolName: raw };
+  }
+  return { ok: false, error: 'MCP is not configured' };
+}
+
+async function mcpListToolsAll(settings) {
+  const { legacy, servers } = getMcpEffectiveSettings(settings);
+  const out = [];
+
+  if (legacy.enabled && legacy.command) {
+    const result = await mcpListTools({ command: legacy.command, args: legacy.args, cwd: legacy.cwd || process.cwd() });
+    const tools = Array.isArray(result?.tools) ? result.tools : [];
+    for (const t of tools) out.push({ ...t, server: 'legacy' });
+  }
+
+  for (const s of servers) {
+    if (!s.enabled || !s.command) continue;
+    const result = await mcpListTools({ command: s.command, args: s.args, cwd: s.cwd || process.cwd() });
+    const tools = Array.isArray(result?.tools) ? result.tools : [];
+    for (const t of tools) {
+      const name = typeof t?.name === 'string' ? t.name : '';
+      out.push({ ...t, name: name ? `${s.name}.${name}` : name, server: s.name });
+    }
+  }
+
+  return out;
 }
 
 function getBaseUrl(req) {
@@ -979,6 +1073,18 @@ const slackOAuthState = new Map();
 const slackUserCache = new Map();
 const slackChannelCache = new Map();
 const slackUsersListCache = new Map();
+
+const slackRuntime = {
+  lastReceivedAt: '',
+  lastAcceptedAt: '',
+  lastRejectedAt: '',
+  lastRejectedReason: '',
+  lastAsyncErrorAt: '',
+  lastAsyncError: '',
+  lastEventId: '',
+  lastTeamId: '',
+  lastEventType: '',
+};
 
 function pruneSlackOAuthState() {
   const cutoff = Date.now() - 10 * 60 * 1000;
@@ -1933,16 +2039,29 @@ app.post('/api/integrations/slack/send-summary', async (req, res) => {
 
     const { botToken } = await getSlackOAuthConfig();
     if (!botToken) {
-      res.status(400).json({ error: 'Slack is not configured' });
+      res.status(400).json({
+        error: 'Slack bot token is not configured. Click “Connect” in Settings → Slack (recommended) or set SLACK_BOT_TOKEN / save slackBotToken.',
+      });
       return;
     }
 
-    let targetChannel = channel || '@christian';
+    let targetChannel = typeof channel === 'string' ? channel.trim() : '';
+    if (!targetChannel) {
+      res.status(400).json({
+        error: 'Missing channel. Provide a Slack target like @yourname (DM) or a channel ID like C123... (recommended).',
+        hint: 'Tip: easiest is @yourname (DM).',
+      });
+      return;
+    }
 
     // Slack does NOT allow posting directly to a user ID. For DMs, we must open
     // (or reuse) an IM channel via conversations.open, then post to that channel.
     if (typeof targetChannel === 'string' && targetChannel.trim().startsWith('@')) {
       const username = targetChannel.trim().substring(1).toLowerCase();
+      if (!username) {
+        res.status(400).json({ error: 'Invalid Slack DM target. Use @username.' });
+        return;
+      }
       const users = await slackListWorkspaceUsers({ token: botToken });
       const user = users.find((u) =>
         u?.name?.toLowerCase() === username ||
@@ -1965,9 +2084,14 @@ app.post('/api/integrations/slack/send-summary', async (req, res) => {
           targetChannel = dmChannelId;
         } else {
           console.warn(`Slack conversations.open returned no channel id for ${targetChannel}`);
+          res.status(400).json({ error: 'Slack could not open a DM channel for that user.' });
+          return;
         }
       } else {
-        console.warn(`Could not resolve Slack user for ${targetChannel}, trying literal`);
+        res.status(400).json({
+          error: `Could not resolve Slack user ${targetChannel}. Make sure the app is installed and has users:read scope (then reinstall).`,
+        });
+        return;
       }
     }
 
@@ -1982,7 +2106,9 @@ app.post('/api/integrations/slack/send-summary', async (req, res) => {
 
     res.json({ ok: true, result });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    const msg = err?.message || 'Slack request failed';
+    const status = msg === 'invalid_id_parameter' ? 400 : 500;
+    res.status(status).json({ error: msg });
   }
 });
 
@@ -3012,9 +3138,9 @@ app.get('/api/settings', async (req, res) => {
   const ghlConfig = await getGhlConfig();
   const ghlConfigured = Boolean(ghlConfig.apiKey && ghlConfig.locationId);
 
-  const mcp = getMcpConfigFromSettings(settings);
-  const mcpEnabled = Boolean(mcp.enabled);
-  const mcpConfigured = Boolean(mcpEnabled && mcp.command);
+  const mcpEff = getMcpEffectiveSettings(settings);
+  const mcpEnabled = Boolean(mcpEff.enabled);
+  const mcpConfigured = Boolean(mcpEff.configured);
 
   res.json({
     ...safe,
@@ -3027,6 +3153,7 @@ app.get('/api/settings', async (req, res) => {
     googleConnected,
     firefliesConfigured,
     crmConfigured,
+    ga4Configured,
     slackConfigured,
     slackOAuthConfigured,
     slackInstalled,
@@ -3693,11 +3820,19 @@ app.get('/api/integrations/slack/diagnostics', async (req, res) => {
     const hasSavedSigningSecret = typeof settings.slackSigningSecret === 'string' && settings.slackSigningSecret.trim();
     const hasEnvBotToken = typeof process.env.SLACK_BOT_TOKEN === 'string' && process.env.SLACK_BOT_TOKEN.trim();
     const hasSavedBotToken = typeof settings.slackBotToken === 'string' && settings.slackBotToken.trim();
+
+    const baseUrl = getBaseUrl(req);
     res.json({
       ok: true,
       configured: Boolean(hasEnvSigningSecret || hasSavedSigningSecret),
       installed: Boolean(hasEnvBotToken || hasSavedBotToken),
       debugWebhooks: DEBUG_WEBHOOKS,
+      baseUrl,
+      eventsUrl: `${baseUrl}/api/integrations/slack/events`,
+      oauthRedirectUrl: `${baseUrl}/api/integrations/slack/oauth/callback`,
+      runtime: {
+        ...slackRuntime,
+      },
       note: 'Slack Events API requires a public HTTPS URL reachable by Slack.',
     });
   } catch (err) {
@@ -3707,6 +3842,8 @@ app.get('/api/integrations/slack/diagnostics', async (req, res) => {
 
 app.post('/api/integrations/slack/events', async (req, res) => {
   try {
+    slackRuntime.lastReceivedAt = nowIso();
+
     const settings = await readSettings();
     const signingSecret = (typeof process.env.SLACK_SIGNING_SECRET === 'string' && process.env.SLACK_SIGNING_SECRET.trim())
       ? process.env.SLACK_SIGNING_SECRET.trim()
@@ -3718,6 +3855,8 @@ app.post('/api/integrations/slack/events', async (req, res) => {
 
     const verified = verifySlackRequest({ req, signingSecret });
     if (!verified.ok) {
+      slackRuntime.lastRejectedAt = nowIso();
+      slackRuntime.lastRejectedReason = verified.error || 'Unauthorized';
       debugWebhookLog('Slack events rejected', {
         reason: verified.error,
         contentType: req.headers['content-type'],
@@ -3736,11 +3875,15 @@ app.post('/api/integrations/slack/events', async (req, res) => {
 
     const body = req.body && typeof req.body === 'object' ? req.body : {};
     if (body.type === 'url_verification') {
+      slackRuntime.lastAcceptedAt = nowIso();
+      slackRuntime.lastEventType = 'url_verification';
       res.json({ challenge: body.challenge });
       return;
     }
 
     if (body.type !== 'event_callback') {
+      slackRuntime.lastAcceptedAt = nowIso();
+      slackRuntime.lastEventType = String(body.type || 'unknown');
       res.json({ ok: true });
       return;
     }
@@ -3752,20 +3895,27 @@ app.post('/api/integrations/slack/events', async (req, res) => {
     const subtype = typeof ev.subtype === 'string' ? ev.subtype : '';
     const isBot = Boolean(ev.bot_id) || Boolean(ev.bot_profile);
 
+    slackRuntime.lastEventId = eventId;
+    slackRuntime.lastTeamId = teamId;
+    slackRuntime.lastEventType = evType || 'event_callback';
+
     // Only capture human message posts.
     if (evType !== 'message' || subtype || isBot) {
+      slackRuntime.lastAcceptedAt = nowIso();
       res.json({ ok: true });
       return;
     }
 
     const text = typeof ev.text === 'string' ? ev.text.trim() : '';
     if (!text) {
+      slackRuntime.lastAcceptedAt = nowIso();
       res.json({ ok: true });
       return;
     }
 
     // ACK immediately. Slack expects a fast 2xx (typically within ~3 seconds).
     // Do the heavier work (disk IO + optional Slack API lookups) asynchronously.
+    slackRuntime.lastAcceptedAt = nowIso();
     res.json({ ok: true });
 
     (async () => {
@@ -3788,6 +3938,8 @@ app.post('/api/integrations/slack/events', async (req, res) => {
         projectName: matched?.name || '',
       });
     })().catch((err) => {
+      slackRuntime.lastAsyncErrorAt = nowIso();
+      slackRuntime.lastAsyncError = err?.message || 'unknown error';
       debugWebhookLog('Slack events async failure', {
         error: err?.message || 'unknown error',
         eventId,
@@ -3795,6 +3947,8 @@ app.post('/api/integrations/slack/events', async (req, res) => {
       });
     });
   } catch (err) {
+    slackRuntime.lastAsyncErrorAt = nowIso();
+    slackRuntime.lastAsyncError = err?.message || 'unknown error';
     // Slack expects fast 2xx responses; treat unexpected errors as 200 to prevent retries storms.
     res.json({ ok: true, error: err?.message || 'unknown error' });
   }
@@ -4036,27 +4190,64 @@ app.post('/api/integrations/quo/calls', async (req, res) => {
 // Integrations: MCP (Model Context Protocol) over stdio
 app.get('/api/integrations/mcp/status', async (req, res) => {
   const settings = await readSettings();
-  const mcp = getMcpConfigFromSettings(settings);
+  const eff = getMcpEffectiveSettings(settings);
   res.json({
-    enabled: Boolean(mcp.enabled),
-    configured: Boolean(mcp.enabled && mcp.command),
-    command: mcp.command,
-    args: mcp.args,
-    cwd: mcp.cwd,
+    ok: true,
+    enabled: Boolean(eff.enabled),
+    configured: Boolean(eff.configured),
+    legacy: {
+      enabled: Boolean(eff.legacy.enabled),
+      configured: Boolean(eff.legacy.enabled && eff.legacy.command),
+      command: eff.legacy.command,
+      args: eff.legacy.args,
+      cwd: eff.legacy.cwd,
+    },
+    servers: eff.servers.map((s) => ({
+      name: s.name,
+      enabled: Boolean(s.enabled),
+      configured: Boolean(s.enabled && s.command),
+      command: s.command,
+      args: s.args,
+      cwd: s.cwd,
+    })),
   });
 });
 
 app.post('/api/integrations/mcp/tools', async (req, res) => {
   try {
     const settings = await readSettings();
-    const mcp = getMcpConfigFromSettings(settings);
-    if (!mcp.enabled || !mcp.command) {
+    const serverRaw = typeof req.body?.server === 'string' ? req.body.server.trim() : '';
+    const server = normalizeMcpServerName(serverRaw);
+    const eff = getMcpEffectiveSettings(settings);
+
+    if (server) {
+      if (server === 'legacy') {
+        if (!eff.legacy.enabled || !eff.legacy.command) {
+          res.status(400).json({ ok: false, error: 'Legacy MCP is not enabled/configured in Settings.' });
+          return;
+        }
+        const result = await mcpListTools({ command: eff.legacy.command, args: eff.legacy.args, cwd: eff.legacy.cwd || process.cwd() });
+        res.json({ ok: true, tools: result.tools || [] });
+        return;
+      }
+
+      const target = eff.servers.find((s) => s.name === server);
+      if (!target || !target.enabled || !target.command) {
+        res.status(400).json({ ok: false, error: `MCP server not configured: ${server}` });
+        return;
+      }
+      const result = await mcpListTools({ command: target.command, args: target.args, cwd: target.cwd || process.cwd() });
+      res.json({ ok: true, tools: result.tools || [] });
+      return;
+    }
+
+    if (!eff.configured) {
       res.status(400).json({ ok: false, error: 'MCP is not enabled/configured in Settings.' });
       return;
     }
 
-    const result = await mcpListTools({ command: mcp.command, args: mcp.args, cwd: mcp.cwd || process.cwd() });
-    res.json({ ok: true, tools: result.tools || [] });
+    const tools = await mcpListToolsAll(settings);
+    res.json({ ok: true, tools });
   } catch (err) {
     res.status(500).json({ ok: false, error: err?.message || 'Failed to list MCP tools' });
   }
@@ -4065,16 +4256,18 @@ app.post('/api/integrations/mcp/tools', async (req, res) => {
 app.post('/api/integrations/mcp/call', async (req, res) => {
   try {
     const settings = await readSettings();
-    const mcp = getMcpConfigFromSettings(settings);
-    if (!mcp.enabled || !mcp.command) {
-      res.status(400).json({ ok: false, error: 'MCP is not enabled/configured in Settings.' });
+    const name = typeof req.body?.name === 'string' ? req.body.name : '';
+    const args = req.body?.arguments && typeof req.body.arguments === 'object' && !Array.isArray(req.body.arguments) ? req.body.arguments : {};
+
+    const resolved = resolveMcpTarget(settings, name);
+    if (!resolved.ok) {
+      res.status(400).json({ ok: false, error: resolved.error || 'MCP is not enabled/configured in Settings.' });
       return;
     }
 
-    const name = typeof req.body?.name === 'string' ? req.body.name : '';
-    const args = req.body?.arguments && typeof req.body.arguments === 'object' && !Array.isArray(req.body.arguments) ? req.body.arguments : {};
-    const result = await mcpCallTool({ command: mcp.command, args: mcp.args, cwd: mcp.cwd || process.cwd() }, name, args);
-    res.json({ ok: true, result });
+    const cfg = resolved.target.config;
+    const result = await mcpCallTool({ command: cfg.command, args: cfg.args, cwd: cfg.cwd || process.cwd() }, resolved.toolName, args);
+    res.json({ ok: true, result, server: resolved.target.name, tool: resolved.toolName });
   } catch (err) {
     res.status(500).json({ ok: false, error: err?.message || 'Failed to call MCP tool' });
   }
@@ -5780,8 +5973,8 @@ async function aiAgentAction(message, store, projectId = null) {
   const { apiKey, model } = await getAiConfig();
 
     const settings = await readSettings();
-    const mcp = getMcpConfigFromSettings(settings);
-    const mcpAvailable = Boolean(mcp.enabled && mcp.command);
+    const mcpEff = getMcpEffectiveSettings(settings);
+    const mcpAvailable = Boolean(mcpEff.configured);
 
     const googleConnected = Boolean(settings.googleTokens && typeof settings.googleTokens === 'object' && settings.googleTokens.refresh_token);
 
@@ -6192,8 +6385,7 @@ async function aiAgentAction(message, store, projectId = null) {
       if (toolName === 'create_tasks') return doCreateTasks(args);
       if (toolName === 'mcp_list_tools') {
         if (!mcpAvailable) return { ok: false, error: 'MCP is not configured' };
-        const result = await mcpListTools({ command: mcp.command, args: mcp.args, cwd: mcp.cwd || process.cwd() });
-        const toolsList = Array.isArray(result?.tools) ? result.tools : [];
+        const toolsList = await mcpListToolsAll(settings);
         return {
           ok: true,
           tools: toolsList.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })),
@@ -6203,7 +6395,10 @@ async function aiAgentAction(message, store, projectId = null) {
         if (!mcpAvailable) return { ok: false, error: 'MCP is not configured' };
         const name = typeof args?.name === 'string' ? args.name : '';
         const a = args?.arguments && typeof args.arguments === 'object' && !Array.isArray(args.arguments) ? args.arguments : {};
-        const result = await mcpCallTool({ command: mcp.command, args: mcp.args, cwd: mcp.cwd || process.cwd() }, name, a);
+        const resolved = resolveMcpTarget(settings, name);
+        if (!resolved.ok) return { ok: false, error: resolved.error || 'MCP is not configured' };
+        const cfg = resolved.target.config;
+        const result = await mcpCallTool({ command: cfg.command, args: cfg.args, cwd: cfg.cwd || process.cwd() }, resolved.toolName, a);
         return { ok: true, result };
       }
       if (toolName === 'google_list_upcoming_events') {
