@@ -4071,6 +4071,40 @@ app.post('/api/integrations/airtable/requests/sync', async (req, res) => {
       return typeof raw === 'string' ? raw.trim() : '';
     };
 
+    const pickAirtableTaskText = (fields) => {
+      const raw = firstNonEmptyString(fields, [], [
+        'tasks',
+        'task list',
+        'action items',
+        'next steps',
+        'next actions',
+        'to do',
+        'todo',
+        'ai tasks',
+      ]);
+      return typeof raw === 'string' ? raw.trim() : '';
+    };
+
+    const parseTaskTitles = (text, { limit = 18 } = {}) => {
+      const raw = typeof text === 'string' ? text : '';
+      if (!raw.trim()) return [];
+      const seen = new Set();
+      const out = [];
+      for (const lineRaw of raw.split(/\r?\n/g)) {
+        const line = String(lineRaw || '').trim();
+        if (!line) continue;
+        const cleaned = line.replace(/^[-*•\u2022\s]+/g, '').replace(/^\(?\d+\)?[.)\s]+/g, '').trim();
+        if (!cleaned) continue;
+        const key = normKey(cleaned);
+        if (!key) continue;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(cleaned.slice(0, 220));
+        if (out.length >= limit) break;
+      }
+      return out;
+    };
+
     const prefer = (nextVal, prevVal) => {
       const n = String(nextVal || '').trim();
       return n ? n : (typeof prevVal === 'string' ? prevVal : '');
@@ -4081,6 +4115,7 @@ app.post('/api/integrations/airtable/requests/sync', async (req, res) => {
     const result = await withBusinessKey(key, async () => {
       const store = await readStore();
       const projects = Array.isArray(store.projects) ? store.projects : [];
+      const existingTasks = Array.isArray(store.tasks) ? store.tasks : [];
 
       const byAirtableUrl = new Map();
       for (const p of projects) {
@@ -4088,12 +4123,25 @@ app.post('/api/integrations/airtable/requests/sync', async (req, res) => {
         if (url) byAirtableUrl.set(url, p);
       }
 
+      const taskIndexById = new Map();
+      for (let i = 0; i < existingTasks.length; i++) {
+        const id = String(existingTasks[i]?.id || '').trim();
+        if (id) taskIndexById.set(id, i);
+      }
+
       let created = 0;
       let updated = 0;
       let skipped = 0;
+      let notesCreated = 0;
+      let notesUpdated = 0;
+      let tasksCreated = 0;
+      let tasksUpdated = 0;
 
       const nextProjects = [...projects];
+      const nextTasks = [...existingTasks];
       let nextSenderProjectMap = { ...(store.senderProjectMap || {}) };
+      let nextProjectNoteEntries = store.projectNoteEntries || {};
+      let didMutate = false;
 
       for (const r of (out.records || [])) {
         const recordId = typeof r?.id === 'string' ? r.id : '';
@@ -4108,6 +4156,7 @@ app.post('/api/integrations/airtable/requests/sync', async (req, res) => {
         const clientPhone = firstNonEmptyString(fields, [], ['phone', 'phone number', 'mobile', 'cell', 'cell phone']) || '';
         const revisionLabel = pickRevisionLabel(fields);
         const aiRevisionSummary = pickAiRevisionSummary(fields);
+        const taskText = pickAirtableTaskText(fields);
         const dueRaw = firstNonEmptyString(fields, [], ['due', 'due date', 'deadline']);
         const dueDate = safeYmd(String(dueRaw || '').trim().slice(0, 10)) || '';
         const status = mapProjectStatus(fields);
@@ -4126,16 +4175,85 @@ app.post('/api/integrations/airtable/requests/sync', async (req, res) => {
         if (dueDate) importedBriefLines.push(`Due: ${dueDate}`);
         importedBriefLines.push(`Status: ${status}`);
         importedBriefLines.push(`Priority: ${priority}`);
-
-        if (aiRevisionSummary) {
-          importedBriefLines.push('');
-          importedBriefLines.push('AI Revision Summary:');
-          importedBriefLines.push(aiRevisionSummary);
-        }
         importedBriefLines.push('');
         if (body) importedBriefLines.push(String(body).trim());
         importedBriefLines.push('');
         importedBriefLines.push(`Airtable: ${recordUrl}`);
+
+        const upsertAiSummaryNote = (project) => {
+          if (!project || !aiRevisionSummary) return;
+          const noteId = `airtable:rev:${recordId}:ai-summary`;
+          const date = safeYmd(ts.slice(0, 10)) || ts.slice(0, 10);
+          const title = revisionLabel ? `AI Revision Summary (Rev ${revisionLabel})` : 'AI Revision Summary';
+          const content = `${aiRevisionSummary}\n\nAirtable: ${recordUrl}`.trimEnd();
+          const note = {
+            id: noteId,
+            kind: 'Airtable',
+            date,
+            title,
+            content,
+            createdAt: ts,
+          };
+          const existing = Array.isArray(nextProjectNoteEntries?.[project.id]) ? nextProjectNoteEntries[project.id] : [];
+          const had = existing.some((n) => String(n?.id || '') === noteId);
+          const filtered = existing.filter((n) => String(n?.id || '') !== noteId);
+          nextProjectNoteEntries = {
+            ...(nextProjectNoteEntries || {}),
+            [project.id]: [note, ...filtered],
+          };
+          if (had) notesUpdated++;
+          else notesCreated++;
+          didMutate = true;
+        };
+
+        const upsertAirtableTasks = (project) => {
+          if (!project) return;
+          const sourceText = taskText || aiRevisionSummary;
+          const titles = parseTaskTitles(sourceText);
+          if (!titles.length) return;
+          for (const t of titles) {
+            const keyHash = crypto.createHash('sha1').update(normKey(t)).digest('hex').slice(0, 12);
+            const taskId = `airtable:rev:${recordId}:task:${keyHash}`;
+
+            const idx = taskIndexById.get(taskId);
+            if (idx === undefined) {
+              const normalized = normalizeTask({
+                title: t,
+                status: 'Next',
+                priority: 2,
+                project: project.name,
+                dueDate,
+              });
+              const task = {
+                id: taskId,
+                ...normalized,
+                createdAt: ts,
+                updatedAt: ts,
+              };
+              nextTasks.unshift(task);
+              // Keep index map accurate for subsequent upserts in this same sync.
+              taskIndexById.set(taskId, 0);
+              tasksCreated++;
+              didMutate = true;
+              continue;
+            }
+
+            const existingTask = nextTasks[idx];
+            const merged = {
+              ...(existingTask && typeof existingTask === 'object' ? existingTask : {}),
+              id: taskId,
+              title: t,
+              project: project.name,
+              dueDate: dueDate || String(existingTask?.dueDate || ''),
+              updatedAt: ts,
+            };
+            const changed = JSON.stringify(merged) !== JSON.stringify(existingTask);
+            if (!changed) continue;
+            nextTasks[idx] = merged;
+            tasksUpdated++;
+            didMutate = true;
+          }
+        };
 
         const existing = byAirtableUrl.get(recordUrl) || null;
         if (!existing) {
@@ -4168,7 +4286,11 @@ app.post('/api/integrations/airtable/requests/sync', async (req, res) => {
             nextSenderProjectMap = upsertSenderProjectMapForProject(nextSenderProjectMap, project.clientPhone, project);
           }
 
+          upsertAiSummaryNote(project);
+          upsertAirtableTasks(project);
+
           created++;
+          didMutate = true;
           continue;
         }
 
@@ -4207,7 +4329,10 @@ app.post('/api/integrations/airtable/requests/sync', async (req, res) => {
 
         const changed = JSON.stringify(updatedProject) !== JSON.stringify(existing);
         if (!changed) {
-          skipped++;
+          // Even if the project didn't change, we still may update notes/tasks from Airtable.
+          upsertAiSummaryNote(existing);
+          upsertAirtableTasks(existing);
+          if (!didMutate) skipped++;
           continue;
         }
 
@@ -4220,11 +4345,15 @@ app.post('/api/integrations/airtable/requests/sync', async (req, res) => {
           nextSenderProjectMap = upsertSenderProjectMapForProject(nextSenderProjectMap, updatedProject.clientPhone, updatedProject);
         }
 
+        upsertAiSummaryNote(updatedProject);
+        upsertAirtableTasks(updatedProject);
+
         updated++;
+        didMutate = true;
       }
 
-      if (!created && !updated) {
-        return { created, updated, skipped, didWrite: false };
+      if (!didMutate && !created && !updated) {
+        return { created, updated, skipped, notesCreated, notesUpdated, tasksCreated, tasksUpdated, didWrite: false };
       }
 
       const nextStore = {
@@ -4232,13 +4361,15 @@ app.post('/api/integrations/airtable/requests/sync', async (req, res) => {
         revision: store.revision + 1,
         updatedAt: ts,
         projects: nextProjects,
+        tasks: nextTasks,
+        projectNoteEntries: nextProjectNoteEntries,
         senderProjectMap: nextSenderProjectMap,
       };
       await writeStore(nextStore);
-      return { created, updated, skipped, didWrite: true };
+      return { created, updated, skipped, notesCreated, notesUpdated, tasksCreated, tasksUpdated, didWrite: true };
     });
 
-    res.json({ ok: true, businessKey: key, created: result.created, updated: result.updated, skipped: result.skipped, totalFetched: (out.records || []).length });
+    res.json({ ok: true, businessKey: key, created: result.created, updated: result.updated, skipped: result.skipped, notesCreated: result.notesCreated, notesUpdated: result.notesUpdated, tasksCreated: result.tasksCreated, tasksUpdated: result.tasksUpdated, totalFetched: (out.records || []).length });
   });
 
   await writeLock;
