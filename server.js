@@ -2474,8 +2474,14 @@ async function airtableListRecords({ pat, baseId, tableId, viewId, maxRecords = 
 
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok) {
-      const msg = typeof data?.error?.message === 'string' ? data.error.message : '';
-      return { ok: false, error: msg || `Airtable request failed (${resp.status})` };
+      const errObj = data && typeof data === 'object' ? data.error : null;
+      const type = typeof errObj?.type === 'string' ? errObj.type.trim() : '';
+      const msg = typeof errObj?.message === 'string' ? errObj.message.trim() : (typeof data?.error === 'string' ? String(data.error).trim() : '');
+      const baseHint = (resp.status === 401 || resp.status === 403 || type === 'AUTHENTICATION_REQUIRED')
+        ? ' (check PAT scopes + that this PAT has access to the base)'
+        : '';
+      const detail = `${type ? `${type}: ` : ''}${msg || `Airtable request failed (${resp.status})`}${baseHint}`;
+      return { ok: false, error: detail };
     }
 
     const records = Array.isArray(data?.records) ? data.records : [];

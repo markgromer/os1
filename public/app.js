@@ -4244,8 +4244,9 @@ function renderSettings(container) {
             }
             setAirtableOutput(lines.join('\n'));
         } catch (e) {
-            setAirtableOutput('');
-            alert(e?.message || 'Failed to test Airtable');
+            const msg = safeText(e?.message || '').trim() || 'Failed to test Airtable';
+            setAirtableOutput(msg);
+            alert(msg);
         } finally {
             btnTestAirtable.disabled = false;
             btnTestAirtable.textContent = prev;
@@ -4268,8 +4269,9 @@ function renderSettings(container) {
             await fetchState();
             renderNav();
         } catch (e) {
-            setAirtableOutput('');
-            alert(e?.message || 'Failed to sync Airtable');
+            const msg = safeText(e?.message || '').trim() || 'Failed to sync Airtable';
+            setAirtableOutput(msg);
+            alert(msg);
         } finally {
             btnSyncAirtable.disabled = false;
             btnSyncAirtable.textContent = prev;
