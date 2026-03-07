@@ -455,6 +455,7 @@ const EMPTY_STORE = {
   revision: 1,
   updatedAt: new Date(0).toISOString(),
   projects: [],
+  clients: [],
   tasks: [],
   team: [],
   projectNotes: {},
@@ -2065,6 +2066,7 @@ async function readStore() {
   const revision = Number(parsed.revision);
   const updatedAt = typeof parsed.updatedAt === 'string' ? parsed.updatedAt : new Date(0).toISOString();
   const projects = Array.isArray(parsed.projects) ? parsed.projects : [];
+  const clients = Array.isArray(parsed.clients) ? parsed.clients : [];
   const tasks = Array.isArray(parsed.tasks) ? parsed.tasks : [];
   const team = Array.isArray(parsed.team) ? parsed.team : [];
   const projectNotes = parsed.projectNotes && typeof parsed.projectNotes === 'object' ? parsed.projectNotes : {};
@@ -2079,6 +2081,7 @@ async function readStore() {
     revision: Number.isFinite(revision) && revision > 0 ? revision : 1,
     updatedAt,
     projects,
+    clients,
     tasks,
     team,
     projectNotes,
@@ -2088,6 +2091,105 @@ async function readStore() {
     projectCommunications,
     inboxItems,
     projectTranscriptUndo,
+  };
+}
+
+function normalizeClientRecord(input) {
+  const c = input && typeof input === 'object' ? input : {};
+  const name = typeof c.name === 'string' ? c.name.trim() : '';
+  const phone = typeof c.phone === 'string' ? c.phone.trim() : '';
+  const email = typeof c.email === 'string' ? c.email.trim() : '';
+  const website = typeof c.website === 'string' ? c.website.trim() : '';
+  const accountManagerName = typeof c.accountManagerName === 'string' ? c.accountManagerName.trim() : '';
+  const accountManagerEmail = typeof c.accountManagerEmail === 'string' ? c.accountManagerEmail.trim() : '';
+  const airtableRecordId = typeof c.airtableRecordId === 'string' ? c.airtableRecordId.trim() : '';
+  const airtableUrl = typeof c.airtableUrl === 'string' ? c.airtableUrl.trim() : '';
+  const createdAt = typeof c.createdAt === 'string' && c.createdAt ? c.createdAt : nowIso();
+  const updatedAt = typeof c.updatedAt === 'string' && c.updatedAt ? c.updatedAt : createdAt;
+
+  return {
+    id: typeof c.id === 'string' && c.id.trim() ? c.id.trim() : makeId(),
+    name,
+    phone,
+    email,
+    website,
+    accountManagerName,
+    accountManagerEmail,
+    airtableRecordId,
+    airtableUrl,
+    createdAt,
+    updatedAt,
+  };
+}
+
+function isLegacyAirtableClientProject(project) {
+  const p = project && typeof project === 'object' ? project : {};
+  const brief = String(p.agentBrief || '').toLowerCase();
+  if (brief.includes('imported from airtable (clients)')) return true;
+  // Older variants
+  if (brief.includes('airtable') && brief.includes('clients') && brief.includes('import')) return true;
+  return false;
+}
+
+function migrateLegacyAirtableClientProjects(store) {
+  const s = store && typeof store === 'object' ? store : {};
+  const projects = Array.isArray(s.projects) ? s.projects : [];
+  const existingClients = Array.isArray(s.clients) ? s.clients : [];
+
+  const byAirtableUrl = new Map();
+  for (const c of existingClients) {
+    const url = typeof c?.airtableUrl === 'string' ? c.airtableUrl.trim() : '';
+    if (url) byAirtableUrl.set(url, c);
+  }
+
+  let changed = false;
+  const nextProjects = projects.map((p) => {
+    if (!isLegacyAirtableClientProject(p)) return p;
+    if (p && typeof p === 'object' && p.isContactRecord === true) return p;
+    changed = true;
+    return { ...(p && typeof p === 'object' ? p : {}), isContactRecord: true };
+  });
+
+  // Create contacts for legacy “client-as-project” entries if missing.
+  let nextClients = [...existingClients];
+  for (const p of projects) {
+    if (!isLegacyAirtableClientProject(p)) continue;
+    const airtableUrl = typeof p?.airtableUrl === 'string' ? p.airtableUrl.trim() : '';
+    if (!airtableUrl) continue;
+    if (byAirtableUrl.has(airtableUrl)) continue;
+
+    const name = String(p?.clientName || p?.name || '').trim();
+    const phone = String(p?.clientPhone || '').trim();
+    const accountManagerName = String(p?.accountManagerName || '').trim();
+    const accountManagerEmail = String(p?.accountManagerEmail || '').trim();
+    const createdAt = typeof p?.createdAt === 'string' ? p.createdAt : nowIso();
+    const updatedAt = typeof p?.updatedAt === 'string' ? p.updatedAt : createdAt;
+
+    const client = normalizeClientRecord({
+      name,
+      phone,
+      accountManagerName,
+      accountManagerEmail,
+      airtableUrl,
+      createdAt,
+      updatedAt,
+    });
+    nextClients.push(client);
+    byAirtableUrl.set(airtableUrl, client);
+    changed = true;
+  }
+
+  if (!changed) return { changed: false, store };
+  const ts = nowIso();
+  return {
+    changed: true,
+    store: {
+      ...s,
+      revision: Number(s.revision || 0) + 1,
+      updatedAt: ts,
+      projects: nextProjects,
+      clients: nextClients,
+    },
   };
 }
 
@@ -3738,39 +3840,21 @@ app.post('/api/integrations/airtable/clients/sync', async (req, res) => {
 
     await withBusinessKey(key, async () => {
       const store = await readStore();
-      const existing = Array.isArray(store.projects) ? store.projects : [];
+      // Ensure older Airtable-imported client entries are flagged as contacts (so they don't flood Projects).
+      const migrated = migrateLegacyAirtableClientProjects(store);
+      const baseStore = migrated.changed ? migrated.store : store;
+      if (migrated.changed) {
+        await writeStore(baseStore);
+      }
+
+      const existingClients = Array.isArray(baseStore.clients) ? baseStore.clients : [];
       const byAirtableUrl = new Map();
-      for (const p of existing) {
-        const url = String(p?.airtableUrl || '').trim();
-        if (url) byAirtableUrl.set(url, p);
+      for (const c of existingClients) {
+        const url = String(c?.airtableUrl || '').trim();
+        if (url) byAirtableUrl.set(url, c);
       }
 
       const pick = (fields, keyNames) => firstNonEmptyString(fields, [], keyNames);
-      const normalizeDue = (value) => {
-        const raw = String(value || '').trim();
-        if (!raw) return '';
-        const iso = raw.includes('T') && raw.length >= 10 ? raw.slice(0, 10) : raw;
-        return safeYmd(iso) || '';
-      };
-      const mapStatus = (value) => {
-        const s = String(value || '').trim().toLowerCase();
-        if (!s) return '';
-        if (s.includes('archiv')) return 'Archived';
-        if (s.includes('done') || s.includes('complete') || s.includes('completed') || s.includes('closed')) return 'Done';
-        if (s.includes('hold') || s.includes('paused') || s.includes('pause')) return 'On Hold';
-        if (s.includes('active') || s.includes('in progress') || s.includes('progress')) return 'Active';
-        return '';
-      };
-      const mapType = (value) => {
-        const s = String(value || '').trim().toLowerCase();
-        if (!s) return '';
-        if (s.includes('rebuild')) return 'Rebuild';
-        if (s.includes('build') || s.includes('new site') || s.includes('new')) return 'Build';
-        if (s.includes('revision') || s.includes('edits') || s.includes('changes')) return 'Revision';
-        if (s.includes('workflow') || s.includes('process') || s.includes('automation')) return 'Workflow';
-        if (s.includes('cleanup') || s.includes('fix') || s.includes('bug')) return 'Cleanup';
-        return '';
-      };
       const prefer = (nextVal, prevVal) => {
         const n = String(nextVal || '').trim();
         return n ? n : (typeof prevVal === 'string' ? prevVal : '');
@@ -3780,10 +3864,8 @@ app.post('/api/integrations/airtable/clients/sync', async (req, res) => {
       let updated = 0;
       let skipped = 0;
 
-      const changedProjects = [];
-
-      const toCreate = [];
-      const nextExisting = [...existing];
+      const nextClients = [...existingClients];
+      let didMutate = false;
 
       for (const r of (out.records || [])) {
         const recordId = typeof r?.id === 'string' ? r.id : '';
@@ -3792,101 +3874,69 @@ app.post('/api/integrations/airtable/clients/sync', async (req, res) => {
         const recordUrl = `https://airtable.com/${cfg.baseId}/${cfg.clientsTableId}/${recordId}`;
 
         const name = pickAirtableClientName(fields) || `Airtable Client ${recordId}`;
-        const clientPhone = pick(fields, ['phone', 'phone number', 'mobile', 'cell', 'cell phone']);
+        const phone = pick(fields, ['phone', 'phone number', 'mobile', 'cell', 'cell phone']);
+        const email = pick(fields, ['email', 'email address']);
         const accountManagerName = pick(fields, ['account manager', 'am', 'owner', 'manager', 'project manager']);
         const accountManagerEmail = pick(fields, ['account manager email', 'am email', 'owner email', 'manager email']);
-        const dueDate = normalizeDue(pick(fields, ['due date', 'due', 'deadline']));
-        const status = mapStatus(pick(fields, ['status', 'stage']));
-        const type = mapType(pick(fields, ['project type', 'type']));
-        const projectValue = pick(fields, ['project value', 'value', 'budget', 'price', 'amount']);
         const website = pick(fields, ['website', 'site', 'url', 'domain']);
 
-        const baseBriefLines = [];
-        baseBriefLines.push('Imported from Airtable (Clients)');
-        baseBriefLines.push(`Record: ${recordId}`);
-        if (website) baseBriefLines.push(`Website: ${website}`);
-        const agentBrief = baseBriefLines.join('\n');
-
-        const normalized = normalizeProject({
-          name,
-          type: type || 'Workflow',
-          status: status || 'Active',
-          dueDate,
-          accountManagerName,
-          accountManagerEmail,
-          clientName: name,
-          clientPhone,
-          airtableUrl: recordUrl,
-          projectValue,
-          agentBrief,
-        });
-
-        const existingProject = byAirtableUrl.get(recordUrl) || null;
-        if (!existingProject) {
+        const existingClient = byAirtableUrl.get(recordUrl) || null;
+        if (!existingClient) {
           const ts = nowIso();
-          const project = {
+          const client = normalizeClientRecord({
             id: makeId(),
-            ...normalized,
+            name,
+            phone,
+            email,
+            website,
+            accountManagerName,
+            accountManagerEmail,
+            airtableRecordId: recordId,
+            airtableUrl: recordUrl,
             createdAt: ts,
             updatedAt: ts,
-          };
-          toCreate.push(project);
-          byAirtableUrl.set(recordUrl, project);
-          changedProjects.push(project);
+          });
+          nextClients.push(client);
+          byAirtableUrl.set(recordUrl, client);
           created++;
+          didMutate = true;
           continue;
         }
 
         const merged = {
-          ...existingProject,
-          ...normalized,
-          // Preserve ids/timestamps; update updatedAt only when we actually change something.
-          id: existingProject.id,
-          createdAt: existingProject.createdAt,
-          name: prefer(normalized.name, existingProject.name),
-          clientName: prefer(normalized.clientName, existingProject.clientName),
-          clientPhone: prefer(normalized.clientPhone, existingProject.clientPhone),
-          accountManagerName: prefer(normalized.accountManagerName, existingProject.accountManagerName),
-          accountManagerEmail: prefer(normalized.accountManagerEmail, existingProject.accountManagerEmail),
-          dueDate: prefer(normalized.dueDate, existingProject.dueDate),
-          status: prefer(normalized.status, existingProject.status),
-          type: prefer(normalized.type, existingProject.type),
-          projectValue: prefer(normalized.projectValue, existingProject.projectValue),
-          agentBrief: prefer(normalized.agentBrief, existingProject.agentBrief),
+          ...existingClient,
+          name: prefer(name, existingClient.name),
+          phone: prefer(phone, existingClient.phone),
+          email: prefer(email, existingClient.email),
+          website: prefer(website, existingClient.website),
+          accountManagerName: prefer(accountManagerName, existingClient.accountManagerName),
+          accountManagerEmail: prefer(accountManagerEmail, existingClient.accountManagerEmail),
+          airtableRecordId: prefer(recordId, existingClient.airtableRecordId),
           airtableUrl: recordUrl,
         };
 
-        const changed = JSON.stringify(merged) !== JSON.stringify(existingProject);
+        const changed = JSON.stringify(merged) !== JSON.stringify(existingClient);
         if (!changed) {
           skipped++;
           continue;
         }
 
         merged.updatedAt = nowIso();
-        const idx = nextExisting.findIndex((p) => p && p.id === existingProject.id);
-        if (idx >= 0) nextExisting[idx] = merged;
-        else nextExisting.push(merged);
+        const idx = nextClients.findIndex((c) => c && c.id === existingClient.id);
+        if (idx >= 0) nextClients[idx] = merged;
+        else nextClients.push(merged);
         byAirtableUrl.set(recordUrl, merged);
-        changedProjects.push(merged);
         updated++;
+        didMutate = true;
       }
 
-      const didWrite = toCreate.length > 0 || updated > 0;
-      if (didWrite) {
+      if (didMutate) {
         const ts = nowIso();
-
-        let nextSenderProjectMap = { ...(store.senderProjectMap || {}) };
-        for (const p of changedProjects) {
-          if (!p?.clientPhone) continue;
-          nextSenderProjectMap = upsertSenderProjectMapForProject(nextSenderProjectMap, p.clientPhone, p);
-        }
-
         const nextStore = {
-          ...store,
-          revision: store.revision + 1,
+          ...baseStore,
+          revision: baseStore.revision + 1,
           updatedAt: ts,
-          projects: [...toCreate, ...nextExisting],
-          senderProjectMap: nextSenderProjectMap,
+          clients: nextClients,
         };
         await writeStore(nextStore);
       }
@@ -3962,137 +4012,181 @@ app.post('/api/integrations/airtable/requests/sync', async (req, res) => {
       return;
     }
 
-    const mapInboxStatus = (fields) => {
+    const mapProjectStatus = (fields) => {
       const raw = firstNonEmptyString(fields, [], ['status', 'stage', 'state']);
       const s = String(raw || '').trim().toLowerCase();
-      if (!s) return 'New';
-      if (s.includes('done') || s.includes('complete') || s.includes('completed') || s.includes('closed') || s.includes('resolved')) return 'Done';
+      if (!s) return 'Active';
+      if (s.includes('hold') || s.includes('paused') || s.includes('waiting')) return 'On Hold';
       if (s.includes('archiv')) return 'Archived';
-      return 'New';
+      if (s.includes('done') || s.includes('complete') || s.includes('completed') || s.includes('closed') || s.includes('resolved')) return 'Done';
+      return 'Active';
     };
 
-    const collectRecordIds = (value) => {
-      const outIds = [];
-      const add = (v) => {
-        if (typeof v !== 'string') return;
-        const s = v.trim();
-        if (/^rec[a-zA-Z0-9]+$/.test(s)) outIds.push(s);
-      };
-      if (typeof value === 'string') add(value);
-      if (Array.isArray(value)) {
-        for (const it of value) {
-          if (typeof it === 'string') add(it);
-        }
-      }
-      return outIds;
+    const mapProjectPriority = (fields) => {
+      const raw = firstNonEmptyString(fields, [], ['priority', 'urgency']);
+      const s = String(raw || '').trim().toLowerCase();
+      if (!s) return 'Medium';
+      if (s.includes('high') || s.includes('urgent') || s.includes('asap') || s === '1') return 'High';
+      if (s.includes('low') || s === '3') return 'Low';
+      if (s.includes('medium') || s === '2') return 'Medium';
+      return 'Medium';
+    };
+
+    const prefer = (nextVal, prevVal) => {
+      const n = String(nextVal || '').trim();
+      return n ? n : (typeof prevVal === 'string' ? prevVal : '');
     };
 
     const ts = nowIso();
 
     const result = await withBusinessKey(key, async () => {
       const store = await readStore();
-      const list = Array.isArray(store.inboxItems) ? store.inboxItems : [];
-      const seen = new Set(list.map((x) => String(x?.id || '')));
       const projects = Array.isArray(store.projects) ? store.projects : [];
 
-      const toAdd = [];
+      const byAirtableUrl = new Map();
+      for (const p of projects) {
+        const url = String(p?.airtableUrl || '').trim();
+        if (url) byAirtableUrl.set(url, p);
+      }
+
       let created = 0;
+      let updated = 0;
       let skipped = 0;
+
+      const nextProjects = [...projects];
+      let nextSenderProjectMap = { ...(store.senderProjectMap || {}) };
 
       for (const r of (out.records || [])) {
         const recordId = typeof r?.id === 'string' ? r.id : '';
         if (!recordId) continue;
         const fields = r?.fields && typeof r.fields === 'object' ? r.fields : {};
 
-        const inboxId = `airtable:rev:${cfg.requestsTableId}:${recordId}`;
-        if (seen.has(inboxId)) {
+        const recordUrl = `https://airtable.com/${cfg.baseId}/${cfg.requestsTableId}/${recordId}`;
+
+        const title = firstNonEmptyString(fields, [], ['title', 'request', 'summary', 'subject', 'name']) || `Revision request ${recordId}`;
+        const body = firstNonEmptyString(fields, [], ['details', 'description', 'notes', 'message']);
+        const clientName = firstNonEmptyString(fields, [], ['client', 'client name', 'company', 'company name', 'customer', 'project']) || '';
+        const clientPhone = firstNonEmptyString(fields, [], ['phone', 'phone number', 'mobile', 'cell', 'cell phone']) || '';
+        const dueRaw = firstNonEmptyString(fields, [], ['due', 'due date', 'deadline']);
+        const dueDate = safeYmd(String(dueRaw || '').trim().slice(0, 10)) || '';
+        const status = mapProjectStatus(fields);
+        const priority = mapProjectPriority(fields);
+
+        const projectName = `${clientName ? `${clientName} — ` : ''}${title}`.slice(0, 140);
+
+        const importedBriefLines = [];
+        importedBriefLines.push('Imported from Airtable (revision requests)');
+        if (clientName) importedBriefLines.push(`Client: ${clientName}`);
+        importedBriefLines.push(`Title: ${title}`);
+        if (dueDate) importedBriefLines.push(`Due: ${dueDate}`);
+        importedBriefLines.push(`Status: ${status}`);
+        importedBriefLines.push('');
+        if (body) importedBriefLines.push(String(body).trim());
+        importedBriefLines.push('');
+        importedBriefLines.push(`Airtable: ${recordUrl}`);
+
+        const existing = byAirtableUrl.get(recordUrl) || null;
+        if (!existing) {
+          const normalized = normalizeProject({
+            name: projectName,
+            type: 'Revision',
+            status,
+            dueDate,
+            clientName,
+            clientPhone,
+            airtableUrl: recordUrl,
+            priority,
+            agentBrief: importedBriefLines.join('\n'),
+          });
+
+          const project = {
+            id: makeId(),
+            ...normalized,
+            airtableSource: 'revision-requests',
+            airtableRecordId: recordId,
+            airtableTableId: cfg.requestsTableId,
+            createdAt: ts,
+            updatedAt: ts,
+          };
+
+          nextProjects.unshift(project);
+          byAirtableUrl.set(recordUrl, project);
+
+          if (project.clientPhone) {
+            nextSenderProjectMap = upsertSenderProjectMapForProject(nextSenderProjectMap, project.clientPhone, project);
+          }
+
+          created++;
+          continue;
+        }
+
+        const shouldOverwriteBrief = (() => {
+          const raw = String(existing?.agentBrief || '').trim().toLowerCase();
+          if (!raw) return true;
+          return raw.includes('imported from airtable (revision requests)');
+        })();
+
+        const merged = {
+          ...existing,
+          name: projectName,
+          type: 'Revision',
+          status,
+          dueDate,
+          clientName: prefer(clientName, existing.clientName),
+          clientPhone: prefer(clientPhone, existing.clientPhone),
+          airtableUrl: recordUrl,
+          priority: prefer(priority, existing.priority),
+          ...(shouldOverwriteBrief ? { agentBrief: importedBriefLines.join('\n') } : {}),
+          airtableSource: 'revision-requests',
+          airtableRecordId: recordId,
+          airtableTableId: cfg.requestsTableId,
+        };
+
+        const normalized = normalizeProject(merged);
+        const updatedProject = {
+          ...existing,
+          ...normalized,
+          ...(shouldOverwriteBrief ? { agentBrief: merged.agentBrief } : {}),
+          airtableSource: merged.airtableSource,
+          airtableRecordId: merged.airtableRecordId,
+          airtableTableId: merged.airtableTableId,
+          updatedAt: ts,
+        };
+
+        const changed = JSON.stringify(updatedProject) !== JSON.stringify(existing);
+        if (!changed) {
           skipped++;
           continue;
         }
 
-        const title = firstNonEmptyString(fields, [], ['title', 'request', 'summary', 'subject', 'name']) || `Revision request ${recordId}`;
-        const body = firstNonEmptyString(fields, [], ['details', 'description', 'notes', 'message']);
-        const client = firstNonEmptyString(fields, [], ['client', 'client name', 'company', 'company name', 'project']);
-        const priority = firstNonEmptyString(fields, [], ['priority', 'urgency']);
-        const dueRaw = firstNonEmptyString(fields, [], ['due', 'due date', 'deadline']);
-        const due = safeYmd(String(dueRaw || '').trim().slice(0, 10)) || '';
-        const status = mapInboxStatus(fields);
+        const idx = nextProjects.findIndex((p) => p && p.id === existing.id);
+        if (idx >= 0) nextProjects[idx] = updatedProject;
+        else nextProjects.unshift(updatedProject);
 
-        const recordUrl = `https://airtable.com/${cfg.baseId}/${cfg.requestsTableId}/${recordId}`;
-        const lines = [];
-        lines.push('Revision Request (Airtable)');
-        if (client) lines.push(`Client: ${client}`);
-        lines.push(`Title: ${title}`);
-        if (priority) lines.push(`Priority: ${priority}`);
-        if (due) lines.push(`Due: ${due}`);
-        if (body) {
-          lines.push('');
-          lines.push(String(body).trim());
-        }
-        lines.push('');
-        lines.push(`Airtable: ${recordUrl}`);
-
-        // Link to a project when possible.
-        let projectId = '';
-        let projectName = '';
-
-        if (cfg.clientsTableId) {
-          const candidateRecIds = [];
-          for (const v of Object.values(fields)) {
-            candidateRecIds.push(...collectRecordIds(v));
-          }
-          for (const recId of candidateRecIds) {
-            const clientUrl = `https://airtable.com/${cfg.baseId}/${cfg.clientsTableId}/${recId}`;
-            const p = projects.find((x) => String(x?.airtableUrl || '').trim() === clientUrl);
-            if (p) {
-              projectId = String(p.id || '');
-              projectName = String(p.name || '');
-              break;
-            }
-          }
+        byAirtableUrl.set(recordUrl, updatedProject);
+        if (updatedProject.clientPhone) {
+          nextSenderProjectMap = upsertSenderProjectMapForProject(nextSenderProjectMap, updatedProject.clientPhone, updatedProject);
         }
 
-        if (!projectId) {
-          const matched = matchProjectFromText(store, `${client}\n${title}\n${body}`);
-          if (matched) {
-            projectId = String(matched.id || '');
-            projectName = String(matched.name || '');
-          }
-        }
-
-        const nextItem = normalizeInboxItem({
-          id: inboxId,
-          source: 'airtable',
-          channel: 'airtable-revisions',
-          text: lines.join('\n'),
-          status,
-          projectId,
-          projectName,
-          businessKey: key,
-          createdAt: ts,
-          updatedAt: ts,
-        });
-
-        seen.add(inboxId);
-        toAdd.push(nextItem);
-        created++;
+        updated++;
       }
 
-      if (!toAdd.length) {
-        return { created, skipped, didWrite: false };
+      if (!created && !updated) {
+        return { created, updated, skipped, didWrite: false };
       }
 
       const nextStore = {
         ...store,
         revision: store.revision + 1,
         updatedAt: ts,
-        inboxItems: [...toAdd, ...list].slice(0, 500),
+        projects: nextProjects,
+        senderProjectMap: nextSenderProjectMap,
       };
       await writeStore(nextStore);
-      return { created, skipped, didWrite: true };
+      return { created, updated, skipped, didWrite: true };
     });
 
-    res.json({ ok: true, businessKey: key, created: result.created, skipped: result.skipped, totalFetched: (out.records || []).length });
+    res.json({ ok: true, businessKey: key, created: result.created, updated: result.updated, skipped: result.skipped, totalFetched: (out.records || []).length });
   });
 
   await writeLock;
@@ -5225,8 +5319,29 @@ app.put('/api/settings/openai', async (req, res) => {
 });
 
 app.get('/api/tasks', async (req, res) => {
-  const store = await readStore();
-  res.json(store);
+  // Serialize with writeLock so one-time migrations don't race with writes.
+  let outStore = null;
+  let outError = null;
+
+  writeLock = writeLock.then(async () => {
+    const store = await readStore();
+    const migrated = migrateLegacyAirtableClientProjects(store);
+    if (!migrated.changed) {
+      outStore = store;
+      return;
+    }
+    await writeStore(migrated.store);
+    outStore = migrated.store;
+  }).catch((err) => {
+    outError = err;
+  });
+
+  await writeLock;
+  if (outError) {
+    res.status(500).json({ ok: false, error: outError?.message || 'Failed to load store' });
+    return;
+  }
+  res.json(outStore || structuredClone(EMPTY_STORE));
 });
 
 // Inbox (global capture)

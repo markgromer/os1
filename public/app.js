@@ -14,6 +14,7 @@ const state = {
     currentClientName: null,
 
     projects: [],
+    clients: [],
     tasks: [],
     inboxItems: [],
 
@@ -1355,14 +1356,21 @@ function isArchivedProject(project) {
     return s === 'done' || s === 'completed' || s === 'complete' || s === 'archived' || s === 'archive';
 }
 
+function isContactOnlyProject(project) {
+    if (project && typeof project === 'object' && project.isContactRecord === true) return true;
+    const brief = safeText(project?.agentBrief).toLowerCase();
+    if (brief.includes('imported from airtable (clients)')) return true;
+    return false;
+}
+
 function getActiveProjects() {
     const list = Array.isArray(state.projects) ? state.projects : [];
-    return list.filter((p) => !isArchivedProject(p));
+    return list.filter((p) => !isArchivedProject(p) && !isContactOnlyProject(p));
 }
 
 function getArchivedProjects() {
     const list = Array.isArray(state.projects) ? state.projects : [];
-    return list.filter((p) => isArchivedProject(p));
+    return list.filter((p) => isArchivedProject(p) && !isContactOnlyProject(p));
 }
 
 function getOpenTaskCountByOwner() {
@@ -1655,6 +1663,7 @@ function applyStore(store) {
     if (Number.isFinite(Number(store.revision))) state.revision = Number(store.revision);
     if (typeof store.updatedAt === 'string') state.updatedAt = store.updatedAt;
     if (Array.isArray(store.projects)) state.projects = store.projects;
+    state.clients = Array.isArray(store.clients) ? store.clients : [];
     if (Array.isArray(store.tasks)) state.tasks = store.tasks;
     if (Array.isArray(store.inboxItems)) state.inboxItems = store.inboxItems;
     if (Array.isArray(store.team)) state.team = store.team;
@@ -2588,12 +2597,39 @@ function buildClientsIndexFromProjects(projects) {
     return out;
 }
 
+function buildClientsIndexFromStore({ projects, clients }) {
+    const list = Array.isArray(projects) ? projects : [];
+    const contacts = Array.isArray(clients) ? clients : [];
+    const byKey = new Map();
+
+    for (const c of contacts) {
+        const name = normalizeClientLabel(c?.name);
+        const key = name.toLowerCase();
+        const phone = safeText(c?.phone).trim();
+        byKey.set(key, { name, phone, projects: [] });
+    }
+
+    const fromProjects = buildClientsIndexFromProjects(list);
+    for (const c of fromProjects) {
+        const name = normalizeClientLabel(c?.name);
+        const key = name.toLowerCase();
+        const existing = byKey.get(key) || { name, phone: '', projects: [] };
+        if (!existing.phone) existing.phone = safeText(c?.phone).trim();
+        existing.projects = [...(Array.isArray(existing.projects) ? existing.projects : []), ...(Array.isArray(c?.projects) ? c.projects : [])];
+        byKey.set(key, existing);
+    }
+
+    const out = Array.from(byKey.values());
+    out.sort((a, b) => safeText(a?.name).localeCompare(safeText(b?.name)));
+    return out;
+}
+
 function renderClients(container) {
     const titleEl = document.getElementById('page-title');
     if (titleEl) titleEl.innerText = 'Clients';
 
     const projects = Array.isArray(state.projects) ? state.projects : [];
-    const clients = buildClientsIndexFromProjects(projects);
+    const clients = buildClientsIndexFromStore({ projects, clients: state.clients });
 
     const wrap = document.createElement('div');
     wrap.className = 'h-full min-h-0 overflow-y-auto p-6';
@@ -2604,7 +2640,7 @@ function renderClients(container) {
         <div class="flex items-center justify-between gap-3">
             <div>
                 <div class="text-xs font-semibold text-white">Clients</div>
-                <div class="text-[10px] font-mono text-ops-light">Grouped from projects in this business</div>
+                <div class="text-[10px] font-mono text-ops-light">Contacts + client names found on projects</div>
             </div>
             <button id="btn-client-new" class="px-3 py-2 rounded border border-ops-border text-[11px] font-mono text-ops-light hover:text-white hover:bg-ops-surface/60 transition-colors">New Project</button>
         </div>
@@ -2652,10 +2688,13 @@ function renderClientView(container) {
 
     const projects = Array.isArray(state.projects) ? state.projects : [];
     const matching = projects
+        .filter((p) => !isContactOnlyProject(p))
         .filter((p) => normalizeClientLabel(p?.clientName).toLowerCase() === clientName.toLowerCase())
         .slice();
     matching.sort((a, b) => safeText(a?.name).localeCompare(safeText(b?.name)));
-    const phone = safeText((matching.find((p) => safeText(p?.clientPhone).trim()) || {})?.clientPhone).trim();
+    const phoneFromProjects = safeText((matching.find((p) => safeText(p?.clientPhone).trim()) || {})?.clientPhone).trim();
+    const phoneFromContacts = safeText((Array.isArray(state.clients) ? state.clients : []).find((c) => normalizeClientLabel(c?.name).toLowerCase() === clientName.toLowerCase())?.phone).trim();
+    const phone = phoneFromProjects || phoneFromContacts;
 
     const wrap = document.createElement('div');
     wrap.className = 'h-full min-h-0 overflow-y-auto p-6';
@@ -3454,7 +3493,7 @@ function renderSettings(container) {
     wrap.appendChild(bizSection);
 
     // Airtable (per-business)
-    const at = section('Airtable (this business)', 'Connect Airtable Clients to auto-create projects in this business workspace.');
+    const at = section('Airtable (this business)', 'Sync Clients into Contacts, and Revision Requests into Projects for this business workspace.');
     const atBody = at.querySelector('[data-slot="body"]');
     atBody.innerHTML = `
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -3485,8 +3524,8 @@ function renderSettings(container) {
         </div>
 
         <div class="mt-5 pt-5 border-t border-ops-border">
-            <div class="text-white text-sm font-semibold">Revision requests → Inbox</div>
-            <div class="text-[11px] text-ops-light mt-1">Paste a link to your Revision Requests table/view. Sync will create Inbox items (deduped) for this business.</div>
+            <div class="text-white text-sm font-semibold">Revision requests → Projects</div>
+            <div class="text-[11px] text-ops-light mt-1">Paste a link to your Revision Requests table/view. Sync will create/update Revision projects (deduped) for this business.</div>
 
             <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-3">
                 <div>
@@ -3508,7 +3547,7 @@ function renderSettings(container) {
 
             <div class="flex flex-wrap gap-2 mt-3">
                 <button id="btn-test-airtable-requests" class="px-3 py-2 rounded bg-ops-bg border border-ops-border text-ops-light text-xs hover:text-white">Test (preview requests)</button>
-                <button id="btn-sync-airtable-requests" class="px-3 py-2 rounded bg-emerald-600 text-white text-xs hover:bg-emerald-500">Sync requests → inbox</button>
+                <button id="btn-sync-airtable-requests" class="px-3 py-2 rounded bg-emerald-600 text-white text-xs hover:bg-emerald-500">Sync requests → projects</button>
             </div>
         </div>
 
@@ -3516,7 +3555,7 @@ function renderSettings(container) {
         <div class="flex flex-wrap gap-2 mt-4">
             <button id="btn-save-airtable" class="px-3 py-2 rounded bg-blue-600 text-white text-xs hover:bg-blue-500">Save Airtable</button>
             <button id="btn-test-airtable" class="px-3 py-2 rounded bg-ops-bg border border-ops-border text-ops-light text-xs hover:text-white">Test (preview clients)</button>
-            <button id="btn-sync-airtable" class="px-3 py-2 rounded bg-emerald-600 text-white text-xs hover:bg-emerald-500">Sync clients → projects</button>
+            <button id="btn-sync-airtable" class="px-3 py-2 rounded bg-emerald-600 text-white text-xs hover:bg-emerald-500">Sync clients → contacts</button>
         </div>
         <div id="airtable-output" class="mt-3 hidden bg-ops-bg border border-ops-border rounded px-3 py-2 text-xs text-ops-light font-mono whitespace-pre-wrap"></div>
     `;
@@ -4579,9 +4618,10 @@ function renderSettings(container) {
             const data = await r.json().catch(() => ({}));
             if (!r.ok || data?.ok === false) throw new Error(data?.error || 'Sync failed');
             const created = Number(data.created) || 0;
+            const updated = Number(data.updated) || 0;
             const skipped = Number(data.skipped) || 0;
             const fetched = Number(data.totalFetched) || 0;
-            setAirtableOutput(`Synced requests. Created: ${created}, Skipped: ${skipped}, Fetched: ${fetched}`);
+            setAirtableOutput(`Synced requests → projects. Created: ${created}, Updated: ${updated}, Skipped: ${skipped}, Fetched: ${fetched}`);
             await fetchState();
             renderNav();
         } catch (e) {
@@ -5253,12 +5293,6 @@ function renderProjects(container) {
     };
 
     content.appendChild(makeProjectListCard('Active Projects', activeProjects, 'None.'));
-
-    if (archivedProjects.length) {
-        const archivedCard = makeProjectListCard('Archived Projects', archivedProjects, '');
-        archivedCard.classList.add('mt-6');
-        content.appendChild(archivedCard);
-    }
 
     // Wire intake controls
     const toggle = intake.querySelector('#btn-toggle-intake');
@@ -6155,11 +6189,9 @@ function renderDashboardLegacy(container) {
 }
 
 function renderDashboard(container, sidePort) {
-    // New command-center layout (wireframe style): MARTY centered; Radar + Calendar on right.
-    if (sidePort) {
-        renderDashboardCommandCenter(container, sidePort);
-        return;
-    }
+    // Always render the classic dashboard layout.
+    // (The command-center layout is intentionally disabled.)
+    void sidePort;
 
     const titleEl = document.getElementById('page-title');
     if (titleEl) titleEl.innerText = 'Dashboard';
