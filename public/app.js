@@ -12,6 +12,8 @@ const state = {
     currentView: "dashboard",
     currentProjectId: null,
     currentClientName: null,
+    settingsPane: "",
+    projectsSettingsLimit: 200,
 
     projects: [],
     clients: [],
@@ -1628,6 +1630,22 @@ function setMainPortScrolling(enabled) {
 
 window.addEventListener("DOMContentLoaded", init);
 
+function applyInitialDeepLinkFromUrl() {
+    try {
+        const params = new URLSearchParams(window.location.search);
+        const view = safeText(params.get('view') || '').trim().toLowerCase();
+        const pane = safeText(params.get('pane') || '').trim().toLowerCase();
+        if (view === 'settings') {
+            state.currentView = 'settings';
+            state.settingsPane = pane;
+            state.currentProjectId = null;
+            state.currentClientName = null;
+        }
+    } catch {
+        // ignore
+    }
+}
+
 async function init() {
     try {
         console.log("Initializing Neural Ops v2.4...");
@@ -1650,6 +1668,9 @@ async function init() {
             fetchState(), 
             fetchSettings()
         ]);
+
+        // Optional deep link routing (used for Settings panes opened in a new tab).
+        applyInitialDeepLinkFromUrl();
         
         // Setup UI
         setupEventListeners();
@@ -2455,6 +2476,7 @@ async function openSettings() {
     state.currentView = 'settings';
     state.currentProjectId = null;
     state.currentClientName = null;
+    state.settingsPane = '';
     await fetchSettings();
     await refreshSlackTeamPresence({ force: true });
     renderNav();
@@ -3458,6 +3480,166 @@ function renderSettings(container) {
         return el;
     };
 
+    const settingsPane = safeText(state.settingsPane).trim().toLowerCase();
+
+    const buildSettingsDeepLink = (pane) => {
+        try {
+            const u = new URL(window.location.href);
+            u.searchParams.set('view', 'settings');
+            if (pane) u.searchParams.set('pane', String(pane));
+            else u.searchParams.delete('pane');
+            u.hash = '';
+            return `${u.pathname}?${u.searchParams.toString()}`;
+        } catch {
+            return pane ? `/?view=settings&pane=${encodeURIComponent(String(pane))}` : '/?view=settings';
+        }
+    };
+
+    const projectsSettingsHref = buildSettingsDeepLink('projects');
+    const fullSettingsHref = buildSettingsDeepLink('');
+
+    // Dedicated heavy pane: Projects (bulk delete). Keeping it isolated prevents Settings from OOM'ing
+    // when there are lots of projects.
+    if (settingsPane === 'projects') {
+        if (titleEl) titleEl.innerText = 'Settings • Projects';
+
+        const projectsSection = section('Projects', 'Bulk select projects and remove them. This also removes their tasks, notes, chat, scratchpad, and communications.');
+        const projectsBody = projectsSection.querySelector('[data-slot="body"]');
+        const projects = Array.isArray(state.projects) ? state.projects : [];
+        const selectedMap = (state.bulkProjectDeleteSelectedById && typeof state.bulkProjectDeleteSelectedById === 'object') ? state.bulkProjectDeleteSelectedById : {};
+
+        const renderProjectsBody = () => {
+            const selectedIds = Object.keys(selectedMap).filter((id) => selectedMap[id]);
+            const limit = Math.max(50, Number(state.projectsSettingsLimit) || 200);
+            const shown = projects.slice(0, limit);
+            const remaining = Math.max(0, projects.length - shown.length);
+
+            projectsBody.innerHTML = `
+                <div class="flex items-center justify-between gap-3 flex-wrap">
+                    <div class="text-xs text-ops-light">Projects (<span id="projects-total">${projects.length}</span>) • Showing (<span id="projects-showing">${shown.length}</span>) • Selected (<span id="projects-selected">${selectedIds.length}</span>)</div>
+                    <div class="flex gap-2 flex-wrap">
+                        <a href="${escapeHtml(fullSettingsHref)}" class="px-3 py-2 rounded bg-ops-bg border border-ops-border text-ops-light text-xs hover:text-white">Back to Settings</a>
+                        ${remaining > 0 ? `<button id="btn-projects-more" class="px-3 py-2 rounded bg-ops-bg border border-ops-border text-ops-light text-xs hover:text-white">Load ${Math.min(200, remaining)} more</button>` : ''}
+                        <button id="btn-projects-clear" class="px-3 py-2 rounded bg-ops-bg border border-ops-border text-ops-light text-xs hover:text-white" ${selectedIds.length ? '' : 'disabled'}>Clear selection</button>
+                        <button id="btn-projects-delete" class="px-3 py-2 rounded bg-red-600 text-white text-xs hover:bg-red-500" ${selectedIds.length ? '' : 'disabled'}>Delete selected</button>
+                    </div>
+                </div>
+                <div class="mt-3 space-y-2" id="projects-list"></div>
+                <div class="text-[11px] text-ops-light mt-3">Tip: This delete is permanent (it removes the project and its related data).</div>
+            `;
+
+            const listEl = projectsBody.querySelector('#projects-list');
+            if (listEl) {
+                if (!shown.length) {
+                    listEl.innerHTML = `<div class="text-xs text-ops-light italic">No projects yet.</div>`;
+                } else {
+                    // Build rows without creating a single massive HTML string.
+                    const frag = document.createDocumentFragment();
+                    for (const p of shown) {
+                        const id = safeText(p?.id);
+                        const nm = safeText(p?.name);
+                        const ty = safeText(p?.type) || 'Other';
+                        const status = safeText(p?.status) || (isArchivedProject(p) ? 'Archived' : 'Active');
+                        const due = safeText(p?.dueDate);
+                        const checked = selectedMap[id] ? 'checked' : '';
+
+                        const label = document.createElement('label');
+                        label.className = 'flex items-start gap-3 border border-ops-border rounded-lg bg-ops-bg/30 p-3 cursor-pointer';
+                        label.innerHTML = `
+                            <input type="checkbox" data-proj-sel="${escapeHtml(id)}" class="mt-0.5" ${checked} />
+                            <div class="min-w-0">
+                                <div class="text-white text-sm font-semibold truncate">${escapeHtml(nm || '(Unnamed)')}</div>
+                                <div class="text-[11px] text-ops-light mt-0.5">${escapeHtml(ty)} • ${escapeHtml(status)}${due ? ` • Due ${escapeHtml(due)}` : ''}</div>
+                            </div>
+                        `;
+                        frag.appendChild(label);
+                    }
+                    listEl.appendChild(frag);
+                }
+            }
+
+            const updateProjectBulkDeleteUi = () => {
+                const selected = Object.keys(state.bulkProjectDeleteSelectedById || {}).filter((id) => state.bulkProjectDeleteSelectedById[id]);
+                const selectedCount = selected.length;
+                const selectedEl = projectsBody.querySelector('#projects-selected');
+                if (selectedEl) selectedEl.textContent = String(selectedCount);
+                const btnClear = projectsBody.querySelector('#btn-projects-clear');
+                const btnDel = projectsBody.querySelector('#btn-projects-delete');
+                if (btnClear) btnClear.disabled = selectedCount === 0;
+                if (btnDel) btnDel.disabled = selectedCount === 0;
+            };
+
+            projectsBody.querySelectorAll('input[type="checkbox"][data-proj-sel]').forEach((cb) => {
+                cb.addEventListener('change', () => {
+                    const id = safeText(cb.getAttribute('data-proj-sel'));
+                    state.bulkProjectDeleteSelectedById[id] = Boolean(cb.checked);
+                    updateProjectBulkDeleteUi();
+                });
+            });
+
+            const btnMore = projectsBody.querySelector('#btn-projects-more');
+            if (btnMore) {
+                btnMore.onclick = () => {
+                    const next = Math.min(projects.length, (Math.max(50, Number(state.projectsSettingsLimit) || 200) + 200));
+                    state.projectsSettingsLimit = next;
+                    renderSettings(container);
+                };
+            }
+
+            const btnClearProjects = projectsBody.querySelector('#btn-projects-clear');
+            if (btnClearProjects) {
+                btnClearProjects.onclick = () => {
+                    state.bulkProjectDeleteSelectedById = {};
+                    projectsBody.querySelectorAll('input[type="checkbox"][data-proj-sel]').forEach((cb) => {
+                        cb.checked = false;
+                    });
+                    updateProjectBulkDeleteUi();
+                };
+            }
+
+            const btnDeleteProjects = projectsBody.querySelector('#btn-projects-delete');
+            if (btnDeleteProjects) {
+                btnDeleteProjects.onclick = async () => {
+                    const ids = Object.keys(state.bulkProjectDeleteSelectedById || {}).filter((id) => state.bulkProjectDeleteSelectedById[id]);
+                    if (!ids.length) return;
+                    if (!confirm(`Delete ${ids.length} project(s)? This will also remove their tasks, notes, chat, scratchpad, and communications.`)) return;
+                    const prevLabel = btnDeleteProjects.textContent;
+                    btnDeleteProjects.disabled = true;
+                    btnDeleteProjects.textContent = 'Deleting…';
+                    try {
+                        const data = await withRevisionRetry(() => apiJson('/api/projects/bulk-delete', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ baseRevision: state.revision, projectIds: ids })
+                        }));
+
+                        const nextStore = data?.store && typeof data.store === 'object' ? data.store : data;
+                        applyStore(nextStore);
+
+                        if (ids.includes(String(state.currentProjectId || ''))) {
+                            state.currentProjectId = null;
+                            state.currentView = 'dashboard';
+                        }
+
+                        state.bulkProjectDeleteSelectedById = {};
+                        renderNav();
+                        renderSettings(container);
+                    } catch (e) {
+                        alert(e?.message || 'Failed to delete projects');
+                    } finally {
+                        btnDeleteProjects.disabled = false;
+                        btnDeleteProjects.textContent = prevLabel;
+                    }
+                };
+            }
+        };
+
+        renderProjectsBody();
+        wrap.appendChild(projectsSection);
+        container.appendChild(wrap);
+        return;
+    }
+
     // Access (admin token)
     const access = section('Access', 'If this server is protected (ADMIN_TOKEN), paste it once here. Stored locally in this browser.');
     const accessBody = access.querySelector('[data-slot="body"]');
@@ -3749,110 +3931,17 @@ function renderSettings(container) {
     `;
     wrap.appendChild(agent);
 
-    // Projects (bulk delete)
-    const projectsSection = section('Projects', 'Bulk select projects and remove them. This also removes their tasks, notes, chat, scratchpad, and communications.');
+    // Projects (bulk delete) — moved to its own deep-link pane to avoid OOM.
+    const projectsSection = section('Projects', 'This list can get big. Open it in a new tab to manage bulk deletes without slowing Settings.');
     const projectsBody = projectsSection.querySelector('[data-slot="body"]');
     const projects = Array.isArray(state.projects) ? state.projects : [];
-    const selectedMap = (state.bulkProjectDeleteSelectedById && typeof state.bulkProjectDeleteSelectedById === 'object') ? state.bulkProjectDeleteSelectedById : {};
-    const selectedIds = Object.keys(selectedMap).filter((id) => selectedMap[id]);
-
     projectsBody.innerHTML = `
-        <div class="flex items-center justify-between gap-3">
-            <div class="text-xs text-ops-light">Projects (<span id="projects-total">${projects.length}</span>) • Selected (<span id="projects-selected">${selectedIds.length}</span>)</div>
-            <div class="flex gap-2">
-                <button id="btn-projects-clear" class="px-3 py-2 rounded bg-ops-bg border border-ops-border text-ops-light text-xs hover:text-white" ${selectedIds.length ? '' : 'disabled'}>Clear selection</button>
-                <button id="btn-projects-delete" class="px-3 py-2 rounded bg-red-600 text-white text-xs hover:bg-red-500" ${selectedIds.length ? '' : 'disabled'}>Delete selected</button>
-            </div>
+        <div class="flex items-center justify-between gap-3 flex-wrap">
+            <div class="text-xs text-ops-light">Projects (${projects.length})</div>
+            <a href="${escapeHtml(projectsSettingsHref)}" target="_blank" rel="noopener noreferrer" class="px-3 py-2 rounded bg-ops-bg border border-ops-border text-ops-light text-xs hover:text-white">Open Projects settings in new tab</a>
         </div>
-        <div class="mt-3 space-y-2">
-            ${projects.length ? projects.map((p) => {
-                const id = safeText(p.id);
-                const nm = safeText(p.name);
-                const ty = safeText(p.type) || 'Other';
-                const status = safeText(p.status) || (isArchivedProject(p) ? 'Archived' : 'Active');
-                const due = safeText(p.dueDate);
-                const checked = selectedMap[id] ? 'checked' : '';
-                return `
-                    <label class="flex items-start gap-3 border border-ops-border rounded-lg bg-ops-bg/30 p-3 cursor-pointer">
-                        <input type="checkbox" data-proj-sel="${escapeHtml(id)}" class="mt-0.5" ${checked} />
-                        <div class="min-w-0">
-                            <div class="text-white text-sm font-semibold truncate">${escapeHtml(nm || '(Unnamed)')}</div>
-                            <div class="text-[11px] text-ops-light mt-0.5">${escapeHtml(ty)} • ${escapeHtml(status)}${due ? ` • Due ${escapeHtml(due)}` : ''}</div>
-                        </div>
-                    </label>
-                `;
-            }).join('') : `<div class="text-xs text-ops-light italic">No projects yet.</div>`}
-        </div>
-        <div class="text-[11px] text-ops-light mt-3">Tip: This delete is permanent (it removes the project and its related data).</div>
+        <div class="text-[11px] text-ops-light mt-2">Tip: Keep this tab for general settings; use the projects tab for bulk delete.</div>
     `;
-
-    const updateProjectBulkDeleteUi = () => {
-        const selected = Object.keys(state.bulkProjectDeleteSelectedById || {}).filter((id) => state.bulkProjectDeleteSelectedById[id]);
-        const selectedCount = selected.length;
-        const selectedEl = projectsBody.querySelector('#projects-selected');
-        if (selectedEl) selectedEl.textContent = String(selectedCount);
-        const btnClear = projectsBody.querySelector('#btn-projects-clear');
-        const btnDel = projectsBody.querySelector('#btn-projects-delete');
-        if (btnClear) btnClear.disabled = selectedCount === 0;
-        if (btnDel) btnDel.disabled = selectedCount === 0;
-    };
-
-    projectsBody.querySelectorAll('input[type="checkbox"][data-proj-sel]').forEach((cb) => {
-        cb.addEventListener('change', () => {
-            const id = safeText(cb.getAttribute('data-proj-sel'));
-            state.bulkProjectDeleteSelectedById[id] = Boolean(cb.checked);
-            updateProjectBulkDeleteUi();
-        });
-    });
-
-    const btnClearProjects = projectsBody.querySelector('#btn-projects-clear');
-    if (btnClearProjects) {
-        btnClearProjects.onclick = () => {
-            state.bulkProjectDeleteSelectedById = {};
-            projectsBody.querySelectorAll('input[type="checkbox"][data-proj-sel]').forEach((cb) => {
-                cb.checked = false;
-            });
-            updateProjectBulkDeleteUi();
-        };
-    }
-
-    const btnDeleteProjects = projectsBody.querySelector('#btn-projects-delete');
-    if (btnDeleteProjects) {
-        btnDeleteProjects.onclick = async () => {
-            const ids = Object.keys(state.bulkProjectDeleteSelectedById || {}).filter((id) => state.bulkProjectDeleteSelectedById[id]);
-            if (!ids.length) return;
-            if (!confirm(`Delete ${ids.length} project(s)? This will also remove their tasks, notes, chat, scratchpad, and communications.`)) return;
-            const prevLabel = btnDeleteProjects.textContent;
-            btnDeleteProjects.disabled = true;
-            btnDeleteProjects.textContent = 'Deleting…';
-            try {
-                const data = await withRevisionRetry(() => apiJson('/api/projects/bulk-delete', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ baseRevision: state.revision, projectIds: ids })
-                }));
-
-                const nextStore = data?.store && typeof data.store === 'object' ? data.store : data;
-                applyStore(nextStore);
-
-                // If the current project was deleted, return to dashboard.
-                if (ids.includes(String(state.currentProjectId || ''))) {
-                    state.currentProjectId = null;
-                    state.currentView = 'dashboard';
-                }
-
-                state.bulkProjectDeleteSelectedById = {};
-                renderNav();
-                renderSettings(container);
-            } catch (e) {
-                alert(e?.message || 'Failed to delete projects');
-            } finally {
-                btnDeleteProjects.disabled = false;
-                btnDeleteProjects.textContent = prevLabel;
-            }
-        };
-    }
-
     wrap.appendChild(projectsSection);
 
     // Team
