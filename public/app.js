@@ -1363,14 +1363,43 @@ function isContactOnlyProject(project) {
     return false;
 }
 
+function isRevisionRequestProject(project) {
+    const p = (project && typeof project === 'object') ? project : {};
+    if (safeText(p?.airtableSource).trim() === 'revision-requests') return true;
+    if (safeText(p?.airtableRequestsKey).trim()) return true;
+    const brief = safeText(p?.agentBrief).toLowerCase();
+    if (brief.includes('imported from airtable (revision requests)')) return true;
+    return false;
+}
+
+function getCurrentUserName() {
+    const teamMembers = Array.isArray(state.team) ? state.team : [];
+    const adminName = safeText(teamMembers.find((m) => safeText(m?.role).toLowerCase() === 'admin')?.name).trim();
+    if (adminName) return adminName;
+    const firstHuman = safeText(teamMembers.find((m) => safeText(m?.id) && safeText(m?.id) !== 'ai' && safeText(m?.name))?.name).trim();
+    return firstHuman || 'Operator';
+}
+
+function getProjectOwnerName(project) {
+    const owner = safeText(project?.owner).trim();
+    return owner;
+}
+
+function shouldShowProjectInMyProjects(project) {
+    if (!isRevisionRequestProject(project)) return true;
+    const owner = getProjectOwnerName(project);
+    if (!owner) return false;
+    return owner === getCurrentUserName();
+}
+
 function getActiveProjects() {
     const list = Array.isArray(state.projects) ? state.projects : [];
-    return list.filter((p) => !isArchivedProject(p) && !isContactOnlyProject(p));
+    return list.filter((p) => !isArchivedProject(p) && !isContactOnlyProject(p) && shouldShowProjectInMyProjects(p));
 }
 
 function getArchivedProjects() {
     const list = Array.isArray(state.projects) ? state.projects : [];
-    return list.filter((p) => isArchivedProject(p) && !isContactOnlyProject(p));
+    return list.filter((p) => isArchivedProject(p) && !isContactOnlyProject(p) && shouldShowProjectInMyProjects(p));
 }
 
 function getOpenTaskCountByOwner() {
@@ -2332,6 +2361,7 @@ function renderNav() {
     
     nav.appendChild(createNavIcon("fa-grip", "Dashboard", () => openDashboard(), state.currentView === "dashboard"));
     nav.appendChild(createNavIcon("fa-inbox", "Inbox", () => openInbox(), state.currentView === "inbox"));
+    nav.appendChild(createNavIcon("fa-rotate", "Revisions", () => openRevisions(), state.currentView === "revisions"));
     nav.appendChild(createNavIcon("fa-address-book", "Clients", () => openClients(), state.currentView === "clients" || state.currentView === "client"));
     nav.appendChild(createNavIcon("fa-folder", "Projects", () => openProjects(), state.currentView === "projects" || state.currentView === "project"));
     nav.appendChild(createNavIcon("fa-calendar-days", "Calendar", () => openCalendar(), state.currentView === "calendar"));
@@ -2357,6 +2387,17 @@ async function openDashboard() {
 
 async function openInbox() {
     state.currentView = 'inbox';
+    state.currentProjectId = null;
+    state.currentClientName = null;
+    await loadChatHistory();
+    renderNav();
+    renderMain();
+    renderChat();
+    broadcastMartyContext();
+}
+
+async function openRevisions() {
+    state.currentView = 'revisions';
     state.currentProjectId = null;
     state.currentClientName = null;
     await loadChatHistory();
@@ -2524,7 +2565,7 @@ function renderMain() {
     }
 
     // Reduce full-page scrolling: scroll inside panes for data-heavy views.
-    if (state.currentView === 'project' || state.currentView === 'projects' || state.currentView === 'dashboard' || state.currentView === 'inbox' || state.currentView === 'calendar' || state.currentView === 'team') {
+    if (state.currentView === 'project' || state.currentView === 'projects' || state.currentView === 'revisions' || state.currentView === 'dashboard' || state.currentView === 'inbox' || state.currentView === 'calendar' || state.currentView === 'team') {
         setMainPortScrolling(false);
     } else {
         setMainPortScrolling(true);
@@ -2540,6 +2581,10 @@ function renderMain() {
         dockMartyToPersistentSlot();
         container.className = 'min-h-0 overflow-y-auto';
         renderInbox(container);
+    } else if (state.currentView === "revisions") {
+        dockMartyToPersistentSlot();
+        container.className = 'min-h-0 overflow-y-auto';
+        renderRevisions(container);
     } else if (state.currentView === "clients") {
         dockMartyToPersistentSlot();
         container.className = 'min-h-0 overflow-y-auto';
@@ -5400,6 +5445,151 @@ function renderProjects(container) {
     container.appendChild(wrap);
 }
 
+function renderRevisions(container) {
+    const titleEl = document.getElementById('page-title');
+    if (titleEl) titleEl.innerText = 'Revisions';
+
+    const all = Array.isArray(state.projects) ? state.projects : [];
+    const revisionsActive = all.filter((p) => isRevisionRequestProject(p) && !isContactOnlyProject(p) && !isArchivedProject(p));
+    const revisionsArchived = all.filter((p) => isRevisionRequestProject(p) && !isContactOnlyProject(p) && isArchivedProject(p));
+
+    const me = getCurrentUserName();
+    const humans = getHumanTeamMembers();
+    const assigneeOptions = [''].concat(humans.map((m) => safeText(m?.name).trim()).filter(Boolean));
+
+    const latestRevisionSummaryPreview = (projectId) => {
+        const notes = Array.isArray(state.projectNoteEntries?.[projectId]) ? state.projectNoteEntries[projectId] : [];
+        const match = notes.find((n) => safeText(n?.kind).toLowerCase() === 'airtable' || safeText(n?.title).toLowerCase().includes('revision summary'));
+        const content = safeText(match?.content);
+        return previewText(content, 180);
+    };
+
+    const makeRevisionCard = (p) => {
+        const card = document.createElement('div');
+        card.className = 'group w-full text-left p-4 rounded-xl border border-white/10 bg-white/5 backdrop-blur-md hover:bg-white/10 hover:border-white/20 transition-all duration-300 hover:-translate-y-1 hover:shadow-xl relative overflow-hidden flex flex-col gap-3 min-h-[120px]';
+
+        const owner = getProjectOwnerName(p);
+        const ownerLabel = owner || 'Unassigned';
+        const ownerTone = owner ? 'text-emerald-300 border-emerald-500/30 bg-emerald-500/10' : 'text-amber-300 border-amber-500/30 bg-amber-500/10';
+        const due = safeText(p?.dueDate).trim();
+        const status = safeText(p?.status).trim() || 'Active';
+        const summaryPreview = latestRevisionSummaryPreview(p?.id);
+
+        card.innerHTML = `
+            <div class="absolute inset-0 bg-gradient-to-br from-blue-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
+            <div class="relative z-10 flex items-start justify-between gap-3">
+                <div class="min-w-0 flex-1">
+                    <div class="text-white text-base font-semibold truncate tracking-tight">${escapeHtml(safeText(p?.name) || 'Untitled')}</div>
+                    <div class="text-xs text-zinc-400 mt-0.5 max-w-[90%] truncate">${escapeHtml(summaryPreview || previewText(safeText(p?.agentBrief) || '', 120) || 'No summary yet...')}</div>
+                </div>
+                <div class="shrink-0 flex flex-col items-end gap-2">
+                    <div class="text-[10px] font-mono px-2 py-1 rounded-full border ${due ? 'text-blue-300 border-blue-500/30 bg-blue-500/10' : 'text-zinc-500 border-zinc-800 bg-black/20'}">${due ? `Due ${escapeHtml(due)}` : 'No due date'}</div>
+                    <div class="text-[10px] font-mono px-2 py-1 rounded-full border ${ownerTone}" title="Assigned to">${escapeHtml(ownerLabel)}</div>
+                </div>
+            </div>
+            <div class="relative z-10 mt-auto flex items-center justify-between gap-2">
+                <div class="flex items-center gap-2">
+                    <span class="text-[10px] font-mono uppercase tracking-wider px-2 py-1 rounded border border-white/10 bg-black/20 text-emerald-300">${escapeHtml(status)}</span>
+                    <span class="text-[10px] font-mono uppercase tracking-wider px-2 py-1 rounded border border-white/10 bg-black/20 text-purple-300">Revision</span>
+                    ${owner === me ? '<span class="text-[10px] font-mono uppercase tracking-wider px-2 py-1 rounded border border-blue-500/30 bg-blue-500/10 text-blue-200">Mine</span>' : ''}
+                </div>
+                <div class="flex items-center gap-2">
+                    <select data-rev-assign class="bg-zinc-950/40 border border-zinc-800 rounded px-2 py-1 text-[10px] font-mono text-zinc-200">
+                        ${assigneeOptions.map((name) => {
+                            const label = name ? name : 'Unassigned';
+                            const selected = (name ? name : '') === (owner ? owner : '') ? 'selected' : '';
+                            return `<option value="${escapeHtml(name)}" ${selected}>${escapeHtml(label)}</option>`;
+                        }).join('')}
+                    </select>
+                    <button data-rev-open type="button" class="px-2 py-1 rounded border border-zinc-800 bg-zinc-950/30 hover:bg-zinc-900/40 text-zinc-300 text-[10px] font-mono">Open</button>
+                </div>
+            </div>
+        `;
+
+        // Card interactions
+        const openBtn = card.querySelector('[data-rev-open]');
+        if (openBtn) {
+            openBtn.addEventListener('click', async (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (p?.id) await openProject(p.id);
+            });
+        }
+
+        const select = card.querySelector('[data-rev-assign]');
+        if (select) {
+            const stop = (e) => { try { e.stopPropagation(); } catch {} };
+            select.addEventListener('click', stop);
+            select.addEventListener('mousedown', stop);
+            select.addEventListener('touchstart', stop);
+            select.addEventListener('change', async (e) => {
+                const val = safeText(e?.target?.value).trim();
+                try {
+                    await saveProjectPatch(p.id, { owner: val });
+                    renderNav();
+                    renderMain();
+                } catch (err) {
+                    alert(err?.message || 'Failed to assign revision');
+                }
+            });
+        }
+
+        // Clicking anywhere else opens
+        card.addEventListener('click', async () => {
+            if (p?.id) await openProject(p.id);
+        });
+
+        return card;
+    };
+
+    const wrap = document.createElement('div');
+    wrap.className = 'h-full flex flex-col min-h-0';
+
+    const content = document.createElement('div');
+    content.className = 'flex-1 min-h-0 overflow-y-auto p-6';
+    content.innerHTML = `
+        <div class="mb-4">
+            <div class="text-white text-lg font-semibold tracking-tight">Revision Requests</div>
+            <div class="text-[11px] text-zinc-500 mt-0.5">Assign a revision to someone. If assigned to you, it will also appear in Projects.</div>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4" data-rev-active></div>
+        <div class="mt-10">
+            <div class="flex items-center justify-between gap-3 mb-4">
+                <div class="text-white text-lg font-semibold tracking-tight">Archived</div>
+                <div class="text-xs font-mono text-zinc-500 bg-black/20 px-2 py-0.5 rounded-full border border-white/5">${revisionsArchived.length}</div>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4" data-rev-archived></div>
+        </div>
+    `;
+
+    const activeEl = content.querySelector('[data-rev-active]');
+    if (activeEl) {
+        if (!revisionsActive.length) {
+            const empty = document.createElement('div');
+            empty.className = 'col-span-full p-4 border border-white/5 rounded-xl text-zinc-500 italic text-sm bg-black/10';
+            empty.innerText = 'No active revision requests.';
+            activeEl.appendChild(empty);
+        } else {
+            for (const p of revisionsActive) activeEl.appendChild(makeRevisionCard(p));
+        }
+    }
+
+    const archivedEl = content.querySelector('[data-rev-archived]');
+    if (archivedEl) {
+        if (!revisionsArchived.length) {
+            const empty = document.createElement('div');
+            empty.className = 'col-span-full p-4 border border-white/5 rounded-xl text-zinc-500 italic text-sm bg-black/10';
+            empty.innerText = 'None.';
+            archivedEl.appendChild(empty);
+        } else {
+            for (const p of revisionsArchived) archivedEl.appendChild(makeRevisionCard(p));
+        }
+    }
+
+    wrap.appendChild(content);
+    container.appendChild(wrap);
+}
+
 function renderDashboardLegacy(container) {
     const titleEl = document.getElementById("page-title");
     if(titleEl) titleEl.innerText = "Command Dashboard";
@@ -6376,6 +6566,7 @@ function renderDashboard(container, sidePort) {
             ? payloadOrItems.items
             : (Array.isArray(payloadOrItems) ? payloadOrItems : []);
         const groups = Array.isArray(payloadOrItems?.groups) ? payloadOrItems.groups : null;
+        const businessGroups = Array.isArray(payloadOrItems?.businessGroups) ? payloadOrItems.businessGroups : null;
 
         const list = Array.isArray(items) ? items : [];
         const slack = list.filter((x) => normalizeInboxSourceKey(x?.source) === 'slack');
@@ -6412,44 +6603,74 @@ function renderDashboard(container, sidePort) {
             `;
         };
 
-        const rowsHtml = Array.isArray(groups)
-            ? (() => {
-                const sections = [];
-                const byKey = new Map();
-                for (const g of groups) {
-                    const key = safeText(g?.businessKey) || safeText(g?.businessLabel) || 'business';
-                    if (!byKey.has(key)) {
-                        const label = safeText(g?.businessLabel) || safeText(g?.businessKey) || 'Business';
-                        const sec = { key, label, rows: [] };
-                        byKey.set(key, sec);
-                        sections.push(sec);
-                    }
-                    byKey.get(key).rows.push(g);
-                }
-
-                return sections
-                    .map((sec) => {
-                        const total = sec.rows.reduce((sum, r) => sum + (Number(r?.count) || 0), 0);
-                        const shown = sec.rows.slice(0, 6);
-                        const more = sec.rows.length - shown.length;
-                        return `
-                            <div class="border border-ops-border rounded-lg bg-ops-bg/20 px-2.5 py-2">
-                                <div class="flex items-center justify-between gap-2 mb-1">
-                                    <div class="text-[9px] font-mono uppercase tracking-widest text-ops-light/60 truncate">${escapeHtml(sec.label)}</div>
-                                    <div class="text-[10px] font-mono text-white">${total}</div>
-                                </div>
-                                <div class="space-y-1">
-                                    ${shown.map((r) => renderGroupRow(r, { showBusiness: false })).join('')}
-                                    ${more > 0 ? `<div class=\"text-[9px] font-mono text-ops-light/40 px-1\">+${more} more</div>` : ''}
-                                </div>
+        const renderBusinessRow = (row) => {
+            const business = safeText(row?.businessLabel) || safeText(row?.businessKey) || 'Business';
+            const stamp = formatInboxStamp(safeText(row?.latestAt));
+            const count = Number(row?.count) || 0;
+            const summary = safeText(row?.summary).trim() || (Array.isArray(row?.sample) ? safeText(row.sample[0]) : '');
+            return `
+                <div class="border border-ops-border rounded bg-ops-bg/40 px-2.5 py-2">
+                    <div class="flex items-start justify-between gap-2">
+                        <div class="min-w-0 flex-1">
+                            <div class="flex items-center gap-1.5 flex-wrap">
+                                <span class="px-1.5 py-0.5 rounded border border-ops-border text-[9px] font-mono text-ops-light/50">${escapeHtml(business)}</span>
+                                ${stamp ? `<span class=\"text-[9px] font-mono text-ops-light/40\">${escapeHtml(stamp)}</span>` : ''}
                             </div>
-                        `;
-                    })
-                    .join('');
+                            <div class="mt-1 flex items-center justify-between gap-2">
+                                <div class="min-w-0 text-[11px] text-white truncate">Messages</div>
+                                <div class="shrink-0 text-[11px] font-mono font-semibold text-white">${count}</div>
+                            </div>
+                            ${summary ? `<div class=\"mt-0.5 text-[10px] text-ops-light/60 truncate\">${escapeHtml(summary)}</div>` : ''}
+                        </div>
+                    </div>
+                </div>
+            `;
+        };
+
+        const rowsHtml = Array.isArray(businessGroups)
+            ? (() => {
+                const shown = businessGroups.slice(0, 8);
+                const more = businessGroups.length - shown.length;
+                return `${shown.map(renderBusinessRow).join('')}${more > 0 ? `<div class=\"text-[9px] font-mono text-ops-light/40 px-1\">+${more} more businesses</div>` : ''}`;
             })()
-            : list
-                .slice(0, 8)
-                .map((row) => {
+            : Array.isArray(groups)
+                ? (() => {
+                    const sections = [];
+                    const byKey = new Map();
+                    for (const g of groups) {
+                        const key = safeText(g?.businessKey) || safeText(g?.businessLabel) || 'business';
+                        if (!byKey.has(key)) {
+                            const label = safeText(g?.businessLabel) || safeText(g?.businessKey) || 'Business';
+                            const sec = { key, label, rows: [] };
+                            byKey.set(key, sec);
+                            sections.push(sec);
+                        }
+                        byKey.get(key).rows.push(g);
+                    }
+
+                    return sections
+                        .map((sec) => {
+                            const total = sec.rows.reduce((sum, r) => sum + (Number(r?.count) || 0), 0);
+                            const shown = sec.rows.slice(0, 6);
+                            const more = sec.rows.length - shown.length;
+                            return `
+                                <div class="border border-ops-border rounded-lg bg-ops-bg/20 px-2.5 py-2">
+                                    <div class="flex items-center justify-between gap-2 mb-1">
+                                        <div class="text-[9px] font-mono uppercase tracking-widest text-ops-light/60 truncate">${escapeHtml(sec.label)}</div>
+                                        <div class="text-[10px] font-mono text-white">${total}</div>
+                                    </div>
+                                    <div class="space-y-1">
+                                        ${shown.map((r) => renderGroupRow(r, { showBusiness: false })).join('')}
+                                        ${more > 0 ? `<div class=\"text-[9px] font-mono text-ops-light/40 px-1\">+${more} more</div>` : ''}
+                                    </div>
+                                </div>
+                            `;
+                        })
+                        .join('');
+                })()
+                : list
+                    .slice(0, 8)
+                    .map((row) => {
                 const item = row;
                 const status = safeText(item?.status).trim() || 'New';
                 const sourceKey = normalizeInboxSourceKey(item?.source);
@@ -6486,7 +6707,11 @@ function renderDashboard(container, sidePort) {
             })
             .join('');
 
-        const showCount = Array.isArray(groups) ? groups.length : list.length;
+        const showCount = Array.isArray(businessGroups)
+            ? businessGroups.reduce((sum, g) => sum + (Number(g?.count) || 0), 0)
+            : (Array.isArray(groups)
+                ? groups.reduce((sum, g) => sum + (Number(g?.count) || 0), 0)
+                : list.length);
 
         return `
             <div class="dash-card-head flex items-center justify-between gap-3 px-3 py-2.5">
@@ -6982,6 +7207,7 @@ function renderDashboardCommandCenter(container, sidePort) {
             ? payloadOrItems.items
             : (Array.isArray(payloadOrItems) ? payloadOrItems : []);
         const groups = Array.isArray(payloadOrItems?.groups) ? payloadOrItems.groups : null;
+        const businessGroups = Array.isArray(payloadOrItems?.businessGroups) ? payloadOrItems.businessGroups : null;
 
         const list = Array.isArray(items) ? items : [];
         const slack = list.filter((x) => normalizeInboxSourceKey(x?.source) === 'slack');
@@ -7014,44 +7240,74 @@ function renderDashboardCommandCenter(container, sidePort) {
             `;
         };
 
-        const rowsHtml = Array.isArray(groups)
-            ? (() => {
-                const sections = [];
-                const byKey = new Map();
-                for (const g of groups) {
-                    const key = safeText(g?.businessKey) || safeText(g?.businessLabel) || 'business';
-                    if (!byKey.has(key)) {
-                        const label = safeText(g?.businessLabel) || safeText(g?.businessKey) || 'Business';
-                        const sec = { key, label, rows: [] };
-                        byKey.set(key, sec);
-                        sections.push(sec);
-                    }
-                    byKey.get(key).rows.push(g);
-                }
-
-                return sections
-                    .map((sec) => {
-                        const total = sec.rows.reduce((sum, r) => sum + (Number(r?.count) || 0), 0);
-                        const shown = sec.rows.slice(0, 6);
-                        const more = sec.rows.length - shown.length;
-                        return `
-                            <div class="border border-ops-border rounded-lg bg-ops-bg/20 px-2.5 py-2">
-                                <div class="flex items-center justify-between gap-2 mb-1">
-                                    <div class="text-[9px] font-mono uppercase tracking-widest text-ops-light/60 truncate">${escapeHtml(sec.label)}</div>
-                                    <div class="text-[10px] font-mono text-white">${total}</div>
-                                </div>
-                                <div class="space-y-1">
-                                    ${shown.map((r) => renderGroupRow(r, { showBusiness: false })).join('')}
-                                    ${more > 0 ? `<div class=\"text-[9px] font-mono text-ops-light/40 px-1\">+${more} more</div>` : ''}
-                                </div>
+        const renderBusinessRow = (row) => {
+            const business = safeText(row?.businessLabel) || safeText(row?.businessKey) || 'Business';
+            const stamp = formatInboxStamp(safeText(row?.latestAt));
+            const count = Number(row?.count) || 0;
+            const summary = safeText(row?.summary).trim() || (Array.isArray(row?.sample) ? safeText(row.sample[0]) : '');
+            return `
+                <div class="border border-ops-border rounded bg-ops-bg/40 px-2.5 py-2">
+                    <div class="flex items-start justify-between gap-2">
+                        <div class="min-w-0 flex-1">
+                            <div class="flex items-center gap-1.5 flex-wrap">
+                                <span class="px-1.5 py-0.5 rounded border border-ops-border text-[9px] font-mono text-ops-light/50">${escapeHtml(business)}</span>
+                                ${stamp ? `<span class=\"text-[9px] font-mono text-ops-light/40\">${escapeHtml(stamp)}</span>` : ''}
                             </div>
-                        `;
-                    })
-                    .join('');
+                            <div class="mt-1 flex items-center justify-between gap-2">
+                                <div class="min-w-0 text-[11px] text-white truncate">Messages</div>
+                                <div class="shrink-0 text-[11px] font-mono font-semibold text-white">${count}</div>
+                            </div>
+                            ${summary ? `<div class=\"mt-0.5 text-[10px] text-ops-light/60 truncate\">${escapeHtml(summary)}</div>` : ''}
+                        </div>
+                    </div>
+                </div>
+            `;
+        };
+
+        const rowsHtml = Array.isArray(businessGroups)
+            ? (() => {
+                const shown = businessGroups.slice(0, 6);
+                const more = businessGroups.length - shown.length;
+                return `${shown.map(renderBusinessRow).join('')}${more > 0 ? `<div class=\"text-[9px] font-mono text-ops-light/40 px-1\">+${more} more businesses</div>` : ''}`;
             })()
-            : list
-                .slice(0, 8)
-                .map((row) => {
+            : Array.isArray(groups)
+                ? (() => {
+                    const sections = [];
+                    const byKey = new Map();
+                    for (const g of groups) {
+                        const key = safeText(g?.businessKey) || safeText(g?.businessLabel) || 'business';
+                        if (!byKey.has(key)) {
+                            const label = safeText(g?.businessLabel) || safeText(g?.businessKey) || 'Business';
+                            const sec = { key, label, rows: [] };
+                            byKey.set(key, sec);
+                            sections.push(sec);
+                        }
+                        byKey.get(key).rows.push(g);
+                    }
+
+                    return sections
+                        .map((sec) => {
+                            const total = sec.rows.reduce((sum, r) => sum + (Number(r?.count) || 0), 0);
+                            const shown = sec.rows.slice(0, 6);
+                            const more = sec.rows.length - shown.length;
+                            return `
+                                <div class="border border-ops-border rounded-lg bg-ops-bg/20 px-2.5 py-2">
+                                    <div class="flex items-center justify-between gap-2 mb-1">
+                                        <div class="text-[9px] font-mono uppercase tracking-widest text-ops-light/60 truncate">${escapeHtml(sec.label)}</div>
+                                        <div class="text-[10px] font-mono text-white">${total}</div>
+                                    </div>
+                                    <div class="space-y-1">
+                                        ${shown.map((r) => renderGroupRow(r, { showBusiness: false })).join('')}
+                                        ${more > 0 ? `<div class=\"text-[9px] font-mono text-ops-light/40 px-1\">+${more} more</div>` : ''}
+                                    </div>
+                                </div>
+                            `;
+                        })
+                        .join('');
+                })()
+                : list
+                    .slice(0, 6)
+                    .map((row) => {
                 const item = row;
                 const status = safeText(item?.status).trim() || 'New';
                 const sourceKey = normalizeInboxSourceKey(item?.source);
@@ -7102,7 +7358,11 @@ function renderDashboardCommandCenter(container, sidePort) {
     };
 
     radarBanner.innerHTML = makeRadarHtml({ items: inboxNew, groups: null });
-    sideWrap.appendChild(radarBanner);
+        const showCount = Array.isArray(businessGroups)
+            ? businessGroups.reduce((sum, g) => sum + (Number(g?.count) || 0), 0)
+            : (Array.isArray(groups)
+                ? groups.reduce((sum, g) => sum + (Number(g?.count) || 0), 0)
+                : list.length);
 
     setTimeout(async () => {
         try {
@@ -7777,9 +8037,24 @@ function renderProjectView(container) {
         };
 
         if (tab === 'details') {
+            const humans = getHumanTeamMembers();
+            const ownerOptions = [''].concat(humans.map((m) => safeText(m?.name).trim()).filter(Boolean));
+            const currentOwner = getProjectOwnerName(project);
+            const ownerOptionsHtml = ownerOptions.map((name) => {
+                const label = name ? name : 'Unassigned';
+                const selected = (name ? name : '') === (currentOwner ? currentOwner : '') ? 'selected' : '';
+                return `<option value="${escapeHtml(name)}" ${selected}>${escapeHtml(label)}</option>`;
+            }).join('');
+
             const el = document.createElement('div');
             el.className = 'space-y-3';
             el.innerHTML = `
+                <div>
+                    <div class="text-zinc-500 text-xxs font-mono uppercase tracking-widest mb-1">Assigned To</div>
+                    <select id="proj-owner" class="w-full bg-zinc-950/40 border border-zinc-800 rounded px-3 py-2 text-xs font-mono text-zinc-200">
+                        ${ownerOptionsHtml}
+                    </select>
+                </div>
                 <div class="grid grid-cols-2 gap-2">
                     <div>
                         <div class="text-zinc-500 text-xxs font-mono uppercase tracking-widest mb-1">Due Date</div>
@@ -7827,6 +8102,7 @@ function renderProjectView(container) {
                 saveDetailsBtn.onclick = async () => {
                     saveDetailsBtn.disabled = true;
                     try {
+                        const owner = safeText(el.querySelector('#proj-owner')?.value).trim();
                         const dueDate = safeText(el.querySelector('#proj-due')?.value).trim();
                         const status = safeText(el.querySelector('#proj-status')?.value).trim();
                         const projectValue = safeText(el.querySelector('#proj-value')?.value).trim();
@@ -7834,7 +8110,7 @@ function renderProjectView(container) {
                         const accountManagerEmail = safeText(el.querySelector('#proj-am-email')?.value).trim();
                         const clientName = safeText(el.querySelector('#proj-client-name')?.value).trim();
                         const clientPhone = safeText(el.querySelector('#proj-client-phone')?.value).trim();
-                        await saveProjectPatch(project.id, { dueDate, status, projectValue, accountManagerName, accountManagerEmail, clientName, clientPhone });
+                        await saveProjectPatch(project.id, { owner, dueDate, status, projectValue, accountManagerName, accountManagerEmail, clientName, clientPhone });
                         alert('Saved.');
                         renderNav();
                         renderMain();

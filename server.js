@@ -1259,7 +1259,63 @@ function getStringAtPath(obj, pathExpr) {
     if (!cur || typeof cur !== 'object') return '';
     cur = cur[p];
   }
-  return typeof cur === 'string' ? cur : cur === undefined || cur === null ? '' : String(cur);
+  return valueToLooseText(cur);
+}
+
+function valueToLooseText(value, { depth = 0, maxDepth = 4 } = {}) {
+  if (value === undefined || value === null) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+
+  if (Array.isArray(value)) {
+    if (depth >= maxDepth) return '';
+    const parts = value
+      .map((v) => valueToLooseText(v, { depth: depth + 1, maxDepth }))
+      .map((s) => String(s || '').trim())
+      .filter(Boolean);
+    if (!parts.length) return '';
+    // Prefer newline separation for multi-line human notes.
+    return parts.join('\n');
+  }
+
+  if (typeof value === 'object') {
+    const v = value;
+
+    // Common Airtable shapes: collaborator, attachment, linked record, rich-ish objects.
+    const directKeys = ['text', 'value', 'name', 'title', 'summary', 'content', 'body', 'message', 'description', 'notes'];
+    for (const k of directKeys) {
+      if (typeof v?.[k] === 'string' && v[k].trim()) return v[k];
+    }
+
+    if (typeof v?.displayName === 'string' && v.displayName.trim()) return v.displayName;
+    if (typeof v?.label === 'string' && v.label.trim()) return v.label;
+
+    const email = typeof v?.email === 'string' ? v.email.trim() : '';
+    const name = typeof v?.name === 'string' ? v.name.trim() : '';
+    if (email) return name ? `${name} <${email}>` : email;
+
+    const url = typeof v?.url === 'string' ? v.url.trim() : '';
+    if (url) return url;
+
+    // If it's a wrapper object with a single property, unwrap it.
+    if (depth < maxDepth) {
+      const entries = Object.entries(v);
+      if (entries.length === 1) {
+        return valueToLooseText(entries[0][1], { depth: depth + 1, maxDepth });
+      }
+    }
+
+    // Last resort: tiny JSON snapshot (avoid huge blobs).
+    try {
+      const json = JSON.stringify(v);
+      if (typeof json === 'string' && json.length <= 400) return json;
+    } catch {
+      // ignore
+    }
+    return '';
+  }
+
+  return '';
 }
 
 function findFirstStringByKeyDeep(root, keyNames, maxDepth = 6) {
@@ -1284,7 +1340,7 @@ function findFirstStringByKeyDeep(root, keyNames, maxDepth = 6) {
     for (const [key, rawVal] of Object.entries(value)) {
       const keyNorm = String(key || '').toLowerCase();
       if (wanted.has(keyNorm)) {
-        const s = typeof rawVal === 'string' ? rawVal.trim() : rawVal === undefined || rawVal === null ? '' : String(rawVal).trim();
+        const s = valueToLooseText(rawVal).trim();
         if (s) return s;
       }
       if (depth < maxDepth && rawVal && typeof rawVal === 'object') {
@@ -2929,6 +2985,7 @@ function normalizeProject(input) {
   const importance = safeEnum(input.importance, ['High', 'Medium', 'Low'], 'Medium');
   const risk = safeEnum(input.risk, ['High', 'Medium', 'Low', 'None'], 'None');
   const agentBrief = typeof input.agentBrief === 'string' ? input.agentBrief.trim() : '';
+  const owner = typeof input.owner === 'string' ? input.owner.trim().slice(0, 80) : '';
 
   return {
     name,
@@ -2949,6 +3006,7 @@ function normalizeProject(input) {
     importance,
     risk,
     agentBrief,
+    owner,
   };
 }
 
@@ -4464,7 +4522,17 @@ async function runAirtableRevisionRequestsSync({ businessKey, limit = 200, windo
         const exists = existing.some((n) => String(n?.id || '') === noteId);
         if (exists) return;
 
-        nextProjectNoteEntries = { ...(nextProjectNoteEntries || {}), [project.id]: [note, ...existing] };
+        const legacyPrefix = `airtable:rev:${recordId}:rev-summary:`;
+        const cleaned = existing.filter((n) => {
+          const id = String(n?.id || '');
+          if (!id.startsWith(legacyPrefix)) return true;
+          const c = String(n?.content || '').trim();
+          if (!c) return false;
+          if (c.includes('[object Object]')) return false;
+          return true;
+        });
+
+        nextProjectNoteEntries = { ...(nextProjectNoteEntries || {}), [project.id]: [note, ...cleaned] };
         notesAppended++;
         didMutate = true;
       };
@@ -5893,6 +5961,7 @@ app.get('/api/inbox/radar', async (req, res) => {
     const businesses = Array.isArray(cfg.businesses) ? cfg.businesses : [];
 
     const all = [];
+    const businessGroupsByKey = new Map();
     for (const b of businesses) {
       const bizKey = normalizeBusinessKey(b?.key || '');
       const bizName = typeof b?.name === 'string' ? b.name.trim() : '';
@@ -5908,12 +5977,41 @@ app.get('/api/inbox/radar', async (req, res) => {
         const itStatus = String(it.status || '').trim();
         if (statusLower && itStatus.toLowerCase() !== statusLower) continue;
         const pid = String(it.projectId || '').trim();
-        all.push({
+        const normalized = {
           ...it,
           businessKey: typeof it.businessKey === 'string' && it.businessKey.trim() ? it.businessKey.trim() : bizKey,
           businessLabel: typeof it.businessLabel === 'string' && it.businessLabel.trim() ? it.businessLabel.trim() : (bizName || bizKey),
           projectName: String(it.projectName || '').trim() || (pid ? (projectsById.get(pid) || '') : ''),
-        });
+        };
+        all.push(normalized);
+
+        // Aggregate at-a-glance totals by business.
+        const bKey = String(normalized.businessKey || '').trim() || bizKey;
+        const bLabel = String(normalized.businessLabel || '').trim() || (bizName || bizKey);
+        const t = typeof normalized?.updatedAt === 'string' && normalized.updatedAt.trim()
+          ? normalized.updatedAt
+          : (typeof normalized?.createdAt === 'string' ? normalized.createdAt : '');
+        const ms = Number.isFinite(Date.parse(t)) ? Date.parse(t) : 0;
+        const preview = previewTextServer(normalized?.text, 160);
+        const existingBiz = businessGroupsByKey.get(bKey);
+        if (!existingBiz) {
+          businessGroupsByKey.set(bKey, {
+            businessKey: bKey,
+            businessLabel: bLabel,
+            count: 1,
+            latestAt: t,
+            latestMs: ms,
+            sample: preview ? [preview] : [],
+            summary: '',
+          });
+        } else {
+          existingBiz.count += 1;
+          if (ms > existingBiz.latestMs) {
+            existingBiz.latestMs = ms;
+            existingBiz.latestAt = t;
+          }
+          if (preview && existingBiz.sample.length < 3) existingBiz.sample.push(preview);
+        }
       }
     }
 
@@ -5980,7 +6078,13 @@ app.get('/api/inbox/radar', async (req, res) => {
 
     groups.sort((a, b) => (b.latestMs - a.latestMs) || (b.count - a.count));
 
-    res.json({ ok: true, status: status || 'New', limit, items, groups });
+    const businessGroups = Array.from(businessGroupsByKey.values()).map((g) => ({
+      ...g,
+      summary: summarizeRadarGroupText(g.sample),
+    }));
+    businessGroups.sort((a, b) => (b.latestMs - a.latestMs) || (b.count - a.count));
+
+    res.json({ ok: true, status: status || 'New', limit, items, groups, businessGroups });
   } catch (err) {
     res.status(500).json({ ok: false, error: err?.message || 'Failed to load radar' });
   }
@@ -7890,6 +7994,7 @@ async function aiAgentAction(message, store, projectId = null) {
             properties: {
               name: { type: "string", description: "Name of the project" },
               type: { type: "string", enum: ["Build", "Rebuild", "Revision", "Workflow", "Cleanup", "Other"] },
+              owner: { type: "string", description: "Optional assignee / owner name (team member)" },
               dueDate: { type: "string", description: "YYYY-MM-DD" },
               status: { type: "string", enum: ["Active", "On Hold", "Done", "Archived"] },
               accountManagerName: { type: "string" },
@@ -7933,6 +8038,7 @@ async function aiAgentAction(message, store, projectId = null) {
                 properties: {
                   name: { type: "string" },
                   type: { type: "string", enum: ["Build", "Rebuild", "Revision", "Workflow", "Cleanup", "Other"] },
+                  owner: { type: "string", description: "Optional assignee / owner name (team member)" },
                   dueDate: { type: "string", description: "YYYY-MM-DD" },
                   status: { type: "string", enum: ["Active", "On Hold", "Done", "Archived"] },
                   accountManagerName: { type: "string" },
