@@ -5504,8 +5504,11 @@ app.post('/api/integrations/slack/events', async (req, res) => {
     slackRuntime.lastTeamId = teamId;
     slackRuntime.lastEventType = evType || 'event_callback';
 
-    // Only capture human message posts.
-    if (evType !== 'message' || subtype || isBot) {
+    // Capture human posts and mentions.
+    // - message: channel/DM messages (requires Slack event subscriptions)
+    // - app_mention: mentions of the app (common configuration when people expect "notifications")
+    const captureable = (evType === 'message' || evType === 'app_mention');
+    if (!captureable || subtype || isBot) {
       slackRuntime.lastAcceptedAt = nowIso();
       res.json({ ok: true });
       return;
@@ -7571,12 +7574,20 @@ app.post('/api/ai/agent', async (req, res) => {
               updatedAt: ts
           };
           
-          const newTasks = (Array.isArray(action.tasks) ? action.tasks : []).map(t => ({
+          const newTasks = (Array.isArray(action.tasks) ? action.tasks : [])
+            .map((t) => ({
+              title: valueToLooseText(t?.title).trim(),
+              priority: Number(t?.priority),
+              dueDate: typeof t?.dueDate === 'string' ? safeYmd(t.dueDate) : '',
+            }))
+            .filter((t) => t.title)
+            .map(t => ({
               id: makeId(),
               title: t.title,
               project: newProject.name,
               status: 'Next',
-              priority: t.priority || 2,
+              priority: [1, 2, 3].includes(Number(t.priority)) ? Number(t.priority) : 2,
+              dueDate: t.dueDate,
               createdAt: ts,
               updatedAt: ts
           }));
@@ -7602,12 +7613,20 @@ app.post('/api/ai/agent', async (req, res) => {
               return;
           }
           
-          const newTasks = (Array.isArray(action.tasks) ? action.tasks : []).map(t => ({
+          const newTasks = (Array.isArray(action.tasks) ? action.tasks : [])
+            .map((t) => ({
+              title: valueToLooseText(t?.title).trim(),
+              priority: Number(t?.priority),
+              dueDate: typeof t?.dueDate === 'string' ? safeYmd(t.dueDate) : '',
+            }))
+            .filter((t) => t.title)
+            .map(t => ({
               id: makeId(),
               title: t.title,
               project: project.name,
               status: 'Next',
-              priority: t.priority || 2,
+              priority: [1, 2, 3].includes(Number(t.priority)) ? Number(t.priority) : 2,
+              dueDate: t.dueDate,
               createdAt: ts,
               updatedAt: ts
           }));
@@ -7631,6 +7650,156 @@ app.post('/api/ai/agent', async (req, res) => {
     }
   });
   
+  await writeLock;
+});
+
+app.post('/api/dashboard/ai-previews', async (req, res) => {
+  const taskIds = Array.isArray(req.body?.taskIds) ? req.body.taskIds.map((v) => String(v || '').trim()).filter(Boolean).slice(0, 24) : [];
+  const inboxIds = Array.isArray(req.body?.inboxIds) ? req.body.inboxIds.map((v) => String(v || '').trim()).filter(Boolean).slice(0, 24) : [];
+
+  writeLock = writeLock.then(async () => {
+    const store = await readStore();
+    const tasks = Array.isArray(store.tasks) ? store.tasks : [];
+    const inbox = Array.isArray(store.inboxItems) ? store.inboxItems : [];
+
+    const pickedTasks = taskIds
+      .map((id) => tasks.find((t) => String(t?.id || '') === id))
+      .filter(Boolean)
+      .map((t) => ({
+        id: String(t.id),
+        title: String(t.title || ''),
+        project: String(t.project || ''),
+        priority: Number(t.priority ?? 2),
+        dueDate: String(t.dueDate || ''),
+        status: String(t.status || ''),
+      }));
+
+    const pickedInbox = inboxIds
+      .map((id) => inbox.find((x) => String(x?.id || '') === id))
+      .filter(Boolean)
+      .map((x) => ({
+        id: String(x.id),
+        source: String(x.source || ''),
+        status: String(x.status || ''),
+        projectId: String(x.projectId || ''),
+        projectName: String(x.projectName || ''),
+        businessLabel: String(x.businessLabel || ''),
+        channel: String(x.channel || ''),
+        sender: String(x.sender || ''),
+        text: String(x.text || '').slice(0, 1400),
+        createdAt: String(x.createdAt || ''),
+      }));
+
+    const heuristic = () => {
+      const isBad = (s) => {
+        const v = String(s || '').trim().toLowerCase();
+        return !v || v === '[object object]' || v === 'item' || v === 'inbox item';
+      };
+      const trimOneLine = (s, max = 120) => {
+        const v = String(s || '').replace(/\s+/g, ' ').trim();
+        if (!v) return '';
+        if (v.length <= max) return v;
+        return v.slice(0, Math.max(0, max - 1)).trimEnd() + '…';
+      };
+
+      const taskMap = {};
+      for (const t of pickedTasks) {
+        const fallback = isBad(t.title)
+          ? (t.project ? `Follow up: ${trimOneLine(t.project, 60)}` : 'Next action')
+          : trimOneLine(t.title, 80);
+        const meta = [t.project && !isBad(t.project) ? trimOneLine(t.project, 60) : '', t.dueDate ? `due ${t.dueDate}` : '']
+          .filter(Boolean)
+          .join(' • ');
+        taskMap[t.id] = { title: fallback, summary: meta };
+      }
+
+      const inboxMap = {};
+      for (const x of pickedInbox) {
+        const snippet = trimOneLine(x.text, 140);
+        const title = snippet || (x.source ? `${x.source} message` : 'Inbox item');
+        const where = x.projectName ? trimOneLine(x.projectName, 60) : 'Unassigned';
+        const from = x.sender ? trimOneLine(x.sender, 40) : (x.channel ? `#${trimOneLine(x.channel, 30)}` : '');
+        const summary = [where, from].filter(Boolean).join(' • ');
+        inboxMap[x.id] = { title, summary };
+      }
+
+      return { ok: true, ai: false, tasks: taskMap, inbox: inboxMap };
+    };
+
+    const { apiKey, model } = await getAiConfig();
+    if (!apiKey) {
+      res.json(heuristic());
+      return;
+    }
+
+    const system =
+      'You rewrite dashboard items into meaningful, human-readable one-liners. ' +
+      'Return ONLY strict JSON. No markdown. No extra keys.';
+
+    const user = {
+      tasks: pickedTasks,
+      inbox: pickedInbox,
+      instructions: {
+        tasks: {
+          title: 'Short action title (3-8 words), imperative where possible',
+          summary: 'One short clause with context (project / due date / status)',
+        },
+        inbox: {
+          title: 'Short title describing what the message is about (not just "Item")',
+          summary: 'One short clause: who/where + what needs doing; mention Unassigned if no projectName',
+        },
+        rules: [
+          'Never output "[object Object]".',
+          'Avoid repeating words like "Inbox:" or "Message:".',
+          'If unsure, make a reasonable guess from text.',
+          'Keep each title under 60 chars, summary under 110 chars.',
+        ],
+      },
+      schema: {
+        tasks: { '<taskId>': { title: 'string', summary: 'string' } },
+        inbox: { '<inboxId>': { title: 'string', summary: 'string' } },
+      },
+    };
+
+    try {
+      const { resp, data } = await fetchJsonWithTimeout('https://api.openai.com/v1/chat/completions', {
+        timeoutMs: 20_000,
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: 'system', content: system },
+            { role: 'user', content: JSON.stringify(user).slice(0, 24000) },
+          ],
+        }),
+      });
+
+      if (!resp.ok) {
+        res.json(heuristic());
+        return;
+      }
+
+      const content = String(data?.choices?.[0]?.message?.content || '').trim();
+      const clean = content.replace(/```json/g, '').replace(/```/g, '').trim();
+      const parsed = tryParseJson(clean);
+      if (!parsed || typeof parsed !== 'object') {
+        res.json(heuristic());
+        return;
+      }
+
+      const outTasks = parsed.tasks && typeof parsed.tasks === 'object' ? parsed.tasks : {};
+      const outInbox = parsed.inbox && typeof parsed.inbox === 'object' ? parsed.inbox : {};
+
+      res.json({ ok: true, ai: true, tasks: outTasks, inbox: outInbox });
+    } catch {
+      res.json(heuristic());
+    }
+  });
+
   await writeLock;
 });
 

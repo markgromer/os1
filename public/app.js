@@ -28,6 +28,7 @@ const state = {
     bulkProjectDeleteSelectedById: {},
     dashboardCalls: { loading: false, fetchedAt: 0, error: '', events: [] },
     dashboardGhl: { loading: false, fetchedAt: 0, error: '', snapshot: null },
+    dashboardAiPreviews: { loading: false, fetchedAt: 0, error: '', ai: false, tasks: {}, inbox: {} },
 
     chatHistory: [],
     globalChatHistory: [],
@@ -1504,6 +1505,40 @@ async function refreshDashboardCalls({ force = false } = {}) {
         state.dashboardCalls = { ...state.dashboardCalls, loading: false, fetchedAt: Date.now(), error: e?.message || 'Failed to load calls' };
     }
     renderMain();
+}
+
+async function refreshDashboardAiPreviews({ taskIds = [], inboxIds = [], force = false } = {}) {
+    if (state.dashboardAiPreviews?.loading) return;
+
+    const tIds = Array.isArray(taskIds) ? taskIds.map((v) => safeText(v).trim()).filter(Boolean).slice(0, 24) : [];
+    const iIds = Array.isArray(inboxIds) ? inboxIds.map((v) => safeText(v).trim()).filter(Boolean).slice(0, 24) : [];
+    if (!tIds.length && !iIds.length) return;
+
+    const ageMs = Date.now() - (Number(state.dashboardAiPreviews?.fetchedAt) || 0);
+    if (!force && ageMs < 60_000) return;
+
+    state.dashboardAiPreviews = { ...(state.dashboardAiPreviews || {}), loading: true, error: '' };
+    try {
+        const data = await apiJson('/api/dashboard/ai-previews', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ taskIds: tIds, inboxIds: iIds }),
+        });
+        const tasks = (data?.tasks && typeof data.tasks === 'object') ? data.tasks : {};
+        const inbox = (data?.inbox && typeof data.inbox === 'object') ? data.inbox : {};
+        state.dashboardAiPreviews = {
+            loading: false,
+            fetchedAt: Date.now(),
+            error: '',
+            ai: Boolean(data?.ai),
+            tasks,
+            inbox,
+        };
+    } catch (e) {
+        state.dashboardAiPreviews = { ...(state.dashboardAiPreviews || {}), loading: false, fetchedAt: Date.now(), error: e?.message || 'Failed to load AI previews' };
+    }
+
+    if (state.currentView === 'dashboard') renderMain();
 }
 
 async function refreshDashboardGhl({ force = false } = {}) {
@@ -4228,6 +4263,8 @@ function renderSettings(container) {
     wrap.appendChild(ga4);
 
     // Slack
+    const slackOrigin = (typeof window !== 'undefined' && window.location && window.location.origin) ? window.location.origin : '';
+    const slackAbs = (p) => slackOrigin ? `${slackOrigin}${p}` : p;
     const slack = section('Slack', 'Ingest Slack messages into Inbox via Slack Events API (signature verified).');
     const slackBody = slack.querySelector('[data-slot="body"]');
     slackBody.innerHTML = `
@@ -4241,7 +4278,7 @@ function renderSettings(container) {
             <div>
                 <label class="text-xs text-ops-light">Client Secret (OAuth)</label>
                 <input id="set-slack-client-secret" type="password" autocomplete="off" placeholder="(leave blank to keep existing)" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-sm" />
-                <div class="text-[11px] text-ops-light mt-1">Redirect URI: <span class="font-mono">/api/integrations/slack/oauth/callback</span></div>
+                <div class="text-[11px] text-ops-light mt-1">Redirect URI: <span class="font-mono">${escapeHtml(slackAbs('/api/integrations/slack/oauth/callback'))}</span></div>
             </div>
             <div>
                 <label class="text-xs text-ops-light">Bot Token (optional)</label>
@@ -4255,7 +4292,7 @@ function renderSettings(container) {
             </div>
             <div>
                 <label class="text-xs text-ops-light">Webhook</label>
-                <div class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-xs font-mono">POST /api/integrations/slack/events</div>
+                <div class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-xs font-mono">POST ${escapeHtml(slackAbs('/api/integrations/slack/events'))}</div>
                 <div class="text-[11px] text-ops-light mt-1">Slack headers: <span class="font-mono">X-Slack-Signature</span>, <span class="font-mono">X-Slack-Request-Timestamp</span></div>
             </div>
             <div>
@@ -4271,6 +4308,7 @@ function renderSettings(container) {
             <button id="btn-diag-slack" class="px-3 py-2 rounded bg-ops-bg border border-ops-border text-ops-light text-xs hover:text-white">Diagnostics</button>
             <button id="btn-test-slack" class="px-3 py-2 rounded bg-emerald-600 text-white text-xs hover:bg-emerald-500">Send test</button>
         </div>
+        <div class="text-[11px] text-ops-light mt-2">Inbox destination: current business <span class="font-mono">${escapeHtml(String(state.activeBusinessKey || 'personal'))}</span> • Captures: <span class="font-mono">message</span> + <span class="font-mono">app_mention</span> (no bots/subtypes).</div>
         <div id="slack-test-output" class="mt-3 hidden bg-ops-bg border border-ops-border rounded px-3 py-2 text-xs text-ops-light font-mono whitespace-pre-wrap"></div>
     `;
     wrap.appendChild(slack);
@@ -6486,6 +6524,8 @@ function renderDashboard(container, sidePort) {
     const inboxItems = Array.isArray(state.inboxItems) ? state.inboxItems : [];
     const inboxNew = inboxItems.filter((x) => String(x?.status || '').trim().toLowerCase() === 'new');
     const inboxNewCount = inboxNew.length;
+    const inboxUnassignedNew = inboxNew.filter((x) => !safeText(x?.projectId).trim());
+    const inboxUnassignedNewCount = inboxUnassignedNew.length;
     const teamMembers = Array.isArray(state.team) ? state.team : [];
 
     const callsConnected = !!state.settings?.googleConnected;
@@ -6502,6 +6542,28 @@ function renderDashboard(container, sidePort) {
     const outcomes = safeText(state.settings?.todayOutcomes);
     const allTasks = Array.isArray(state.tasks) ? state.tasks : [];
     const today = ymdToday();
+
+    const aiPrev = (state.dashboardAiPreviews && typeof state.dashboardAiPreviews === 'object') ? state.dashboardAiPreviews : {};
+    const aiTaskMap = (aiPrev.tasks && typeof aiPrev.tasks === 'object') ? aiPrev.tasks : {};
+    const aiInboxMap = (aiPrev.inbox && typeof aiPrev.inbox === 'object') ? aiPrev.inbox : {};
+
+    const isBadDashText = (s) => {
+        const v = safeText(s).trim().toLowerCase();
+        return !v || v === '[object object]' || v === 'item' || v === 'inbox item';
+    };
+
+    // Best-effort AI previews for what we actually show on the dashboard.
+    setTimeout(() => {
+        try {
+            refreshDashboardAiPreviews({
+                taskIds: nextActions.map((t) => safeText(t?.id)).filter(Boolean).slice(0, 10),
+                inboxIds: inboxNew.map((x) => safeText(x?.id)).filter(Boolean).slice(0, 16),
+                force: false,
+            });
+        } catch {
+            // ignore
+        }
+    }, 0);
 
     // Overdue
     const overdueTasks = allTasks.filter((t) => { if (isDoneTask(t)) return false; const d = safeText(t?.dueDate).trim(); return d && d < today; });
@@ -6521,15 +6583,48 @@ function renderDashboard(container, sidePort) {
 
     // Activity feed
     const recentActivity = [];
-    for (const t of allTasks) { const u = safeText(t?.updatedAt||t?.completedAt||t?.createdAt).trim(); if (!u) continue; const d = new Date(u); if (Number.isNaN(d.getTime())) continue; recentActivity.push({ time: d, text: isDoneTask(t) ? `Completed "${safeText(t?.title)}"` : `Updated "${safeText(t?.title)}"`, icon: isDoneTask(t) ? 'fa-check-circle text-emerald-400' : 'fa-pen text-blue-400' }); }
-    for (const item of inboxItems.slice(0,20)) { const c = safeText(item?.createdAt).trim(); if (!c) continue; const d = new Date(c); if (Number.isNaN(d.getTime())) continue; recentActivity.push({ time: d, text: `Inbox: "${safeText(item?.title||item?.subject)}"`, icon: 'fa-inbox text-amber-400' }); }
+    for (const t of allTasks) {
+        const u = safeText(t?.updatedAt || t?.completedAt || t?.createdAt).trim();
+        if (!u) continue;
+        const d = new Date(u);
+        if (Number.isNaN(d.getTime())) continue;
+        recentActivity.push({
+            kind: 'task',
+            id: safeText(t?.id),
+            time: d,
+            verb: isDoneTask(t) ? 'Completed' : 'Updated',
+            rawTitle: safeText(t?.title),
+            icon: isDoneTask(t) ? 'fa-check-circle text-emerald-400' : 'fa-pen text-blue-400',
+        });
+    }
+    for (const item of inboxItems.slice(0, 20)) {
+        const c = safeText(item?.createdAt).trim();
+        if (!c) continue;
+        const d = new Date(c);
+        if (Number.isNaN(d.getTime())) continue;
+        recentActivity.push({
+            kind: 'inbox',
+            id: safeText(item?.id),
+            source: normalizeInboxSourceKey(item?.source),
+            time: d,
+            rawTitle: safeText(item?.title || item?.subject),
+            icon: 'fa-inbox text-amber-400',
+        });
+    }
     recentActivity.sort((a,b) => b.time - a.time);
 
     // MARTY insights (multi-line, Jarvis-style)
     const martyInsights = [];
     if (totalOverdue > 0) martyInsights.push({ icon: 'fa-triangle-exclamation text-red-400', text: `${totalOverdue} overdue item${totalOverdue>1?'s':''}. I\u2019d recommend triaging those first.` });
     const topAction = nextActions[0] || null;
-    if (topAction) { const pr = Number(topAction?.priority)||3; martyInsights.push({ icon: 'fa-bullseye text-blue-400', text: `Top priority: "${safeText(topAction?.title)}" (P${pr}). Focus there next.` }); }
+    if (topAction) {
+        const pr = Number(topAction?.priority) || 3;
+        const id = safeText(topAction?.id).trim();
+        const ai = id ? aiTaskMap[id] : null;
+        let title = safeText(ai?.title || topAction?.title).trim();
+        if (isBadDashText(title)) title = safeText(topAction?.project).trim() ? `Follow up: ${safeText(topAction?.project).trim()}` : 'Top priority task';
+        martyInsights.push({ icon: 'fa-bullseye text-blue-400', text: `Top priority: "${title}" (P${pr}). Focus there next.` });
+    }
     if (dueThisWeek > 0) martyInsights.push({ icon: 'fa-clock text-amber-400', text: `${dueThisWeek} project${dueThisWeek>1?'s':''} due this week \u2014 stay ahead.` });
     if (inboxNewCount > 3) martyInsights.push({ icon: 'fa-inbox text-purple-400', text: `${inboxNewCount} inbox items accumulating. Consider a quick triage pass.` });
     if (totalDoneWeek > 0) martyInsights.push({ icon: 'fa-chart-line text-emerald-400', text: `${totalDoneWeek} tasks completed this week. ${totalDoneWeek >= 5 ? 'Strong momentum.' : 'Keep it going.'}` });
@@ -6576,11 +6671,12 @@ function renderDashboard(container, sidePort) {
             <div class="text-[10px] font-mono text-ops-light/60 mt-0.5">${escapeHtml(dateStr)}</div>
         </div>
         <div class="flex flex-wrap items-center gap-1.5">
-            ${totalOverdue ? `<span class="stat-pill" style="border-color:rgba(239,68,68,0.3);color:#fca5a5"><i class="fa-solid fa-triangle-exclamation text-[8px]"></i>${totalOverdue} overdue</span>` : ''}
-            ${dueThisWeek ? `<span class="stat-pill"><i class="fa-solid fa-fire text-[8px] text-amber-400"></i>${dueThisWeek} this week</span>` : ''}
+            ${totalOverdue ? `<span class="stat-pill stat-pill--danger"><i class="fa-solid fa-triangle-exclamation text-[8px]"></i>${totalOverdue} overdue</span>` : ''}
+            ${inboxUnassignedNewCount ? `<span class="stat-pill stat-pill--danger"><i class="fa-solid fa-link-slash text-[8px]"></i>${inboxUnassignedNewCount} unassigned</span>` : ''}
+            ${dueThisWeek ? `<span class="stat-pill stat-pill--warning"><i class="fa-solid fa-fire text-[8px]"></i>${dueThisWeek} this week</span>` : ''}
             ${calls.length ? `<span class="stat-pill"><i class="fa-solid fa-video text-[8px] text-blue-400"></i>${calls.length} call${calls.length>1?'s':''}</span>` : ''}
-            <span class="stat-pill"><i class="fa-solid fa-inbox text-[8px] text-purple-400"></i>${inboxNewCount} inbox</span>
-            <span class="stat-pill"><i class="fa-solid fa-check text-[8px] text-emerald-400"></i>${totalDoneWeek} done</span>
+            <span class="stat-pill ${inboxNewCount ? 'stat-pill--accent' : 'stat-pill--muted'}"><i class="fa-solid fa-inbox text-[8px] text-purple-400"></i>${inboxNewCount} inbox</span>
+            <span class="stat-pill ${totalDoneWeek ? 'stat-pill--success' : 'stat-pill--muted'}"><i class="fa-solid fa-check text-[8px] text-emerald-400"></i>${totalDoneWeek} done</span>
             <span class="stat-pill cursor-pointer hover:text-white" id="dash-shortcuts-btn" title="Keyboard Shortcuts"><i class="fa-solid fa-keyboard text-[8px]"></i>?</span>
         </div>
     `;
@@ -6641,7 +6737,7 @@ function renderDashboard(container, sidePort) {
 
     // ═══ INBOX RADAR (compact banner) ════════════════════════════════
     const radarBanner = document.createElement('div');
-    radarBanner.className = 'dash-card';
+    radarBanner.className = `dash-card${inboxUnassignedNewCount ? ' dash-card--danger' : (inboxNewCount ? ' dash-card--accent' : '')}`;
     radarBanner.dataset.cardId = 'radar';
     const formatInboxStamp = (iso) => {
         const s = safeText(iso).trim();
@@ -6872,14 +6968,14 @@ function renderDashboard(container, sidePort) {
     const mkProjBtn = (p, color) => `<button type="button" class="dash-project-btn w-full text-left px-2.5 py-1.5 rounded border border-ops-border bg-ops-bg/40 hover:bg-ops-surface/60 transition-colors" data-pid="${escapeHtml(safeText(p?.id))}"><div class="text-[11px] text-white truncate">${escapeHtml(safeText(p?.name)||'Untitled')}</div><div class="text-[9px] font-mono ${color}">${escapeHtml(safeText(p?.dueDate)||'')}</div></button>`;
     const dtPreview = dueTodayItems.length ? `<div class="space-y-1">${dueTodayItems.slice(0,2).map(p=>mkProjBtn(p,'text-red-400/70')).join('')}</div>` : `<div class="text-[10px] text-ops-light/50">Nothing due today.</div>`;
     const dtBody = dueTodayItems.length > 2 ? `<div class="space-y-1">${dueTodayItems.slice(2).map(p=>mkProjBtn(p,'text-red-400/70')).join('')}</div>` : '';
-    const dueTodayCard = makeCard('due-today', 'fa-fire', 'text-red-400', 'Due Today', `<span class="text-sm font-semibold text-white">${dueTodayItems.length}</span>`, dtPreview, dtBody);
+    const dueTodayCard = makeCard('due-today', 'fa-fire', 'text-red-400', 'Due Today', `<span class="text-sm font-semibold text-white">${dueTodayItems.length}</span>`, dtPreview, dtBody, { extraClass: dueTodayItems.length ? 'dash-card--danger' : '' });
     urgentRow.appendChild(dueTodayCard);
 
     // Due This Week card
     const dueWeekItems = [...(Array.isArray(buckets.tomorrow)?buckets.tomorrow:[]), ...(Array.isArray(buckets.thisWeek)?buckets.thisWeek:[])];
     const dwPreview = dueWeekItems.length ? `<div class="space-y-1">${dueWeekItems.slice(0,2).map(p=>mkProjBtn(p,'text-amber-400/70')).join('')}</div>` : `<div class="text-[10px] text-ops-light/50">Nothing else this week.</div>`;
     const dwBody = dueWeekItems.length > 2 ? `<div class="space-y-1">${dueWeekItems.slice(2).map(p=>mkProjBtn(p,'text-amber-400/70')).join('')}</div>` : '';
-    const dueWeekCard = makeCard('due-week', 'fa-calendar-week', 'text-amber-400', 'Due This Week', `<span class="text-sm font-semibold text-white">${dueWeekItems.length}</span>`, dwPreview, dwBody);
+    const dueWeekCard = makeCard('due-week', 'fa-calendar-week', 'text-amber-400', 'Due This Week', `<span class="text-sm font-semibold text-white">${dueWeekItems.length}</span>`, dwPreview, dwBody, { extraClass: dueWeekItems.length ? 'dash-card--warning' : '' });
     urgentRow.appendChild(dueWeekCard);
     wrap.appendChild(urgentRow);
 
@@ -6917,17 +7013,31 @@ function renderDashboard(container, sidePort) {
 
     // ═══ TODAY'S FOCUS (outcomes + next actions) ═════════════════════
     const nextActionsHtml = nextActions.length
-        ? nextActions.slice(0,3).map((t) => {
-            const pr = Number(t?.priority)||3;
-            const prColor = pr===1?'text-red-400':pr===2?'text-amber-400':'text-ops-light/50';
-            const project = safeText(t?.project)||'';
-            return `<div class="flex items-center gap-2 border border-ops-border rounded bg-ops-bg/40 px-2.5 py-1.5"><span class="${prColor} text-[9px] font-mono font-bold shrink-0">P${pr}</span><div class="min-w-0 flex-1"><div class="text-[11px] text-white truncate">${escapeHtml(safeText(t?.title)||'Untitled')}</div>${project?`<div class="text-[9px] font-mono text-ops-light/50 truncate">${escapeHtml(project)}</div>`:''}</div></div>`;
+        ? nextActions.slice(0, 3).map((t) => {
+            const pr = Number(t?.priority) || 3;
+            const prColor = pr === 1 ? 'text-red-400' : pr === 2 ? 'text-amber-400' : 'text-ops-light/50';
+            const id = safeText(t?.id).trim();
+            const ai = id ? aiTaskMap[id] : null;
+            let title = safeText(ai?.title || t?.title).trim();
+            if (isBadDashText(title)) title = safeText(t?.project).trim() ? `Follow up: ${safeText(t?.project).trim()}` : 'Next action';
+            const summary = safeText(ai?.summary).trim();
+            const project = safeText(t?.project).trim();
+            const sub = summary || project;
+            return `<div class="flex items-center gap-2 border border-ops-border rounded bg-ops-bg/40 px-2.5 py-1.5"><span class="${prColor} text-[9px] font-mono font-bold shrink-0">P${pr}</span><div class="min-w-0 flex-1"><div class="text-[11px] text-white truncate">${escapeHtml(title)}</div>${sub ? `<div class="text-[9px] font-mono text-ops-light/60 truncate">${escapeHtml(sub)}</div>` : ''}</div></div>`;
         }).join('')
         : `<div class="text-[10px] text-ops-light/50">No next actions.</div>`;
-    const extraActions = nextActions.length > 3 ? nextActions.slice(3,10).map((t) => {
-        const pr = Number(t?.priority)||3; const prColor = pr===1?'text-red-400':pr===2?'text-amber-400':'text-ops-light/50';
-        return `<div class="flex items-center gap-2 border border-ops-border rounded bg-ops-bg/40 px-2.5 py-1.5"><span class="${prColor} text-[9px] font-mono font-bold shrink-0">P${pr}</span><div class="min-w-0 flex-1"><div class="text-[11px] text-white truncate">${escapeHtml(safeText(t?.title)||'Untitled')}</div></div></div>`;
-    }).join('') : '';
+    const extraActions = nextActions.length > 3
+        ? nextActions.slice(3, 10).map((t) => {
+            const pr = Number(t?.priority) || 3;
+            const prColor = pr === 1 ? 'text-red-400' : pr === 2 ? 'text-amber-400' : 'text-ops-light/50';
+            const id = safeText(t?.id).trim();
+            const ai = id ? aiTaskMap[id] : null;
+            let title = safeText(ai?.title || t?.title).trim();
+            if (isBadDashText(title)) title = safeText(t?.project).trim() ? `Follow up: ${safeText(t?.project).trim()}` : 'Next action';
+            const summary = safeText(ai?.summary).trim();
+            return `<div class="flex items-center gap-2 border border-ops-border rounded bg-ops-bg/40 px-2.5 py-1.5"><span class="${prColor} text-[9px] font-mono font-bold shrink-0">P${pr}</span><div class="min-w-0 flex-1"><div class="text-[11px] text-white truncate">${escapeHtml(title)}</div>${summary ? `<div class="text-[9px] font-mono text-ops-light/60 truncate">${escapeHtml(summary)}</div>` : ''}</div></div>`;
+        }).join('')
+        : '';
 
     const focusEl = document.createElement('div');
     focusEl.className = 'dash-card';
@@ -6969,20 +7079,67 @@ function renderDashboard(container, sidePort) {
     feedRow.className = 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2';
 
     // Activity
-    const actPreview = recentActivity.slice(0,3).map(a => { const ts = a.time.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}); return `<div class="flex items-start gap-1.5"><i class="fa-solid ${a.icon} text-[9px] mt-0.5 shrink-0"></i><div class="min-w-0"><div class="text-[10px] text-white truncate">${escapeHtml(a.text)}</div><div class="text-[8px] font-mono text-ops-light/40">${escapeHtml(ts)}</div></div></div>`; }).join('');
-    const actBody = recentActivity.length > 3 ? recentActivity.slice(3,10).map(a => { const ts = a.time.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}); return `<div class="flex items-start gap-1.5"><i class="fa-solid ${a.icon} text-[9px] mt-0.5 shrink-0"></i><div class="min-w-0"><div class="text-[10px] text-white truncate">${escapeHtml(a.text)}</div><div class="text-[8px] font-mono text-ops-light/40">${escapeHtml(ts)}</div></div></div>`; }).join('') : '';
+    const renderActivityLine = (a) => {
+        const ts = a.time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        let main = '';
+        let sub = '';
+
+        if (a.kind === 'task') {
+            const id = safeText(a?.id).trim();
+            const ai = id ? aiTaskMap[id] : null;
+            main = `${safeText(a.verb)}: ${safeText(ai?.title || a.rawTitle || 'Task')}`;
+            sub = safeText(ai?.summary).trim();
+        } else if (a.kind === 'inbox') {
+            const id = safeText(a?.id).trim();
+            const ai = id ? aiInboxMap[id] : null;
+            const src = safeText(a?.source).trim();
+            const meta = inboxSourceMeta(src);
+            const label = safeText(meta?.label).trim() || (src ? src.toUpperCase() : 'Inbox');
+            main = `${label}: ${safeText(ai?.title || a.rawTitle || 'Inbox item')}`;
+            sub = safeText(ai?.summary).trim();
+        } else {
+            main = safeText(a?.text || '');
+        }
+
+        return `<div class="flex items-start gap-1.5"><i class="fa-solid ${a.icon} text-[9px] mt-0.5 shrink-0"></i><div class="min-w-0"><div class="text-[10px] text-white truncate">${escapeHtml(main)}</div>${sub ? `<div class="text-[9px] font-mono text-ops-light/50 truncate">${escapeHtml(sub)}</div>` : ''}<div class="text-[8px] font-mono text-ops-light/40">${escapeHtml(ts)}</div></div></div>`;
+    };
+    const actPreview = recentActivity.slice(0, 3).map(renderActivityLine).join('');
+    const actBody = recentActivity.length > 3 ? recentActivity.slice(3, 10).map(renderActivityLine).join('') : '';
     const actCard = makeCard('activity', 'fa-clock-rotate-left', 'text-sky-400', 'Activity', '', `<div class="space-y-1.5">${actPreview || '<div class="text-[10px] text-ops-light/50">No recent activity.</div>'}</div>`, actBody ? `<div class="space-y-1.5">${actBody}</div>` : '');
     feedRow.appendChild(actCard);
 
     // Slack
-    const slackPreview = slackNew.length ? slackNew.slice(0,2).map(item => { const t = safeText(item?.title)||safeText(item?.subject)||'Slack'; const p = previewText(safeText(item?.content)||safeText(item?.text)||safeText(item?.body)||'',60); return `<div class="border border-ops-border rounded bg-ops-bg/40 px-2.5 py-1.5"><div class="text-[11px] text-white truncate">${escapeHtml(t)}</div>${p?`<div class="text-[9px] text-ops-light/60 truncate mt-0.5">${escapeHtml(p)}</div>`:''}</div>`; }).join('') : '<div class="text-[10px] text-ops-light/50">No Slack messages.</div>';
+    const slackPreview = slackNew.length ? slackNew.slice(0, 2).map(item => {
+        const id = safeText(item?.id).trim();
+        const ai = id ? aiInboxMap[id] : null;
+        let t = safeText(ai?.title || item?.title || item?.subject).trim();
+        if (isBadDashText(t)) {
+            const full = safeText(item?.content) || safeText(item?.text) || safeText(item?.body) || '';
+            t = previewText(full, 80) || 'Slack message';
+        }
+        const p = safeText(ai?.summary).trim() || previewText(safeText(item?.content) || safeText(item?.text) || safeText(item?.body) || '', 90);
+        return `<div class="border border-ops-border rounded bg-ops-bg/40 px-2.5 py-1.5"><div class="text-[11px] text-white truncate">${escapeHtml(t)}</div>${p ? `<div class="text-[9px] font-mono text-ops-light/60 truncate mt-0.5">${escapeHtml(p)}</div>` : ''}</div>`;
+    }).join('') : '<div class="text-[10px] text-ops-light/50">No Slack messages.</div>';
     const slackBody = slackNew.length > 2 ? slackNew.slice(2,6).map(item => { const t = safeText(item?.title)||'Slack'; return `<div class="border border-ops-border rounded bg-ops-bg/40 px-2.5 py-1.5"><div class="text-[11px] text-white truncate">${escapeHtml(t)}</div></div>`; }).join('') : '';
     const slackCard = makeCard('slack', 'fa-slack', 'text-purple-400', 'Slack', `<button type="button" data-open-slack class="px-1.5 py-0.5 rounded border border-ops-border text-[9px] font-mono text-ops-light hover:text-white transition-colors">Open</button>`, `<div class="space-y-1">${slackPreview}</div>`, slackBody ? `<div class="space-y-1">${slackBody}</div>` : '');
     slackCard.querySelector('.dash-card-head i.fa-slack')?.classList.replace('fa-solid', 'fa-brands');
     feedRow.appendChild(slackCard);
 
     // Inbox
-    const inboxPreview = inboxNew.length ? inboxNew.slice(0,2).map(item => { const t = safeText(item?.title)||safeText(item?.subject)||'Item'; const s = safeText(item?.source)||''; return `<div class="flex items-center justify-between gap-2 border border-ops-border rounded bg-ops-bg/40 px-2.5 py-1.5"><span class="text-[11px] text-white truncate">${escapeHtml(t)}</span><span class="text-[9px] font-mono text-ops-light/50 shrink-0">${escapeHtml(s)}</span></div>`; }).join('') : '<div class="text-[10px] text-ops-light/50">Inbox zero.</div>';
+    const inboxPreview = inboxNew.length ? inboxNew.slice(0, 2).map(item => {
+        const id = safeText(item?.id).trim();
+        const ai = id ? aiInboxMap[id] : null;
+        let t = safeText(ai?.title || item?.title || item?.subject).trim();
+        if (isBadDashText(t)) {
+            const full = safeText(item?.text) || safeText(item?.content) || safeText(item?.body) || safeText(item?.message) || '';
+            t = previewText(full, 80) || 'Inbox item';
+        }
+        const s = normalizeInboxSourceKey(item?.source);
+        const meta = inboxSourceMeta(s);
+        const label = safeText(meta?.label).trim() || safeText(item?.source).trim();
+        const sum = safeText(ai?.summary).trim();
+        return `<div class="border border-ops-border rounded bg-ops-bg/40 px-2.5 py-1.5"><div class="flex items-center justify-between gap-2"><span class="text-[11px] text-white truncate">${escapeHtml(t)}</span><span class="text-[9px] font-mono text-ops-light/50 shrink-0">${escapeHtml(label)}</span></div>${sum ? `<div class="text-[9px] font-mono text-ops-light/60 truncate mt-0.5">${escapeHtml(sum)}</div>` : ''}</div>`;
+    }).join('') : '<div class="text-[10px] text-ops-light/50">Inbox zero.</div>';
     const inboxBody = inboxNew.length > 2 ? inboxNew.slice(2,8).map(item => { const t = safeText(item?.title)||'Item'; const s = safeText(item?.source)||''; return `<div class="flex items-center justify-between gap-2 border border-ops-border rounded bg-ops-bg/40 px-2.5 py-1.5"><span class="text-[11px] text-white truncate">${escapeHtml(t)}</span><span class="text-[9px] font-mono text-ops-light/50 shrink-0">${escapeHtml(s)}</span></div>`; }).join('') : '';
     const inboxCard = makeCard('inbox', 'fa-inbox', 'text-amber-400', 'Inbox', `<button type="button" data-open-inbox2 class="px-1.5 py-0.5 rounded border border-ops-border text-[9px] font-mono text-ops-light hover:text-white transition-colors">Open</button>`, `<div class="space-y-1">${inboxPreview}</div>`, inboxBody ? `<div class="space-y-1">${inboxBody}</div>` : '');
     feedRow.appendChild(inboxCard);
