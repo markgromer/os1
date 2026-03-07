@@ -21,6 +21,8 @@ const requestContext = new AsyncLocalStorage();
 let cachedActiveBusinessKey = DEFAULT_BUSINESS_KEY;
 let cachedBusinesses = [{ key: DEFAULT_BUSINESS_KEY, name: 'Personal', phoneNumbers: [] }];
 
+const lastRevisionCollapseByKey = new Map();
+
 const DEBUG_WEBHOOKS = String(process.env.DEBUG_WEBHOOKS || '').trim().toLowerCase() === 'true';
 
 // Capture the raw request bytes so we can verify webhook signatures (Slack/Twilio/etc).
@@ -2356,6 +2358,56 @@ function collapseLegacyAirtableRevisionRequestProjects(store, businessKey) {
   };
 }
 
+function summarizeRevisionLikeProjectsForDebug(store, businessKey) {
+  const s = store && typeof store === 'object' ? store : {};
+  const projects = Array.isArray(s.projects) ? s.projects : [];
+  const businessName = getBusinessNameForKey(businessKey);
+  const revLike = projects.filter((p) => isAirtableRevisionRequestsProject(p));
+  const active = revLike.filter((p) => String(p?.status || '') !== 'Archived');
+  const archived = revLike.filter((p) => String(p?.status || '') === 'Archived');
+
+  const groups = new Map();
+  for (const p of revLike) {
+    const existing = String(p?.airtableRequestsKey || '').trim();
+    const site = normalizeSiteLabelLoose(String(p?.airtableSiteLabel || p?.clientName || '').trim() || String(p?.name || '').split('—')[0].trim());
+    const key = existing || (() => {
+      const biz = normKey(businessName);
+      const siteKey = normKey(site);
+      if (!siteKey) return '';
+      const hash = crypto.createHash('sha1').update(`${biz}|${siteKey}`).digest('hex').slice(0, 12);
+      return `airtable:rev-requests:group:${hash}`;
+    })();
+    if (!key) continue;
+    groups.set(key, (groups.get(key) || 0) + 1);
+  }
+
+  const groupSizes = [...groups.values()];
+  groupSizes.sort((a, b) => b - a);
+
+  const sample = revLike
+    .slice(0, 25)
+    .map((p) => ({
+      id: String(p?.id || ''),
+      name: String(p?.name || ''),
+      status: String(p?.status || ''),
+      airtableUrl: String(p?.airtableUrl || ''),
+      airtableRequestsKey: String(p?.airtableRequestsKey || ''),
+      airtableSiteLabel: String(p?.airtableSiteLabel || ''),
+    }));
+
+  return {
+    businessKey: normalizeBusinessKey(businessKey) || DEFAULT_BUSINESS_KEY,
+    businessName,
+    totalProjects: projects.length,
+    revLikeProjects: revLike.length,
+    revLikeActive: active.length,
+    revLikeArchived: archived.length,
+    revLikeGroups: groups.size,
+    revLikeMaxGroupSize: groupSizes.length ? groupSizes[0] : 0,
+    sample,
+  };
+}
+
 function normalizeInboxText(text) {
   if (typeof text !== 'string') return '';
   return text.replace(/\r\n/g, '\n').trim();
@@ -4147,6 +4199,28 @@ app.get('/api/integrations/airtable/requests/preview', async (req, res) => {
     res.json({ ok: true, businessKey: key, records });
   } catch (err) {
     res.status(500).json({ ok: false, error: err?.message || 'Failed to preview Airtable revision requests' });
+  }
+});
+
+app.get('/api/debug/store', async (req, res) => {
+  try {
+    const key = getBusinessKeyFromContext();
+    const filePath = getStoreFileForBusiness(key);
+    const store = await withBusinessKey(key, async () => readStore());
+    const summary = summarizeRevisionLikeProjectsForDebug(store, key);
+    const last = lastRevisionCollapseByKey.get(normalizeBusinessKey(key) || DEFAULT_BUSINESS_KEY) || null;
+    res.json({
+      ok: true,
+      now: nowIso(),
+      activeBusinessKey: cachedActiveBusinessKey,
+      requestBusinessKey: key,
+      storeFile: filePath,
+      dataDir: DATA_DIR,
+      summary,
+      lastRevisionCollapse: last,
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message || 'Failed to load debug store info' });
   }
 });
 
@@ -8139,6 +8213,12 @@ app.listen(PORT, async () => {
       if (collapsed.changed) {
         await writeStore(collapsed.store);
       }
+      lastRevisionCollapseByKey.set(bKey, {
+        at: nowIso(),
+        changed: Boolean(collapsed.changed),
+        archived: Number(collapsed.archived || 0),
+        tasksReassigned: Number(collapsed.tasksReassigned || 0),
+      });
     });
   }
   await backupCriticalFiles({ force: true }).catch(() => {
