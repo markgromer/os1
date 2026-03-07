@@ -47,6 +47,15 @@ function normalizeBusinessKey(input) {
   return key;
 }
 
+function getBusinessNameForKey(key) {
+  const k = normalizeBusinessKey(key) || DEFAULT_BUSINESS_KEY;
+  const list = Array.isArray(cachedBusinesses) ? cachedBusinesses : [];
+  const match = list.find((b) => normalizeBusinessKey(b?.key || '') === k);
+  if (typeof match?.name === 'string' && match.name.trim()) return match.name.trim();
+  if (k === DEFAULT_BUSINESS_KEY) return 'Personal';
+  return k;
+}
+
 function normalizeBusinessName(input) {
   const raw = typeof input === 'string' ? input.trim() : '';
   return raw.slice(0, 80);
@@ -4032,6 +4041,36 @@ app.post('/api/integrations/airtable/requests/sync', async (req, res) => {
       return 'Medium';
     };
 
+    const pickRevisionLabel = (fields) => {
+      const raw = firstNonEmptyString(fields, [], [
+        'revision',
+        'rev',
+        'rev #',
+        'rev#',
+        'revision #',
+        'revision number',
+        'revision id',
+        'request #',
+        'request id',
+        'ticket',
+        'ticket #',
+      ]);
+      const s = String(raw || '').trim();
+      return s;
+    };
+
+    const pickAiRevisionSummary = (fields) => {
+      const raw = firstNonEmptyString(fields, [], [
+        'ai revision summary',
+        'ai summary',
+        'ai revision',
+        'revision summary',
+        'ai notes',
+        'ai output',
+      ]);
+      return typeof raw === 'string' ? raw.trim() : '';
+    };
+
     const prefer = (nextVal, prevVal) => {
       const n = String(nextVal || '').trim();
       return n ? n : (typeof prevVal === 'string' ? prevVal : '');
@@ -4067,19 +4106,32 @@ app.post('/api/integrations/airtable/requests/sync', async (req, res) => {
         const body = firstNonEmptyString(fields, [], ['details', 'description', 'notes', 'message']);
         const clientName = firstNonEmptyString(fields, [], ['client', 'client name', 'company', 'company name', 'customer', 'project']) || '';
         const clientPhone = firstNonEmptyString(fields, [], ['phone', 'phone number', 'mobile', 'cell', 'cell phone']) || '';
+        const revisionLabel = pickRevisionLabel(fields);
+        const aiRevisionSummary = pickAiRevisionSummary(fields);
         const dueRaw = firstNonEmptyString(fields, [], ['due', 'due date', 'deadline']);
         const dueDate = safeYmd(String(dueRaw || '').trim().slice(0, 10)) || '';
         const status = mapProjectStatus(fields);
         const priority = mapProjectPriority(fields);
 
-        const projectName = `${clientName ? `${clientName} — ` : ''}${title}`.slice(0, 140);
+        const businessName = getBusinessNameForKey(key);
+        const revPart = revisionLabel ? `Rev ${revisionLabel}` : 'Revision';
+        const projectName = `${businessName} — ${revPart}`.slice(0, 140);
 
         const importedBriefLines = [];
         importedBriefLines.push('Imported from Airtable (revision requests)');
+        importedBriefLines.push(`Business: ${businessName}`);
+        if (revisionLabel) importedBriefLines.push(`Revision: ${revisionLabel}`);
         if (clientName) importedBriefLines.push(`Client: ${clientName}`);
         importedBriefLines.push(`Title: ${title}`);
         if (dueDate) importedBriefLines.push(`Due: ${dueDate}`);
         importedBriefLines.push(`Status: ${status}`);
+        importedBriefLines.push(`Priority: ${priority}`);
+
+        if (aiRevisionSummary) {
+          importedBriefLines.push('');
+          importedBriefLines.push('AI Revision Summary:');
+          importedBriefLines.push(aiRevisionSummary);
+        }
         importedBriefLines.push('');
         if (body) importedBriefLines.push(String(body).trim());
         importedBriefLines.push('');
