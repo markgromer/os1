@@ -500,17 +500,20 @@ function dockMartyToDashboardSlot(slotEl) {
     const slot = slotEl && typeof slotEl === 'object' ? slotEl : null;
     const drawer = document.getElementById('neural-drawer');
     if (!slot || !drawer) return;
-    if (drawer.dataset?.martyDocked === '1') return;
+    if (drawer.dataset?.martyDocked === '1' && drawer.parentElement === slot) return;
 
     const parent = drawer.parentElement;
     if (!parent) return;
 
-    martyDockRestore = {
-        parent,
-        nextSibling: drawer.nextSibling,
-        className: drawer.className,
-        style: drawer.getAttribute('style') || '',
-    };
+    // Only capture restore info when docking from a floating state.
+    if (drawer.dataset?.martyDocked !== '1') {
+        martyDockRestore = {
+            parent,
+            nextSibling: drawer.nextSibling,
+            className: drawer.className,
+            style: drawer.getAttribute('style') || '',
+        };
+    }
 
     drawer.dataset.martyDocked = '1';
     drawer.className = drawer.className
@@ -2421,13 +2424,13 @@ function renderMain() {
     const ports = ensurePersistentMartyLayout();
     if (!ports) return;
 
-    // Keep MARTY permanently docked on the right.
-    dockMartyToPersistentSlot();
-
     const container = ports.viewPort;
     if (!container) return;
 
+    const side = ports.martyPort;
+
     container.innerHTML = "";
+    if (side) side.innerHTML = '';
 
     // If the server requires ADMIN_TOKEN and we're not authenticated,
     // show a clear gate instead of rendering empty/disabled views.
@@ -2472,18 +2475,34 @@ function renderMain() {
     }
     
     if (state.currentView === "dashboard") {
-        renderDashboard(container);
+        // Dashboard uses the right column for Inbox Radar + Calendar.
+        container.className = 'min-h-0 overflow-hidden';
+        if (side) side.className = 'min-h-0 overflow-y-auto border-l border-ops-border';
+        renderDashboard(container, side);
     } else if (state.currentView === "inbox") {
+        // All other views keep MARTY docked on the right.
+        dockMartyToPersistentSlot();
+        container.className = 'min-h-0 overflow-y-auto';
         renderInbox(container);
     } else if (state.currentView === "projects") {
+        dockMartyToPersistentSlot();
+        container.className = 'min-h-0 overflow-y-auto';
         renderProjects(container);
     } else if (state.currentView === "project") {
+        dockMartyToPersistentSlot();
+        container.className = 'min-h-0 overflow-y-auto';
         renderProjectView(container);
     } else if (state.currentView === "calendar") {
+        dockMartyToPersistentSlot();
+        container.className = 'min-h-0 overflow-y-auto';
         renderCalendar(container);
     } else if (state.currentView === "team") {
+        dockMartyToPersistentSlot();
+        container.className = 'min-h-0 overflow-y-auto';
         renderTeam(container);
     } else if (state.currentView === "settings") {
+        dockMartyToPersistentSlot();
+        container.className = 'min-h-0 overflow-y-auto';
         renderSettings(container);
     }
 
@@ -5921,7 +5940,13 @@ function renderDashboardLegacy(container) {
     });
 }
 
-function renderDashboard(container) {
+function renderDashboard(container, sidePort) {
+    // New command-center layout (wireframe style): MARTY centered; Radar + Calendar on right.
+    if (sidePort) {
+        renderDashboardCommandCenter(container, sidePort);
+        return;
+    }
+
     const titleEl = document.getElementById('page-title');
     if (titleEl) titleEl.innerText = 'Dashboard';
 
@@ -6466,6 +6491,354 @@ function renderDashboard(container) {
     const shortcutsClose = wrap.querySelector('#dash-shortcuts-close');
     if (shortcutsBtn && shortcutsPanelEl) shortcutsBtn.addEventListener('click', () => shortcutsPanelEl.classList.toggle('hidden'));
     if (shortcutsClose && shortcutsPanelEl) shortcutsClose.addEventListener('click', () => shortcutsPanelEl.classList.add('hidden'));
+}
+
+function renderDashboardCommandCenter(container, sidePort) {
+    const titleEl = document.getElementById('page-title');
+    if (titleEl) titleEl.innerText = 'Dashboard';
+
+    const inboxItems = Array.isArray(state.inboxItems) ? state.inboxItems : [];
+    const inboxNew = inboxItems.filter((x) => String(x?.status || '').trim().toLowerCase() === 'new');
+
+    const activeProjects = getActiveProjects();
+    const buckets = bucketProjectsByDueDate(activeProjects);
+    const dueTodayItems = Array.isArray(buckets.today) ? buckets.today : [];
+    const dueWeekItems = [...(Array.isArray(buckets.tomorrow) ? buckets.tomorrow : []), ...(Array.isArray(buckets.thisWeek) ? buckets.thisWeek : [])];
+
+    const allTasks = Array.isArray(state.tasks) ? state.tasks : [];
+    const today = ymdToday();
+    const overdueTasks = allTasks.filter((t) => { if (isDoneTask(t)) return false; const d = safeText(t?.dueDate).trim(); return d && d < today; });
+    const overdueProjects = activeProjects.filter((p) => { const d = safeText(p?.dueDate).trim(); return d && d < today; });
+    const totalOverdue = overdueTasks.length + overdueProjects.length;
+
+    const nextActions = getTodayNextActions();
+    const topAction = nextActions[0] || null;
+
+    const callsConnected = !!state.settings?.googleConnected;
+    const calls = Array.isArray(state.dashboardCalls?.events) ? state.dashboardCalls.events : [];
+    const callsError = safeText(state.dashboardCalls?.error);
+    const callsLoading = !!state.dashboardCalls?.loading;
+    if (callsConnected) setTimeout(() => refreshDashboardCalls({ force: false }), 0);
+
+    const hour = new Date().getHours();
+    const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
+    const teamMembers = Array.isArray(state.team) ? state.team : [];
+    const userName = safeText(teamMembers.find((m) => safeText(m?.role).toLowerCase() === 'admin')?.name) || 'Operator';
+    const dateStr = new Date().toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+
+    container.innerHTML = '';
+    sidePort.innerHTML = '';
+
+    const root = document.createElement('div');
+    root.className = 'h-full min-h-0 p-4';
+    root.style.display = 'grid';
+    root.style.gridTemplateRows = 'auto 1fr auto';
+    root.style.gap = '0.75rem';
+    container.appendChild(root);
+
+    // Top row: Welcome + Urgent
+    const topRow = document.createElement('div');
+    topRow.style.display = 'grid';
+    topRow.style.gridTemplateColumns = '1fr 1fr';
+    topRow.style.gap = '0.75rem';
+    root.appendChild(topRow);
+
+    const welcome = document.createElement('div');
+    welcome.className = 'dash-card';
+    welcome.dataset.cardId = 'welcome';
+    welcome.innerHTML = `
+        <div class="dash-card-head flex items-center justify-between gap-2 px-3 py-2.5">
+            <div class="flex items-center gap-2 min-w-0">
+                <i class="fa-solid fa-user-shield text-ops-accent text-[10px] shrink-0"></i>
+                <span class="text-[10px] font-mono uppercase tracking-widest text-ops-light truncate">Welcome Operator</span>
+            </div>
+            <div class="text-[10px] font-mono text-ops-light/50">${escapeHtml(dateStr)}</div>
+        </div>
+        <div class="px-3 pb-3">
+            <div class="text-sm text-white font-semibold">${escapeHtml(greeting)}, ${escapeHtml(userName)}</div>
+            <div class="mt-2 flex flex-wrap items-center gap-1.5 text-[10px] font-mono text-ops-light/60">
+                ${totalOverdue ? `<span class="stat-pill" style="border-color:rgba(239,68,68,0.3);color:#fca5a5"><i class="fa-solid fa-triangle-exclamation text-[8px]"></i>${totalOverdue} overdue</span>` : ''}
+                <span class="stat-pill"><i class="fa-solid fa-inbox text-[8px] text-purple-400"></i>${inboxNew.length} inbox new</span>
+                <span class="stat-pill"><i class="fa-solid fa-calendar text-[8px] text-blue-400"></i>${calls.length} meetings</span>
+            </div>
+        </div>
+    `;
+    topRow.appendChild(welcome);
+
+    const urgent = document.createElement('div');
+    urgent.className = 'dash-card';
+    urgent.dataset.cardId = 'urgent';
+
+    const urgentLines = [];
+    if (totalOverdue) urgentLines.push(`⚠️ ${totalOverdue} overdue item${totalOverdue === 1 ? '' : 's'} — triage first.`);
+    if (topAction) urgentLines.push(`🎯 Next action: “${safeText(topAction?.title)}”`);
+    if (inboxNew.length) urgentLines.push(`📡 ${inboxNew.length} new inbox item${inboxNew.length === 1 ? '' : 's'} — link or no-home.`);
+    if (!urgentLines.length) urgentLines.push('All clear. Keep momentum and stay ahead of due dates.');
+
+    urgent.innerHTML = `
+        <div class="dash-card-head flex items-center justify-between gap-2 px-3 py-2.5">
+            <div class="flex items-center gap-2 min-w-0">
+                <i class="fa-solid fa-bell text-amber-400 text-[10px] shrink-0"></i>
+                <span class="text-[10px] font-mono uppercase tracking-widest text-ops-light truncate">Urgent Notifications</span>
+            </div>
+            <button type="button" data-open-inbox class="px-2.5 py-1 rounded border border-ops-border text-[9px] font-mono text-ops-light hover:text-white hover:bg-ops-surface/60 transition-colors">Open Inbox</button>
+        </div>
+        <div class="px-3 pb-3">
+            <div class="space-y-1">
+                ${urgentLines.slice(0, 4).map((t) => `<div class="text-[11px] text-ops-light/80">${escapeHtml(t)}</div>`).join('')}
+            </div>
+        </div>
+    `;
+    topRow.appendChild(urgent);
+
+    // Middle: MARTY
+    const martyCard = document.createElement('div');
+    martyCard.className = 'dash-card min-h-0 overflow-hidden';
+    martyCard.dataset.cardId = 'marty-center';
+    martyCard.style.display = 'flex';
+    martyCard.style.flexDirection = 'column';
+    martyCard.innerHTML = `
+        <div class="dash-card-head flex items-center justify-between gap-2 px-3 py-2.5">
+            <div class="flex items-center gap-2 min-w-0">
+                <div class="marty-status-dot shrink-0"></div>
+                <span class="text-[10px] font-mono uppercase tracking-widest text-blue-300">MARTY</span>
+            </div>
+            <div class="text-[9px] font-mono text-ops-light/50">Dashboard Console</div>
+        </div>
+        <div id="dash-marty-slot" class="flex-1 min-h-0 overflow-hidden"></div>
+    `;
+    root.appendChild(martyCard);
+
+    const martySlot = martyCard.querySelector('#dash-marty-slot');
+    if (martySlot) dockMartyToDashboardSlot(martySlot);
+
+    // Bottom row: Due Today | This Week | Pending Meetings
+    const bottomRow = document.createElement('div');
+    bottomRow.style.display = 'grid';
+    bottomRow.style.gridTemplateColumns = '1fr 1fr 1fr';
+    bottomRow.style.gap = '0.75rem';
+    root.appendChild(bottomRow);
+
+    const mkMiniList = (rows, emptyText) => {
+        const list = Array.isArray(rows) ? rows : [];
+        if (!list.length) return `<div class="text-[10px] text-ops-light/50">${escapeHtml(emptyText || 'None')}</div>`;
+        return `<div class="space-y-1">${list.slice(0, 3).map((r) => `<div class="border border-ops-border rounded bg-ops-bg/40 px-2.5 py-1.5"><div class="text-[11px] text-white truncate">${escapeHtml(safeText(r?.name) || safeText(r?.title) || 'Untitled')}</div>${r?.dueDate ? `<div class="text-[9px] font-mono text-ops-light/50">${escapeHtml(safeText(r?.dueDate))}</div>` : ''}</div>`).join('')}</div>`;
+    };
+
+    const dueTodayCard = document.createElement('div');
+    dueTodayCard.className = 'dash-card';
+    dueTodayCard.dataset.cardId = 'due-today-mini';
+    dueTodayCard.innerHTML = `
+        <div class="dash-card-head flex items-center justify-between gap-2 px-3 py-2.5">
+            <div class="flex items-center gap-2 min-w-0">
+                <i class="fa-solid fa-fire text-red-400 text-[10px] shrink-0"></i>
+                <span class="text-[10px] font-mono uppercase tracking-widest text-ops-light truncate">Due Today</span>
+            </div>
+            <div class="text-[11px] font-mono text-white">${dueTodayItems.length}</div>
+        </div>
+        <div class="px-3 pb-3">${mkMiniList(dueTodayItems, 'Nothing due today.')}</div>
+    `;
+    bottomRow.appendChild(dueTodayCard);
+
+    const dueWeekCard = document.createElement('div');
+    dueWeekCard.className = 'dash-card';
+    dueWeekCard.dataset.cardId = 'due-week-mini';
+    dueWeekCard.innerHTML = `
+        <div class="dash-card-head flex items-center justify-between gap-2 px-3 py-2.5">
+            <div class="flex items-center gap-2 min-w-0">
+                <i class="fa-solid fa-calendar-week text-amber-400 text-[10px] shrink-0"></i>
+                <span class="text-[10px] font-mono uppercase tracking-widest text-ops-light truncate">Due This Week</span>
+            </div>
+            <div class="text-[11px] font-mono text-white">${dueWeekItems.length}</div>
+        </div>
+        <div class="px-3 pb-3">${mkMiniList(dueWeekItems, 'Nothing else due this week.')}</div>
+    `;
+    bottomRow.appendChild(dueWeekCard);
+
+    const meetingsCard = document.createElement('div');
+    meetingsCard.className = 'dash-card';
+    meetingsCard.dataset.cardId = 'meetings-mini';
+    const meetingsBody = !callsConnected
+        ? `<div class="text-[10px] text-ops-light/50">Connect Google Calendar in Settings.</div>`
+        : (callsError
+            ? `<div class="text-[10px] text-amber-300">${escapeHtml(callsError)}</div>`
+            : (callsLoading && !calls.length)
+                ? `<div class="text-[10px] text-ops-light/50">Loading…</div>`
+                : (calls.length
+                    ? `<div class="space-y-1">${calls.slice(0, 3).map((ev) => {
+                        const time = formatTimeFromIso(ev.start);
+                        const title = safeText(ev.summary) || 'Untitled';
+                        return `<div class="border border-ops-border rounded bg-ops-bg/40 px-2.5 py-1.5"><div class="text-[11px] text-white truncate">${escapeHtml(title)}</div><div class="text-[9px] font-mono text-ops-light/50">${escapeHtml(time || '')}</div></div>`;
+                    }).join('')}</div>`
+                    : `<div class="text-[10px] text-ops-light/50">No meetings scheduled.</div>`));
+    meetingsCard.innerHTML = `
+        <div class="dash-card-head flex items-center justify-between gap-2 px-3 py-2.5">
+            <div class="flex items-center gap-2 min-w-0">
+                <i class="fa-solid fa-video text-blue-400 text-[10px] shrink-0"></i>
+                <span class="text-[10px] font-mono uppercase tracking-widest text-ops-light truncate">Pending Meetings</span>
+            </div>
+            <button type="button" data-open-calendar class="px-2.5 py-1 rounded border border-ops-border text-[9px] font-mono text-ops-light hover:text-white hover:bg-ops-surface/60 transition-colors">Open</button>
+        </div>
+        <div class="px-3 pb-3">${meetingsBody}</div>
+    `;
+    bottomRow.appendChild(meetingsCard);
+
+    // Right column: Inbox Radar + Calendar
+    const sideWrap = document.createElement('div');
+    sideWrap.className = 'h-full min-h-0 p-4 space-y-3';
+    sidePort.appendChild(sideWrap);
+
+    const radarBanner = document.createElement('div');
+    radarBanner.className = 'dash-card';
+    radarBanner.dataset.cardId = 'radar-side';
+
+    const formatInboxStamp = (iso) => {
+        const s = safeText(iso).trim();
+        if (!s) return '';
+        const d = new Date(s);
+        if (Number.isNaN(d.getTime())) return '';
+        return d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    };
+
+    const makeRadarHtml = (payloadOrItems) => {
+        const items = Array.isArray(payloadOrItems?.items)
+            ? payloadOrItems.items
+            : (Array.isArray(payloadOrItems) ? payloadOrItems : []);
+        const groups = Array.isArray(payloadOrItems?.groups) ? payloadOrItems.groups : null;
+
+        const list = Array.isArray(items) ? items : [];
+        const slack = list.filter((x) => normalizeInboxSourceKey(x?.source) === 'slack');
+        const email = list.filter((x) => normalizeInboxSourceKey(x?.source) === 'email');
+        const other = list.filter((x) => { const k = normalizeInboxSourceKey(x?.source); return k !== 'slack' && k !== 'email'; });
+
+        const rowsHtml = (Array.isArray(groups) ? groups : list)
+            .slice(0, 8)
+            .map((row) => {
+                const isGroup = Array.isArray(groups);
+                if (isGroup) {
+                    const business = safeText(row?.businessLabel) || safeText(row?.businessKey) || 'Business';
+                    const stamp = formatInboxStamp(safeText(row?.latestAt));
+                    const count = Number(row?.count) || 0;
+                    const isUnassigned = Boolean(row?.isUnassigned) || (!safeText(row?.projectId).trim());
+                    const title = isUnassigned ? 'Unassigned' : (safeText(row?.projectName).trim() || 'Project');
+                    const summary = safeText(row?.summary).trim() || (Array.isArray(row?.sample) ? safeText(row.sample[0]) : '');
+                    const borderTone = isUnassigned ? 'border-red-500/30 bg-red-500/10' : 'border-ops-border bg-ops-bg/40';
+                    const countTone = isUnassigned ? 'text-red-300' : 'text-white';
+                    return `
+                        <div class="border rounded px-2.5 py-2 ${borderTone}">
+                            <div class="min-w-0">
+                                <div class="flex items-center justify-between gap-2">
+                                    <div class="min-w-0">
+                                        <div class="text-[10px] font-mono text-ops-light/50 truncate">${escapeHtml(business)}${stamp ? ` • ${escapeHtml(stamp)}` : ''}</div>
+                                        <div class="mt-0.5 text-[11px] ${isUnassigned ? 'text-red-200 font-semibold' : 'text-white'} truncate">${escapeHtml(title)}</div>
+                                    </div>
+                                    <div class="shrink-0 text-[11px] font-mono font-semibold ${countTone}">${count}</div>
+                                </div>
+                                ${summary ? `<div class="mt-0.5 text-[10px] text-ops-light/60 truncate">${escapeHtml(summary)}</div>` : ''}
+                            </div>
+                        </div>
+                    `;
+                }
+
+                const item = row;
+                const status = safeText(item?.status).trim() || 'New';
+                const sourceKey = normalizeInboxSourceKey(item?.source);
+                const meta = inboxSourceMeta(sourceKey);
+                const iconCls = meta.icon === 'fa-slack' ? 'fa-brands fa-slack' : `fa-solid ${meta.icon}`;
+                const business = inboxBusinessLabel(item);
+                const stamp = formatInboxStamp(safeText(item?.updatedAt) || safeText(item?.createdAt));
+                const fullText = safeText(item?.text) || safeText(item?.content) || safeText(item?.body) || safeText(item?.message) || '';
+                const snippet = previewText(fullText, 120);
+                const explicitTitle = safeText(item?.title) || safeText(item?.subject) || '';
+                const titleLine = explicitTitle.trim() || snippet || 'Inbox item';
+                return `
+                    <div class="border border-ops-border rounded bg-ops-bg/40 px-2.5 py-2">
+                        <div class="flex items-center gap-1.5 flex-wrap">
+                            <span class="px-1.5 py-0.5 rounded border border-ops-border text-[9px] font-mono text-ops-light/70">${escapeHtml(status)}</span>
+                            <span class="px-1.5 py-0.5 rounded border border-ops-border text-[9px] font-mono ${meta.tone} flex items-center gap-1">
+                                <i class="${iconCls} text-[9px]"></i>
+                                ${escapeHtml(meta.label)}
+                            </span>
+                            <span class="px-1.5 py-0.5 rounded border border-ops-border text-[9px] font-mono text-ops-light/50">${escapeHtml(business)}</span>
+                            ${stamp ? `<span class="text-[9px] font-mono text-ops-light/40">${escapeHtml(stamp)}</span>` : ''}
+                        </div>
+                        <div class="mt-1 text-[11px] text-white truncate">${escapeHtml(titleLine)}</div>
+                    </div>
+                `;
+            }).join('');
+
+        const showCount = Array.isArray(groups) ? groups.length : list.length;
+        return `
+            <div class="dash-card-head flex items-center justify-between gap-3 px-3 py-2.5">
+                <div class="flex items-center gap-2 min-w-0">
+                    <i class="fa-solid fa-satellite-dish text-blue-400 text-xs shrink-0"></i>
+                    <span class="text-[10px] font-mono uppercase tracking-widest text-ops-light">Inbox Radar</span>
+                    <div class="flex items-center gap-3 text-[10px] font-mono text-ops-light/50">
+                        <span class="text-lg font-semibold text-white leading-none">${showCount}</span>
+                        <span><i class="fa-brands fa-slack text-purple-400 mr-0.5"></i>${slack.length}</span>
+                        <span><i class="fa-solid fa-envelope text-sky-400 mr-0.5"></i>${email.length}</span>
+                        <span><i class="fa-solid fa-ellipsis text-ops-light/30 mr-0.5"></i>${other.length}</span>
+                    </div>
+                </div>
+                <div class="flex items-center gap-1.5 shrink-0">
+                    <button type="button" data-open-inbox class="px-2.5 py-1 rounded border border-ops-border text-[9px] font-mono text-ops-light hover:text-white hover:bg-ops-surface/60 transition-colors">Open Inbox</button>
+                    ${showCount ? '<i class="fa-solid fa-chevron-down expand-chevron"></i>' : ''}
+                </div>
+            </div>
+            ${showCount ? `<div class="dash-card-body px-3 pb-2.5"><div class="space-y-1">${rowsHtml}</div></div>` : ''}
+        `;
+    };
+
+    radarBanner.innerHTML = makeRadarHtml({ items: inboxNew, groups: null });
+    sideWrap.appendChild(radarBanner);
+
+    setTimeout(async () => {
+        try {
+            const data = await apiJson('/api/inbox/radar?status=New&limit=60');
+            if (state.currentView !== 'dashboard') return;
+            radarBanner.innerHTML = makeRadarHtml(data);
+            radarBanner.querySelector('button[data-open-inbox]')?.addEventListener('click', () => openInbox());
+        } catch {
+            // ignore
+        }
+    }, 0);
+
+    const calCard = document.createElement('div');
+    calCard.className = 'dash-card';
+    calCard.dataset.cardId = 'calendar-side';
+    const calRows = !callsConnected
+        ? `<div class="text-[10px] text-ops-light/50">Connect Google Calendar in Settings.</div>`
+        : (callsError
+            ? `<div class="text-[10px] text-amber-300">${escapeHtml(callsError)}</div>`
+            : (callsLoading && !calls.length)
+                ? `<div class="text-[10px] text-ops-light/50">Loading…</div>`
+                : (calls.length
+                    ? `<div class="space-y-1">${calls.slice(0, 6).map((ev) => {
+                        const time = formatTimeFromIso(ev.start);
+                        const title = safeText(ev.summary) || 'Untitled';
+                        const link = safeText(ev.meetingLink);
+                        return `<div class="border border-ops-border rounded bg-ops-bg/40 px-2.5 py-1.5"><div class="flex items-center justify-between gap-2"><div class="min-w-0"><div class="text-[11px] text-white truncate">${escapeHtml(title)}</div><div class="text-[9px] font-mono text-ops-light/50">${escapeHtml(time || '')}</div></div>${link ? `<a class="shrink-0 text-[9px] font-mono text-ops-accent hover:underline" href="${escapeHtml(link)}" target="_blank" rel="noreferrer">Join</a>` : ''}</div></div>`;
+                    }).join('')}</div>`
+                    : `<div class="text-[10px] text-ops-light/50">No upcoming meetings.</div>`));
+
+    calCard.innerHTML = `
+        <div class="dash-card-head flex items-center justify-between gap-2 px-3 py-2.5">
+            <div class="flex items-center gap-2 min-w-0">
+                <i class="fa-solid fa-calendar-days text-blue-400 text-[10px] shrink-0"></i>
+                <span class="text-[10px] font-mono uppercase tracking-widest text-ops-light truncate">Calendar</span>
+            </div>
+            <div class="flex items-center gap-2">
+                <button type="button" data-open-calendar class="px-2.5 py-1 rounded border border-ops-border text-[9px] font-mono text-ops-light hover:text-white hover:bg-ops-surface/60 transition-colors">Open</button>
+            </div>
+        </div>
+        <div class="px-3 pb-3">${calRows}</div>
+    `;
+    sideWrap.appendChild(calCard);
+
+    sideWrap.querySelectorAll('button[data-open-inbox]').forEach((b) => b.addEventListener('click', () => openInbox()));
+    sideWrap.querySelectorAll('button[data-open-calendar]').forEach((b) => b.addEventListener('click', () => openCalendar()));
+    root.querySelectorAll('button[data-open-inbox]').forEach((b) => b.addEventListener('click', () => openInbox()));
+    root.querySelectorAll('button[data-open-calendar]').forEach((b) => b.addEventListener('click', () => openCalendar()));
 }
 
 function renderTodayPanel() {
