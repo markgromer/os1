@@ -2522,10 +2522,10 @@ function renderMain() {
     }
     
     if (state.currentView === "dashboard") {
-        // Dashboard uses the right column for Inbox Radar + Calendar.
-        container.className = 'min-h-0 overflow-hidden';
-        if (side) side.className = 'min-h-0 overflow-y-auto border-l border-ops-border';
-        renderDashboard(container, side);
+        // Restore the classic layout: Dashboard in the main pane, MARTY on the right.
+        dockMartyToPersistentSlot();
+        container.className = 'min-h-0 overflow-y-auto';
+        renderDashboard(container, null);
     } else if (state.currentView === "inbox") {
         // All other views keep MARTY docked on the right.
         dockMartyToPersistentSlot();
