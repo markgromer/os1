@@ -2207,6 +2207,155 @@ function migrateLegacyAirtableClientProjects(store) {
   };
 }
 
+function isAirtableRevisionRequestsProject(project) {
+  const p = project && typeof project === 'object' ? project : {};
+  if (String(p.airtableSource || '') === 'revision-requests') return true;
+  const brief = String(p.agentBrief || '').toLowerCase();
+  if (brief.includes('imported from airtable (revision requests)')) return true;
+  if (brief.includes('airtable') && brief.includes('revision')) return true;
+
+  const name = String(p.name || '');
+  if (/\s—\srev\s*\w+/i.test(name) || /\s-\srev\s*\w+/i.test(name)) return true;
+
+  const airtableUrl = String(p.airtableUrl || '').trim();
+  if (airtableUrl.startsWith('https://airtable.com/') && airtableUrl.length > 25) return true;
+  return false;
+}
+
+function normalizeSiteLabelLoose(input) {
+  const raw = typeof input === 'string' ? input.trim() : '';
+  if (!raw) return '';
+  try {
+    const withProto = raw.includes('://') ? raw : `https://${raw}`;
+    const u = new URL(withProto);
+    const host = String(u.hostname || '').trim().toLowerCase().replace(/^www\./, '');
+    if (host) return host;
+  } catch {
+    // ignore
+  }
+  return raw.replace(/^https?:\/\//i, '').replace(/^www\./i, '').split(/[\/\s]/)[0].trim() || raw;
+}
+
+function collapseLegacyAirtableRevisionRequestProjects(store, businessKey) {
+  const s = store && typeof store === 'object' ? store : {};
+  const projects = Array.isArray(s.projects) ? s.projects : [];
+  const tasks = Array.isArray(s.tasks) ? s.tasks : [];
+
+  const businessName = getBusinessNameForKey(businessKey);
+  const groups = new Map();
+
+  const computeGroupKey = (p) => {
+    const existing = String(p?.airtableRequestsKey || '').trim();
+    if (existing) return existing;
+
+    const site = normalizeSiteLabelLoose(String(p?.airtableSiteLabel || p?.clientName || '').trim() || String(p?.name || '').split('—')[0].trim());
+    const biz = normKey(businessName);
+    const siteKey = normKey(site);
+    if (!siteKey) return '';
+    const hash = crypto.createHash('sha1').update(`${biz}|${siteKey}`).digest('hex').slice(0, 12);
+    return `airtable:rev-requests:group:${hash}`;
+  };
+
+  for (let i = 0; i < projects.length; i++) {
+    const p = projects[i];
+    if (!isAirtableRevisionRequestsProject(p)) continue;
+    const key = computeGroupKey(p);
+    if (!key) continue;
+    const list = groups.get(key) || [];
+    list.push(i);
+    groups.set(key, list);
+  }
+
+  if (!groups.size) return { changed: false, store: s, archived: 0, tasksReassigned: 0 };
+
+  const ts = nowIso();
+  const nextProjects = [...projects];
+  const nextTasks = [...tasks];
+
+  let archived = 0;
+  let tasksReassigned = 0;
+  let changed = false;
+
+  const parseTime = (val) => {
+    const t = Date.parse(String(val || ''));
+    return Number.isFinite(t) ? t : 0;
+  };
+
+  for (const [groupKey, idxs] of groups.entries()) {
+    if (idxs.length <= 1) continue;
+
+    // Pick the project to keep: prefer non-Archived + one that already has the group key.
+    let keepIdx = idxs[0];
+    for (const idx of idxs) {
+      const p = nextProjects[idx];
+      const curKeep = nextProjects[keepIdx];
+      const pKey = String(p?.airtableRequestsKey || '').trim();
+      const keepKey = String(curKeep?.airtableRequestsKey || '').trim();
+      const pArchived = String(p?.status || '') === 'Archived';
+      const keepArchived = String(curKeep?.status || '') === 'Archived';
+      if (!pArchived && keepArchived) {
+        keepIdx = idx;
+        continue;
+      }
+      if (pKey === groupKey && keepKey !== groupKey) {
+        keepIdx = idx;
+        continue;
+      }
+      const pTime = Math.max(parseTime(p?.updatedAt), parseTime(p?.createdAt));
+      const keepTime = Math.max(parseTime(curKeep?.updatedAt), parseTime(curKeep?.createdAt));
+      if (pTime > keepTime) keepIdx = idx;
+    }
+
+    const keepProject = nextProjects[keepIdx];
+    const keepName = String(keepProject?.name || '').trim();
+    if (!keepName) continue;
+
+    // Ensure the kept project is tagged with the group key.
+    if (String(keepProject.airtableRequestsKey || '').trim() !== groupKey) {
+      nextProjects[keepIdx] = { ...keepProject, airtableRequestsKey: groupKey, updatedAt: ts };
+      changed = true;
+    }
+
+    for (const idx of idxs) {
+      if (idx === keepIdx) continue;
+      const p = nextProjects[idx];
+      if (!p || typeof p !== 'object') continue;
+      if (String(p.status || '') !== 'Archived') {
+        nextProjects[idx] = { ...p, status: 'Archived', airtableRequestsKey: groupKey, updatedAt: ts };
+        archived++;
+        changed = true;
+      }
+
+      const oldName = String(p.name || '').trim();
+      if (!oldName || oldName === keepName) continue;
+      for (let t = 0; t < nextTasks.length; t++) {
+        const task = nextTasks[t];
+        if (!task || typeof task !== 'object') continue;
+        if (String(task.project || '') !== oldName) continue;
+        const id = String(task.id || '');
+        if (!id.startsWith('airtable:rev:')) continue;
+        nextTasks[t] = { ...task, project: keepName, updatedAt: ts };
+        tasksReassigned++;
+        changed = true;
+      }
+    }
+  }
+
+  if (!changed) return { changed: false, store: s, archived, tasksReassigned };
+  return {
+    changed: true,
+    archived,
+    tasksReassigned,
+    store: {
+      ...s,
+      revision: Number(s.revision || 0) + 1,
+      updatedAt: ts,
+      projects: nextProjects,
+      tasks: nextTasks,
+    },
+  };
+}
+
 function normalizeInboxText(text) {
   if (typeof text !== 'string') return '';
   return text.replace(/\r\n/g, '\n').trim();
@@ -4082,6 +4231,48 @@ async function runAirtableRevisionRequestsSync({ businessKey, limit = 200, windo
     return typeof raw === 'string' ? raw.trim() : '';
   };
 
+  const pickWebsiteOrSiteLabel = (fields) => {
+    const raw = firstNonEmptyString(fields, [], [
+      'website',
+      'site',
+      'domain',
+      'url',
+      'link',
+      'website url',
+      'site url',
+      'page url',
+      'website (from clients)',
+      'site (from clients)',
+      'domain (from clients)',
+      'url (from clients)',
+      'website (from clientssss)',
+      'site (from clientssss)',
+    ]);
+    return typeof raw === 'string' ? raw.trim() : '';
+  };
+
+  const normalizeSiteLabel = (input) => {
+    const raw = typeof input === 'string' ? input.trim() : '';
+    if (!raw) return '';
+    try {
+      const withProto = raw.includes('://') ? raw : `https://${raw}`;
+      const u = new URL(withProto);
+      const host = String(u.hostname || '').trim().toLowerCase().replace(/^www\./, '');
+      if (host) return host;
+    } catch {
+      // ignore
+    }
+    return raw.replace(/^https?:\/\//i, '').replace(/^www\./i, '').split(/[\/\s]/)[0].trim() || raw;
+  };
+
+  const computeRequestsGroupKey = ({ businessName, siteLabel, recordId }) => {
+    const biz = normKey(businessName || getBusinessNameForKey(key));
+    const site = normKey(siteLabel);
+    if (!site) return `airtable:rev-requests:record:${recordId}`;
+    const hash = crypto.createHash('sha1').update(`${biz}|${site}`).digest('hex').slice(0, 12);
+    return `airtable:rev-requests:group:${hash}`;
+  };
+
   const parseTaskTitles = (text, { limit: taskLimit = 18 } = {}) => {
     const raw = typeof text === 'string' ? text : '';
     if (!raw.trim()) return [];
@@ -4113,11 +4304,16 @@ async function runAirtableRevisionRequestsSync({ businessKey, limit = 200, windo
     const projects = Array.isArray(store.projects) ? store.projects : [];
     const existingTasks = Array.isArray(store.tasks) ? store.tasks : [];
 
+    const byRequestsKey = new Map();
     const byAirtableUrl = new Map();
     for (const p of projects) {
+      const k = String(p?.airtableRequestsKey || '').trim();
+      if (k) byRequestsKey.set(k, p);
       const url = String(p?.airtableUrl || '').trim();
       if (url) byAirtableUrl.set(url, p);
     }
+
+    const primaryProjectIdByRequestsKey = new Map();
 
     let created = 0;
     let updated = 0;
@@ -4126,6 +4322,7 @@ async function runAirtableRevisionRequestsSync({ businessKey, limit = 200, windo
     let notesAppended = 0;
     let tasksCreated = 0;
     let tasksUpdated = 0;
+    let archivedDuplicates = 0;
 
     const nextProjects = [...projects];
     const nextTasks = [...existingTasks];
@@ -4159,13 +4356,17 @@ async function runAirtableRevisionRequestsSync({ businessKey, limit = 200, windo
       const priority = mapProjectPriority(fields);
 
       const businessName = pickBusinessFromClients(fields) || getBusinessNameForKey(key);
-      const revPart = revisionLabel ? `Rev ${revisionLabel}` : 'Revision';
-      const projectName = `${businessName} — ${revPart}`.slice(0, 140);
+
+      const siteFromFields = pickWebsiteOrSiteLabel(fields);
+      const siteLabel = normalizeSiteLabel(siteFromFields || clientName);
+      const displayLabel = (siteLabel || clientName || businessName).trim();
+      const requestsKey = computeRequestsGroupKey({ businessName, siteLabel: displayLabel, recordId });
+      const projectName = displayLabel.slice(0, 140) || businessName.slice(0, 140);
 
       const importedBriefLines = [];
       importedBriefLines.push('Imported from Airtable (revision requests)');
       importedBriefLines.push(`Business: ${businessName}`);
-      if (revisionLabel) importedBriefLines.push(`Revision: ${revisionLabel}`);
+      if (siteLabel) importedBriefLines.push(`Site: ${siteLabel}`);
       if (clientName) importedBriefLines.push(`Client: ${clientName}`);
       importedBriefLines.push(`Title: ${title}`);
       if (dueDate) importedBriefLines.push(`Due: ${dueDate}`);
@@ -4231,7 +4432,7 @@ async function runAirtableRevisionRequestsSync({ businessKey, limit = 200, windo
         }
       };
 
-      const existing = byAirtableUrl.get(recordUrl) || null;
+      const existing = byRequestsKey.get(requestsKey) || byAirtableUrl.get(recordUrl) || null;
       if (!existing) {
         const normalized = normalizeProject({
           name: projectName,
@@ -4249,6 +4450,8 @@ async function runAirtableRevisionRequestsSync({ businessKey, limit = 200, windo
           id: makeId(),
           ...normalized,
           airtableSource: 'revision-requests',
+          airtableRequestsKey: requestsKey,
+          airtableSiteLabel: siteLabel || '',
           airtableRecordId: recordId,
           airtableTableId: cfg.requestsTableId,
           createdAt: ts,
@@ -4256,7 +4459,9 @@ async function runAirtableRevisionRequestsSync({ businessKey, limit = 200, windo
         };
 
         nextProjects.unshift(project);
+        byRequestsKey.set(requestsKey, project);
         byAirtableUrl.set(recordUrl, project);
+        primaryProjectIdByRequestsKey.set(requestsKey, project.id);
         if (project.clientPhone) nextSenderProjectMap = upsertSenderProjectMapForProject(nextSenderProjectMap, project.clientPhone, project);
 
         appendRevisionSummaryNoteIfNew(project);
@@ -4285,6 +4490,8 @@ async function runAirtableRevisionRequestsSync({ businessKey, limit = 200, windo
         priority: prefer(priority, existing.priority),
         ...(shouldOverwriteBrief ? { agentBrief: importedBriefLines.join('\n') } : {}),
         airtableSource: 'revision-requests',
+        airtableRequestsKey: requestsKey,
+        airtableSiteLabel: siteLabel || String(existing?.airtableSiteLabel || '').trim(),
         airtableRecordId: recordId,
         airtableTableId: cfg.requestsTableId,
       };
@@ -4295,6 +4502,8 @@ async function runAirtableRevisionRequestsSync({ businessKey, limit = 200, windo
         ...normalized,
         ...(shouldOverwriteBrief ? { agentBrief: merged.agentBrief } : {}),
         airtableSource: merged.airtableSource,
+        airtableRequestsKey: merged.airtableRequestsKey,
+        airtableSiteLabel: merged.airtableSiteLabel,
         airtableRecordId: merged.airtableRecordId,
         airtableTableId: merged.airtableTableId,
         updatedAt: ts,
@@ -4311,7 +4520,9 @@ async function runAirtableRevisionRequestsSync({ businessKey, limit = 200, windo
       const idx = nextProjects.findIndex((p) => p && p.id === existing.id);
       if (idx >= 0) nextProjects[idx] = updatedProject;
       else nextProjects.unshift(updatedProject);
+      byRequestsKey.set(requestsKey, updatedProject);
       byAirtableUrl.set(recordUrl, updatedProject);
+      primaryProjectIdByRequestsKey.set(requestsKey, updatedProject.id);
       if (updatedProject.clientPhone) nextSenderProjectMap = upsertSenderProjectMapForProject(nextSenderProjectMap, updatedProject.clientPhone, updatedProject);
 
       appendRevisionSummaryNoteIfNew(updatedProject);
@@ -4321,8 +4532,35 @@ async function runAirtableRevisionRequestsSync({ businessKey, limit = 200, windo
       didMutate = true;
     }
 
+    // If we rolled up multiple revision records into a single project, archive legacy per-revision projects
+    // so the active project list stays useful.
+    const baseBusinessName = getBusinessNameForKey(key);
+    for (let i = 0; i < nextProjects.length; i++) {
+      const p = nextProjects[i];
+      if (!p || typeof p !== 'object') continue;
+      if (String(p.airtableSource || '') !== 'revision-requests') continue;
+      if (String(p.status || '') === 'Archived') continue;
+
+      const existingKey = String(p.airtableRequestsKey || '').trim();
+      const derivedSite = normalizeSiteLabel(String(p.airtableSiteLabel || p.clientName || p.name || '').trim());
+      const derivedKey = existingKey || computeRequestsGroupKey({ businessName: baseBusinessName, siteLabel: derivedSite, recordId: String(p.airtableRecordId || '') });
+      const primaryId = primaryProjectIdByRequestsKey.get(derivedKey);
+      if (!primaryId) continue;
+      if (String(p.id || '') === String(primaryId)) continue;
+
+      const archived = {
+        ...p,
+        status: 'Archived',
+        airtableRequestsKey: derivedKey,
+        updatedAt: ts,
+      };
+      nextProjects[i] = archived;
+      archivedDuplicates++;
+      didMutate = true;
+    }
+
     if (!didMutate && !created && !updated) {
-      return { created, updated, skipped, skippedOld, notesAppended, tasksCreated, tasksUpdated, didWrite: false };
+      return { created, updated, skipped, skippedOld, notesAppended, tasksCreated, tasksUpdated, archivedDuplicates, didWrite: false };
     }
 
     const nextStore = {
@@ -4335,7 +4573,7 @@ async function runAirtableRevisionRequestsSync({ businessKey, limit = 200, windo
       senderProjectMap: nextSenderProjectMap,
     };
     await writeStore(nextStore);
-    return { created, updated, skipped, skippedOld, notesAppended, tasksCreated, tasksUpdated, didWrite: true };
+    return { created, updated, skipped, skippedOld, notesAppended, tasksCreated, tasksUpdated, archivedDuplicates, didWrite: true };
   });
 
   return {
@@ -4349,6 +4587,7 @@ async function runAirtableRevisionRequestsSync({ businessKey, limit = 200, windo
     notesAppended: result.notesAppended,
     tasksCreated: result.tasksCreated,
     tasksUpdated: result.tasksUpdated,
+    archivedDuplicates: result.archivedDuplicates,
     totalFetched: (out.records || []).length,
   };
 }
@@ -7890,9 +8129,18 @@ app.post('/api/chat', async (req, res) => {
 
 app.listen(PORT, async () => {
   await refreshBusinessCacheFromSettings();
-  await withBusinessKey(DEFAULT_BUSINESS_KEY, async () => {
-    await ensureStoreExists();
-  });
+  const businesses = Array.isArray(cachedBusinesses) ? cachedBusinesses : [{ key: DEFAULT_BUSINESS_KEY }];
+  for (const biz of businesses) {
+    const bKey = normalizeBusinessKey(biz?.key || '') || DEFAULT_BUSINESS_KEY;
+    await withBusinessKey(bKey, async () => {
+      await ensureStoreExists();
+      const store = await readStore();
+      const collapsed = collapseLegacyAirtableRevisionRequestProjects(store, bKey);
+      if (collapsed.changed) {
+        await writeStore(collapsed.store);
+      }
+    });
+  }
   await backupCriticalFiles({ force: true }).catch(() => {
     // ignore startup backup errors
   });
