@@ -4059,16 +4059,24 @@ app.post('/api/integrations/airtable/requests/sync', async (req, res) => {
       return s;
     };
 
-    const pickAiRevisionSummary = (fields) => {
-      const raw = firstNonEmptyString(fields, [], [
-        'ai revision summary',
-        'ai summary',
-        'ai revision',
-        'revision summary',
-        'ai notes',
-        'ai output',
-      ]);
+    const pickRevisionSummary = (fields) => {
+      // Exact Airtable field name: "Revision Summary"
+      const raw = firstNonEmptyString(fields, [], ['revision summary']);
       return typeof raw === 'string' ? raw.trim() : '';
+    };
+
+    const pickBusinessFromClients = (fields) => {
+      // Exact Airtable field name is expected to be something like:
+      // "Business (from Clients)" (lookup/linked field).
+      // User-provided variant: "Business (from Clientssss)".
+      const raw = firstNonEmptyString(fields, [], [
+        'business (from clients)',
+        'business (from clientssss)',
+      ]);
+      const s = typeof raw === 'string' ? raw.trim() : '';
+      if (!s) return '';
+      // Airtable lookups sometimes return comma-joined strings in our deep picker.
+      return s.split(',')[0].trim();
     };
 
     const pickAirtableTaskText = (fields) => {
@@ -4155,14 +4163,14 @@ app.post('/api/integrations/airtable/requests/sync', async (req, res) => {
         const clientName = firstNonEmptyString(fields, [], ['client', 'client name', 'company', 'company name', 'customer', 'project']) || '';
         const clientPhone = firstNonEmptyString(fields, [], ['phone', 'phone number', 'mobile', 'cell', 'cell phone']) || '';
         const revisionLabel = pickRevisionLabel(fields);
-        const aiRevisionSummary = pickAiRevisionSummary(fields);
+        const revisionSummary = pickRevisionSummary(fields);
         const taskText = pickAirtableTaskText(fields);
         const dueRaw = firstNonEmptyString(fields, [], ['due', 'due date', 'deadline']);
         const dueDate = safeYmd(String(dueRaw || '').trim().slice(0, 10)) || '';
         const status = mapProjectStatus(fields);
         const priority = mapProjectPriority(fields);
 
-        const businessName = getBusinessNameForKey(key);
+        const businessName = pickBusinessFromClients(fields) || getBusinessNameForKey(key);
         const revPart = revisionLabel ? `Rev ${revisionLabel}` : 'Revision';
         const projectName = `${businessName} — ${revPart}`.slice(0, 140);
 
@@ -4180,12 +4188,12 @@ app.post('/api/integrations/airtable/requests/sync', async (req, res) => {
         importedBriefLines.push('');
         importedBriefLines.push(`Airtable: ${recordUrl}`);
 
-        const upsertAiSummaryNote = (project) => {
-          if (!project || !aiRevisionSummary) return;
+        const upsertRevisionSummaryNote = (project) => {
+          if (!project || !revisionSummary) return;
           const noteId = `airtable:rev:${recordId}:ai-summary`;
           const date = safeYmd(ts.slice(0, 10)) || ts.slice(0, 10);
           const title = revisionLabel ? `AI Revision Summary (Rev ${revisionLabel})` : 'AI Revision Summary';
-          const content = `${aiRevisionSummary}\n\nAirtable: ${recordUrl}`.trimEnd();
+          const content = `${revisionSummary}\n\nAirtable: ${recordUrl}`.trimEnd();
           const note = {
             id: noteId,
             kind: 'Airtable',
@@ -4208,7 +4216,7 @@ app.post('/api/integrations/airtable/requests/sync', async (req, res) => {
 
         const upsertAirtableTasks = (project) => {
           if (!project) return;
-          const sourceText = taskText || aiRevisionSummary;
+          const sourceText = taskText || revisionSummary;
           const titles = parseTaskTitles(sourceText);
           if (!titles.length) return;
           for (const t of titles) {
@@ -4286,7 +4294,7 @@ app.post('/api/integrations/airtable/requests/sync', async (req, res) => {
             nextSenderProjectMap = upsertSenderProjectMapForProject(nextSenderProjectMap, project.clientPhone, project);
           }
 
-          upsertAiSummaryNote(project);
+          upsertRevisionSummaryNote(project);
           upsertAirtableTasks(project);
 
           created++;
@@ -4330,7 +4338,7 @@ app.post('/api/integrations/airtable/requests/sync', async (req, res) => {
         const changed = JSON.stringify(updatedProject) !== JSON.stringify(existing);
         if (!changed) {
           // Even if the project didn't change, we still may update notes/tasks from Airtable.
-          upsertAiSummaryNote(existing);
+          upsertRevisionSummaryNote(existing);
           upsertAirtableTasks(existing);
           if (!didMutate) skipped++;
           continue;
@@ -4345,7 +4353,7 @@ app.post('/api/integrations/airtable/requests/sync', async (req, res) => {
           nextSenderProjectMap = upsertSenderProjectMapForProject(nextSenderProjectMap, updatedProject.clientPhone, updatedProject);
         }
 
-        upsertAiSummaryNote(updatedProject);
+        upsertRevisionSummaryNote(updatedProject);
         upsertAirtableTasks(updatedProject);
 
         updated++;
