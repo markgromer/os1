@@ -11,6 +11,7 @@ const state = {
 
     currentView: "dashboard",
     currentProjectId: null,
+    currentClientName: null,
 
     projects: [],
     tasks: [],
@@ -68,6 +69,20 @@ const state = {
 };
 
 let pollIntervalId = null;
+
+function preserveMartyDrawerDuringRerender() {
+    const drawer = document.getElementById('neural-drawer');
+    if (!drawer) return;
+    // If a view rerender is about to clear a parent via `.innerHTML = ''`,
+    // move the drawer back to <body> first so it doesn't get destroyed.
+    try {
+        if (drawer.parentElement && drawer.parentElement !== document.body) {
+            document.body.appendChild(drawer);
+        }
+    } catch {
+        // ignore
+    }
+}
 
 function stopPolling() {
     if (pollIntervalId) {
@@ -2308,6 +2323,7 @@ function renderNav() {
     
     nav.appendChild(createNavIcon("fa-grip", "Dashboard", () => openDashboard(), state.currentView === "dashboard"));
     nav.appendChild(createNavIcon("fa-inbox", "Inbox", () => openInbox(), state.currentView === "inbox"));
+    nav.appendChild(createNavIcon("fa-address-book", "Clients", () => openClients(), state.currentView === "clients" || state.currentView === "client"));
     nav.appendChild(createNavIcon("fa-folder", "Projects", () => openProjects(), state.currentView === "projects" || state.currentView === "project"));
     nav.appendChild(createNavIcon("fa-calendar-days", "Calendar", () => openCalendar(), state.currentView === "calendar"));
     nav.appendChild(createNavIcon("fa-user-group", "Team", () => openTeam(), state.currentView === "team"));
@@ -2322,6 +2338,7 @@ function renderNav() {
 async function openDashboard() {
     state.currentView = 'dashboard';
     state.currentProjectId = null;
+    state.currentClientName = null;
     await loadChatHistory();
     renderNav();
     renderMain();
@@ -2332,6 +2349,29 @@ async function openDashboard() {
 async function openInbox() {
     state.currentView = 'inbox';
     state.currentProjectId = null;
+    state.currentClientName = null;
+    await loadChatHistory();
+    renderNav();
+    renderMain();
+    renderChat();
+    broadcastMartyContext();
+}
+
+async function openClients() {
+    state.currentView = 'clients';
+    state.currentProjectId = null;
+    state.currentClientName = null;
+    await loadChatHistory();
+    renderNav();
+    renderMain();
+    renderChat();
+    broadcastMartyContext();
+}
+
+async function openClient(clientName) {
+    state.currentView = 'client';
+    state.currentProjectId = null;
+    state.currentClientName = safeText(clientName).trim() || null;
     await loadChatHistory();
     renderNav();
     renderMain();
@@ -2342,6 +2382,7 @@ async function openInbox() {
 async function openProjects() {
     state.currentView = 'projects';
     state.currentProjectId = null;
+    state.currentClientName = null;
     await loadChatHistory();
     renderNav();
     renderMain();
@@ -2352,6 +2393,7 @@ async function openProjects() {
 async function openProject(projectId) {
     state.currentView = 'project';
     state.currentProjectId = projectId;
+    state.currentClientName = null;
     await loadChatHistory();
     renderNav();
     renderMain();
@@ -2362,6 +2404,7 @@ async function openProject(projectId) {
 async function openSettings() {
     state.currentView = 'settings';
     state.currentProjectId = null;
+    state.currentClientName = null;
     await fetchSettings();
     await refreshSlackTeamPresence({ force: true });
     renderNav();
@@ -2373,6 +2416,7 @@ async function openSettings() {
 async function openCalendar() {
     state.currentView = 'calendar';
     state.currentProjectId = null;
+    state.currentClientName = null;
     await fetchSettings();
     await refreshDashboardCalls({ force: true }).catch(() => {});
     await loadChatHistory();
@@ -2385,6 +2429,7 @@ async function openCalendar() {
 async function openTeam() {
     state.currentView = 'team';
     state.currentProjectId = null;
+    state.currentClientName = null;
     await fetchSettings();
     await refreshSlackTeamPresence({ force: true }).catch(() => {});
     await loadChatHistory();
@@ -2428,6 +2473,8 @@ function renderMain() {
     if (!container) return;
 
     const side = ports.martyPort;
+
+    preserveMartyDrawerDuringRerender();
 
     container.innerHTML = "";
     if (side) side.innerHTML = '';
@@ -2484,6 +2531,14 @@ function renderMain() {
         dockMartyToPersistentSlot();
         container.className = 'min-h-0 overflow-y-auto';
         renderInbox(container);
+    } else if (state.currentView === "clients") {
+        dockMartyToPersistentSlot();
+        container.className = 'min-h-0 overflow-y-auto';
+        renderClients(container);
+    } else if (state.currentView === "client") {
+        dockMartyToPersistentSlot();
+        container.className = 'min-h-0 overflow-y-auto';
+        renderClientView(container);
     } else if (state.currentView === "projects") {
         dockMartyToPersistentSlot();
         container.className = 'min-h-0 overflow-y-auto';
@@ -2507,6 +2562,165 @@ function renderMain() {
     }
 
     renderCommandPaletteOverlay();
+}
+
+function normalizeClientLabel(name) {
+    const n = safeText(name).trim();
+    return n || 'Unnamed Client';
+}
+
+function buildClientsIndexFromProjects(projects) {
+    const list = Array.isArray(projects) ? projects : [];
+    const byKey = new Map();
+
+    for (const p of list) {
+        const name = normalizeClientLabel(p?.clientName);
+        const key = name.toLowerCase();
+        const phone = safeText(p?.clientPhone).trim();
+        const existing = byKey.get(key) || { name, phone: '', projects: [] };
+        if (!existing.phone && phone) existing.phone = phone;
+        existing.projects.push(p);
+        byKey.set(key, existing);
+    }
+
+    const out = Array.from(byKey.values());
+    out.sort((a, b) => a.name.localeCompare(b.name));
+    return out;
+}
+
+function renderClients(container) {
+    const titleEl = document.getElementById('page-title');
+    if (titleEl) titleEl.innerText = 'Clients';
+
+    const projects = Array.isArray(state.projects) ? state.projects : [];
+    const clients = buildClientsIndexFromProjects(projects);
+
+    const wrap = document.createElement('div');
+    wrap.className = 'h-full min-h-0 overflow-y-auto p-6';
+
+    const card = document.createElement('div');
+    card.className = 'border border-ops-border rounded-xl bg-ops-surface/30 p-4';
+    card.innerHTML = `
+        <div class="flex items-center justify-between gap-3">
+            <div>
+                <div class="text-xs font-semibold text-white">Clients</div>
+                <div class="text-[10px] font-mono text-ops-light">Grouped from projects in this business</div>
+            </div>
+            <button id="btn-client-new" class="px-3 py-2 rounded border border-ops-border text-[11px] font-mono text-ops-light hover:text-white hover:bg-ops-surface/60 transition-colors">New Project</button>
+        </div>
+        <div class="mt-4">
+            ${clients.length ? `<div class="space-y-2">${clients.map((c) => {
+                const projCount = Array.isArray(c.projects) ? c.projects.length : 0;
+                const activeCount = (Array.isArray(c.projects) ? c.projects : [])
+                    .filter((p) => String(p?.status || '').trim().toLowerCase() !== 'archived')
+                    .length;
+                const phone = safeText(c.phone).trim();
+                return `
+                    <button data-client-open="${escapeHtml(c.name)}" class="w-full text-left border border-ops-border rounded-lg bg-ops-bg/40 px-3 py-2 hover:bg-ops-surface/60 transition-colors">
+                        <div class="flex items-center justify-between gap-3">
+                            <div class="min-w-0">
+                                <div class="text-sm text-white truncate">${escapeHtml(c.name)}</div>
+                                <div class="text-[10px] font-mono text-ops-light truncate">${escapeHtml(phone || '—')}</div>
+                            </div>
+                            <div class="shrink-0 text-right">
+                                <div class="text-[11px] font-mono text-white">${projCount}</div>
+                                <div class="text-[9px] font-mono text-ops-light/60">${activeCount} active</div>
+                            </div>
+                        </div>
+                    </button>
+                `;
+            }).join('')}</div>` : `<div class="text-[11px] text-ops-light/80">No clients yet. Add a project with a client name.</div>`}
+        </div>
+    `;
+
+    wrap.appendChild(card);
+    container.appendChild(wrap);
+
+    card.querySelector('#btn-client-new')?.addEventListener('click', () => createNewProjectPrompt());
+    card.querySelectorAll('button[data-client-open]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+            const name = safeText(btn.getAttribute('data-client-open'));
+            await openClient(name);
+        });
+    });
+}
+
+function renderClientView(container) {
+    const clientName = normalizeClientLabel(state.currentClientName);
+    const titleEl = document.getElementById('page-title');
+    if (titleEl) titleEl.innerText = clientName;
+
+    const projects = Array.isArray(state.projects) ? state.projects : [];
+    const matching = projects
+        .filter((p) => normalizeClientLabel(p?.clientName).toLowerCase() === clientName.toLowerCase())
+        .slice();
+    matching.sort((a, b) => safeText(a?.name).localeCompare(safeText(b?.name)));
+    const phone = safeText((matching.find((p) => safeText(p?.clientPhone).trim()) || {})?.clientPhone).trim();
+
+    const wrap = document.createElement('div');
+    wrap.className = 'h-full min-h-0 overflow-y-auto p-6';
+
+    const head = document.createElement('div');
+    head.className = 'border border-ops-border rounded-xl bg-ops-surface/30 p-4';
+    head.innerHTML = `
+        <div class="flex items-start justify-between gap-3">
+            <div class="min-w-0">
+                <div class="text-xs font-semibold text-white">Client</div>
+                <div class="mt-1 text-lg text-white font-semibold truncate">${escapeHtml(clientName)}</div>
+                <div class="mt-1 text-[10px] font-mono text-ops-light truncate">${escapeHtml(phone || '—')}</div>
+            </div>
+            <div class="shrink-0 flex items-center gap-2">
+                <button id="btn-client-back" class="px-3 py-2 rounded border border-ops-border text-[11px] font-mono text-ops-light hover:text-white hover:bg-ops-surface/60 transition-colors">Back</button>
+                <button id="btn-client-new-project" class="px-3 py-2 rounded bg-blue-600/20 border border-blue-600/40 text-[11px] font-mono text-blue-200 hover:bg-blue-600/30 transition-colors">New Project</button>
+            </div>
+        </div>
+    `;
+    wrap.appendChild(head);
+
+    const projCard = document.createElement('div');
+    projCard.className = 'mt-4 border border-ops-border rounded-xl bg-ops-surface/30 p-4';
+    projCard.innerHTML = `
+        <div class="flex items-center justify-between gap-3">
+            <div>
+                <div class="text-xs font-semibold text-white">Projects</div>
+                <div class="text-[10px] font-mono text-ops-light">Tracked under this client</div>
+            </div>
+            <div class="text-[11px] font-mono text-white">${matching.length}</div>
+        </div>
+        <div class="mt-4">
+            ${matching.length ? `<div class="space-y-2">${matching.map((p) => {
+                const pid = safeText(p?.id);
+                const name = safeText(p?.name) || 'Untitled';
+                const status = safeText(p?.status) || 'Active';
+                const due = safeText(p?.dueDate);
+                return `
+                    <button data-client-proj-open="${escapeHtml(pid)}" class="w-full text-left border border-ops-border rounded-lg bg-ops-bg/40 px-3 py-2 hover:bg-ops-surface/60 transition-colors">
+                        <div class="flex items-center justify-between gap-3">
+                            <div class="min-w-0">
+                                <div class="text-sm text-white truncate">${escapeHtml(name)}</div>
+                                <div class="text-[10px] font-mono text-ops-light/70 truncate">${escapeHtml(status)}${due ? ` • ${escapeHtml(due)}` : ''}</div>
+                            </div>
+                            <i class="fa-solid fa-chevron-right text-ops-light/40"></i>
+                        </div>
+                    </button>
+                `;
+            }).join('')}</div>` : `<div class="text-[11px] text-ops-light/80">No projects yet for this client.</div>`}
+        </div>
+    `;
+    wrap.appendChild(projCard);
+
+    container.appendChild(wrap);
+
+    head.querySelector('#btn-client-back')?.addEventListener('click', () => openClients());
+    head.querySelector('#btn-client-new-project')?.addEventListener('click', () => {
+        createNewProjectPrompt({ clientName, clientPhone: phone });
+    });
+    projCard.querySelectorAll('button[data-client-proj-open]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+            const pid = safeText(btn.getAttribute('data-client-proj-open'));
+            if (pid) await openProject(pid);
+        });
+    });
 }
 
 function renderCalendar(container) {
@@ -6136,43 +6350,74 @@ function renderDashboard(container, sidePort) {
         const email = list.filter((x) => normalizeInboxSourceKey(x?.source) === 'email');
         const other = list.filter((x) => { const k = normalizeInboxSourceKey(x?.source); return k !== 'slack' && k !== 'email'; });
 
-        const rowsHtml = (Array.isArray(groups) ? groups : list)
-            .slice(0, 8)
-            .map((row) => {
-                const isGroup = Array.isArray(groups);
+        const renderGroupRow = (row, { showBusiness = true } = {}) => {
+            const business = safeText(row?.businessLabel) || safeText(row?.businessKey) || 'Business';
+            const stamp = formatInboxStamp(safeText(row?.latestAt));
+            const count = Number(row?.count) || 0;
+            const isUnassigned = Boolean(row?.isUnassigned) || (!safeText(row?.projectId).trim());
+            const title = isUnassigned ? 'Unassigned' : (safeText(row?.projectName).trim() || 'Project');
+            const summary = safeText(row?.summary).trim() || (Array.isArray(row?.sample) ? safeText(row.sample[0]) : '');
 
-                if (isGroup) {
-                    const business = safeText(row?.businessLabel) || safeText(row?.businessKey) || 'Business';
-                    const stamp = formatInboxStamp(safeText(row?.latestAt));
-                    const count = Number(row?.count) || 0;
-                    const isUnassigned = Boolean(row?.isUnassigned) || (!safeText(row?.projectId).trim());
-                    const title = isUnassigned
-                        ? 'Unassigned'
-                        : (safeText(row?.projectName).trim() || 'Project');
-                    const summary = safeText(row?.summary).trim() || (Array.isArray(row?.sample) ? safeText(row.sample[0]) : '');
+            const borderTone = isUnassigned ? 'border-red-500/30 bg-red-500/10' : 'border-ops-border bg-ops-bg/40';
+            const countTone = isUnassigned ? 'text-red-300' : 'text-white';
 
-                    const borderTone = isUnassigned ? 'border-red-500/30 bg-red-500/10' : 'border-ops-border bg-ops-bg/40';
-                    const countTone = isUnassigned ? 'text-red-300' : 'text-white';
-
-                    return `
-                        <div class="border rounded px-2.5 py-2 ${borderTone}">
-                            <div class="flex items-start justify-between gap-2">
-                                <div class="min-w-0 flex-1">
-                                    <div class="flex items-center gap-1.5 flex-wrap">
-                                        <span class="px-1.5 py-0.5 rounded border border-ops-border text-[9px] font-mono text-ops-light/50">${escapeHtml(business)}</span>
-                                        ${stamp ? `<span class="text-[9px] font-mono text-ops-light/40">${escapeHtml(stamp)}</span>` : ''}
-                                    </div>
-                                    <div class="mt-1 flex items-center justify-between gap-2">
-                                        <div class="min-w-0 text-[11px] ${isUnassigned ? 'text-red-200 font-semibold' : 'text-white'} truncate">${escapeHtml(title)}</div>
-                                        <div class="shrink-0 text-[11px] font-mono font-semibold ${countTone}">${count}</div>
-                                    </div>
-                                    ${summary ? `<div class="mt-0.5 text-[10px] text-ops-light/60 truncate">${escapeHtml(summary)}</div>` : ''}
-                                </div>
+            return `
+                <div class="border rounded px-2.5 py-2 ${borderTone}">
+                    <div class="flex items-start justify-between gap-2">
+                        <div class="min-w-0 flex-1">
+                            <div class="flex items-center gap-1.5 flex-wrap">
+                                ${showBusiness ? `<span class=\"px-1.5 py-0.5 rounded border border-ops-border text-[9px] font-mono text-ops-light/50\">${escapeHtml(business)}</span>` : ''}
+                                ${stamp ? `<span class="text-[9px] font-mono text-ops-light/40">${escapeHtml(stamp)}</span>` : ''}
                             </div>
+                            <div class="mt-1 flex items-center justify-between gap-2">
+                                <div class="min-w-0 text-[11px] ${isUnassigned ? 'text-red-200 font-semibold' : 'text-white'} truncate">${escapeHtml(title)}</div>
+                                <div class="shrink-0 text-[11px] font-mono font-semibold ${countTone}">${count}</div>
+                            </div>
+                            ${summary ? `<div class="mt-0.5 text-[10px] text-ops-light/60 truncate">${escapeHtml(summary)}</div>` : ''}
                         </div>
-                    `;
+                    </div>
+                </div>
+            `;
+        };
+
+        const rowsHtml = Array.isArray(groups)
+            ? (() => {
+                const sections = [];
+                const byKey = new Map();
+                for (const g of groups) {
+                    const key = safeText(g?.businessKey) || safeText(g?.businessLabel) || 'business';
+                    if (!byKey.has(key)) {
+                        const label = safeText(g?.businessLabel) || safeText(g?.businessKey) || 'Business';
+                        const sec = { key, label, rows: [] };
+                        byKey.set(key, sec);
+                        sections.push(sec);
+                    }
+                    byKey.get(key).rows.push(g);
                 }
 
+                return sections
+                    .map((sec) => {
+                        const total = sec.rows.reduce((sum, r) => sum + (Number(r?.count) || 0), 0);
+                        const shown = sec.rows.slice(0, 6);
+                        const more = sec.rows.length - shown.length;
+                        return `
+                            <div class="border border-ops-border rounded-lg bg-ops-bg/20 px-2.5 py-2">
+                                <div class="flex items-center justify-between gap-2 mb-1">
+                                    <div class="text-[9px] font-mono uppercase tracking-widest text-ops-light/60 truncate">${escapeHtml(sec.label)}</div>
+                                    <div class="text-[10px] font-mono text-white">${total}</div>
+                                </div>
+                                <div class="space-y-1">
+                                    ${shown.map((r) => renderGroupRow(r, { showBusiness: false })).join('')}
+                                    ${more > 0 ? `<div class=\"text-[9px] font-mono text-ops-light/40 px-1\">+${more} more</div>` : ''}
+                                </div>
+                            </div>
+                        `;
+                    })
+                    .join('');
+            })()
+            : list
+                .slice(0, 8)
+                .map((row) => {
                 const item = row;
                 const status = safeText(item?.status).trim() || 'New';
                 const sourceKey = normalizeInboxSourceKey(item?.source);
@@ -6711,35 +6956,70 @@ function renderDashboardCommandCenter(container, sidePort) {
         const email = list.filter((x) => normalizeInboxSourceKey(x?.source) === 'email');
         const other = list.filter((x) => { const k = normalizeInboxSourceKey(x?.source); return k !== 'slack' && k !== 'email'; });
 
-        const rowsHtml = (Array.isArray(groups) ? groups : list)
-            .slice(0, 8)
-            .map((row) => {
-                const isGroup = Array.isArray(groups);
-                if (isGroup) {
-                    const business = safeText(row?.businessLabel) || safeText(row?.businessKey) || 'Business';
-                    const stamp = formatInboxStamp(safeText(row?.latestAt));
-                    const count = Number(row?.count) || 0;
-                    const isUnassigned = Boolean(row?.isUnassigned) || (!safeText(row?.projectId).trim());
-                    const title = isUnassigned ? 'Unassigned' : (safeText(row?.projectName).trim() || 'Project');
-                    const summary = safeText(row?.summary).trim() || (Array.isArray(row?.sample) ? safeText(row.sample[0]) : '');
-                    const borderTone = isUnassigned ? 'border-red-500/30 bg-red-500/10' : 'border-ops-border bg-ops-bg/40';
-                    const countTone = isUnassigned ? 'text-red-300' : 'text-white';
-                    return `
-                        <div class="border rounded px-2.5 py-2 ${borderTone}">
+        const renderGroupRow = (row, { showBusiness = true } = {}) => {
+            const business = safeText(row?.businessLabel) || safeText(row?.businessKey) || 'Business';
+            const stamp = formatInboxStamp(safeText(row?.latestAt));
+            const count = Number(row?.count) || 0;
+            const isUnassigned = Boolean(row?.isUnassigned) || (!safeText(row?.projectId).trim());
+            const title = isUnassigned ? 'Unassigned' : (safeText(row?.projectName).trim() || 'Project');
+            const summary = safeText(row?.summary).trim() || (Array.isArray(row?.sample) ? safeText(row.sample[0]) : '');
+            const borderTone = isUnassigned ? 'border-red-500/30 bg-red-500/10' : 'border-ops-border bg-ops-bg/40';
+            const countTone = isUnassigned ? 'text-red-300' : 'text-white';
+            const businessLine = showBusiness ? `${escapeHtml(business)}${stamp ? ` • ${escapeHtml(stamp)}` : ''}` : (stamp ? escapeHtml(stamp) : '');
+            return `
+                <div class="border rounded px-2.5 py-2 ${borderTone}">
+                    <div class="min-w-0">
+                        <div class="flex items-center justify-between gap-2">
                             <div class="min-w-0">
-                                <div class="flex items-center justify-between gap-2">
-                                    <div class="min-w-0">
-                                        <div class="text-[10px] font-mono text-ops-light/50 truncate">${escapeHtml(business)}${stamp ? ` • ${escapeHtml(stamp)}` : ''}</div>
-                                        <div class="mt-0.5 text-[11px] ${isUnassigned ? 'text-red-200 font-semibold' : 'text-white'} truncate">${escapeHtml(title)}</div>
-                                    </div>
-                                    <div class="shrink-0 text-[11px] font-mono font-semibold ${countTone}">${count}</div>
-                                </div>
-                                ${summary ? `<div class="mt-0.5 text-[10px] text-ops-light/60 truncate">${escapeHtml(summary)}</div>` : ''}
+                                ${businessLine ? `<div class=\"text-[10px] font-mono text-ops-light/50 truncate\">${businessLine}</div>` : ''}
+                                <div class="mt-0.5 text-[11px] ${isUnassigned ? 'text-red-200 font-semibold' : 'text-white'} truncate">${escapeHtml(title)}</div>
                             </div>
+                            <div class="shrink-0 text-[11px] font-mono font-semibold ${countTone}">${count}</div>
                         </div>
-                    `;
+                        ${summary ? `<div class="mt-0.5 text-[10px] text-ops-light/60 truncate">${escapeHtml(summary)}</div>` : ''}
+                    </div>
+                </div>
+            `;
+        };
+
+        const rowsHtml = Array.isArray(groups)
+            ? (() => {
+                const sections = [];
+                const byKey = new Map();
+                for (const g of groups) {
+                    const key = safeText(g?.businessKey) || safeText(g?.businessLabel) || 'business';
+                    if (!byKey.has(key)) {
+                        const label = safeText(g?.businessLabel) || safeText(g?.businessKey) || 'Business';
+                        const sec = { key, label, rows: [] };
+                        byKey.set(key, sec);
+                        sections.push(sec);
+                    }
+                    byKey.get(key).rows.push(g);
                 }
 
+                return sections
+                    .map((sec) => {
+                        const total = sec.rows.reduce((sum, r) => sum + (Number(r?.count) || 0), 0);
+                        const shown = sec.rows.slice(0, 6);
+                        const more = sec.rows.length - shown.length;
+                        return `
+                            <div class="border border-ops-border rounded-lg bg-ops-bg/20 px-2.5 py-2">
+                                <div class="flex items-center justify-between gap-2 mb-1">
+                                    <div class="text-[9px] font-mono uppercase tracking-widest text-ops-light/60 truncate">${escapeHtml(sec.label)}</div>
+                                    <div class="text-[10px] font-mono text-white">${total}</div>
+                                </div>
+                                <div class="space-y-1">
+                                    ${shown.map((r) => renderGroupRow(r, { showBusiness: false })).join('')}
+                                    ${more > 0 ? `<div class=\"text-[9px] font-mono text-ops-light/40 px-1\">+${more} more</div>` : ''}
+                                </div>
+                            </div>
+                        `;
+                    })
+                    .join('');
+            })()
+            : list
+                .slice(0, 8)
+                .map((row) => {
                 const item = row;
                 const status = safeText(item?.status).trim() || 'New';
                 const sourceKey = normalizeInboxSourceKey(item?.source);
@@ -8482,8 +8762,19 @@ async function renderDelete(id) {
     }
 }
 
-async function createNewProjectPrompt() {
+async function createNewProjectPrompt(prefill) {
     state.showNewProjectIntake = true;
+
+    const p = (prefill && typeof prefill === 'object') ? prefill : null;
+    if (p) {
+        const patch = {};
+        const name = safeText(p.clientName).trim();
+        const phone = safeText(p.clientPhone).trim();
+        if (name) patch.clientName = normalizeClientLabel(name);
+        if (phone) patch.clientPhone = phone;
+        if (Object.keys(patch).length) setNewProjectDraft(patch);
+    }
+
     await openProjects();
     setTimeout(() => {
         const nameEl = document.getElementById('np-name');
