@@ -3645,56 +3645,147 @@ app.post('/api/integrations/airtable/clients/sync', async (req, res) => {
     await withBusinessKey(key, async () => {
       const store = await readStore();
       const existing = Array.isArray(store.projects) ? store.projects : [];
-      const existingByAirtableUrl = new Set(existing.map((p) => String(p?.airtableUrl || '').trim()).filter(Boolean));
+      const byAirtableUrl = new Map();
+      for (const p of existing) {
+        const url = String(p?.airtableUrl || '').trim();
+        if (url) byAirtableUrl.set(url, p);
+      }
+
+      const pick = (fields, keyNames) => firstNonEmptyString(fields, [], keyNames);
+      const normalizeDue = (value) => {
+        const raw = String(value || '').trim();
+        if (!raw) return '';
+        const iso = raw.includes('T') && raw.length >= 10 ? raw.slice(0, 10) : raw;
+        return safeYmd(iso) || '';
+      };
+      const mapStatus = (value) => {
+        const s = String(value || '').trim().toLowerCase();
+        if (!s) return '';
+        if (s.includes('archiv')) return 'Archived';
+        if (s.includes('done') || s.includes('complete') || s.includes('completed') || s.includes('closed')) return 'Done';
+        if (s.includes('hold') || s.includes('paused') || s.includes('pause')) return 'On Hold';
+        if (s.includes('active') || s.includes('in progress') || s.includes('progress')) return 'Active';
+        return '';
+      };
+      const mapType = (value) => {
+        const s = String(value || '').trim().toLowerCase();
+        if (!s) return '';
+        if (s.includes('rebuild')) return 'Rebuild';
+        if (s.includes('build') || s.includes('new site') || s.includes('new')) return 'Build';
+        if (s.includes('revision') || s.includes('edits') || s.includes('changes')) return 'Revision';
+        if (s.includes('workflow') || s.includes('process') || s.includes('automation')) return 'Workflow';
+        if (s.includes('cleanup') || s.includes('fix') || s.includes('bug')) return 'Cleanup';
+        return '';
+      };
+      const prefer = (nextVal, prevVal) => {
+        const n = String(nextVal || '').trim();
+        return n ? n : (typeof prevVal === 'string' ? prevVal : '');
+      };
 
       let created = 0;
+      let updated = 0;
       let skipped = 0;
 
       const toCreate = [];
+      const nextExisting = [...existing];
+
       for (const r of (out.records || [])) {
         const recordId = typeof r?.id === 'string' ? r.id : '';
         if (!recordId) continue;
+        const fields = r?.fields && typeof r.fields === 'object' ? r.fields : {};
         const recordUrl = `https://airtable.com/${cfg.baseId}/${cfg.clientsTableId}/${recordId}`;
-        if (existingByAirtableUrl.has(recordUrl)) {
+
+        const name = pickAirtableClientName(fields) || `Airtable Client ${recordId}`;
+        const clientPhone = pick(fields, ['phone', 'phone number', 'mobile', 'cell', 'cell phone']);
+        const accountManagerName = pick(fields, ['account manager', 'am', 'owner', 'manager', 'project manager']);
+        const accountManagerEmail = pick(fields, ['account manager email', 'am email', 'owner email', 'manager email']);
+        const dueDate = normalizeDue(pick(fields, ['due date', 'due', 'deadline']));
+        const status = mapStatus(pick(fields, ['status', 'stage']));
+        const type = mapType(pick(fields, ['project type', 'type']));
+        const projectValue = pick(fields, ['project value', 'value', 'budget', 'price', 'amount']);
+        const website = pick(fields, ['website', 'site', 'url', 'domain']);
+
+        const baseBriefLines = [];
+        baseBriefLines.push('Imported from Airtable (Clients)');
+        baseBriefLines.push(`Record: ${recordId}`);
+        if (website) baseBriefLines.push(`Website: ${website}`);
+        const agentBrief = baseBriefLines.join('\n');
+
+        const normalized = normalizeProject({
+          name,
+          type: type || 'Workflow',
+          status: status || 'Active',
+          dueDate,
+          accountManagerName,
+          accountManagerEmail,
+          clientName: name,
+          clientPhone,
+          airtableUrl: recordUrl,
+          projectValue,
+          agentBrief,
+        });
+
+        const existingProject = byAirtableUrl.get(recordUrl) || null;
+        if (!existingProject) {
+          const ts = nowIso();
+          const project = {
+            id: makeId(),
+            ...normalized,
+            createdAt: ts,
+            updatedAt: ts,
+          };
+          toCreate.push(project);
+          byAirtableUrl.set(recordUrl, project);
+          created++;
+          continue;
+        }
+
+        const merged = {
+          ...existingProject,
+          ...normalized,
+          // Preserve ids/timestamps; update updatedAt only when we actually change something.
+          id: existingProject.id,
+          createdAt: existingProject.createdAt,
+          name: prefer(normalized.name, existingProject.name),
+          clientName: prefer(normalized.clientName, existingProject.clientName),
+          clientPhone: prefer(normalized.clientPhone, existingProject.clientPhone),
+          accountManagerName: prefer(normalized.accountManagerName, existingProject.accountManagerName),
+          accountManagerEmail: prefer(normalized.accountManagerEmail, existingProject.accountManagerEmail),
+          dueDate: prefer(normalized.dueDate, existingProject.dueDate),
+          status: prefer(normalized.status, existingProject.status),
+          type: prefer(normalized.type, existingProject.type),
+          projectValue: prefer(normalized.projectValue, existingProject.projectValue),
+          agentBrief: prefer(normalized.agentBrief, existingProject.agentBrief),
+          airtableUrl: recordUrl,
+        };
+
+        const changed = JSON.stringify(merged) !== JSON.stringify(existingProject);
+        if (!changed) {
           skipped++;
           continue;
         }
 
-        const name = pickAirtableClientName(r?.fields) || `Airtable Client ${recordId}`;
-        const normalized = normalizeProject({
-          name,
-          type: 'Workflow',
-          status: 'Active',
-          clientName: name,
-          airtableUrl: recordUrl,
-          agentBrief: `Imported from Airtable (Clients)\nRecord: ${recordId}`,
-        });
-
-        const ts = nowIso();
-        const project = {
-          id: makeId(),
-          ...normalized,
-          createdAt: ts,
-          updatedAt: ts,
-        };
-        toCreate.push(project);
-        existingByAirtableUrl.add(recordUrl);
-        created++;
+        merged.updatedAt = nowIso();
+        const idx = nextExisting.findIndex((p) => p && p.id === existingProject.id);
+        if (idx >= 0) nextExisting[idx] = merged;
+        else nextExisting.push(merged);
+        byAirtableUrl.set(recordUrl, merged);
+        updated++;
       }
 
-      const ts = nowIso();
-      const nextStore = {
-        ...store,
-        revision: store.revision + 1,
-        updatedAt: ts,
-        projects: [...toCreate, ...existing],
-      };
-
-      if (toCreate.length) {
+      const didWrite = toCreate.length > 0 || updated > 0;
+      if (didWrite) {
+        const ts = nowIso();
+        const nextStore = {
+          ...store,
+          revision: store.revision + 1,
+          updatedAt: ts,
+          projects: [...toCreate, ...nextExisting],
+        };
         await writeStore(nextStore);
       }
 
-      res.json({ ok: true, businessKey: key, created, skipped, totalFetched: (out.records || []).length });
+      res.json({ ok: true, businessKey: key, created, updated, skipped, totalFetched: (out.records || []).length });
     });
   });
 

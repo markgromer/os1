@@ -4265,7 +4265,11 @@ function renderSettings(container) {
             });
             const data = await r.json().catch(() => ({}));
             if (!r.ok || data?.ok === false) throw new Error(data?.error || 'Sync failed');
-            setAirtableOutput(`Synced. Created: ${Number(data.created) || 0}, Skipped: ${Number(data.skipped) || 0}, Fetched: ${Number(data.totalFetched) || 0}`);
+            const created = Number(data.created) || 0;
+            const updated = Number(data.updated) || 0;
+            const skipped = Number(data.skipped) || 0;
+            const fetched = Number(data.totalFetched) || 0;
+            setAirtableOutput(`Synced. Created: ${created}, Updated: ${updated}, Skipped: ${skipped}, Fetched: ${fetched}`);
             await fetchState();
             renderNav();
         } catch (e) {
