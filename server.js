@@ -802,6 +802,93 @@ function phoneLookupKeys(value) {
   return Array.from(new Set(keys.filter(Boolean)));
 }
 
+function senderLookupKeys(value) {
+  const raw = String(value || '').trim();
+  const keys = [];
+  if (raw) keys.push(raw);
+  const digits = normalizePhoneForLookup(raw);
+  if (digits) {
+    keys.push(digits);
+    if (digits.length > 10) keys.push(digits.slice(-10));
+  }
+  return Array.from(new Set(keys.filter(Boolean)));
+}
+
+function resolveSenderProjectMapping(store, senderValue) {
+  const s = store && typeof store === 'object' ? store : {};
+  const map = s.senderProjectMap && typeof s.senderProjectMap === 'object' ? s.senderProjectMap : {};
+  const keys = senderLookupKeys(senderValue);
+  for (const k of keys) {
+    const v = map[k];
+    if (!v) continue;
+    if (typeof v === 'string') {
+      const pid = v.trim();
+      if (!pid) continue;
+      const project = (Array.isArray(s.projects) ? s.projects : []).find((p) => String(p?.id || '') === pid) || null;
+      return { projectId: pid, projectName: project ? String(project.name || '').trim() : '' };
+    }
+    if (v && typeof v === 'object') {
+      const pid = String(v.projectId || '').trim();
+      const pnm = String(v.projectName || '').trim();
+      if (pid) return { projectId: pid, projectName: pnm };
+    }
+  }
+  return null;
+}
+
+function upsertSenderProjectMapForProject(senderProjectMap, senderValue, project) {
+  const map = senderProjectMap && typeof senderProjectMap === 'object' ? senderProjectMap : {};
+  const pid = String(project?.id || '').trim();
+  if (!pid) return map;
+  const keys = senderLookupKeys(senderValue);
+  for (const k of keys) {
+    map[k] = pid;
+  }
+  return map;
+}
+
+function previewTextServer(text, maxLen = 140) {
+  const s = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!s) return '';
+  if (s.length <= maxLen) return s;
+  return `${s.slice(0, Math.max(0, maxLen - 1)).trimEnd()}…`;
+}
+
+function summarizeRadarGroupText(texts) {
+  const list = Array.isArray(texts) ? texts.map((t) => String(t || '')).filter(Boolean) : [];
+  if (!list.length) return '';
+
+  const stop = new Set([
+    'this', 'that', 'with', 'from', 'your', 'youre', 'have', 'will', 'just', 'like', 'thanks', 'thank', 'hello',
+    'sent', 'text', 'message', 'sms', 'call', 'email', 'slack', 'team', 'please', 'need', 'needed', 'needed',
+    'client', 'project', 'title', 'link', 'airtable', 'http', 'https', 'www',
+  ]);
+
+  const counts = new Map();
+  for (const raw of list.slice(0, 8)) {
+    const s = raw
+      .replace(/https?:\/\/\S+/gi, ' ')
+      .replace(/\+?\d[\d\s().-]{7,}\d/g, ' ')
+      .replace(/[^a-zA-Z0-9\s]/g, ' ')
+      .toLowerCase();
+    for (const w of s.split(/\s+/g)) {
+      if (!w || w.length < 4) continue;
+      if (stop.has(w)) continue;
+      counts.set(w, (counts.get(w) || 0) + 1);
+    }
+  }
+
+  const top = Array.from(counts.entries())
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, 3)
+    .map(([w]) => w);
+
+  if (top.length) return top.join(' · ');
+
+  const first = list.find((t) => String(t || '').trim()) || '';
+  return previewTextServer(first, 80);
+}
+
 function businessKeyFromLabel(label) {
   const text = String(label || '').trim().toLowerCase();
   const key = text.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
@@ -882,26 +969,25 @@ async function addInboxIntegrationItem({ source, externalId, text, projectId = '
 
     const ts = nowIso();
 
-      let finalProjectId = projectId;
-      let finalProjectName = projectName;
-      const senderKey = fromNumber || "";
-      if (!finalProjectId && senderKey && store.senderProjectMap && store.senderProjectMap[senderKey]) {
-        const autoProjId = store.senderProjectMap[senderKey];
-        const autoProj = (store.projects || []).find(p => p.id === autoProjId);
-        if (autoProj) {
-          finalProjectId = autoProj.id;
-          finalProjectName = autoProj.name;
-        }
+    let finalProjectId = projectId;
+    let finalProjectName = projectName;
+    const senderKey = fromNumber || '';
+    if (!finalProjectId && senderKey) {
+      const auto = resolveSenderProjectMapping(store, senderKey);
+      if (auto?.projectId) {
+        finalProjectId = auto.projectId;
+        finalProjectName = auto.projectName || '';
       }
+    }
 
-      const nextItem = normalizeInboxItem({
+    const nextItem = normalizeInboxItem({
         id,
         source: cleanSource,
         text: cleanText,
         status: "New",
         projectId: finalProjectId,
         projectName: finalProjectName,
-        businessKey,
+        businessKey: targetBusinessKey,
         businessLabel,
         toNumber,
         fromNumber,
@@ -2416,8 +2502,10 @@ function normalizeAirtableBusinessConfig(input) {
   const baseId = normalizeAirtableId(cfg.baseId);
   const clientsTableId = normalizeAirtableId(cfg.clientsTableId || cfg.tableId || cfg.clientsTable);
   const clientsViewId = normalizeAirtableId(cfg.clientsViewId || cfg.viewId || cfg.clientsView);
+  const requestsTableId = normalizeAirtableId(cfg.requestsTableId || cfg.revisionRequestsTableId || cfg.requestsTable);
+  const requestsViewId = normalizeAirtableId(cfg.requestsViewId || cfg.revisionRequestsViewId || cfg.requestsView);
   const updatedAt = typeof cfg.updatedAt === 'string' ? cfg.updatedAt : '';
-  return { pat, baseId, clientsTableId, clientsViewId, updatedAt };
+  return { pat, baseId, clientsTableId, clientsViewId, requestsTableId, requestsViewId, updatedAt };
 }
 
 function getAirtableConfigForBusiness(settings, businessKey) {
@@ -3534,6 +3622,8 @@ app.get('/api/integrations/airtable/config', async (req, res) => {
       baseId: cfg.baseId,
       clientsTableId: cfg.clientsTableId,
       clientsViewId: cfg.clientsViewId,
+      requestsTableId: cfg.requestsTableId,
+      requestsViewId: cfg.requestsViewId,
       updatedAt: cfg.updatedAt || '',
     });
   } catch (err) {
@@ -3555,6 +3645,8 @@ app.put('/api/integrations/airtable/config', async (req, res) => {
       baseId: incoming.baseId || current.baseId,
       clientsTableId: incoming.clientsTableId || current.clientsTableId,
       clientsViewId: incoming.clientsViewId || current.clientsViewId,
+      requestsTableId: incoming.requestsTableId || current.requestsTableId,
+      requestsViewId: incoming.requestsViewId || current.requestsViewId,
       pat: incoming.pat || current.pat,
       updatedAt: nowIso(),
     };
@@ -3575,6 +3667,8 @@ app.put('/api/integrations/airtable/config', async (req, res) => {
       baseId: next.baseId,
       clientsTableId: next.clientsTableId,
       clientsViewId: next.clientsViewId,
+      requestsTableId: next.requestsTableId,
+      requestsViewId: next.requestsViewId,
       updatedAt: next.updatedAt,
     });
   });
@@ -3686,6 +3780,8 @@ app.post('/api/integrations/airtable/clients/sync', async (req, res) => {
       let updated = 0;
       let skipped = 0;
 
+      const changedProjects = [];
+
       const toCreate = [];
       const nextExisting = [...existing];
 
@@ -3736,6 +3832,7 @@ app.post('/api/integrations/airtable/clients/sync', async (req, res) => {
           };
           toCreate.push(project);
           byAirtableUrl.set(recordUrl, project);
+          changedProjects.push(project);
           created++;
           continue;
         }
@@ -3770,23 +3867,232 @@ app.post('/api/integrations/airtable/clients/sync', async (req, res) => {
         if (idx >= 0) nextExisting[idx] = merged;
         else nextExisting.push(merged);
         byAirtableUrl.set(recordUrl, merged);
+        changedProjects.push(merged);
         updated++;
       }
 
       const didWrite = toCreate.length > 0 || updated > 0;
       if (didWrite) {
         const ts = nowIso();
+
+        let nextSenderProjectMap = { ...(store.senderProjectMap || {}) };
+        for (const p of changedProjects) {
+          if (!p?.clientPhone) continue;
+          nextSenderProjectMap = upsertSenderProjectMapForProject(nextSenderProjectMap, p.clientPhone, p);
+        }
+
         const nextStore = {
           ...store,
           revision: store.revision + 1,
           updatedAt: ts,
           projects: [...toCreate, ...nextExisting],
+          senderProjectMap: nextSenderProjectMap,
         };
         await writeStore(nextStore);
       }
 
       res.json({ ok: true, businessKey: key, created, updated, skipped, totalFetched: (out.records || []).length });
     });
+  });
+
+  await writeLock;
+});
+
+app.get('/api/integrations/airtable/requests/preview', async (req, res) => {
+  try {
+    const settings = await readSettings();
+    const key = getBusinessKeyFromContext();
+    const cfg = getAirtableConfigForBusiness(settings, key);
+    if (!cfg.pat || !cfg.baseId || !cfg.requestsTableId) {
+      res.status(400).json({ ok: false, error: 'Airtable revision requests are not configured for this business.' });
+      return;
+    }
+
+    const out = await airtableListRecords({
+      pat: cfg.pat,
+      baseId: cfg.baseId,
+      tableId: cfg.requestsTableId,
+      viewId: cfg.requestsViewId,
+      maxRecords: 5,
+    });
+    if (!out.ok) {
+      res.status(400).json({ ok: false, error: out.error || 'Failed to fetch Airtable revision requests' });
+      return;
+    }
+
+    const records = (out.records || []).map((r) => {
+      const fields = r?.fields && typeof r.fields === 'object' ? r.fields : {};
+      const title = firstNonEmptyString(fields, [], ['title', 'request', 'summary', 'subject', 'name']);
+      return {
+        id: typeof r?.id === 'string' ? r.id : '',
+        createdTime: typeof r?.createdTime === 'string' ? r.createdTime : '',
+        title: title || pickAirtableClientName(fields) || '',
+        fieldKeys: Object.keys(fields).slice(0, 30),
+      };
+    });
+
+    res.json({ ok: true, businessKey: key, count: records.length, records });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message || 'Failed to preview revision requests' });
+  }
+});
+
+app.post('/api/integrations/airtable/requests/sync', async (req, res) => {
+  const limitRaw = Number(req.body?.limit);
+  const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(500, Math.floor(limitRaw))) : 200;
+  const key = getBusinessKeyFromContext();
+
+  writeLock = writeLock.then(async () => {
+    const settings = await readSettings();
+    const cfg = getAirtableConfigForBusiness(settings, key);
+    if (!cfg.pat || !cfg.baseId || !cfg.requestsTableId) {
+      res.status(400).json({ ok: false, error: 'Airtable revision requests are not configured for this business.' });
+      return;
+    }
+
+    const out = await airtableListRecords({
+      pat: cfg.pat,
+      baseId: cfg.baseId,
+      tableId: cfg.requestsTableId,
+      viewId: cfg.requestsViewId,
+      maxRecords: limit,
+    });
+    if (!out.ok) {
+      res.status(400).json({ ok: false, error: out.error || 'Failed to fetch Airtable revision requests' });
+      return;
+    }
+
+    const mapInboxStatus = (fields) => {
+      const raw = firstNonEmptyString(fields, [], ['status', 'stage', 'state']);
+      const s = String(raw || '').trim().toLowerCase();
+      if (!s) return 'New';
+      if (s.includes('done') || s.includes('complete') || s.includes('completed') || s.includes('closed') || s.includes('resolved')) return 'Done';
+      if (s.includes('archiv')) return 'Archived';
+      return 'New';
+    };
+
+    const collectRecordIds = (value) => {
+      const outIds = [];
+      const add = (v) => {
+        if (typeof v !== 'string') return;
+        const s = v.trim();
+        if (/^rec[a-zA-Z0-9]+$/.test(s)) outIds.push(s);
+      };
+      if (typeof value === 'string') add(value);
+      if (Array.isArray(value)) {
+        for (const it of value) {
+          if (typeof it === 'string') add(it);
+        }
+      }
+      return outIds;
+    };
+
+    const ts = nowIso();
+
+    const result = await withBusinessKey(key, async () => {
+      const store = await readStore();
+      const list = Array.isArray(store.inboxItems) ? store.inboxItems : [];
+      const seen = new Set(list.map((x) => String(x?.id || '')));
+      const projects = Array.isArray(store.projects) ? store.projects : [];
+
+      const toAdd = [];
+      let created = 0;
+      let skipped = 0;
+
+      for (const r of (out.records || [])) {
+        const recordId = typeof r?.id === 'string' ? r.id : '';
+        if (!recordId) continue;
+        const fields = r?.fields && typeof r.fields === 'object' ? r.fields : {};
+
+        const inboxId = `airtable:rev:${cfg.requestsTableId}:${recordId}`;
+        if (seen.has(inboxId)) {
+          skipped++;
+          continue;
+        }
+
+        const title = firstNonEmptyString(fields, [], ['title', 'request', 'summary', 'subject', 'name']) || `Revision request ${recordId}`;
+        const body = firstNonEmptyString(fields, [], ['details', 'description', 'notes', 'message']);
+        const client = firstNonEmptyString(fields, [], ['client', 'client name', 'company', 'company name', 'project']);
+        const priority = firstNonEmptyString(fields, [], ['priority', 'urgency']);
+        const dueRaw = firstNonEmptyString(fields, [], ['due', 'due date', 'deadline']);
+        const due = safeYmd(String(dueRaw || '').trim().slice(0, 10)) || '';
+        const status = mapInboxStatus(fields);
+
+        const recordUrl = `https://airtable.com/${cfg.baseId}/${cfg.requestsTableId}/${recordId}`;
+        const lines = [];
+        lines.push('Revision Request (Airtable)');
+        if (client) lines.push(`Client: ${client}`);
+        lines.push(`Title: ${title}`);
+        if (priority) lines.push(`Priority: ${priority}`);
+        if (due) lines.push(`Due: ${due}`);
+        if (body) {
+          lines.push('');
+          lines.push(String(body).trim());
+        }
+        lines.push('');
+        lines.push(`Airtable: ${recordUrl}`);
+
+        // Link to a project when possible.
+        let projectId = '';
+        let projectName = '';
+
+        if (cfg.clientsTableId) {
+          const candidateRecIds = [];
+          for (const v of Object.values(fields)) {
+            candidateRecIds.push(...collectRecordIds(v));
+          }
+          for (const recId of candidateRecIds) {
+            const clientUrl = `https://airtable.com/${cfg.baseId}/${cfg.clientsTableId}/${recId}`;
+            const p = projects.find((x) => String(x?.airtableUrl || '').trim() === clientUrl);
+            if (p) {
+              projectId = String(p.id || '');
+              projectName = String(p.name || '');
+              break;
+            }
+          }
+        }
+
+        if (!projectId) {
+          const matched = matchProjectFromText(store, `${client}\n${title}\n${body}`);
+          if (matched) {
+            projectId = String(matched.id || '');
+            projectName = String(matched.name || '');
+          }
+        }
+
+        const nextItem = normalizeInboxItem({
+          id: inboxId,
+          source: 'airtable',
+          channel: 'airtable-revisions',
+          text: lines.join('\n'),
+          status,
+          projectId,
+          projectName,
+          businessKey: key,
+          createdAt: ts,
+          updatedAt: ts,
+        });
+
+        seen.add(inboxId);
+        toAdd.push(nextItem);
+        created++;
+      }
+
+      if (!toAdd.length) {
+        return { created, skipped, didWrite: false };
+      }
+
+      const nextStore = {
+        ...store,
+        revision: store.revision + 1,
+        updatedAt: ts,
+        inboxItems: [...toAdd, ...list].slice(0, 500),
+      };
+      await writeStore(nextStore);
+      return { created, skipped, didWrite: true };
+    });
+
+    res.json({ ok: true, businessKey: key, created: result.created, skipped: result.skipped, totalFetched: (out.records || []).length });
   });
 
   await writeLock;
@@ -4653,17 +4959,19 @@ app.post('/api/integrations/quo/sms', async (req, res) => {
     const { matched, finalProjectName, fromLabel } = await withBusinessKey(routing.businessKey, async () => {
       const businessStore = await readStore();
       const match = matchProjectFromText(businessStore, body);
-
-      const senderKey = normalizePhoneForLookup(from);
       let projName = match?.name || '';
       let label = from || '';
 
-      const pMap = businessStore.senderProjectMap || settings.senderProjectMap || {};
-      if (pMap && typeof pMap === 'object' && pMap[senderKey]) {
-        label = pMap[senderKey].projectName;
+      const storeForMap = {
+        ...businessStore,
+        senderProjectMap: businessStore?.senderProjectMap || settings?.senderProjectMap || {},
+      };
+      const auto = resolveSenderProjectMapping(storeForMap, from);
+      if (auto?.projectId) {
+        if (auto.projectName) label = auto.projectName;
         if (!projName) {
-          projName = label;
-          if (match) { match.id = pMap[senderKey].projectId; }
+          projName = auto.projectName || projName;
+          if (match) match.id = auto.projectId;
         }
       }
 
@@ -4948,15 +5256,20 @@ app.get('/api/inbox/radar', async (req, res) => {
       if (!bizKey) continue;
 
       const store = await withBusinessKey(bizKey, async () => readStore());
+      const projectsById = new Map(
+        (Array.isArray(store?.projects) ? store.projects : []).map((p) => [String(p?.id || ''), String(p?.name || '').trim()]).filter(([id]) => Boolean(id)),
+      );
       const items = Array.isArray(store?.inboxItems) ? store.inboxItems : [];
       for (const item of items) {
         const it = item && typeof item === 'object' ? item : {};
         const itStatus = String(it.status || '').trim();
         if (statusLower && itStatus.toLowerCase() !== statusLower) continue;
+        const pid = String(it.projectId || '').trim();
         all.push({
           ...it,
           businessKey: typeof it.businessKey === 'string' && it.businessKey.trim() ? it.businessKey.trim() : bizKey,
           businessLabel: typeof it.businessLabel === 'string' && it.businessLabel.trim() ? it.businessLabel.trim() : (bizName || bizKey),
+          projectName: String(it.projectName || '').trim() || (pid ? (projectsById.get(pid) || '') : ''),
         });
       }
     }
@@ -4969,7 +5282,62 @@ app.get('/api/inbox/radar', async (req, res) => {
 
     all.sort((a, b) => timeValue(b) - timeValue(a));
     const items = all.slice(0, limit);
-    res.json({ ok: true, status: status || 'New', limit, items });
+
+    const groupsById = new Map();
+    const isAssigned = (it) => {
+      const pid = String(it?.projectId || '').trim();
+      const iid = String(it?.id || '').trim();
+      return Boolean(pid) && pid !== iid;
+    };
+
+    for (const it of items) {
+      const bizKey = String(it?.businessKey || '').trim();
+      const bizLabel = String(it?.businessLabel || '').trim();
+      const assigned = isAssigned(it);
+      const pid = assigned ? String(it?.projectId || '').trim() : '';
+      const pname = assigned ? String(it?.projectName || '').trim() : '';
+
+      const groupId = assigned ? `${bizKey}:${pid}` : `${bizKey}:__unassigned__`;
+      const existing = groupsById.get(groupId);
+
+      const ms = timeValue(it);
+      const preview = previewTextServer(it?.text, 160);
+
+      if (!existing) {
+        groupsById.set(groupId, {
+          groupId,
+          businessKey: bizKey,
+          businessLabel: bizLabel,
+          projectId: pid,
+          projectName: pname,
+          assigned,
+          isUnassigned: !assigned,
+          count: 1,
+          latestAt: typeof it?.updatedAt === 'string' && it.updatedAt.trim() ? it.updatedAt : (typeof it?.createdAt === 'string' ? it.createdAt : ''),
+          latestMs: ms,
+          sample: preview ? [preview] : [],
+          summary: '',
+        });
+        continue;
+      }
+
+      existing.count += 1;
+      if (ms > existing.latestMs) {
+        existing.latestMs = ms;
+        existing.latestAt = typeof it?.updatedAt === 'string' && it.updatedAt.trim() ? it.updatedAt : (typeof it?.createdAt === 'string' ? it.createdAt : '');
+        if (assigned && !existing.projectName) existing.projectName = pname;
+      }
+      if (preview && existing.sample.length < 3) existing.sample.push(preview);
+    }
+
+    const groups = Array.from(groupsById.values()).map((g) => ({
+      ...g,
+      summary: summarizeRadarGroupText(g.sample),
+    }));
+
+    groups.sort((a, b) => (b.latestMs - a.latestMs) || (b.count - a.count));
+
+    res.json({ ok: true, status: status || 'New', limit, items, groups });
   } catch (err) {
     res.status(500).json({ ok: false, error: err?.message || 'Failed to load radar' });
   }
@@ -4992,25 +5360,24 @@ app.post('/api/inbox', async (req, res) => {
 
     const ts = nowIso();
     let finalProjectId = item.projectId;
-      let finalProjectName = item.projectName;
-      const senderKey = item.sender || item.fromNumber || "";
-      if (!finalProjectId && senderKey && store.senderProjectMap && store.senderProjectMap[senderKey]) {
-        const autoProjId = store.senderProjectMap[senderKey];
-        const autoProj = (store.projects || []).find(p => p.id === autoProjId);
-        if (autoProj) {
-          finalProjectId = autoProj.id;
-          finalProjectName = autoProj.name;
-        }
+    let finalProjectName = item.projectName;
+    const senderValue = item.sender || item.fromNumber || '';
+    if (!finalProjectId && senderValue) {
+      const auto = resolveSenderProjectMapping(store, senderValue);
+      if (auto?.projectId) {
+        finalProjectId = auto.projectId;
+        finalProjectName = auto.projectName || '';
       }
+    }
 
-      const nextItem = {
-        ...item,
-        projectId: finalProjectId,
-        projectName: finalProjectName,
-        status: "New",
-        createdAt: ts,
-        updatedAt: ts,
-      };
+    const nextItem = {
+      ...item,
+      projectId: finalProjectId,
+      projectName: finalProjectName,
+      status: 'New',
+      createdAt: ts,
+      updatedAt: ts,
+    };
 
     const nextStore = {
       ...store,
@@ -5113,6 +5480,7 @@ app.post('/api/inbox/:id/link-project', async (req, res) => {
     const ts = nowIso();
     const current = list[idx];
     const matchSender = current.sender || current.fromNumber || '';
+    const matchKeys = senderLookupKeys(matchSender);
     
     const nextList = list.map((item, i) => {
       if (i === idx) {
@@ -5126,7 +5494,9 @@ app.post('/api/inbox/:id/link-project', async (req, res) => {
       }
       
       const itemSender = item.sender || item.fromNumber || '';
-      if (matchSender && itemSender === matchSender && (!item.projectId || item.projectId === item.id)) {
+      const itemKeys = senderLookupKeys(itemSender);
+      const sameThread = matchKeys.length && itemKeys.length && itemKeys.some((k) => matchKeys.includes(k));
+      if (sameThread && (!item.projectId || item.projectId === item.id)) {
         return normalizeInboxItem({
           ...item,
           projectId: String(project.id || ''),
@@ -5138,9 +5508,9 @@ app.post('/api/inbox/:id/link-project', async (req, res) => {
       return item;
     });
 
-    const nextSenderProjectMap = { ...(store.senderProjectMap || {}) };
+    let nextSenderProjectMap = { ...(store.senderProjectMap || {}) };
     if (matchSender) {
-      nextSenderProjectMap[matchSender] = String(project.id || '');
+      nextSenderProjectMap = upsertSenderProjectMapForProject(nextSenderProjectMap, matchSender, project);
     }
 
     const nextStore = {
@@ -5152,7 +5522,8 @@ app.post('/api/inbox/:id/link-project', async (req, res) => {
     };
 
     await writeStore(nextStore);
-    res.json({ ok: true, store: nextStore, item: nextItem, project });
+    const updated = nextList[idx] || null;
+    res.json({ ok: true, store: nextStore, item: updated, project });
   });
 
   await writeLock;
@@ -5413,11 +5784,17 @@ app.post('/api/projects', async (req, res) => {
       updatedAt: ts,
     };
 
+    let nextSenderProjectMap = { ...(store.senderProjectMap || {}) };
+    if (project.clientPhone) {
+      nextSenderProjectMap = upsertSenderProjectMapForProject(nextSenderProjectMap, project.clientPhone, project);
+    }
+
     const nextStore = {
       ...store,
       revision: store.revision + 1,
       updatedAt: ts,
       projects: [project, ...(store.projects || [])],
+      senderProjectMap: nextSenderProjectMap,
     };
 
     await writeStore(nextStore);
@@ -5454,11 +5831,17 @@ app.put('/api/projects/:id', async (req, res) => {
     const nextProjects = [...store.projects];
     nextProjects[idx] = updated;
 
+    let nextSenderProjectMap = { ...(store.senderProjectMap || {}) };
+    if (updated.clientPhone) {
+      nextSenderProjectMap = upsertSenderProjectMapForProject(nextSenderProjectMap, updated.clientPhone, updated);
+    }
+
     const nextStore = {
       ...store,
       revision: store.revision + 1,
       updatedAt: ts,
       projects: nextProjects,
+      senderProjectMap: nextSenderProjectMap,
     };
 
     await writeStore(nextStore);
@@ -5506,11 +5889,19 @@ app.post('/api/projects/bulk-update', async (req, res) => {
       return { ...p, ...normalized, updatedAt: ts };
     });
 
+    let nextSenderProjectMap = { ...(store.senderProjectMap || {}) };
+    for (const p of nextProjects) {
+      if (!projectIds.includes(String(p?.id || ''))) continue;
+      if (!p?.clientPhone) continue;
+      nextSenderProjectMap = upsertSenderProjectMapForProject(nextSenderProjectMap, p.clientPhone, p);
+    }
+
     const nextStore = {
       ...store,
       revision: store.revision + 1,
       updatedAt: ts,
       projects: nextProjects,
+      senderProjectMap: nextSenderProjectMap,
     };
 
     await writeStore(nextStore);

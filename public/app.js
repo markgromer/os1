@@ -2859,9 +2859,11 @@ function renderInbox(container) {
                 const createdAt = safeText(item?.createdAt);
                 const updatedAt = safeText(item?.updatedAt);
                 const projectId = safeText((state.inboxConvertProjectById && state.inboxConvertProjectById[id]) || item?.projectId);
+                const isAssigned = projectId && projectId !== id;
+                const isUnassignedNew = !isAssigned && String(status || '').trim().toLowerCase() === 'new';
 
                 const card = document.createElement('div');
-                card.className = 'border border-zinc-800 rounded-xl bg-zinc-900/30 p-4';
+                card.className = `border ${isUnassignedNew ? 'border-red-500/30 bg-red-500/5' : 'border-zinc-800 bg-zinc-900/30'} rounded-xl p-4`;
                 card.innerHTML = `
                     <div class="flex items-start justify-between gap-4">
                         <div class="min-w-0">
@@ -2886,7 +2888,9 @@ function renderInbox(container) {
                         <div class="shrink-0 flex flex-col gap-2">
                             <button data-inbox-triage="${escapeHtml(id)}" class="px-3 py-1.5 rounded border border-zinc-800 text-[11px] font-mono text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Triage</button>
                             <button data-inbox-done="${escapeHtml(id)}" class="px-3 py-1.5 rounded bg-emerald-600/20 border border-emerald-600/40 text-[11px] font-mono text-emerald-200 hover:bg-emerald-600/30 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Done</button>
-                            <button data-inbox-archive="${escapeHtml(id)}" class="px-3 py-1.5 rounded bg-zinc-900/30 border border-zinc-800 text-[11px] font-mono text-zinc-200 hover:bg-zinc-800/40 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Archive</button>
+                            ${isAssigned
+                                ? `<button data-inbox-archive="${escapeHtml(id)}" class="px-3 py-1.5 rounded bg-zinc-900/30 border border-zinc-800 text-[11px] font-mono text-zinc-200 hover:bg-zinc-800/40 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Archive</button>`
+                                : `<button data-inbox-nohome="${escapeHtml(id)}" class="px-3 py-1.5 rounded bg-red-600/15 border border-red-600/30 text-[11px] font-mono text-red-200 hover:bg-red-600/25 transition-colors transition-transform duration-150 ease-out active:translate-y-px">No Home</button>`}
                         </div>
                     </div>
                     <div class="mt-4 flex flex-wrap gap-2">
@@ -3030,6 +3034,7 @@ function renderInbox(container) {
     wireStatus('data-inbox-triage', 'Triaged');
     wireStatus('data-inbox-done', 'Done');
     wireStatus('data-inbox-archive', 'Archived');
+    wireStatus('data-inbox-nohome', 'Archived');
 
     const wireConvert = (attr, kind) => {
         container.querySelectorAll(`button[${attr}]`).forEach((btn) => {
@@ -3245,6 +3250,35 @@ function renderSettings(container) {
                 <input id="set-airtable-view" type="text" autocomplete="off" placeholder="viw..." class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-sm font-mono" />
             </div>
         </div>
+
+        <div class="mt-5 pt-5 border-t border-ops-border">
+            <div class="text-white text-sm font-semibold">Revision requests → Inbox</div>
+            <div class="text-[11px] text-ops-light mt-1">Paste a link to your Revision Requests table/view. Sync will create Inbox items (deduped) for this business.</div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-3">
+                <div>
+                    <label class="text-xs text-ops-light">Revision requests link (paste)</label>
+                    <input id="set-airtable-req-link" type="text" autocomplete="off" placeholder="https://airtable.com/app.../tbl.../viw..." class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-sm" />
+                    <div class="text-[11px] text-ops-light mt-1">We’ll extract Table/View IDs automatically.</div>
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <label class="text-xs text-ops-light">Requests table ID</label>
+                        <input id="set-airtable-req-table" type="text" autocomplete="off" placeholder="tbl..." class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-sm font-mono" />
+                    </div>
+                    <div>
+                        <label class="text-xs text-ops-light">Requests view ID (optional)</label>
+                        <input id="set-airtable-req-view" type="text" autocomplete="off" placeholder="viw..." class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-sm font-mono" />
+                    </div>
+                </div>
+            </div>
+
+            <div class="flex flex-wrap gap-2 mt-3">
+                <button id="btn-test-airtable-requests" class="px-3 py-2 rounded bg-ops-bg border border-ops-border text-ops-light text-xs hover:text-white">Test (preview requests)</button>
+                <button id="btn-sync-airtable-requests" class="px-3 py-2 rounded bg-emerald-600 text-white text-xs hover:bg-emerald-500">Sync requests → inbox</button>
+            </div>
+        </div>
+
         <div class="text-[11px] text-ops-light mt-2" id="airtable-status-line">Status: checking...</div>
         <div class="flex flex-wrap gap-2 mt-4">
             <button id="btn-save-airtable" class="px-3 py-2 rounded bg-blue-600 text-white text-xs hover:bg-blue-500">Save Airtable</button>
@@ -4054,6 +4088,8 @@ function renderSettings(container) {
     const btnSaveAirtable = document.getElementById('btn-save-airtable');
     const btnTestAirtable = document.getElementById('btn-test-airtable');
     const btnSyncAirtable = document.getElementById('btn-sync-airtable');
+    const btnTestAirtableRequests = document.getElementById('btn-test-airtable-requests');
+    const btnSyncAirtableRequests = document.getElementById('btn-sync-airtable-requests');
     const airtableStatusLine = document.getElementById('airtable-status-line');
     const airtableOutput = document.getElementById('airtable-output');
 
@@ -4167,9 +4203,13 @@ function renderSettings(container) {
             const baseEl = document.getElementById('set-airtable-base');
             const tableEl = document.getElementById('set-airtable-table');
             const viewEl = document.getElementById('set-airtable-view');
+            const reqTableEl = document.getElementById('set-airtable-req-table');
+            const reqViewEl = document.getElementById('set-airtable-req-view');
             if (baseEl && !String(baseEl.value || '').trim()) baseEl.value = String(s.baseId || '');
             if (tableEl && !String(tableEl.value || '').trim()) tableEl.value = String(s.clientsTableId || '');
             if (viewEl && !String(viewEl.value || '').trim()) viewEl.value = String(s.clientsViewId || '');
+            if (reqTableEl && !String(reqTableEl.value || '').trim()) reqTableEl.value = String(s.requestsTableId || '');
+            if (reqViewEl && !String(reqViewEl.value || '').trim()) reqViewEl.value = String(s.requestsViewId || '');
 
             if (airtableStatusLine) {
                 const configured = !!s.configured;
@@ -4196,6 +4236,19 @@ function renderSettings(container) {
         });
     }
 
+    const atReqLink = document.getElementById('set-airtable-req-link');
+    if (atReqLink) {
+        atReqLink.addEventListener('input', () => {
+            const baseEl = document.getElementById('set-airtable-base');
+            const reqTableEl = document.getElementById('set-airtable-req-table');
+            const reqViewEl = document.getElementById('set-airtable-req-view');
+            const { baseId, tableId, viewId } = parseAirtableIdsFromUrl(atReqLink.value);
+            if (baseEl && baseId) baseEl.value = baseId;
+            if (reqTableEl && tableId) reqTableEl.value = tableId;
+            if (reqViewEl && viewId) reqViewEl.value = viewId;
+        });
+    }
+
     if (btnSaveAirtable) btnSaveAirtable.onclick = async () => {
         const prev = btnSaveAirtable.textContent;
         btnSaveAirtable.disabled = true;
@@ -4206,9 +4259,12 @@ function renderSettings(container) {
             const baseId = String(document.getElementById('set-airtable-base')?.value || '').trim();
             const clientsTableId = String(document.getElementById('set-airtable-table')?.value || '').trim();
             const clientsViewId = String(document.getElementById('set-airtable-view')?.value || '').trim();
-            if (!baseId || !clientsTableId) throw new Error('Base ID and Clients table ID are required. Paste the Airtable link to auto-fill.');
+            const requestsTableId = String(document.getElementById('set-airtable-req-table')?.value || '').trim();
+            const requestsViewId = String(document.getElementById('set-airtable-req-view')?.value || '').trim();
+            if (!baseId) throw new Error('Base ID is required. Paste an Airtable link to auto-fill.');
+            if (!clientsTableId && !requestsTableId) throw new Error('Provide a Clients table ID and/or Requests table ID.');
 
-            const body = { baseId, clientsTableId, clientsViewId };
+            const body = { baseId, clientsTableId, clientsViewId, requestsTableId, requestsViewId };
             if (pat) body.pat = pat;
 
             const resp = await apiJson('/api/integrations/airtable/config', {
@@ -4250,6 +4306,58 @@ function renderSettings(container) {
         } finally {
             btnTestAirtable.disabled = false;
             btnTestAirtable.textContent = prev;
+        }
+    };
+
+    if (btnTestAirtableRequests) btnTestAirtableRequests.onclick = async () => {
+        const prev = btnTestAirtableRequests.textContent;
+        btnTestAirtableRequests.disabled = true;
+        btnTestAirtableRequests.textContent = 'Testing…';
+        try {
+            const r = await apiFetch('/api/integrations/airtable/requests/preview');
+            const data = await r.json().catch(() => ({}));
+            if (!r.ok || data?.ok === false) throw new Error(data?.error || 'Preview failed');
+            const lines = [];
+            lines.push(`Preview: ${Number(data.count) || 0} record(s)`);
+            for (const rec of (data.records || [])) {
+                lines.push(`- ${safeText(rec.title) || '(Untitled)'} (${safeText(rec.id)})`);
+            }
+            setAirtableOutput(lines.join('\n'));
+        } catch (e) {
+            const msg = safeText(e?.message || '').trim() || 'Failed to test Airtable requests';
+            setAirtableOutput(msg);
+            alert(msg);
+        } finally {
+            btnTestAirtableRequests.disabled = false;
+            btnTestAirtableRequests.textContent = prev;
+        }
+    };
+
+    if (btnSyncAirtableRequests) btnSyncAirtableRequests.onclick = async () => {
+        const prev = btnSyncAirtableRequests.textContent;
+        btnSyncAirtableRequests.disabled = true;
+        btnSyncAirtableRequests.textContent = 'Syncing…';
+        try {
+            const r = await apiFetch('/api/integrations/airtable/requests/sync', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ limit: 200 }),
+            });
+            const data = await r.json().catch(() => ({}));
+            if (!r.ok || data?.ok === false) throw new Error(data?.error || 'Sync failed');
+            const created = Number(data.created) || 0;
+            const skipped = Number(data.skipped) || 0;
+            const fetched = Number(data.totalFetched) || 0;
+            setAirtableOutput(`Synced requests. Created: ${created}, Skipped: ${skipped}, Fetched: ${fetched}`);
+            await fetchState();
+            renderNav();
+        } catch (e) {
+            const msg = safeText(e?.message || '').trim() || 'Failed to sync Airtable requests';
+            setAirtableOutput(msg);
+            alert(msg);
+        } finally {
+            btnSyncAirtableRequests.disabled = false;
+            btnSyncAirtableRequests.textContent = prev;
         }
     };
 
@@ -5992,46 +6100,91 @@ function renderDashboard(container) {
         if (Number.isNaN(d.getTime())) return '';
         return d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
     };
-    const makeRadarHtml = (items) => {
+    const makeRadarHtml = (payloadOrItems) => {
+        const items = Array.isArray(payloadOrItems?.items)
+            ? payloadOrItems.items
+            : (Array.isArray(payloadOrItems) ? payloadOrItems : []);
+        const groups = Array.isArray(payloadOrItems?.groups) ? payloadOrItems.groups : null;
+
         const list = Array.isArray(items) ? items : [];
         const slack = list.filter((x) => normalizeInboxSourceKey(x?.source) === 'slack');
         const email = list.filter((x) => normalizeInboxSourceKey(x?.source) === 'email');
         const other = list.filter((x) => { const k = normalizeInboxSourceKey(x?.source); return k !== 'slack' && k !== 'email'; });
 
-        const radarExtraRows = list.slice(0, 8).map(item => {
-            const status = safeText(item?.status).trim() || 'New';
-            const sourceKey = normalizeInboxSourceKey(item?.source);
-            const meta = inboxSourceMeta(sourceKey);
-            const iconCls = meta.icon === 'fa-slack' ? 'fa-brands fa-slack' : `fa-solid ${meta.icon}`;
-            const business = inboxBusinessLabel(item);
-            const stamp = formatInboxStamp(safeText(item?.updatedAt) || safeText(item?.createdAt));
+        const rowsHtml = (Array.isArray(groups) ? groups : list)
+            .slice(0, 8)
+            .map((row) => {
+                const isGroup = Array.isArray(groups);
 
-            const fullText = safeText(item?.text) || safeText(item?.content) || safeText(item?.body) || safeText(item?.message) || '';
-            const snippet = previewText(fullText, 140);
-            const explicitTitle = safeText(item?.title) || safeText(item?.subject) || '';
-            const titleLine = explicitTitle.trim() || snippet || 'Inbox item';
-            const subLine = (explicitTitle.trim() && snippet && snippet !== titleLine) ? snippet : '';
+                if (isGroup) {
+                    const business = safeText(row?.businessLabel) || safeText(row?.businessKey) || 'Business';
+                    const stamp = formatInboxStamp(safeText(row?.latestAt));
+                    const count = Number(row?.count) || 0;
+                    const isUnassigned = Boolean(row?.isUnassigned) || (!safeText(row?.projectId).trim());
+                    const title = isUnassigned
+                        ? 'Unassigned'
+                        : (safeText(row?.projectName).trim() || 'Project');
+                    const summary = safeText(row?.summary).trim() || (Array.isArray(row?.sample) ? safeText(row.sample[0]) : '');
 
-            return `
-                <div class="border border-ops-border rounded bg-ops-bg/40 px-2.5 py-2">
-                    <div class="flex items-start justify-between gap-2">
-                        <div class="min-w-0 flex-1">
-                            <div class="flex items-center gap-1.5 flex-wrap">
-                                <span class="px-1.5 py-0.5 rounded border border-ops-border text-[9px] font-mono text-ops-light/70">${escapeHtml(status)}</span>
-                                <span class="px-1.5 py-0.5 rounded border border-ops-border text-[9px] font-mono ${meta.tone} flex items-center gap-1">
-                                    <i class="${iconCls} text-[9px]"></i>
-                                    ${escapeHtml(meta.label)}
-                                </span>
-                                <span class="px-1.5 py-0.5 rounded border border-ops-border text-[9px] font-mono text-ops-light/50">${escapeHtml(business)}</span>
-                                ${stamp ? `<span class="text-[9px] font-mono text-ops-light/40">${escapeHtml(stamp)}</span>` : ''}
+                    const borderTone = isUnassigned ? 'border-red-500/30 bg-red-500/10' : 'border-ops-border bg-ops-bg/40';
+                    const countTone = isUnassigned ? 'text-red-300' : 'text-white';
+
+                    return `
+                        <div class="border rounded px-2.5 py-2 ${borderTone}">
+                            <div class="flex items-start justify-between gap-2">
+                                <div class="min-w-0 flex-1">
+                                    <div class="flex items-center gap-1.5 flex-wrap">
+                                        <span class="px-1.5 py-0.5 rounded border border-ops-border text-[9px] font-mono text-ops-light/50">${escapeHtml(business)}</span>
+                                        ${stamp ? `<span class="text-[9px] font-mono text-ops-light/40">${escapeHtml(stamp)}</span>` : ''}
+                                    </div>
+                                    <div class="mt-1 flex items-center justify-between gap-2">
+                                        <div class="min-w-0 text-[11px] ${isUnassigned ? 'text-red-200 font-semibold' : 'text-white'} truncate">${escapeHtml(title)}</div>
+                                        <div class="shrink-0 text-[11px] font-mono font-semibold ${countTone}">${count}</div>
+                                    </div>
+                                    ${summary ? `<div class="mt-0.5 text-[10px] text-ops-light/60 truncate">${escapeHtml(summary)}</div>` : ''}
+                                </div>
                             </div>
-                            <div class="mt-1 text-[11px] text-white truncate">${escapeHtml(titleLine)}</div>
-                            ${subLine ? `<div class="mt-0.5 text-[10px] text-ops-light/60 truncate">${escapeHtml(subLine)}</div>` : ''}
+                        </div>
+                    `;
+                }
+
+                const item = row;
+                const status = safeText(item?.status).trim() || 'New';
+                const sourceKey = normalizeInboxSourceKey(item?.source);
+                const meta = inboxSourceMeta(sourceKey);
+                const iconCls = meta.icon === 'fa-slack' ? 'fa-brands fa-slack' : `fa-solid ${meta.icon}`;
+                const business = inboxBusinessLabel(item);
+                const stamp = formatInboxStamp(safeText(item?.updatedAt) || safeText(item?.createdAt));
+
+                const fullText = safeText(item?.text) || safeText(item?.content) || safeText(item?.body) || safeText(item?.message) || '';
+                const snippet = previewText(fullText, 140);
+                const explicitTitle = safeText(item?.title) || safeText(item?.subject) || '';
+                const titleLine = explicitTitle.trim() || snippet || 'Inbox item';
+                const subLine = (explicitTitle.trim() && snippet && snippet !== titleLine) ? snippet : '';
+
+                return `
+                    <div class="border border-ops-border rounded bg-ops-bg/40 px-2.5 py-2">
+                        <div class="flex items-start justify-between gap-2">
+                            <div class="min-w-0 flex-1">
+                                <div class="flex items-center gap-1.5 flex-wrap">
+                                    <span class="px-1.5 py-0.5 rounded border border-ops-border text-[9px] font-mono text-ops-light/70">${escapeHtml(status)}</span>
+                                    <span class="px-1.5 py-0.5 rounded border border-ops-border text-[9px] font-mono ${meta.tone} flex items-center gap-1">
+                                        <i class="${iconCls} text-[9px]"></i>
+                                        ${escapeHtml(meta.label)}
+                                    </span>
+                                    <span class="px-1.5 py-0.5 rounded border border-ops-border text-[9px] font-mono text-ops-light/50">${escapeHtml(business)}</span>
+                                    ${stamp ? `<span class="text-[9px] font-mono text-ops-light/40">${escapeHtml(stamp)}</span>` : ''}
+                                </div>
+                                <div class="mt-1 text-[11px] text-white truncate">${escapeHtml(titleLine)}</div>
+                                ${subLine ? `<div class="mt-0.5 text-[10px] text-ops-light/60 truncate">${escapeHtml(subLine)}</div>` : ''}
+                            </div>
                         </div>
                     </div>
-                </div>
-            `;
-        }).join('');
+                `;
+            })
+            .join('');
+
+        const showCount = Array.isArray(groups) ? groups.length : list.length;
 
         return `
             <div class="dash-card-head flex items-center justify-between gap-3 px-3 py-2.5">
@@ -6039,7 +6192,7 @@ function renderDashboard(container) {
                     <i class="fa-solid fa-satellite-dish text-blue-400 text-xs shrink-0"></i>
                     <span class="text-[10px] font-mono uppercase tracking-widest text-ops-light">Inbox Radar</span>
                     <div class="flex items-center gap-3 text-[10px] font-mono text-ops-light/50">
-                        <span class="text-lg font-semibold text-white leading-none">${list.length}</span>
+                        <span class="text-lg font-semibold text-white leading-none">${showCount}</span>
                         <span><i class="fa-brands fa-slack text-purple-400 mr-0.5"></i>${slack.length}</span>
                         <span><i class="fa-solid fa-envelope text-sky-400 mr-0.5"></i>${email.length}</span>
                         <span><i class="fa-solid fa-ellipsis text-ops-light/30 mr-0.5"></i>${other.length}</span>
@@ -6047,10 +6200,10 @@ function renderDashboard(container) {
                 </div>
                 <div class="flex items-center gap-1.5 shrink-0">
                     <button type="button" data-open-inbox class="px-2.5 py-1 rounded border border-ops-border text-[9px] font-mono text-ops-light hover:text-white hover:bg-ops-surface/60 transition-colors">Open Inbox</button>
-                    ${list.length ? '<i class="fa-solid fa-chevron-down expand-chevron"></i>' : ''}
+                    ${showCount ? '<i class="fa-solid fa-chevron-down expand-chevron"></i>' : ''}
                 </div>
             </div>
-            ${list.length ? `<div class="dash-card-body px-3 pb-2.5"><div class="space-y-1">${radarExtraRows}</div></div>` : ''}
+            ${showCount ? `<div class="dash-card-body px-3 pb-2.5"><div class="space-y-1">${rowsHtml}</div></div>` : ''}
         `;
     };
 
@@ -6061,9 +6214,8 @@ function renderDashboard(container) {
     setTimeout(async () => {
         try {
             const data = await apiJson('/api/inbox/radar?status=New&limit=60');
-            const items = Array.isArray(data?.items) ? data.items : [];
             if (state.currentView !== 'dashboard') return;
-            radarBanner.innerHTML = makeRadarHtml(items);
+            radarBanner.innerHTML = makeRadarHtml(data);
 
             // Re-wire events (innerHTML replacement removes listeners).
             radarBanner.querySelector('button[data-open-inbox]')?.addEventListener('click', () => openInbox());
