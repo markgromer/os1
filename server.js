@@ -8502,27 +8502,55 @@ async function aiAgentAction(message, store, projectId = null) {
           return { ok: false, error: e.message };
         }
       }
-      return { ok: false, error: `Unknown tool: ${toolName}` };
-    };
-
-    try {
-      for (let step = 0; step < 4; step++) {
-        const msg = await callOpenAi();
-
-        // Preserve the assistant message in the transcript for tool-call chaining.
-        const assistantMsg = { role: 'assistant', content: msg.content || '' };
-        if (msg.tool_calls) assistantMsg.tool_calls = msg.tool_calls;
-        messages.push(assistantMsg);
-
-        if (!msg.tool_calls || msg.tool_calls.length === 0) {
-          return { content: String(msg.content || '').trim() };
+        if (toolName === 'web_search') {
+          try {
+            const query = args?.query || '';
+            if (!query) return { ok: false, error: 'Query required' };
+            const formData = new URLSearchParams();
+            formData.append('q', query);
+            const r = await fetch('https://lite.duckduckgo.com/lite/', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+              body: formData.toString()
+            });
+            const text = await r.text();
+            const results = [];
+            const snippetRegex = /<td class='result-snippet'[^>]*>([\s\S]*?)<\/td>/g;
+            let m;
+            while ((m = snippetRegex.exec(text)) !== null && results.length < 6) {
+               results.push(m[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim());
+            }
+            if (results.length > 0) return { ok: true, results };
+            // fallback if regex misses
+            const plain = text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+            return { ok: true, results: [plain.substring(1000, 3000)] };
+          } catch (e) {
+            return { ok: false, error: e.message };
+          }
         }
 
-        for (const call of msg.tool_calls) {
-          const toolName = call?.function?.name;
-          const raw = call?.function?.arguments;
-          let args = {};
-          try {
+        return { ok: false, error: `Unknown tool: ${toolName}` };
+      };
+
+      try {
+        for (let step = 0; step < 4; step++) {
+          const msg = await callOpenAi();
+
+          // Preserve the assistant message in the transcript for tool-call chaining.
+          const assistantMsg = { role: 'assistant', content: msg.content || '' };
+          if (msg.tool_calls) assistantMsg.tool_calls = msg.tool_calls;
+          messages.push(assistantMsg);
+
+          if (!msg.tool_calls || msg.tool_calls.length === 0) {
+            return { content: String(msg.content || '').trim() };
+          }
+
+          for (const call of msg.tool_calls) {
+            const toolName = call?.function?.name;
+            const raw = call?.function?.arguments;
+
+            let args = {};
+            try {
             args = raw ? JSON.parse(raw) : {};
           } catch {
             args = {};
