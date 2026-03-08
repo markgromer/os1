@@ -986,6 +986,50 @@ function applyTheme(theme) {
     }
 }
 
+function applyUiPreferencesFromSettings(settings) {
+    const s = (settings && typeof settings === 'object') ? settings : {};
+    const titleScaleRaw = safeText(s.uiTitleScale).trim().toLowerCase();
+    const densityRaw = safeText(s.uiDensity).trim().toLowerCase();
+
+    const titleScale = ['sm', 'md', 'lg', 'xl'].includes(titleScaleRaw) ? titleScaleRaw : 'md';
+    const density = ['compact', 'comfortable'].includes(densityRaw) ? densityRaw : 'comfortable';
+
+    const titleMap = {
+        // Inter is loaded at 400/500/600/700 — stay within real weights.
+        sm: { page: '1.25rem', pageWeight: '700', section: '0.8125rem', sectionWeight: '600' },
+        md: { page: '1.4rem', pageWeight: '700', section: '0.875rem', sectionWeight: '600' },
+        lg: { page: '1.55rem', pageWeight: '700', section: '0.95rem', sectionWeight: '600' },
+        xl: { page: '1.75rem', pageWeight: '700', section: '1.0rem', sectionWeight: '600' },
+    };
+
+    const densityMap = {
+        comfortable: { pad: '16px', gap: '12px', headPy: '10px', previewPb: '10px' },
+        compact: { pad: '12px', gap: '8px', headPy: '8px', previewPb: '8px' },
+    };
+
+    try {
+        const root = document.documentElement;
+        const style = root.style;
+        const t = titleMap[titleScale] || titleMap.md;
+        const d = densityMap[density] || densityMap.comfortable;
+
+        style.setProperty('--ops-page-title-size', t.page);
+        style.setProperty('--ops-page-title-weight', t.pageWeight);
+        style.setProperty('--ops-section-title-size', t.section);
+        style.setProperty('--ops-section-title-weight', t.sectionWeight);
+
+        style.setProperty('--ops-dash-pad', d.pad);
+        style.setProperty('--ops-dash-gap', d.gap);
+        style.setProperty('--ops-dash-card-head-py', d.headPy);
+        style.setProperty('--ops-dash-card-preview-pb', d.previewPb);
+
+        root.dataset.uiTitleScale = titleScale;
+        root.dataset.uiDensity = density;
+    } catch {
+        // ignore
+    }
+}
+
 function isEditableTarget(el) {
     if (!el || typeof el !== 'object') return false;
     const tag = String(el.tagName || '').toLowerCase();
@@ -2362,6 +2406,8 @@ async function fetchSettings() {
             state.aiAvailable = !!state.settings.aiEnabled;
             updateSystemStatus(true);
 
+            applyUiPreferencesFromSettings(state.settings);
+
             // UI prefs (optional, stored in settings)
             if (Number.isFinite(Number(state.settings.autoRefreshSeconds))) {
                 state.uiPrefs.autoRefreshSeconds = Math.max(10, Number(state.settings.autoRefreshSeconds));
@@ -3506,7 +3552,7 @@ function renderSettings(container) {
         el.innerHTML = `
             <div class="flex items-start justify-between gap-4">
                 <div>
-                    <div class="text-white font-semibold">${title}</div>
+                    <div class="text-white text-base font-semibold tracking-tight">${title}</div>
                     <div class="text-xs text-ops-light mt-1">${subtitle || ''}</div>
                 </div>
             </div>
@@ -3699,6 +3745,89 @@ function renderSettings(container) {
         </div>
     `;
     wrap.appendChild(access);
+
+    // UI
+    const uiTuneSection = section('UI', 'Adjust title size and density for faster scanning.');
+    const uiTuneBody = uiTuneSection.querySelector('[data-slot="body"]');
+    const currentTitleScale = safeText(state.settings?.uiTitleScale).trim().toLowerCase() || 'md';
+    const currentDensity = safeText(state.settings?.uiDensity).trim().toLowerCase() || 'comfortable';
+    uiTuneBody.innerHTML = `
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+                <label class="text-xs text-ops-light">Title size</label>
+                <select id="ui-title-scale" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-sm">
+                    <option value="sm" ${currentTitleScale === 'sm' ? 'selected' : ''}>Small</option>
+                    <option value="md" ${currentTitleScale === 'md' ? 'selected' : ''}>Medium (default)</option>
+                    <option value="lg" ${currentTitleScale === 'lg' ? 'selected' : ''}>Large</option>
+                    <option value="xl" ${currentTitleScale === 'xl' ? 'selected' : ''}>Extra large</option>
+                </select>
+                <div class="text-[11px] text-ops-light mt-1">Affects page title + dashboard section headers.</div>
+            </div>
+            <div>
+                <label class="text-xs text-ops-light">Density</label>
+                <select id="ui-density" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-sm">
+                    <option value="comfortable" ${currentDensity === 'comfortable' ? 'selected' : ''}>Comfortable (default)</option>
+                    <option value="compact" ${currentDensity === 'compact' ? 'selected' : ''}>Compact</option>
+                </select>
+                <div class="text-[11px] text-ops-light mt-1">Controls dashboard padding + spacing.</div>
+            </div>
+        </div>
+        <div class="flex gap-2 mt-4 flex-wrap">
+            <button id="btn-ui-save" class="px-3 py-2 rounded bg-blue-600 text-white text-xs hover:bg-blue-500">Save UI</button>
+            <button id="btn-ui-reset" class="px-3 py-2 rounded bg-ops-bg border border-ops-border text-ops-light text-xs hover:text-white">Reset defaults</button>
+        </div>
+    `;
+    wrap.appendChild(uiTuneSection);
+
+    // Wire UI controls
+    const uiTitleSel = uiTuneBody.querySelector('#ui-title-scale');
+    const uiDensitySel = uiTuneBody.querySelector('#ui-density');
+    const btnUiSave = uiTuneBody.querySelector('#btn-ui-save');
+    const btnUiReset = uiTuneBody.querySelector('#btn-ui-reset');
+
+    const previewUi = () => {
+        const titleScale = safeText(uiTitleSel?.value).trim().toLowerCase();
+        const density = safeText(uiDensitySel?.value).trim().toLowerCase();
+        applyUiPreferencesFromSettings({ ...(state.settings || {}), uiTitleScale: titleScale, uiDensity: density });
+    };
+
+    if (uiTitleSel) uiTitleSel.addEventListener('change', previewUi);
+    if (uiDensitySel) uiDensitySel.addEventListener('change', previewUi);
+
+    if (btnUiSave) {
+        btnUiSave.onclick = async () => {
+            btnUiSave.disabled = true;
+            const titleScale = safeText(uiTitleSel?.value).trim().toLowerCase() || 'md';
+            const density = safeText(uiDensitySel?.value).trim().toLowerCase() || 'comfortable';
+            try {
+                state.settings = state.settings && typeof state.settings === 'object' ? state.settings : {};
+                state.settings.uiTitleScale = titleScale;
+                state.settings.uiDensity = density;
+                applyUiPreferencesFromSettings(state.settings);
+                await saveSettingsPatch({ uiTitleScale: titleScale, uiDensity: density });
+                renderSettings(container);
+            } catch (e) {
+                alert(e?.message || 'Failed to save UI settings');
+            } finally {
+                btnUiSave.disabled = false;
+            }
+        };
+    }
+
+    if (btnUiReset) {
+        btnUiReset.onclick = async () => {
+            const defaults = { uiTitleScale: 'md', uiDensity: 'comfortable' };
+            if (uiTitleSel) uiTitleSel.value = defaults.uiTitleScale;
+            if (uiDensitySel) uiDensitySel.value = defaults.uiDensity;
+            previewUi();
+            try {
+                await saveSettingsPatch(defaults);
+                renderSettings(container);
+            } catch (e) {
+                alert(e?.message || 'Failed to reset UI settings');
+            }
+        };
+    }
 
     // Businesses
     const bizSection = section('Businesses', 'Each business is a separate workspace (projects, tasks, inbox).');
@@ -6640,7 +6769,7 @@ function renderDashboard(container, sidePort) {
             <div class="dash-card-head flex items-center justify-between gap-2 px-3 py-2.5">
                 <div class="flex items-center gap-2 min-w-0">
                     <i class="fa-solid ${icon} ${iconColor} text-[10px] shrink-0"></i>
-                    <span class="text-[10px] font-mono uppercase tracking-widest text-ops-light truncate">${label}</span>
+                    <span class="ops-section-title font-mono uppercase truncate">${label}</span>
                 </div>
                 <div class="flex items-center gap-2">
                     ${rightHtml || ''}
@@ -6667,7 +6796,7 @@ function renderDashboard(container, sidePort) {
     headerEl.className = 'flex flex-col sm:flex-row sm:items-center justify-between gap-2';
     headerEl.innerHTML = `
         <div>
-            <div class="text-base text-white font-semibold">${escapeHtml(greeting)}, ${escapeHtml(userName)}</div>
+            <div class="text-lg text-white font-semibold tracking-tight">${escapeHtml(greeting)}, ${escapeHtml(userName)}</div>
             <div class="text-[10px] font-mono text-ops-light/60 mt-0.5">${escapeHtml(dateStr)}</div>
         </div>
         <div class="flex flex-wrap items-center gap-1.5">
