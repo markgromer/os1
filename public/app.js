@@ -55,6 +55,10 @@ const state = {
     backgroundDirty: false,
     lastInteractionAt: 0,
 
+    // View search
+    projectsSearch: '',
+    revisionsSearch: '',
+
     // Focus timer state (Pomodoro)
     focusTimer: {
         running: false,
@@ -132,6 +136,8 @@ const MARTY_DETACHED_STORAGE_KEY = 'opsMartyDetached';
 const MARTY_PANEL_STORAGE_KEY = 'opsMartyPanel';
 const MARTY_SYNC_CHANNEL = 'opsMartySync';
 const MARTY_SYNC_STORAGE_KEY = 'opsMartySyncEvent';
+const MARTY_VOICE_IN_STORAGE_KEY = 'opsMartyVoiceIn';
+const MARTY_VOICE_OUT_STORAGE_KEY = 'opsMartyVoiceOut';
 
 const MARTY_PANEL_MIN_WIDTH = 320;
 const MARTY_PANEL_MIN_HEIGHT = 420;
@@ -180,6 +186,40 @@ function setStoredMartyOpen(open) {
         localStorage.setItem(MARTY_OPEN_STORAGE_KEY, open ? '1' : '0');
     } catch {
         // ignore
+    }
+}
+
+function setStoredMartyVoiceIn(enabled) {
+    try {
+        localStorage.setItem(MARTY_VOICE_IN_STORAGE_KEY, enabled ? '1' : '0');
+    } catch {
+        // ignore
+    }
+}
+
+function getStoredMartyVoiceIn() {
+    try {
+        const raw = String(localStorage.getItem(MARTY_VOICE_IN_STORAGE_KEY) || '').trim().toLowerCase();
+        return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
+    } catch {
+        return false;
+    }
+}
+
+function setStoredMartyVoiceOut(enabled) {
+    try {
+        localStorage.setItem(MARTY_VOICE_OUT_STORAGE_KEY, enabled ? '1' : '0');
+    } catch {
+        // ignore
+    }
+}
+
+function getStoredMartyVoiceOut() {
+    try {
+        const raw = String(localStorage.getItem(MARTY_VOICE_OUT_STORAGE_KEY) || '').trim().toLowerCase();
+        return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
+    } catch {
+        return false;
     }
 }
 
@@ -811,6 +851,11 @@ function initializeMartyWidget() {
     syncMartyModelUi();
     setMartyPresence('idle');
 
+    state.martyVoiceIn = getStoredMartyVoiceIn();
+    state.martyVoiceOut = getStoredMartyVoiceOut();
+    state.martyVoiceListening = false;
+    syncMartyVoiceUi();
+
     if (IS_MARTY_POPOUT) {
         applyMartyOpenState(true);
     }
@@ -1077,6 +1122,11 @@ function getCommandPaletteItems() {
             run: async () => { await createNewProjectPrompt(); },
         },
         {
+
+        // MARTY voice
+        martyVoiceIn: false,
+        martyVoiceOut: false,
+        martyVoiceListening: false,
             id: 'new-inbox-item',
             label: 'Capture Inbox Item',
             hint: 'Action',
@@ -1281,6 +1331,129 @@ function snapshotViewUiState() {
         expandedCards: [],
         scrollSelector: '',
     };
+
+    let martySpeechRecognition = null;
+
+    function getSpeechRecognitionCtor() {
+        try {
+            return window.SpeechRecognition || window.webkitSpeechRecognition || null;
+        } catch {
+            return null;
+        }
+    }
+
+    function stripForSpeech(input) {
+        const s = String(input || '');
+        return s
+            .replace(/```[\s\S]*?```/g, ' ')
+            .replace(/`[^`]*`/g, ' ')
+            .replace(/\[(.*?)\]\((.*?)\)/g, '$1')
+            .replace(/[#*_>]+/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+
+    function speakMarty(text) {
+        if (!state.martyVoiceOut) return;
+        try {
+            const spoken = stripForSpeech(text);
+            if (!spoken) return;
+            if (!('speechSynthesis' in window)) return;
+            window.speechSynthesis.cancel();
+            const u = new SpeechSynthesisUtterance(spoken.slice(0, 1200));
+            u.rate = 1;
+            u.pitch = 1;
+            u.volume = 1;
+            window.speechSynthesis.speak(u);
+        } catch {
+            // ignore
+        }
+    }
+
+    function syncMartyVoiceUi() {
+        const mic = document.getElementById('cmd-mic');
+        const speak = document.getElementById('cmd-speak');
+        if (mic) {
+            mic.classList.toggle('text-blue-400', !!state.martyVoiceIn);
+            mic.classList.toggle('text-emerald-300', !!state.martyVoiceListening);
+            mic.title = state.martyVoiceListening ? 'Listening… (click to stop)' : 'Voice input';
+        }
+        if (speak) {
+            speak.classList.toggle('text-blue-400', !!state.martyVoiceOut);
+            speak.title = state.martyVoiceOut ? 'Voice output on' : 'Voice output off';
+        }
+    }
+
+    function stopMartyListening() {
+        state.martyVoiceListening = false;
+        try {
+            martySpeechRecognition?.stop?.();
+        } catch {
+            // ignore
+        }
+        syncMartyVoiceUi();
+    }
+
+    function startMartyListening() {
+        const Ctor = getSpeechRecognitionCtor();
+        if (!Ctor) {
+            alert('Voice input is not supported in this browser. Try Chrome/Edge on desktop.');
+            return;
+        }
+
+        if (!martySpeechRecognition) {
+            martySpeechRecognition = new Ctor();
+            martySpeechRecognition.lang = 'en-US';
+            martySpeechRecognition.interimResults = true;
+            martySpeechRecognition.continuous = false;
+        }
+
+        const input = document.getElementById('cmd-input');
+        let finalTranscript = '';
+
+        state.martyVoiceListening = true;
+        syncMartyVoiceUi();
+
+        martySpeechRecognition.onresult = (e) => {
+            try {
+                let interim = '';
+                for (let i = e.resultIndex; i < e.results.length; i++) {
+                    const r = e.results[i];
+                    const t = r && r[0] && r[0].transcript ? String(r[0].transcript) : '';
+                    if (r.isFinal) finalTranscript += t;
+                    else interim += t;
+                }
+                const combined = (finalTranscript + interim).trim();
+                if (input && combined) input.value = combined;
+            } catch {
+                // ignore
+            }
+        };
+
+        martySpeechRecognition.onerror = () => {
+            stopMartyListening();
+        };
+
+        martySpeechRecognition.onend = () => {
+            const final = String(finalTranscript || '').trim();
+            stopMartyListening();
+            if (final) {
+                try {
+                    if (input) input.value = final;
+                    handleChatSubmit();
+                } catch {
+                    // ignore
+                }
+            }
+        };
+
+        try {
+            martySpeechRecognition.start();
+            if (input) input.focus?.();
+        } catch {
+            stopMartyListening();
+        }
+    }
 
     if (state.currentView === 'dashboard') {
         const scrollEl = viewPort.querySelector('.dash-stagger');
@@ -2166,6 +2339,31 @@ function setupEventListeners() {
         if (!btn) return;
         e.preventDefault();
         handleChatSubmit();
+    });
+
+    document.addEventListener('click', (e) => {
+        const btn = e.target?.closest?.('#cmd-mic');
+        if (!btn) return;
+        e.preventDefault();
+        const next = !state.martyVoiceIn;
+        state.martyVoiceIn = next;
+        setStoredMartyVoiceIn(next);
+        if (next) startMartyListening();
+        else stopMartyListening();
+        syncMartyVoiceUi();
+    });
+
+    document.addEventListener('click', (e) => {
+        const btn = e.target?.closest?.('#cmd-speak');
+        if (!btn) return;
+        e.preventDefault();
+        const next = !state.martyVoiceOut;
+        state.martyVoiceOut = next;
+        setStoredMartyVoiceOut(next);
+        if (!next) {
+            try { window.speechSynthesis?.cancel?.(); } catch {}
+        }
+        syncMartyVoiceUi();
     });
 
     if (modelSelect) {
@@ -5540,6 +5738,20 @@ function renderProjects(container) {
     `;
     content.appendChild(intake);
 
+    // Search
+    const searchWrap = document.createElement('div');
+    searchWrap.className = 'mb-4 flex flex-col md:flex-row md:items-end md:justify-between gap-3';
+    searchWrap.innerHTML = `
+        <div class="flex-1">
+            <div class="text-[11px] text-zinc-500 mb-1">Search projects</div>
+            <input id="projects-search" type="text" value="${escapeHtml(state.projectsSearch || '')}" class="w-full bg-zinc-950/40 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white transition-colors focus:outline-none focus:ring-1 focus:ring-blue-500/30 focus:border-blue-500/40" placeholder="Name, client, brief, type, status..." />
+        </div>
+        <div class="shrink-0 text-xs font-mono text-zinc-500 bg-black/20 px-2 py-1 rounded-full border border-white/5" data-project-search-count></div>
+    `;
+    content.appendChild(searchWrap);
+
+    const searchKey = (...parts) => parts.map((p) => safeText(p).trim().toLowerCase()).filter(Boolean).join(' ');
+
     const makeProjectListCard = (title, projects, emptyText) => {
         const wrap = document.createElement('div');
         const list = Array.isArray(projects) ? projects : [];
@@ -5561,6 +5773,8 @@ function renderProjects(container) {
                 for (const p of list) {
                     const card = document.createElement('button');
                     card.type = 'button';
+                    card.setAttribute('data-project-card', '1');
+                    card.dataset.searchKey = searchKey(p?.name, p?.clientName, p?.agentBrief, p?.type, p?.status, p?.dueDate);
                     // Glassy Card
                     card.className = 'group w-full text-left p-4 rounded-xl border border-white/10 bg-white/5 backdrop-blur-md hover:bg-white/10 hover:border-white/20 transition-all duration-300 hover:-translate-y-1 hover:shadow-xl relative overflow-hidden flex flex-col gap-3 min-h-[120px]';
                     card.innerHTML = `
@@ -5593,7 +5807,47 @@ function renderProjects(container) {
         return wrap;
     };
 
-    content.appendChild(makeProjectListCard('Active Projects', activeProjects, 'None.'));
+    const activeCard = makeProjectListCard('Active Projects', activeProjects, 'None.');
+    content.appendChild(activeCard);
+
+    const noMatches = document.createElement('div');
+    noMatches.className = 'mt-4 p-4 border border-white/5 rounded-xl text-zinc-500 italic text-sm bg-black/10 hidden';
+    noMatches.setAttribute('data-project-search-empty', '1');
+    noMatches.innerText = 'No matching projects.';
+    content.appendChild(noMatches);
+
+    const applyProjectsSearch = () => {
+        const q = safeText(state.projectsSearch).trim().toLowerCase();
+        const cards = Array.from(content.querySelectorAll('[data-project-card]'));
+        let visible = 0;
+        for (const c of cards) {
+            const key = safeText(c?.dataset?.searchKey).toLowerCase();
+            const match = !q || key.includes(q);
+            c.classList.toggle('hidden', !match);
+            if (match) visible++;
+        }
+        const countEl = content.querySelector('[data-project-search-count]');
+        if (countEl) countEl.textContent = cards.length ? (q ? `${visible}/${cards.length}` : `${cards.length}`) : '0';
+        const emptyEl = content.querySelector('[data-project-search-empty]');
+        if (emptyEl) emptyEl.classList.toggle('hidden', !(q && cards.length && visible === 0));
+    };
+
+    const searchInput = content.querySelector('#projects-search');
+    if (searchInput) {
+        searchInput.addEventListener('input', (e) => {
+            state.projectsSearch = safeText(e?.target?.value);
+            applyProjectsSearch();
+        });
+        searchInput.addEventListener('keydown', (e) => {
+            if (e?.key === 'Escape') {
+                e.preventDefault();
+                state.projectsSearch = '';
+                searchInput.value = '';
+                applyProjectsSearch();
+            }
+        });
+    }
+    applyProjectsSearch();
 
     // Wire intake controls
     const toggle = intake.querySelector('#btn-toggle-intake');
@@ -5722,6 +5976,7 @@ function renderRevisions(container) {
 
     const makeRevisionCard = (p) => {
         const card = document.createElement('div');
+        card.setAttribute('data-rev-card', '1');
         card.className = 'group w-full text-left p-4 rounded-xl border border-white/10 bg-white/5 backdrop-blur-md hover:bg-white/10 hover:border-white/20 transition-all duration-300 hover:-translate-y-1 hover:shadow-xl relative overflow-hidden flex flex-col gap-3 min-h-[120px]';
 
         const owner = getProjectOwnerName(p);
@@ -5730,6 +5985,16 @@ function renderRevisions(container) {
         const due = safeText(p?.dueDate).trim();
         const status = safeText(p?.status).trim() || 'Active';
         const summaryPreview = latestRevisionSummaryPreview(p?.id);
+
+        card.dataset.searchKey = [
+            safeText(p?.name),
+            safeText(p?.clientName),
+            safeText(p?.agentBrief),
+            safeText(ownerLabel),
+            safeText(status),
+            safeText(due),
+            safeText(summaryPreview),
+        ].join(' ').trim().toLowerCase();
 
         card.innerHTML = `
             <div class="absolute inset-0 bg-gradient-to-br from-blue-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
@@ -5804,15 +6069,21 @@ function renderRevisions(container) {
     const content = document.createElement('div');
     content.className = 'flex-1 min-h-0 overflow-y-auto p-6';
     content.innerHTML = `
-        <div class="mb-4">
-            <div class="text-white text-lg font-semibold tracking-tight">Revision Requests</div>
-            <div class="text-[11px] text-zinc-500 mt-0.5">Assign a revision to someone. If assigned to you, it will also appear in Projects.</div>
+        <div class="mb-4 flex flex-col md:flex-row md:items-end md:justify-between gap-3">
+            <div>
+                <div class="text-white text-lg font-semibold tracking-tight">Revision Requests</div>
+                <div class="text-[11px] text-zinc-500 mt-0.5">Assign a revision to someone. If assigned to you, it will also appear in Projects.</div>
+            </div>
+            <div class="w-full md:max-w-sm">
+                <div class="text-[11px] text-zinc-500 mb-1">Search revisions</div>
+                <input id="revisions-search" type="text" value="${escapeHtml(state.revisionsSearch || '')}" class="w-full bg-zinc-950/40 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white transition-colors focus:outline-none focus:ring-1 focus:ring-blue-500/30 focus:border-blue-500/40" placeholder="Name, notes, owner, status..." />
+            </div>
         </div>
         <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4" data-rev-active></div>
         <div class="mt-10">
             <div class="flex items-center justify-between gap-3 mb-4">
                 <div class="text-white text-lg font-semibold tracking-tight">Archived</div>
-                <div class="text-xs font-mono text-zinc-500 bg-black/20 px-2 py-0.5 rounded-full border border-white/5">${revisionsArchived.length}</div>
+                <div class="text-xs font-mono text-zinc-500 bg-black/20 px-2 py-0.5 rounded-full border border-white/5" data-rev-archived-count>${revisionsArchived.length}</div>
             </div>
             <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4" data-rev-archived></div>
         </div>
@@ -5828,6 +6099,12 @@ function renderRevisions(container) {
         } else {
             for (const p of revisionsActive) activeEl.appendChild(makeRevisionCard(p));
         }
+
+        const empty = document.createElement('div');
+        empty.className = 'col-span-full p-4 border border-white/5 rounded-xl text-zinc-500 italic text-sm bg-black/10 hidden';
+        empty.setAttribute('data-rev-search-empty-active', '1');
+        empty.innerText = 'No matching revision requests.';
+        activeEl.appendChild(empty);
     }
 
     const archivedEl = content.querySelector('[data-rev-archived]');
@@ -5840,7 +6117,58 @@ function renderRevisions(container) {
         } else {
             for (const p of revisionsArchived) archivedEl.appendChild(makeRevisionCard(p));
         }
+
+        const empty = document.createElement('div');
+        empty.className = 'col-span-full p-4 border border-white/5 rounded-xl text-zinc-500 italic text-sm bg-black/10 hidden';
+        empty.setAttribute('data-rev-search-empty-archived', '1');
+        empty.innerText = 'No matching archived revisions.';
+        archivedEl.appendChild(empty);
     }
+
+    const applyRevisionsSearch = () => {
+        const q = safeText(state.revisionsSearch).trim().toLowerCase();
+        const activeCards = Array.from(content.querySelectorAll('[data-rev-active] [data-rev-card]'));
+        const archivedCards = Array.from(content.querySelectorAll('[data-rev-archived] [data-rev-card]'));
+
+        const filter = (cards) => {
+            let visible = 0;
+            for (const c of cards) {
+                const key = safeText(c?.dataset?.searchKey).toLowerCase();
+                const match = !q || key.includes(q);
+                c.classList.toggle('hidden', !match);
+                if (match) visible++;
+            }
+            return visible;
+        };
+
+        const visActive = filter(activeCards);
+        const visArchived = filter(archivedCards);
+
+        const emptyActive = content.querySelector('[data-rev-search-empty-active]');
+        if (emptyActive) emptyActive.classList.toggle('hidden', !(q && activeCards.length && visActive === 0));
+        const emptyArchived = content.querySelector('[data-rev-search-empty-archived]');
+        if (emptyArchived) emptyArchived.classList.toggle('hidden', !(q && archivedCards.length && visArchived === 0));
+
+        const archivedCountEl = content.querySelector('[data-rev-archived-count]');
+        if (archivedCountEl) archivedCountEl.textContent = q ? String(visArchived) : String(revisionsArchived.length);
+    };
+
+    const searchInput = content.querySelector('#revisions-search');
+    if (searchInput) {
+        searchInput.addEventListener('input', (e) => {
+            state.revisionsSearch = safeText(e?.target?.value);
+            applyRevisionsSearch();
+        });
+        searchInput.addEventListener('keydown', (e) => {
+            if (e?.key === 'Escape') {
+                e.preventDefault();
+                state.revisionsSearch = '';
+                searchInput.value = '';
+                applyRevisionsSearch();
+            }
+        });
+    }
+    applyRevisionsSearch();
 
     wrap.appendChild(content);
     container.appendChild(wrap);
@@ -9908,6 +10236,7 @@ async function handleChatSubmit() {
         setMartyPresence('responding');
         recordChatMessage("ai", reply);
         addChatMessage("ai", reply, true);
+        speakMarty(reply);
         
         // Refresh state in case AI changed things
         await fetchState();

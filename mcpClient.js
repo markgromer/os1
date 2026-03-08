@@ -136,7 +136,7 @@ class McpStdioClient {
     this.proc.stdin.write(encodeJsonRpc(message));
   }
 
-  sendRequest(method, params, { timeoutMs = 8000 } = {}) {
+  sendRequest(method, params, { timeoutMs = 30000 } = {}) {
     const id = String(this.nextId++);
     const message = { jsonrpc: '2.0', id, method, params };
 
@@ -165,10 +165,13 @@ export async function withMcpClient(config, fn) {
   const args = splitArgs(config?.args);
   const cwd = typeof config?.cwd === 'string' && config.cwd.trim() ? config.cwd.trim() : process.cwd();
 
+  const isWinCmd = process.platform === 'win32' && (command.toLowerCase().endsWith('.cmd') || command.toLowerCase().endsWith('.bat'));
+
   const proc = spawn(command, args, {
     cwd,
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true,
+    shell: isWinCmd,
     env: process.env,
   });
 
@@ -182,20 +185,24 @@ export async function withMcpClient(config, fn) {
         capabilities: {},
         clientInfo: { name: 'OS.1', version: '1.0' },
       },
-      { timeoutMs: 8000 }
+      { timeoutMs: 30000 }
     );
 
     client.sendNotification('notifications/initialized', {});
 
     return await fn({ client, initResult });
   } finally {
-    await client.close();
+    try {
+      proc.kill();
+    } catch {
+      // ignore
+    }
   }
 }
 
 export async function mcpListTools(config) {
   return await withMcpClient(config, async ({ client }) => {
-    const result = await client.sendRequest('tools/list', {}, { timeoutMs: 8000 });
+    const result = await client.sendRequest('tools/list', {}, { timeoutMs: 30000 });
     const tools = Array.isArray(result?.tools) ? result.tools : [];
     return { tools };
   });

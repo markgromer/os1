@@ -647,9 +647,17 @@
                 <textarea id="cmd-input" rows="1"
                     class="w-full bg-black/20 border border-white/10 rounded-xl p-3 pr-10 text-white text-xs font-mono focus:border-ops-accent focus:outline-none focus:ring-1 focus:ring-ops-accent transition-all resize-none shadow-inner"
                     placeholder="Execute directive..."></textarea>
-                <button id="cmd-send" class="absolute right-3 bottom-2.5 text-ops-light hover:text-white transition-colors p-1">
-                    <i class="fa-solid fa-arrow-turn-up"></i>
-                </button>
+                <div class="absolute right-2 bottom-2 flex items-center gap-1">
+                    <button id="cmd-mic" class="text-ops-light hover:text-white transition-colors p-1" title="Voice input">
+                        <i class="fa-solid fa-microphone"></i>
+                    </button>
+                    <button id="cmd-speak" class="text-ops-light hover:text-white transition-colors p-1" title="Voice output">
+                        <i class="fa-solid fa-volume-high"></i>
+                    </button>
+                    <button id="cmd-send" class="text-ops-light hover:text-white transition-colors p-1" title="Send">
+                        <i class="fa-solid fa-arrow-turn-up"></i>
+                    </button>
+                </div>
             </div>
             <div id="ai-status" class="flex justify-between mt-2 text-[10px] text-ops-light font-mono opacity-0 transition-opacity">
                 <span id="marty-state">MARTY IDLE</span>

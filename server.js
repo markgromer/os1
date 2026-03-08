@@ -2139,7 +2139,7 @@ async function readStore() {
   const updatedAt = typeof parsed.updatedAt === 'string' ? parsed.updatedAt : new Date(0).toISOString();
   const projects = Array.isArray(parsed.projects) ? parsed.projects : [];
   const clients = Array.isArray(parsed.clients) ? parsed.clients : [];
-  const tasks = Array.isArray(parsed.tasks) ? parsed.tasks : [];
+  const tasks = (Array.isArray(parsed.tasks) ? parsed.tasks : []).map(sanitizeTaskRecord);
   const team = Array.isArray(parsed.team) ? parsed.team : [];
   const projectNotes = parsed.projectNotes && typeof parsed.projectNotes === 'object' ? parsed.projectNotes : {};
   const projectScratchpads = parsed.projectScratchpads && typeof parsed.projectScratchpads === 'object' ? parsed.projectScratchpads : {};
@@ -3026,6 +3026,40 @@ function normalizeTask(input) {
   const dueDate = typeof input.dueDate === 'string' && input.dueDate ? input.dueDate : '';
 
   return {
+    title,
+    project,
+    type,
+    owner,
+    status,
+    priority,
+    dueDate,
+  };
+}
+
+function sanitizeTaskRecord(rawTask) {
+  const t = rawTask && typeof rawTask === 'object' ? rawTask : {};
+
+  const title = valueToLooseText(t.title).trim()
+    || valueToLooseText(t.text).trim()
+    || valueToLooseText(t.name).trim()
+    || 'Untitled task';
+
+  const project = valueToLooseText(t.project).trim() || 'Other';
+  const type = valueToLooseText(t.type).trim() || 'Other';
+  const owner = valueToLooseText(t.owner).trim();
+  const status = valueToLooseText(t.status).trim() || 'Next';
+
+  const priorityNum = Number(t.priority);
+  const priority = Number.isFinite(priorityNum) ? Math.min(3, Math.max(1, Math.floor(priorityNum))) : 2;
+
+  const dueRaw = valueToLooseText(t.dueDate).trim();
+  const dueDate = dueRaw ? (safeYmd(dueRaw.slice(0, 10)) || '') : '';
+
+  const id = typeof t.id === 'string' && t.id.trim() ? t.id.trim() : makeId();
+
+  return {
+    ...t,
+    id,
     title,
     project,
     type,
@@ -4348,7 +4382,22 @@ async function runAirtableRevisionRequestsSync({ businessKey, limit = 200, windo
 
   const pickRevisionSummary = (fields) => {
     const raw = firstNonEmptyString(fields, [], ['revision summary']);
-    return typeof raw === 'string' ? raw.trim() : '';
+    return valueToLooseText(raw).trim();
+  };
+
+  const pickRevisionNotes = (fields) => {
+    const raw = firstNonEmptyString(fields, [], [
+      'revision notes',
+      'requested changes',
+      'changes requested',
+      'change requests',
+      'feedback',
+      'client feedback',
+      'customer feedback',
+      'review notes',
+      'notes',
+    ]);
+    return valueToLooseText(raw).trim();
   };
 
   const pickBusinessFromClients = (fields) => {
@@ -4360,7 +4409,7 @@ async function runAirtableRevisionRequestsSync({ businessKey, limit = 200, windo
 
   const pickAirtableTaskText = (fields) => {
     const raw = firstNonEmptyString(fields, [], ['tasks', 'task list', 'action items', 'next steps', 'next actions', 'to do', 'todo', 'ai tasks']);
-    return typeof raw === 'string' ? raw.trim() : '';
+    return valueToLooseText(raw).trim();
   };
 
   const pickWebsiteOrSiteLabel = (fields) => {
@@ -4475,13 +4524,26 @@ async function runAirtableRevisionRequestsSync({ businessKey, limit = 200, windo
       const fields = r?.fields && typeof r.fields === 'object' ? r.fields : {};
       const recordUrl = `https://airtable.com/${cfg.baseId}/${cfg.requestsTableId}/${recordId}`;
 
-      const title = firstNonEmptyString(fields, [], ['title', 'request', 'summary', 'subject', 'name']) || `Revision request ${recordId}`;
-      const body = firstNonEmptyString(fields, [], ['details', 'description', 'notes', 'message']);
+      const titleRaw = firstNonEmptyString(fields, [], ['title', 'request', 'summary', 'subject', 'name']) || `Revision request ${recordId}`;
+      const title = valueToLooseText(titleRaw).trim() || `Revision request ${recordId}`;
       const clientName = firstNonEmptyString(fields, [], ['client', 'client name', 'company', 'company name', 'customer', 'project']) || '';
       const clientPhone = firstNonEmptyString(fields, [], ['phone', 'phone number', 'mobile', 'cell', 'cell phone']) || '';
       const revisionLabel = pickRevisionLabel(fields);
       const revisionSummary = pickRevisionSummary(fields);
+      const revisionNotes = pickRevisionNotes(fields);
       const taskText = pickAirtableTaskText(fields);
+      const bodyRaw = firstNonEmptyString(fields, [], [
+        'revision notes',
+        'requested changes',
+        'changes requested',
+        'change requests',
+        'feedback',
+        'details',
+        'description',
+        'notes',
+        'message',
+      ]);
+      const body = valueToLooseText(bodyRaw).trim() || revisionSummary || revisionNotes;
       const dueRaw = firstNonEmptyString(fields, [], ['due', 'due date', 'deadline']);
       const dueDate = safeYmd(String(dueRaw || '').trim().slice(0, 10)) || '';
       const status = mapProjectStatus(fields);
@@ -4501,28 +4563,42 @@ async function runAirtableRevisionRequestsSync({ businessKey, limit = 200, windo
       if (siteLabel) importedBriefLines.push(`Site: ${siteLabel}`);
       if (clientName) importedBriefLines.push(`Client: ${clientName}`);
       importedBriefLines.push(`Title: ${title}`);
+      if (revisionLabel) importedBriefLines.push(`Revision: ${revisionLabel}`);
       if (dueDate) importedBriefLines.push(`Due: ${dueDate}`);
       importedBriefLines.push(`Status: ${status}`);
       importedBriefLines.push(`Priority: ${priority}`);
       importedBriefLines.push('');
-      if (body) importedBriefLines.push(String(body).trim());
+      if (revisionSummary) {
+        importedBriefLines.push('Revision summary:');
+        importedBriefLines.push(revisionSummary);
+        importedBriefLines.push('');
+      }
+      if (revisionNotes) {
+        importedBriefLines.push('Revision notes:');
+        importedBriefLines.push(revisionNotes);
+        importedBriefLines.push('');
+      }
+      if (body && body !== revisionSummary && body !== revisionNotes) importedBriefLines.push(body);
       importedBriefLines.push('');
       importedBriefLines.push(`Airtable: ${recordUrl}`);
 
       const appendRevisionSummaryNoteIfNew = (project) => {
-        if (!project || !revisionSummary) return;
-        const hash = crypto.createHash('sha1').update(revisionSummary).digest('hex').slice(0, 12);
-        const noteId = `airtable:rev:${recordId}:rev-summary:${hash}`;
+        if (!project) return;
+        const text = revisionSummary || revisionNotes;
+        if (!text) return;
+        const hash = crypto.createHash('sha1').update(text).digest('hex').slice(0, 12);
+        const noteId = `airtable:rev:${recordId}:rev-note:${hash}`;
         const date = safeYmd(ts.slice(0, 10)) || ts.slice(0, 10);
-        const noteTitle = revisionLabel ? `Revision Summary (Rev ${revisionLabel})` : 'Revision Summary';
-        const content = `${revisionSummary}\n\nAirtable: ${recordUrl}`.trimEnd();
+        const baseTitle = revisionSummary ? 'Revision Summary' : 'Revision Notes';
+        const noteTitle = revisionLabel ? `${baseTitle} (Rev ${revisionLabel})` : baseTitle;
+        const content = `${text}\n\nAirtable: ${recordUrl}`.trimEnd();
         const note = { id: noteId, kind: 'Airtable', date, title: noteTitle, content, createdAt: ts };
 
         const existing = Array.isArray(nextProjectNoteEntries?.[project.id]) ? nextProjectNoteEntries[project.id] : [];
         const exists = existing.some((n) => String(n?.id || '') === noteId);
         if (exists) return;
 
-        const legacyPrefix = `airtable:rev:${recordId}:rev-summary:`;
+        const legacyPrefix = `airtable:rev:${recordId}:rev-`;
         const cleaned = existing.filter((n) => {
           const id = String(n?.id || '');
           if (!id.startsWith(legacyPrefix)) return true;
@@ -4539,7 +4615,7 @@ async function runAirtableRevisionRequestsSync({ businessKey, limit = 200, windo
 
       const upsertAirtableTasks = (project) => {
         if (!project) return;
-        const sourceText = taskText || revisionSummary;
+        const sourceText = taskText || revisionSummary || revisionNotes || body;
         const titles = parseTaskTitles(sourceText);
         if (!titles.length) return;
 
@@ -8297,22 +8373,52 @@ async function aiAgentAction(message, store, projectId = null) {
       });
     }
 
-    const messages = [
-      {
-        role: 'system',
-        content:
-          systemPrompt +
-          "\n\nIMPORTANT: When the user asks to create or update a project (due date, links, invoice, repo, docs, value, status, account manager), you MUST use tool calls (create_project / update_project / create_tasks). If you need external data, use MCP tools when available.",
-      },
-    ];
+      if (apiKey) {
+        tools.push({
+          type: 'function',
+          function: {
+            name: 'generate_image',
+            description: 'Generate an image using DALL-E 3 based on a prompt. Returns a summary of the generated image and its embedded URL.',
+            parameters: {
+              type: 'object',
+              properties: {
+                prompt: { type: 'string', description: 'Very detailed visual prompt describing the image.' },
+              },
+              required: ['prompt'],
+            },
+          },
+        });
+        tools.push({
+          type: 'function',
+          function: {
+            name: 'web_search',
+            description: 'Search the web for real-time information using local MCP proxy (if puppeteer is configured, it will be seamless, else fallback).',
+            parameters: {
+              type: 'object',
+              properties: {
+                query: { type: 'string', description: 'Search keywords.' }
+              },
+              required: ['query'],
+            }
+          }
+        });
+      }
 
-    // Include a small amount of history for continuity (before the current message).
-    if (effectiveProjectId && store.projectChats && store.projectChats[effectiveProjectId]) {
-      const h = store.projectChats[effectiveProjectId];
-      const history = Array.isArray(h) ? h : Array.isArray(h.messages) ? h.messages : [];
-      for (const m of history.slice(-8)) {
-        if (!m || typeof m !== 'object') continue;
-        const role = m.role === 'user' ? 'user' : m.role === 'ai' ? 'assistant' : '';
+      const messages = [
+        {
+          role: 'system',
+          content:
+            systemPrompt +
+            "\n\nIMPORTANT: When the user asks to create or update a project (due date, links, invoice, repo, docs, value, status, account manager), you MUST use tool calls (create_project / update_project / create_tasks). If you need external data, use MCP tools when available.",
+        },
+      ];
+
+      // Include a small amount of history for continuity (before the current message).
+      if (effectiveProjectId && store.projectChats && store.projectChats[effectiveProjectId]) {
+        const h = store.projectChats[effectiveProjectId];
+        const history = Array.isArray(h) ? h : Array.isArray(h.messages) ? h.messages : [];
+        for (const m of history.slice(-8)) {
+          const role = m.role === 'user' ? 'user' : m.role === 'ai' ? 'assistant' : '';
         if (!role) continue;
         const content = String(m.content || '').slice(0, 2000);
         if (content) messages.push({ role, content });
@@ -8376,6 +8482,25 @@ async function aiAgentAction(message, store, projectId = null) {
         const days = Number(args?.days);
         const max = Number(args?.max);
         return await googleListUpcomingEvents({ days, max });
+      }
+      if (toolName === 'generate_image') {
+        if (!apiKey) return { ok: false, error: 'No API key' };
+        try {
+          const body = { model: 'dall-e-3', prompt: args.prompt, n: 1, size: '1024x1024' };
+          const { resp, data } = await fetchJsonWithTimeout('https://api.openai.com/v1/images/generations', {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+            timeoutMs: 45000
+          });
+          if (data?.data?.[0]?.url) {
+            const url = data.data[0].url;
+            return { ok: true, imageUrl: url, result: `![Generated Image](${url})` };
+          }
+          return { ok: false, error: 'Image generation failed', details: data };
+        } catch (e) {
+          return { ok: false, error: e.message };
+        }
       }
       return { ok: false, error: `Unknown tool: ${toolName}` };
     };
