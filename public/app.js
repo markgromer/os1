@@ -7207,76 +7207,331 @@ function renderDashboard(container, sidePort) {
     const feedRow = document.createElement('div');
     feedRow.className = 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2';
 
-    // Activity
-    const renderActivityLine = (a) => {
-        const ts = a.time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        let main = '';
-        let sub = '';
+    const inboxById = {};
+    for (const it of inboxItems) {
+        const id = safeText(it?.id).trim();
+        if (!id) continue;
+        inboxById[id] = it;
+    }
 
-        if (a.kind === 'task') {
-            const id = safeText(a?.id).trim();
-            const ai = id ? aiTaskMap[id] : null;
-            main = `${safeText(a.verb)}: ${safeText(ai?.title || a.rawTitle || 'Task')}`;
-            sub = safeText(ai?.summary).trim();
-        } else if (a.kind === 'inbox') {
-            const id = safeText(a?.id).trim();
-            const ai = id ? aiInboxMap[id] : null;
-            const src = safeText(a?.source).trim();
-            const meta = inboxSourceMeta(src);
-            const label = safeText(meta?.label).trim() || (src ? src.toUpperCase() : 'Inbox');
-            main = `${label}: ${safeText(ai?.title || a.rawTitle || 'Inbox item')}`;
-            sub = safeText(ai?.summary).trim();
-        } else {
-            main = safeText(a?.text || '');
+    const projectNameById = {};
+    for (const p of activeProjects) {
+        const id = safeText(p?.id).trim();
+        if (!id) continue;
+        projectNameById[id] = safeText(p?.name).trim();
+    }
+
+    const parseFirstPhone = (text) => {
+        const s = safeText(text);
+        const m = s.match(/\+\d{7,15}/);
+        return m ? m[0] : '';
+    };
+
+    const formatClock = (d) => {
+        try {
+            const dt = (d instanceof Date) ? d : new Date(d);
+            if (Number.isNaN(dt.getTime())) return '';
+            return dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        } catch {
+            return '';
+        }
+    };
+
+    // Activity
+    const activityBlocks = [];
+    const inboxAggByKey = {};
+    for (const a of recentActivity) {
+        if (a.kind !== 'inbox') {
+            activityBlocks.push({ kind: 'single', time: a.time, a });
+            continue;
         }
 
-        return `<div class="flex items-start gap-1.5"><i class="fa-solid ${a.icon} text-[9px] mt-0.5 shrink-0"></i><div class="min-w-0"><div class="text-[10px] text-white truncate">${escapeHtml(main)}</div>${sub ? `<div class="text-[9px] font-mono text-ops-light/50 truncate">${escapeHtml(sub)}</div>` : ''}<div class="text-[8px] font-mono text-ops-light/40">${escapeHtml(ts)}</div></div></div>`;
+        const id = safeText(a?.id).trim();
+        const item = id ? inboxById[id] : null;
+        const sourceKey = normalizeInboxSourceKey(item?.source || a?.source);
+        const meta = inboxSourceMeta(sourceKey);
+        const label = safeText(meta?.label).trim() || (sourceKey ? sourceKey.toUpperCase() : 'Inbox');
+        const phone = parseFirstPhone(safeText(item?.from) || safeText(item?.phone) || safeText(item?.title) || safeText(a?.rawTitle));
+        const counterparty = phone || safeText(item?.fromName).trim() || safeText(item?.contactName).trim();
+        const groupKey = `inbox:${sourceKey}:${counterparty || 'unknown'}`;
+
+        const stampIso = safeText(item?.createdAt || a?.time?.toISOString?.() || '').trim();
+        const stamp = stampIso ? new Date(stampIso) : a.time;
+        const existing = inboxAggByKey[groupKey];
+        if (!existing) {
+            inboxAggByKey[groupKey] = {
+                kind: 'inbox-group',
+                time: stamp,
+                label,
+                counterparty: counterparty || '',
+                sourceKey,
+                count: 1,
+                sampleId: id,
+                sampleRawTitle: safeText(a?.rawTitle),
+                icon: a.icon,
+            };
+        } else {
+            existing.count += 1;
+            if (stamp > existing.time) {
+                existing.time = stamp;
+                existing.sampleId = id;
+                existing.sampleRawTitle = safeText(a?.rawTitle);
+            }
+        }
+    }
+    for (const k of Object.keys(inboxAggByKey)) {
+        activityBlocks.push(inboxAggByKey[k]);
+    }
+    activityBlocks.sort((x, y) => y.time - x.time);
+
+    const renderActivityBlock = (block) => {
+        const ts = formatClock(block.time);
+
+        if (block.kind === 'single') {
+            const a = block.a;
+            let main = '';
+            let sub = '';
+
+            if (a.kind === 'task') {
+                const id = safeText(a?.id).trim();
+                const ai = id ? aiTaskMap[id] : null;
+                main = `${safeText(a.verb)}: ${safeText(ai?.title || a.rawTitle || 'Task')}`;
+                sub = safeText(ai?.summary).trim();
+            } else {
+                main = safeText(a?.text || '');
+            }
+
+            return `<div class="flex items-start gap-1.5"><i class="fa-solid ${a.icon} text-[9px] mt-0.5 shrink-0"></i><div class="min-w-0"><div class="text-[10px] text-white truncate">${escapeHtml(main)}</div>${sub ? `<div class="text-[9px] font-mono text-ops-light/50 truncate">${escapeHtml(sub)}</div>` : ''}<div class="text-[8px] font-mono text-ops-light/40">${escapeHtml(ts)}</div></div></div>`;
+        }
+
+        if (block.kind === 'inbox-group') {
+            const id = safeText(block.sampleId).trim();
+            const ai = id ? aiInboxMap[id] : null;
+            let title = safeText(ai?.title || block.sampleRawTitle || 'Inbox item').trim();
+            if (isBadDashText(title)) title = `${block.label} message`;
+            const summary = safeText(ai?.summary).trim();
+            const who = block.counterparty ? ` • ${block.counterparty}` : '';
+            const count = Number(block.count) || 1;
+            const countBadge = count > 1 ? `<span class="ml-1 px-1.5 py-0.5 rounded border border-ops-border text-[8px] font-mono text-ops-light/60">${count}</span>` : '';
+            return `<div class="flex items-start gap-1.5"><i class="fa-solid ${block.icon} text-[9px] mt-0.5 shrink-0"></i><div class="min-w-0"><div class="text-[10px] text-white truncate">${escapeHtml(block.label)}${escapeHtml(who)}${countBadge} — ${escapeHtml(title)}</div>${summary ? `<div class="text-[9px] font-mono text-ops-light/50 truncate">${escapeHtml(summary)}</div>` : ''}<div class="text-[8px] font-mono text-ops-light/40">${escapeHtml(ts)}</div></div></div>`;
+        }
+
+        return '';
     };
-    const actPreview = recentActivity.slice(0, 3).map(renderActivityLine).join('');
-    const actBody = recentActivity.length > 3 ? recentActivity.slice(3, 10).map(renderActivityLine).join('') : '';
+
+    const actPreview = activityBlocks.slice(0, 3).map(renderActivityBlock).join('');
+    const actBody = activityBlocks.length > 3 ? activityBlocks.slice(3, 10).map(renderActivityBlock).join('') : '';
     const actCard = makeCard('activity', 'fa-clock-rotate-left', 'text-sky-400', 'Activity', '', `<div class="space-y-1.5">${actPreview || '<div class="text-[10px] text-ops-light/50">No recent activity.</div>'}</div>`, actBody ? `<div class="space-y-1.5">${actBody}</div>` : '');
     feedRow.appendChild(actCard);
 
-    // Slack
-    const slackPreview = slackNew.length ? slackNew.slice(0, 2).map(item => {
+    // Slack (group by channel)
+    const parseSlackContext = (item) => {
+        const raw = safeText(item?.title || item?.subject || '').trim();
+        const channel = (raw.match(/#([a-z0-9_-]{2,})/i) || [])[1] || '';
+        const at = (raw.match(/@([a-z0-9_.-]{2,})/i) || [])[1] || '';
+        return { channel, at };
+    };
+    const slackByChannel = {};
+    for (const item of slackNew) {
+        const ctx = parseSlackContext(item);
+        const key = ctx.channel ? `#${ctx.channel}` : 'Slack';
+        if (!slackByChannel[key]) slackByChannel[key] = { key, count: 0, sample: item };
+        slackByChannel[key].count += 1;
+    }
+    const slackChannels = Object.values(slackByChannel).sort((a, b) => (b.count - a.count));
+
+    const renderSlackRow = (row) => {
+        const item = row.sample;
         const id = safeText(item?.id).trim();
         const ai = id ? aiInboxMap[id] : null;
-        let t = safeText(ai?.title || item?.title || item?.subject).trim();
-        if (isBadDashText(t)) {
+        const ctx = parseSlackContext(item);
+        const who = ctx.at ? `@${ctx.at}` : '';
+        let title = safeText(ai?.title || item?.title || item?.subject).trim();
+        if (isBadDashText(title)) {
             const full = safeText(item?.content) || safeText(item?.text) || safeText(item?.body) || '';
-            t = previewText(full, 80) || 'Slack message';
+            title = previewText(full, 90) || 'Slack message';
         }
-        const p = safeText(ai?.summary).trim() || previewText(safeText(item?.content) || safeText(item?.text) || safeText(item?.body) || '', 90);
-        return `<div class="border border-ops-border rounded bg-ops-bg/40 px-2.5 py-1.5"><div class="text-[11px] text-white truncate">${escapeHtml(t)}</div>${p ? `<div class="text-[9px] font-mono text-ops-light/60 truncate mt-0.5">${escapeHtml(p)}</div>` : ''}</div>`;
-    }).join('') : '<div class="text-[10px] text-ops-light/50">No Slack messages.</div>';
-    const slackBody = slackNew.length > 2 ? slackNew.slice(2,6).map(item => { const t = safeText(item?.title)||'Slack'; return `<div class="border border-ops-border rounded bg-ops-bg/40 px-2.5 py-1.5"><div class="text-[11px] text-white truncate">${escapeHtml(t)}</div></div>`; }).join('') : '';
+        const summary = safeText(ai?.summary).trim() || previewText(safeText(item?.content) || safeText(item?.text) || safeText(item?.body) || '', 120);
+        const countBadge = row.count > 1 ? `<span class="px-1.5 py-0.5 rounded border border-ops-border text-[8px] font-mono text-ops-light/60">${row.count}</span>` : '';
+        return `
+            <div class="border border-ops-border rounded bg-ops-bg/40 px-2.5 py-2">
+                <div class="flex items-center justify-between gap-2">
+                    <div class="min-w-0 flex-1">
+                        <div class="flex items-center gap-2">
+                            <div class="text-[11px] text-white truncate">${escapeHtml(row.key)}${who ? ` <span class="text-ops-light/50">${escapeHtml(who)}</span>` : ''}</div>
+                        </div>
+                    </div>
+                    ${countBadge}
+                </div>
+                <div class="mt-1 text-[10px] text-white truncate">${escapeHtml(title)}</div>
+                ${summary ? `<div class="mt-0.5 text-[9px] font-mono text-ops-light/60 truncate">${escapeHtml(summary)}</div>` : ''}
+            </div>
+        `;
+    };
+
+    const slackPreview = slackNew.length
+        ? slackChannels.slice(0, 2).map(renderSlackRow).join('')
+        : '<div class="text-[10px] text-ops-light/50">No Slack messages.</div>';
+    const slackBody = slackNew.length && slackChannels.length > 2
+        ? slackChannels.slice(2, 8).map(renderSlackRow).join('')
+        : '';
     const slackCard = makeCard('slack', 'fa-slack', 'text-purple-400', 'Slack', `<button type="button" data-open-slack class="px-1.5 py-0.5 rounded border border-ops-border text-[9px] font-mono text-ops-light hover:text-white transition-colors">Open</button>`, `<div class="space-y-1">${slackPreview}</div>`, slackBody ? `<div class="space-y-1">${slackBody}</div>` : '');
     slackCard.querySelector('.dash-card-head i.fa-slack')?.classList.replace('fa-solid', 'fa-brands');
     feedRow.appendChild(slackCard);
 
-    // Inbox
-    const inboxPreview = inboxNew.length ? inboxNew.slice(0, 2).map(item => {
+    // Inbox (group by assignment)
+    const inboxGroupsByKey = {};
+    for (const item of inboxNew) {
+        const id = safeText(item?.id).trim();
+        const projectId = safeText(item?.projectId).trim();
+        const key = projectId ? `project:${projectId}` : 'unassigned';
+        if (!inboxGroupsByKey[key]) {
+            inboxGroupsByKey[key] = {
+                key,
+                projectId,
+                label: projectId ? (projectNameById[projectId] || 'Project') : 'Unassigned',
+                count: 0,
+                sourceCounts: {},
+                latestAt: '',
+                sample: item,
+            };
+        }
+        const g = inboxGroupsByKey[key];
+        g.count += 1;
+        const s = normalizeInboxSourceKey(item?.source);
+        g.sourceCounts[s] = (g.sourceCounts[s] || 0) + 1;
+        const at = safeText(item?.createdAt).trim();
+        if (at && (!g.latestAt || at > g.latestAt)) {
+            g.latestAt = at;
+            g.sample = item;
+        }
+    }
+
+    const inboxGroups = Object.values(inboxGroupsByKey).sort((a, b) => {
+        if (a.key === 'unassigned' && b.key !== 'unassigned') return -1;
+        if (b.key === 'unassigned' && a.key !== 'unassigned') return 1;
+        return (safeText(b.latestAt) || '').localeCompare(safeText(a.latestAt) || '');
+    });
+
+    const renderInboxGroupRow = (g) => {
+        const item = g.sample;
         const id = safeText(item?.id).trim();
         const ai = id ? aiInboxMap[id] : null;
-        let t = safeText(ai?.title || item?.title || item?.subject).trim();
-        if (isBadDashText(t)) {
+        let title = safeText(ai?.title || item?.title || item?.subject).trim();
+        if (isBadDashText(title)) {
             const full = safeText(item?.text) || safeText(item?.content) || safeText(item?.body) || safeText(item?.message) || '';
-            t = previewText(full, 80) || 'Inbox item';
+            title = previewText(full, 90) || 'Inbox item';
         }
-        const s = normalizeInboxSourceKey(item?.source);
-        const meta = inboxSourceMeta(s);
-        const label = safeText(meta?.label).trim() || safeText(item?.source).trim();
-        const sum = safeText(ai?.summary).trim();
-        return `<div class="border border-ops-border rounded bg-ops-bg/40 px-2.5 py-1.5"><div class="flex items-center justify-between gap-2"><span class="text-[11px] text-white truncate">${escapeHtml(t)}</span><span class="text-[9px] font-mono text-ops-light/50 shrink-0">${escapeHtml(label)}</span></div>${sum ? `<div class="text-[9px] font-mono text-ops-light/60 truncate mt-0.5">${escapeHtml(sum)}</div>` : ''}</div>`;
-    }).join('') : '<div class="text-[10px] text-ops-light/50">Inbox zero.</div>';
-    const inboxBody = inboxNew.length > 2 ? inboxNew.slice(2,8).map(item => { const t = safeText(item?.title)||'Item'; const s = safeText(item?.source)||''; return `<div class="flex items-center justify-between gap-2 border border-ops-border rounded bg-ops-bg/40 px-2.5 py-1.5"><span class="text-[11px] text-white truncate">${escapeHtml(t)}</span><span class="text-[9px] font-mono text-ops-light/50 shrink-0">${escapeHtml(s)}</span></div>`; }).join('') : '';
+        const summary = safeText(ai?.summary).trim() || previewText(safeText(item?.text) || safeText(item?.content) || safeText(item?.body) || '', 120);
+        const stamp = g.latestAt ? formatClock(g.latestAt) : '';
+
+        const srcBadges = Object.entries(g.sourceCounts)
+            .filter(([k, v]) => k && Number(v) > 0)
+            .slice(0, 3)
+            .map(([k, v]) => {
+                const meta = inboxSourceMeta(k);
+                const label = safeText(meta?.label).trim() || k.toUpperCase();
+                return `<span class="px-1.5 py-0.5 rounded border border-ops-border text-[8px] font-mono text-ops-light/50">${escapeHtml(label)} ${Number(v)}</span>`;
+            })
+            .join('');
+
+        const tone = g.key === 'unassigned' ? 'border-red-500/30 bg-red-500/10' : 'border-ops-border bg-ops-bg/40';
+        const countTone = g.key === 'unassigned' ? 'text-red-300' : 'text-white';
+
+        return `
+            <div class="border rounded px-2.5 py-2 ${tone}">
+                <div class="flex items-start justify-between gap-2">
+                    <div class="min-w-0 flex-1">
+                        <div class="flex items-center justify-between gap-2">
+                            <div class="min-w-0">
+                                <div class="text-[11px] ${g.key === 'unassigned' ? 'text-red-200 font-semibold' : 'text-white'} truncate">${escapeHtml(g.label)}</div>
+                                <div class="mt-0.5 text-[10px] text-white truncate">${escapeHtml(title)}</div>
+                            </div>
+                            <div class="shrink-0 text-[11px] font-mono font-semibold ${countTone}">${g.count}</div>
+                        </div>
+                        <div class="mt-1 flex items-center gap-1.5 flex-wrap">
+                            ${srcBadges}
+                            ${stamp ? `<span class="text-[8px] font-mono text-ops-light/40">${escapeHtml(stamp)}</span>` : ''}
+                        </div>
+                        ${summary ? `<div class="mt-1 text-[9px] font-mono text-ops-light/60 truncate">${escapeHtml(summary)}</div>` : ''}
+                    </div>
+                </div>
+            </div>
+        `;
+    };
+
+    const inboxPreview = inboxNew.length
+        ? inboxGroups.slice(0, 2).map(renderInboxGroupRow).join('')
+        : '<div class="text-[10px] text-ops-light/50">Inbox zero.</div>';
+    const inboxBody = inboxNew.length && inboxGroups.length > 2
+        ? inboxGroups.slice(2, 10).map(renderInboxGroupRow).join('')
+        : '';
     const inboxCard = makeCard('inbox', 'fa-inbox', 'text-amber-400', 'Inbox', `<button type="button" data-open-inbox2 class="px-1.5 py-0.5 rounded border border-ops-border text-[9px] font-mono text-ops-light hover:text-white transition-colors">Open</button>`, `<div class="space-y-1">${inboxPreview}</div>`, inboxBody ? `<div class="space-y-1">${inboxBody}</div>` : '');
     feedRow.appendChild(inboxCard);
 
-    // Team
+    // Team (presence + WIP/overdue signals)
     const humanMembers = teamMembers.filter(m => safeText(m?.role).toLowerCase() !== 'ai');
-    const teamPreview = humanMembers.length ? humanMembers.slice(0,3).map(m => { const name = safeText(m?.name)||'Member'; const role = safeText(m?.role)||''; const sid = safeText(m?.slackMemberId); const pres = sid && state.teamPresenceByMemberId?.[sid]; const on = pres && String(pres.presence||'').toLowerCase()==='active'; const dot = on ? '<span class="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0"></span>' : '<span class="w-1.5 h-1.5 rounded-full bg-zinc-600 shrink-0"></span>'; return `<div class="flex items-center gap-2 border border-ops-border rounded bg-ops-bg/40 px-2.5 py-1.5">${dot}<div class="min-w-0"><div class="text-[11px] text-white truncate">${escapeHtml(name)}</div>${role?`<div class="text-[9px] font-mono text-ops-light/50">${escapeHtml(role)}</div>`:''}</div></div>`; }).join('') : '<div class="text-[10px] text-ops-light/50">No team members.</div>';
-    const teamBody = humanMembers.length > 3 ? humanMembers.slice(3).map(m => { const name = safeText(m?.name)||'Member'; return `<div class="flex items-center gap-2 border border-ops-border rounded bg-ops-bg/40 px-2.5 py-1.5"><span class="w-1.5 h-1.5 rounded-full bg-zinc-600 shrink-0"></span><div class="text-[11px] text-white truncate">${escapeHtml(name)}</div></div>`; }).join('') : '';
+    const openByOwner = getOpenTaskCountByOwner();
+    const overdueByOwner = {};
+    for (const t of allTasks) {
+        if (isDoneTask(t)) continue;
+        const owner = safeText(t?.owner).trim();
+        if (!owner) continue;
+        const d = safeText(t?.dueDate).trim();
+        if (d && d < today) overdueByOwner[owner] = (overdueByOwner[owner] || 0) + 1;
+    }
+
+    const teamRows = humanMembers.map((m) => {
+        const name = safeText(m?.name).trim() || 'Member';
+        const role = safeText(m?.role).trim();
+        const sid = safeText(m?.slackMemberId).trim();
+        const pres = sid && state.teamPresenceByMemberId?.[sid];
+        const on = pres && String(pres.presence || '').toLowerCase() === 'active';
+        const dot = on
+            ? '<span class="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0"></span>'
+            : '<span class="w-1.5 h-1.5 rounded-full bg-zinc-600 shrink-0"></span>';
+
+        const openCount = Number(openByOwner[name]) || 0;
+        const overdueCount = Number(overdueByOwner[name]) || 0;
+        const wipLimit = getWipLimitForOwner(name);
+        const overLimit = Number.isFinite(wipLimit) && openCount > wipLimit;
+
+        const wipTone = overLimit ? 'border-red-500/30 bg-red-500/10 text-red-200' : 'border-ops-border bg-ops-bg/40 text-ops-light/70';
+        const overdueTone = overdueCount > 0 ? 'border-amber-500/30 bg-amber-500/10 text-amber-200' : 'border-ops-border bg-ops-bg/40 text-ops-light/50';
+        const wipText = Number.isFinite(wipLimit) ? `WIP ${openCount}/${wipLimit}` : `WIP ${openCount}`;
+
+        const score = (overLimit ? 1000 : 0) + (overdueCount * 10) + openCount;
+
+        return {
+            score,
+            html: `
+                <div class="border border-ops-border rounded bg-ops-bg/40 px-2.5 py-2">
+                    <div class="flex items-start justify-between gap-2">
+                        <div class="min-w-0 flex-1">
+                            <div class="flex items-center gap-2">
+                                ${dot}
+                                <div class="min-w-0">
+                                    <div class="text-[11px] text-white truncate">${escapeHtml(name)}</div>
+                                    ${role ? `<div class="text-[9px] font-mono text-ops-light/50 truncate">${escapeHtml(role)}</div>` : ''}
+                                </div>
+                            </div>
+                            <div class="mt-2 flex items-center gap-1.5 flex-wrap">
+                                <span class="px-1.5 py-0.5 rounded border text-[8px] font-mono ${wipTone}">${escapeHtml(wipText)}</span>
+                                <span class="px-1.5 py-0.5 rounded border text-[8px] font-mono ${overdueTone}">${overdueCount ? `${overdueCount} overdue` : 'No overdue'}</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `,
+        };
+    }).sort((a, b) => b.score - a.score);
+
+    const teamPreview = teamRows.length
+        ? teamRows.slice(0, 3).map((r) => r.html).join('')
+        : '<div class="text-[10px] text-ops-light/50">No team members.</div>';
+    const teamBody = teamRows.length > 3
+        ? teamRows.slice(3, 10).map((r) => r.html).join('')
+        : '';
     const teamCard = makeCard('team', 'fa-users', 'text-emerald-400', 'Team', `<button type="button" data-open-team class="px-1.5 py-0.5 rounded border border-ops-border text-[9px] font-mono text-ops-light hover:text-white transition-colors">Open</button>`, `<div class="space-y-1">${teamPreview}</div>`, teamBody ? `<div class="space-y-1">${teamBody}</div>` : '');
     feedRow.appendChild(teamCard);
     wrap.appendChild(feedRow);
