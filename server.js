@@ -23,6 +23,9 @@ let cachedBusinesses = [{ key: DEFAULT_BUSINESS_KEY, name: 'Personal', phoneNumb
 
 const lastRevisionCollapseByKey = new Map();
 
+// Cache cross-business rollups so chat doesn't re-scan every store on every message.
+let crossBizRollupCache = { at: 0, text: '' };
+
 const DEBUG_WEBHOOKS = String(process.env.DEBUG_WEBHOOKS || '').trim().toLowerCase() === 'true';
 
 // Capture the raw request bytes so we can verify webhook signatures (Slack/Twilio/etc).
@@ -6270,6 +6273,7 @@ app.get('/api/me/dashboard', async (req, res) => {
     const focusProjects = [];
     const globalSlackItems = [];
     const globalTeam = [];
+    const globalBriefs = [];
     const seenTeamNames = new Set();
 
     for (const b of businesses) {
@@ -6280,6 +6284,27 @@ app.get('/api/me/dashboard', async (req, res) => {
       const store = await withBusinessKey(bizKey, async () => readStore());
 
       const items = Array.isArray(store?.inboxItems) ? store.inboxItems : [];
+
+      // Latest Marty brief (if any) for this business.
+      let latestBrief = null;
+      for (const item of items) {
+        const src = String(item?.source || '').trim().toLowerCase();
+        if (src !== 'marty') continue;
+        const ts = String(item?.updatedAt || item?.createdAt || '').trim();
+        const bestTs = String(latestBrief?.updatedAt || latestBrief?.createdAt || '').trim();
+        if (!latestBrief || ts > bestTs) latestBrief = item;
+      }
+      if (latestBrief) {
+        globalBriefs.push({
+          id: latestBrief.id,
+          text: latestBrief.text,
+          status: latestBrief.status,
+          createdAt: latestBrief.createdAt,
+          updatedAt: latestBrief.updatedAt,
+          businessKey: bizKey,
+          businessName: bizName || bizKey,
+        });
+      }
       let newInboxCount = 0;
       for (const item of items) {
          const itemStatus = String(item.status || '').trim().toLowerCase();
@@ -6362,6 +6387,9 @@ app.get('/api/me/dashboard', async (req, res) => {
        return ad.localeCompare(bd);
     });
 
+    // Sort briefs by recency
+    globalBriefs.sort((a, b) => String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || '')));
+
     // Sort slack items by recency
     globalSlackItems.sort((a, b) => {
        const ad = a.createdAt || '';
@@ -6369,7 +6397,7 @@ app.get('/api/me/dashboard', async (req, res) => {
        return bd.localeCompare(ad);
     });
 
-    res.json({ businesses: globalBusinesses, focusProjects: focusProjects, slackItems: globalSlackItems, team: globalTeam });
+    res.json({ businesses: globalBusinesses, focusProjects: focusProjects, slackItems: globalSlackItems, team: globalTeam, briefs: globalBriefs });
   } catch (err) {
     console.error('Error in /api/me/dashboard:', err);
     res.status(500).json({ error: err.message });
@@ -8482,7 +8510,7 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
 
     let context = '';
     const baseSystemPrompt =
-      "You are Marty — (M)anagement (A)ssistant for (R)outing (T)asks and (Y)ield. Stay concise and action-oriented. You DO have access to the user's project data provided in context. Never claim you can't access tasks/notes; if something isn't present in context, ask for it.";
+      "You are Marty — (M)anagement (A)ssistant for (R)outing (T)asks and (Y)ield. Stay concise and action-oriented. You DO have access to the user's project data provided in context. Never claim you can't access tasks/notes; if something isn't present in context, ask for it.\n\nDefault behavior (unless the user explicitly asks otherwise):\n- Be proactive: infer what matters now from OPS SNAPSHOT + CROSS-BUSINESS ROLLUP and propose next actions.\n- Output structure: (1) Situation (1-2 lines), (2) Next actions (3-7 bullets), (3) Questions (0-2) only if needed to unblock.\n- If the user message is vague (e.g., \"hi\", \"what now\"), treat it as a request for a prioritized plan from the snapshot.";
     let systemPrompt = userSystemPrompt ? `${userSystemPrompt}\n\n---\n${baseSystemPrompt}` : baseSystemPrompt;
 
     if (effectiveThreadId === 'operator_bio') {
@@ -8527,6 +8555,192 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
           `- Keep it bluntly funny/sarcastic when appropriate, but still useful.\n`;
       }
       context += `\n`;
+    }
+
+    // Always include a compact operational snapshot so Marty can be proactive.
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      const tasks = Array.isArray(store.tasks) ? store.tasks : [];
+      const inbox = Array.isArray(store.inboxItems) ? store.inboxItems : [];
+      const projects = Array.isArray(store.projects) ? store.projects : [];
+
+      const isDoneStatus = (st) => {
+        const v = String(st == null ? '' : st).trim().toLowerCase();
+        return ['done', 'archived', 'complete', 'completed'].includes(v);
+      };
+      const normalizeDue = (d) => {
+        const v = String(d == null ? '' : d).trim();
+        return /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : '';
+      };
+
+      const openTasks = tasks.filter((t) => !isDoneStatus(t.status));
+      const overdue = openTasks.filter((t) => {
+        const due = normalizeDue(t?.dueDate);
+        return Boolean(due) && due < today;
+      });
+      const dueToday = openTasks.filter((t) => normalizeDue(t?.dueDate) === today);
+
+      const sortedOpen = openTasks
+        .slice()
+        .sort((a, b) => {
+          const apRaw = Number(a?.priority);
+          const bpRaw = Number(b?.priority);
+          const ap = Number.isFinite(apRaw) ? apRaw : 2;
+          const bp = Number.isFinite(bpRaw) ? bpRaw : 2;
+          if (ap !== bp) return ap - bp;
+          const ad0 = normalizeDue(a?.dueDate);
+          const bd0 = normalizeDue(b?.dueDate);
+          const ad = ad0 ? ad0 : '9999-12-31';
+          const bd = bd0 ? bd0 : '9999-12-31';
+          if (ad !== bd) return ad.localeCompare(bd);
+          return String(b?.updatedAt || '').localeCompare(String(a?.updatedAt || ''));
+        })
+        .slice(0, 18);
+
+      const inboxNew = inbox.filter((it) => String(it?.status || '').trim().toLowerCase() === 'new' && String(it?.source || '').trim().toLowerCase() !== 'marty');
+      const inboxLines = inboxNew
+        .slice()
+        .sort((a, b) => String(b?.updatedAt || b?.createdAt || '').localeCompare(String(a?.updatedAt || a?.createdAt || '')))
+        .slice(0, 10)
+        .map((item) => {
+          const src = String(item?.source || '').trim() || 'inbox';
+          const proj = String(item?.projectName || '').trim();
+          const text = String(item?.text || '').replace(/\s+/g, ' ').trim();
+          const head = text.length > 160 ? `${text.slice(0, 160)}…` : text;
+          return `- [${src}] ${head}${proj ? ` (project: ${proj})` : ''}`;
+        });
+
+      const businessKey = getBusinessKeyFromContext();
+      const lines = [];
+      lines.push(`OPS SNAPSHOT (ACTIVE BUSINESS: ${businessKey}; asOf: ${nowIso()}; today: ${today})`);
+      lines.push(`- Projects: ${projects.length} • Open tasks: ${openTasks.length} • Overdue: ${overdue.length} • Due today: ${dueToday.length} • New inbox: ${inboxNew.length}`);
+      lines.push('');
+      if (overdue.length) {
+        lines.push('Top overdue:');
+        overdue
+          .slice()
+          .sort((a, b) => (normalizeDue(a?.dueDate) || '9999-12-31').localeCompare(normalizeDue(b?.dueDate) || '9999-12-31'))
+          .slice(0, 8)
+          .forEach((t, i) => {
+            const priRaw = Number(t?.priority);
+            const priNum = Number.isFinite(priRaw) ? priRaw : 2;
+            const due = normalizeDue(t?.dueDate);
+            const proj = String(t?.project || '').trim();
+            const st = String(t?.status || 'Next');
+            lines.push(`${i + 1}. [P${priNum}] ${String(t?.title || '').trim()}${proj ? ` — ${proj}` : ''}${due ? ` — due ${due}` : ''} — ${st}`);
+          });
+        lines.push('');
+      }
+
+      lines.push('Next tasks (prioritized):');
+      sortedOpen.forEach((t, i) => {
+        const priRaw = Number(t?.priority);
+        const priNum = Number.isFinite(priRaw) ? priRaw : 2;
+        const due = normalizeDue(t?.dueDate);
+        const proj = String(t?.project || '').trim();
+        const st = String(t?.status || 'Next');
+        lines.push(`${i + 1}. [P${priNum}] ${String(t?.title || '').trim()}${proj ? ` — ${proj}` : ''}${due ? ` — due ${due}` : ''} — ${st}`);
+      });
+
+      if (inboxLines.length) {
+        lines.push('Recent inbox (new):');
+        lines.push(...inboxLines);
+        lines.push('');
+      }
+
+      context += `${lines.join('\n')}\n\n`;
+    } catch {
+      // ignore snapshot failures
+    }
+
+    // Cross-business rollup (cached).
+    try {
+      const cfg = getBusinessConfigFromSettings(settings);
+      const bizList = Array.isArray(cfg.businesses) ? cfg.businesses : [];
+      if (bizList.length > 1) {
+        const nowMs = Date.now();
+        const cached = crossBizRollupCache && typeof crossBizRollupCache === 'object' ? crossBizRollupCache : { at: 0, text: '' };
+        if (cached.text && (nowMs - Number(cached.at || 0) < 60_000)) {
+          context += cached.text;
+        } else {
+          const today = new Date().toISOString().slice(0, 10);
+          const byBiz = [];
+          const focus = [];
+
+          for (const b of bizList.slice(0, 12)) {
+            const bKey = normalizeBusinessKey(b?.key || '') || DEFAULT_BUSINESS_KEY;
+            const bName = String(b?.name || '').trim() || bKey;
+            const bStore = await withBusinessKey(bKey, async () => readStore());
+            const tasks = Array.isArray(bStore?.tasks) ? bStore.tasks : [];
+            const inbox = Array.isArray(bStore?.inboxItems) ? bStore.inboxItems : [];
+            const projects = Array.isArray(bStore?.projects) ? bStore.projects : [];
+
+            const openTasks = tasks.filter((t) => {
+              const st = String(t?.status || '').trim().toLowerCase();
+              return st !== 'done' && st !== 'archived' && st !== 'complete' && st !== 'completed';
+            });
+            const overdue = openTasks.filter((t) => {
+              const due = String(t?.dueDate || '').trim();
+              return /^\d{4}-\d{2}-\d{2}$/.test(due) && due < today;
+            });
+            const dueToday = openTasks.filter((t) => String(t?.dueDate || '').trim() === today);
+            const newInbox = inbox.filter((it) => String(it?.status || '').trim().toLowerCase() === 'new' && String(it?.source || '').trim().toLowerCase() !== 'marty');
+            byBiz.push({ key: bKey, name: bName, open: openTasks.length, overdue: overdue.length, dueToday: dueToday.length, inboxNew: newInbox.length });
+
+            for (const p of projects) {
+              const pst = String(p?.status || '').trim().toLowerCase();
+              if (pst === 'done' || pst === 'archived') continue;
+              const pTasks = tasks.filter((t) => t?.project === p?.name || t?.projectId === p?.id);
+              const open = pTasks.filter((t) => {
+                const st = String(t?.status || '').trim().toLowerCase();
+                return st !== 'done' && st !== 'archived' && st !== 'complete' && st !== 'completed';
+              });
+              if (!open.length) continue;
+              let urgent = 0;
+              for (const t of open) {
+                const pri = Number(t?.priority);
+                const st = String(t?.status || '').trim().toLowerCase();
+                const due = String(t?.dueDate || '').trim();
+                if (pri === 1 || st === 'urgent' || (due && due <= today)) urgent++;
+              }
+              if (urgent <= 0) continue;
+              focus.push({ businessKey: bKey, businessName: bName, projectId: p?.id || '', name: String(p?.name || '').trim(), dueDate: String(p?.dueDate || '').trim(), urgent, open: open.length });
+            }
+          }
+
+          focus.sort((a, b) => {
+            if (a.urgent !== b.urgent) return b.urgent - a.urgent;
+            const ad = a.dueDate || '9999-12-31';
+            const bd = b.dueDate || '9999-12-31';
+            return ad.localeCompare(bd);
+          });
+
+          const out = [];
+          out.push(`CROSS-BUSINESS ROLLUP (asOf: ${nowIso()}; today: ${today})`);
+          out.push(`- Businesses scanned: ${byBiz.length}`);
+          out.push(`- Inbox new total: ${byBiz.reduce((n, x) => n + Number(x.inboxNew || 0), 0)}`);
+          out.push('');
+          out.push('By business (open/overdue/due-today/inbox-new):');
+          byBiz
+            .slice()
+            .sort((a, b) => (b.overdue - a.overdue) || (b.inboxNew - a.inboxNew) || (b.open - a.open))
+            .forEach((b) => {
+              out.push(`- ${b.name}: ${b.open}/${b.overdue}/${b.dueToday}/${b.inboxNew}`);
+            });
+          out.push('');
+          out.push('Top urgent projects:');
+          focus.slice(0, 12).forEach((p, i) => {
+            const due = p.dueDate ? ` • due ${p.dueDate}` : '';
+            out.push(`${i + 1}. [${p.businessName}] ${p.name} • urgent ${p.urgent}/${p.open}${due}`);
+          });
+          out.push('');
+          const text = `${out.join('\n')}\n\n`;
+          crossBizRollupCache = { at: nowMs, text };
+          context += text;
+        }
+      }
+    } catch {
+      // ignore rollup failures
     }
 
     if (effectiveProjectId && effectiveProject) {
@@ -8650,7 +8864,7 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
         })
         .slice(0, 10);
 
-      const newInbox = inbox.filter((it) => String(it?.status || '').trim().toLowerCase() === 'new');
+      const newInbox = inbox.filter((it) => String(it?.status || '').trim().toLowerCase() === 'new' && String(it?.source || '').trim().toLowerCase() !== 'marty');
 
       const lines = [];
       lines.push('AI is not enabled for this area (missing API key), but I can still guide you using the tracker data.');
@@ -9168,6 +9382,200 @@ app.get('/api/chat/thread/:id', async (req, res) => {
   res.json({ ok: true, threadId: id, operatorBio, history });
 });
 
+
+function parseHHMM(value) {
+  const raw = typeof value === 'string' ? value.trim() : '';
+  const m = raw.match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  const hh = Math.max(0, Math.min(23, Number(m[1])));
+  const mm = Math.max(0, Math.min(59, Number(m[2])));
+  return (hh * 60) + mm;
+}
+
+function localMinutesNow() {
+  const d = new Date();
+  return (d.getHours() * 60) + d.getMinutes();
+}
+
+function briefKindLabel(kind) {
+  const k = String(kind || '').trim().toLowerCase();
+  if (k === 'morning') return 'MORNING';
+  if (k === 'midday') return 'MIDDAY';
+  if (k === 'eod') return 'EOD';
+  return k.toUpperCase() || 'BRIEF';
+}
+
+function buildDeterministicBrief({ kind, store, businessName }) {
+  const today = new Date().toISOString().slice(0, 10);
+  const tasks = Array.isArray(store?.tasks) ? store.tasks : [];
+  const inbox = Array.isArray(store?.inboxItems) ? store.inboxItems : [];
+  const projects = Array.isArray(store?.projects) ? store.projects : [];
+  const isDoneStatus = (st) => {
+    const v = String(st == null ? '' : st).trim().toLowerCase();
+    return ['done', 'archived', 'complete', 'completed'].includes(v);
+  };
+  const normalizeDue = (d) => {
+    const v = String(d == null ? '' : d).trim();
+    return /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : '';
+  };
+
+  const openTasks = tasks.filter((t) => !isDoneStatus(t?.status));
+  const overdue = openTasks.filter((t) => {
+    const due = normalizeDue(t?.dueDate);
+    return Boolean(due) && due < today;
+  });
+  const dueToday = openTasks.filter((t) => normalizeDue(t?.dueDate) === today);
+  const inboxNew = inbox.filter((it) => String(it?.status || '').trim().toLowerCase() === 'new' && String(it?.source || '').trim().toLowerCase() !== 'marty');
+
+  const nextTasks = openTasks
+    .slice()
+    .sort((a, b) => {
+      const apRaw = Number(a?.priority);
+      const bpRaw = Number(b?.priority);
+      const ap = Number.isFinite(apRaw) ? apRaw : 2;
+      const bp = Number.isFinite(bpRaw) ? bpRaw : 2;
+      if (ap !== bp) return ap - bp;
+      const ad0 = normalizeDue(a?.dueDate);
+      const bd0 = normalizeDue(b?.dueDate);
+      const ad = ad0 ? ad0 : '9999-12-31';
+      const bd = bd0 ? bd0 : '9999-12-31';
+      if (ad !== bd) return ad.localeCompare(bd);
+      return String(b?.updatedAt || '').localeCompare(String(a?.updatedAt || ''));
+    })
+    .slice(0, 8);
+
+  const lines = [];
+  lines.push(`Marty Brief — ${briefKindLabel(kind)} — ${today}${businessName ? ` — ${businessName}` : ''}`);
+  lines.push('');
+  lines.push(`Situation: ${projects.length} projects • ${openTasks.length} open tasks • ${overdue.length} overdue • ${dueToday.length} due today • ${inboxNew.length} new inbox`);
+  lines.push('');
+  lines.push('Next actions:');
+  if (overdue.length) {
+    lines.push(`- Clear 1 overdue item first (overdue: ${overdue.length})`);
+  }
+  if (inboxNew.length) {
+    lines.push(`- Triage inbox (new: ${inboxNew.length})`);
+  }
+  nextTasks.forEach((t) => {
+    const priRaw = Number(t?.priority);
+    const priNum = Number.isFinite(priRaw) ? priRaw : 2;
+    const due = normalizeDue(t?.dueDate);
+    const proj = String(t?.project || '').trim();
+    lines.push(`- [P${priNum}] ${String(t?.title || '').trim()}${proj ? ` — ${proj}` : ''}${due ? ` — due ${due}` : ''}`);
+  });
+
+  if (inboxNew.length) {
+    lines.push('Inbox (newest):');
+    inboxNew
+      .slice()
+      .sort((a, b) => String(b?.updatedAt || b?.createdAt || '').localeCompare(String(a?.updatedAt || a?.createdAt || '')))
+      .slice(0, 3)
+      .forEach((it) => {
+        const src = String(it?.source || '').trim() || 'inbox';
+        const txt = String(it?.text || '').replace(/\s+/g, ' ').trim();
+        const head = txt.length > 140 ? `${txt.slice(0, 140)}…` : txt;
+        lines.push(`- [${src}] ${head}`);
+      });
+  }
+
+  return lines.join('\n');
+}
+
+async function sendMartyBriefsForAllBusinesses(kind, settings) {
+  const cfg = getBusinessConfigFromSettings(settings);
+  const bizList = Array.isArray(cfg.businesses) ? cfg.businesses : [{ key: DEFAULT_BUSINESS_KEY, name: 'Personal' }];
+  const today = new Date().toISOString().slice(0, 10);
+
+  for (const b of bizList) {
+    const bKey = normalizeBusinessKey(b?.key || '') || DEFAULT_BUSINESS_KEY;
+    const bName = String(b?.name || '').trim() || getBusinessNameForKey(bKey);
+    const store = await withBusinessKey(bKey, async () => readStore());
+    const text = buildDeterministicBrief({ kind, store, businessName: bName });
+    await addInboxIntegrationItem({
+      source: 'marty',
+      externalId: `brief:${String(kind || 'brief').toLowerCase()}:${today}`,
+      text,
+      businessKey: bKey,
+      businessLabel: bName,
+    });
+  }
+}
+
+function getBriefScheduleFromSettings(settings) {
+  const raw = settings && typeof settings === 'object' ? settings.martyBriefSchedule : null;
+  const times = (raw && typeof raw === 'object' && raw.times && typeof raw.times === 'object') ? raw.times : {};
+  const lastSent = (raw && typeof raw === 'object' && raw.lastSent && typeof raw.lastSent === 'object') ? raw.lastSent : {};
+  return {
+    times: {
+      morning: typeof times.morning === 'string' ? times.morning : '09:00',
+      midday: typeof times.midday === 'string' ? times.midday : '13:00',
+      eod: typeof times.eod === 'string' ? times.eod : '17:00',
+    },
+    lastSent: {
+      morning: typeof lastSent.morning === 'string' ? lastSent.morning : '',
+      midday: typeof lastSent.midday === 'string' ? lastSent.midday : '',
+      eod: typeof lastSent.eod === 'string' ? lastSent.eod : '',
+    },
+  };
+}
+
+async function markBriefSent(kind, today) {
+  const settings = await readSettings();
+  const sched = getBriefScheduleFromSettings(settings);
+  const next = {
+    ...settings,
+    martyBriefSchedule: {
+      times: { ...sched.times },
+      lastSent: { ...sched.lastSent, [String(kind)]: today },
+    },
+    updatedAt: nowIso(),
+  };
+  await writeSettings(next);
+}
+
+function startMartyBriefScheduler() {
+  let running = false;
+  const tick = async () => {
+    if (running) return;
+    running = true;
+    try {
+      const settings = await readSettings();
+      const sched = getBriefScheduleFromSettings(settings);
+      const today = new Date().toISOString().slice(0, 10);
+      const nowMin = localMinutesNow();
+
+      const kinds = [
+        { kind: 'morning', at: parseHHMM(sched.times.morning) },
+        { kind: 'midday', at: parseHHMM(sched.times.midday) },
+        { kind: 'eod', at: parseHHMM(sched.times.eod) },
+      ];
+
+      // Send only the most recent due brief (prevents catch-up spam).
+      let candidate = null;
+      for (const k of kinds) {
+        if (k.at == null) continue;
+        const last = String(sched.lastSent[k.kind] || '').trim();
+        if (last === today) continue;
+        if (nowMin < k.at) continue;
+        if (!candidate || k.at > candidate.at) candidate = k;
+      }
+
+      if (candidate) {
+        await sendMartyBriefsForAllBusinesses(candidate.kind, settings);
+        await markBriefSent(candidate.kind, today);
+      }
+    } catch (e) {
+      console.error('Brief scheduler tick failed:', e);
+    } finally {
+      running = false;
+    }
+  };
+
+  // Start with a slight delay so startup migrations finish.
+  setTimeout(() => { void tick(); }, 15_000);
+  setInterval(() => { void tick(); }, 30_000);
+}
+
 app.listen(PORT, async () => {
   await refreshBusinessCacheFromSettings();
   const businesses = Array.isArray(cachedBusinesses) ? cachedBusinesses : [{ key: DEFAULT_BUSINESS_KEY }];
@@ -9194,6 +9602,7 @@ app.listen(PORT, async () => {
   startBackupScheduler();
   startGa4Scheduler();
   startAirtableRequestsAutoSyncScheduler();
+  startMartyBriefScheduler();
   // eslint-disable-next-line no-console
   console.log(`Marty running on http://localhost:${PORT}`);
 });

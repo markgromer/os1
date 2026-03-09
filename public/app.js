@@ -7144,6 +7144,11 @@ function renderGodView(container) {
                 <div class="col-span-full text-center text-zinc-500 text-sm py-8"><i class="fa-solid fa-circle-notch animate-ping"></i> Scraping data...</div>
             </div>
 
+            <div class="mt-10 mb-2 flex items-center gap-3">
+                <h2 class="text-xl font-bold tracking-tight text-white">Marty Brief</h2>
+            </div>
+            <div id="godview-brief-list" class="space-y-2"></div>
+
             <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 mt-12 mb-12">
                 <!-- Calendar Section -->
                 <div>
@@ -7186,7 +7191,32 @@ function renderGodView(container) {
         return;
     }
 
-    const { businesses, focusProjects, slackItems, team } = state.godViewData;
+    const { businesses, focusProjects, slackItems, team, briefs } = state.godViewData;
+
+    // --- Marty Brief ---
+    const briefList = container.querySelector('#godview-brief-list');
+    if (briefList) {
+        const items = Array.isArray(briefs) ? briefs : [];
+        if (!items.length) {
+            briefList.innerHTML = `<div class="text-[11px] text-zinc-500 px-3 py-2 border border-zinc-800 border-dashed rounded bg-zinc-950/20">No briefs yet. Scheduled briefs will appear here.</div>`;
+        } else {
+            briefList.innerHTML = items.slice(0, 3).map((b) => {
+                const name = safeText(b?.businessName) || safeText(b?.businessKey) || 'Business';
+                const ts = safeText(b?.updatedAt) || safeText(b?.createdAt) || '';
+                const tsHtml = ts ? `<div class="text-[10px] font-mono text-zinc-500">${escapeHtml(ts)}</div>` : '';
+                const raw = safeText(b?.text || '').replace(/\s+/g, ' ').trim();
+                const head = raw.length > 320 ? `${raw.slice(0, 320)}…` : raw;
+                return `
+                    <div class="border border-zinc-800 rounded-lg bg-zinc-900/40 px-3 py-2 hover:border-zinc-700 transition-colors">
+                        <div class="min-w-0">
+                            <div class="text-[11px] font-mono text-ops-accent">${escapeHtml(name)}</div>
+                            ${tsHtml}
+                        </div>
+                        <div class="mt-2 text-[11px] text-zinc-300">${escapeHtml(head)}</div>
+                    </div>`;
+            }).join('');
+        }
+    }
 
     const radarGrid = container.querySelector('#godview-radar-grid');
     radarGrid.innerHTML = '';
