@@ -1159,6 +1159,31 @@ function applyUiPreferencesFromSettings(settings) {
     }
 }
 
+function getPageElementsPreferences(settings) {
+    const s = (settings && typeof settings === 'object') ? settings : {};
+    const pe = (s.pageElements && typeof s.pageElements === 'object') ? s.pageElements : {};
+    const dashRaw = (pe.dashboard && typeof pe.dashboard === 'object') ? pe.dashboard : {};
+    const godRaw = (pe.godview && typeof pe.godview === 'object') ? pe.godview : {};
+
+    const boolDefaultTrue = (v) => (v === false ? false : true);
+
+    return {
+        dashboard: {
+            missionControl: boolDefaultTrue(dashRaw.missionControl),
+            newProjectIntake: boolDefaultTrue(dashRaw.newProjectIntake),
+            commsRadar: boolDefaultTrue(dashRaw.commsRadar),
+            deliveryBoard: boolDefaultTrue(dashRaw.deliveryBoard),
+        },
+        godview: {
+            businessesRadar: boolDefaultTrue(godRaw.businessesRadar),
+            martyBrief: boolDefaultTrue(godRaw.martyBrief),
+            upcoming: boolDefaultTrue(godRaw.upcoming),
+            teamComms: boolDefaultTrue(godRaw.teamComms),
+            globalFocus: boolDefaultTrue(godRaw.globalFocus),
+        },
+    };
+}
+
 function isEditableTarget(el) {
     if (!el || typeof el !== 'object') return false;
     const tag = String(el.tagName || '').toLowerCase();
@@ -1955,6 +1980,16 @@ function applyInitialDeepLinkFromUrl() {
 }
 
 async function init() {
+    const initErrors = [];
+    const step = async (label, fn) => {
+        try {
+            await fn();
+        } catch (e) {
+            initErrors.push({ label, message: safeText(e?.message) || String(e) });
+            console.error(`Init step failed: ${label}`, e);
+        }
+    };
+
     try {
         console.log("Initializing Marty...");
         state.lastInteractionAt = Date.now();
@@ -1963,46 +1998,51 @@ async function init() {
         showLoading();
 
         // Auth status is a public endpoint; check early so we can avoid a broken/empty UI.
-        await refreshAuthStatus();
+        await step('refreshAuthStatus', async () => { await refreshAuthStatus(); });
 
         // Businesses (workspace selection)
-        await fetchBusinesses().catch(() => {
-            // best-effort; fall back to local storage / default
+        await step('fetchBusinesses', async () => {
+            await fetchBusinesses();
+        });
+        if (!safeText(state.activeBusinessKey).trim()) {
             const stored = normalizeBusinessKey(getStoredBusinessKey());
             state.activeBusinessKey = stored || 'personal';
-        });
+        }
         
-        // Initial Fetch
-        await Promise.all([
-            fetchState(), 
-            fetchSettings()
-        ]);
+        // Initial Fetch (best-effort; these functions already swallow most errors)
+        await step('fetchState', async () => { await fetchState(); });
+        await step('fetchSettings', async () => { await fetchSettings(); });
 
         // Optional deep link routing (used for Settings panes opened in a new tab).
-        applyInitialDeepLinkFromUrl();
+        await step('applyInitialDeepLinkFromUrl', async () => { applyInitialDeepLinkFromUrl(); });
         
         // Setup UI
-        setupEventListeners();
-        initializeMartyWidget();
-        initMartySync();
-        await loadChatHistory();
-        renderNav();
-        renderMain();
-        renderChat();
+        await step('setupEventListeners', async () => { setupEventListeners(); });
+        await step('initializeMartyWidget', async () => { initializeMartyWidget(); });
+        await step('initMartySync', async () => { initMartySync(); });
+        await step('loadChatHistory', async () => { await loadChatHistory(); });
+        await step('renderNav', async () => { renderNav(); });
+        await step('renderMain', async () => { renderMain(); });
+        await step('renderChat', async () => { renderChat(); });
 
-        ensureAiTeamMember();
+        await step('ensureAiTeamMember', async () => { ensureAiTeamMember(); });
         
         // Polling (Auto-Refresh)
-        if (!(state.auth.required && !state.auth.authenticated)) {
-            startPolling();
-        }
+        await step('startPolling', async () => {
+            if (!(state.auth.required && !state.auth.authenticated)) {
+                startPolling();
+            }
+        });
 
-        startProactiveFocusNudges();
+        await step('startProactiveFocusNudges', async () => { startProactiveFocusNudges(); });
         
         console.log("System Online");
     } catch (e) {
         console.error("Critical Failure:", e);
-        showError(e.message);
+        const details = initErrors.length
+            ? `${safeText(e?.message || 'Unknown error')}\n\nStartup warnings:\n${initErrors.map((x) => `- ${x.label}: ${x.message}`).join('\n')}`
+            : safeText(e?.message || 'Unknown error');
+        showError(details);
     }
 }
 
@@ -2801,11 +2841,19 @@ async function openDashboard() {
     state.currentView = 'dashboard';
     state.currentProjectId = null;
     state.currentClientName = null;
+    // Presence dots on the dashboard rely on settings + presence being loaded.
+    // Fetch is best-effort and should not block navigation.
+    await fetchSettings().catch(() => {});
+    const presencePromise = refreshSlackTeamPresence({ force: true }).catch(() => {});
     await loadChatHistory();
     renderNav();
     renderMain();
     renderChat();
     broadcastMartyContext();
+
+    presencePromise.then(() => {
+        if (state.currentView === 'dashboard') rerenderMainPreservingUi();
+    });
 }
 
 async function openInbox() {
@@ -3322,9 +3370,7 @@ function renderTeam(container) {
 
     const presenceFor = (m) => {
         const id = safeText(m?.id).trim();
-        const slackUserId = safeText(m?.slackUserId).trim();
-        const key = slackUserId || id;
-        return key ? (presenceMap[key] || null) : null;
+        return id ? (presenceMap[id] || null) : null;
     };
 
     const rows = humans.length
@@ -3333,15 +3379,18 @@ function renderTeam(container) {
             const role = safeText(m?.role);
             const avatar = safeText(m?.avatar) || name.slice(0, 1).toUpperCase();
             const p = presenceFor(m);
-            const rawStatus = safeText(p?.status).toLowerCase();
-            const statusText = slackInstalled ? (rawStatus || 'unknown') : 'not connected';
+            const online = p && Object.prototype.hasOwnProperty.call(p, 'online') ? p.online : null;
+            const rawPresence = safeText(p?.presence).toLowerCase();
+            const statusText = !slackInstalled
+                ? 'not connected'
+                : (online === true ? 'online' : (online === false ? 'offline' : (rawPresence || 'unknown')));
             const statusClass = !slackInstalled
                 ? 'bg-zinc-600'
-                : (rawStatus === 'active' || rawStatus === 'online')
+                : (online === true || rawPresence === 'active' || rawPresence === 'online')
                     ? 'bg-emerald-400'
-                    : (rawStatus === 'away')
+                    : (rawPresence === 'away')
                         ? 'bg-amber-300'
-                        : 'bg-zinc-600';
+                        : (online === null ? 'bg-amber-300' : 'bg-zinc-600');
             return `
                 <div class="border border-ops-border rounded-lg bg-ops-bg/40 px-3 py-2">
                     <div class="flex items-center justify-between gap-3">
@@ -3869,7 +3918,7 @@ function renderSettings(container) {
     if(titleEl) titleEl.innerText = "Settings";
 
     const wrap = document.createElement('div');
-    wrap.className = 'p-8 max-w-4xl';
+    wrap.className = 'p-6 max-w-7xl mx-auto';
 
     const section = (title, subtitle) => {
         const el = document.createElement('div');
@@ -3902,7 +3951,29 @@ function renderSettings(container) {
     };
 
     const projectsSettingsHref = buildSettingsDeepLink('projects');
+    const pagesSettingsHref = buildSettingsDeepLink('pages');
     const fullSettingsHref = buildSettingsDeepLink('');
+
+    // Tab strip (uses deep-link panes).
+    {
+        const active = settingsPane || '';
+        const tab = (label, href, isActive, extraAttrs = '') => {
+            const base = 'px-3 py-2 rounded border text-xs font-mono transition-colors';
+            const cls = isActive
+                ? `${base} bg-blue-600/20 border-blue-600/40 text-blue-200`
+                : `${base} bg-ops-bg border-ops-border text-ops-light hover:text-white`;
+            return `<a href="${escapeHtml(href)}" ${extraAttrs} class="${cls}">${escapeHtml(label)}</a>`;
+        };
+
+        const tabs = document.createElement('div');
+        tabs.className = 'mb-6 flex flex-wrap gap-2';
+        tabs.innerHTML = `
+            ${tab('General', fullSettingsHref, !active)}
+            ${tab('Pages', pagesSettingsHref, active === 'pages')}
+            ${tab('Projects', projectsSettingsHref, active === 'projects', 'target="_blank" rel="noopener noreferrer"')}
+        `;
+        wrap.appendChild(tabs);
+    }
 
     // Dedicated heavy pane: Projects (bulk delete). Keeping it isolated prevents Settings from OOM'ing
     // when there are lots of projects.
@@ -4042,6 +4113,127 @@ function renderSettings(container) {
 
         renderProjectsBody();
         wrap.appendChild(projectsSection);
+        container.appendChild(wrap);
+        return;
+    }
+
+    // Dedicated pane: Pages (choose which blocks appear on pages)
+    if (settingsPane === 'pages') {
+        if (titleEl) titleEl.innerText = 'Settings • Pages';
+
+        const pagesSection = section('Pages', 'Choose which blocks appear on Dashboard and God View.');
+        const pagesBody = pagesSection.querySelector('[data-slot="body"]');
+
+        const defaults = {
+            dashboard: { missionControl: true, newProjectIntake: true, commsRadar: true, deliveryBoard: true },
+            godview: { businessesRadar: true, martyBrief: true, upcoming: true, teamComms: true, globalFocus: true },
+        };
+
+        const prefs = getPageElementsPreferences(state.settings);
+
+        const ck = (id, label, checked, hint) => `
+            <label class="flex items-start gap-3 border border-ops-border rounded-lg bg-ops-bg/30 p-3 cursor-pointer">
+                <input id="${escapeHtml(id)}" type="checkbox" class="mt-1" ${checked ? 'checked' : ''} />
+                <div class="min-w-0">
+                    <div class="text-white text-sm font-semibold">${escapeHtml(label)}</div>
+                    <div class="text-[11px] text-ops-light mt-0.5">${escapeHtml(hint || '')}</div>
+                </div>
+            </label>
+        `;
+
+        pagesBody.innerHTML = `
+            <div class="flex items-center justify-between gap-3 flex-wrap">
+                <div class="text-xs text-ops-light">These settings affect what you see (and what Marty can reference visually) — they don’t delete data.</div>
+                <a href="${escapeHtml(fullSettingsHref)}" class="px-3 py-2 rounded bg-ops-bg border border-ops-border text-ops-light text-xs hover:text-white">Back to Settings</a>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-4">
+                <div>
+                    <div class="text-white text-sm font-semibold">Dashboard</div>
+                    <div class="text-[11px] text-ops-light mt-1">Toggle major blocks to keep the dashboard focused.</div>
+                    <div class="mt-3 space-y-2">
+                        ${ck('pe-dash-mission', 'Mission Control', prefs.dashboard.missionControl, 'Greeting, stats, Marty bar, and alerts.')}
+                        ${ck('pe-dash-intake', 'New Project Intake', prefs.dashboard.newProjectIntake, 'Quick-add bar (new item + new project).')}
+                        ${ck('pe-dash-comms', 'Comms Radar', prefs.dashboard.commsRadar, 'Inbox Radar + comms feed (Activity/Slack/Inbox/Team).')}
+                        ${ck('pe-dash-delivery', 'Delivery Board', prefs.dashboard.deliveryBoard, 'Calendar + due date panels + focus + future projects.')}
+                    </div>
+                </div>
+                <div>
+                    <div class="text-white text-sm font-semibold">God View</div>
+                    <div class="text-[11px] text-ops-light mt-1">Global cross-business overview sections.</div>
+                    <div class="mt-3 space-y-2">
+                        ${ck('pe-god-radar', 'Businesses Radar', prefs.godview.businessesRadar, 'The business cards radar grid.')}
+                        ${ck('pe-god-brief', 'Marty Brief', prefs.godview.martyBrief, 'Shows latest scheduled brief items.')}
+                        ${ck('pe-god-upcoming', 'Upcoming', prefs.godview.upcoming, 'Google Calendar upcoming panel.')}
+                        ${ck('pe-god-team', 'Team Comms', prefs.godview.teamComms, 'Slack/team section.')}
+                        ${ck('pe-god-focus', 'Global Focus', prefs.godview.globalFocus, 'Urgent projects list.')}
+                    </div>
+                </div>
+            </div>
+
+            <div class="flex gap-2 mt-4 flex-wrap">
+                <button id="btn-pages-save" class="px-3 py-2 rounded bg-blue-600 text-white text-xs hover:bg-blue-500">Save</button>
+                <button id="btn-pages-reset" class="px-3 py-2 rounded bg-ops-bg border border-ops-border text-ops-light text-xs hover:text-white">Reset defaults</button>
+            </div>
+        `;
+
+        const getBool = (id, fallback) => {
+            const el = pagesBody.querySelector(`#${CSS.escape(id)}`);
+            if (!el) return !!fallback;
+            return !!el.checked;
+        };
+
+        const btnSave = pagesBody.querySelector('#btn-pages-save');
+        if (btnSave) {
+            btnSave.onclick = async () => {
+                btnSave.disabled = true;
+                try {
+                    const next = {
+                        dashboard: {
+                            missionControl: getBool('pe-dash-mission', defaults.dashboard.missionControl),
+                            newProjectIntake: getBool('pe-dash-intake', defaults.dashboard.newProjectIntake),
+                            commsRadar: getBool('pe-dash-comms', defaults.dashboard.commsRadar),
+                            deliveryBoard: getBool('pe-dash-delivery', defaults.dashboard.deliveryBoard),
+                        },
+                        godview: {
+                            businessesRadar: getBool('pe-god-radar', defaults.godview.businessesRadar),
+                            martyBrief: getBool('pe-god-brief', defaults.godview.martyBrief),
+                            upcoming: getBool('pe-god-upcoming', defaults.godview.upcoming),
+                            teamComms: getBool('pe-god-team', defaults.godview.teamComms),
+                            globalFocus: getBool('pe-god-focus', defaults.godview.globalFocus),
+                        },
+                    };
+
+                    state.settings = state.settings && typeof state.settings === 'object' ? state.settings : {};
+                    state.settings.pageElements = next;
+                    await saveSettingsPatch({ pageElements: next });
+                    renderSettings(container);
+                } catch (e) {
+                    alert(e?.message || 'Failed to save page settings');
+                } finally {
+                    btnSave.disabled = false;
+                }
+            };
+        }
+
+        const btnReset = pagesBody.querySelector('#btn-pages-reset');
+        if (btnReset) {
+            btnReset.onclick = async () => {
+                btnReset.disabled = true;
+                try {
+                    state.settings = state.settings && typeof state.settings === 'object' ? state.settings : {};
+                    state.settings.pageElements = defaults;
+                    await saveSettingsPatch({ pageElements: defaults });
+                    renderSettings(container);
+                } catch (e) {
+                    alert(e?.message || 'Failed to reset page settings');
+                } finally {
+                    btnReset.disabled = false;
+                }
+            };
+        }
+
+        wrap.appendChild(pagesSection);
         container.appendChild(wrap);
         return;
     }
@@ -7129,8 +7321,9 @@ function renderGodView(container) {
 
     const snap = snapshotViewUiState();
 
-    container.innerHTML = `
-        <div class="max-w-7xl mx-auto p-4 md:p-6 lg:p-8 space-y-8 animate-fade-in pb-[400px]">
+    const prefs = getPageElementsPreferences(state.settings).godview;
+
+    const sectionRadar = prefs.businessesRadar ? `
             <div class="flex items-center justify-between mb-2">
                 <h2 class="text-xl font-bold tracking-tight text-white flex items-center gap-3">
                     <i class="fa-solid fa-satellite-dish text-ops-accent"></i> Businesses Radar
@@ -7143,13 +7336,18 @@ function renderGodView(container) {
             <div id="godview-radar-grid" class="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4">
                 <div class="col-span-full text-center text-zinc-500 text-sm py-8"><i class="fa-solid fa-circle-notch animate-ping"></i> Scraping data...</div>
             </div>
+    ` : '';
 
+    const sectionBrief = prefs.martyBrief ? `
             <div class="mt-10 mb-2 flex items-center gap-3">
                 <h2 class="text-xl font-bold tracking-tight text-white">Marty Brief</h2>
             </div>
             <div id="godview-brief-list" class="space-y-2"></div>
+    ` : '';
 
+    const sectionUpcomingTeam = (prefs.upcoming || prefs.teamComms) ? `
             <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 mt-12 mb-12">
+                ${prefs.upcoming ? `
                 <!-- Calendar Section -->
                 <div>
                     <div class="flex items-center gap-3 mb-4">
@@ -7159,7 +7357,9 @@ function renderGodView(container) {
                     </div>
                     <div id="godview-calendar-list" class="space-y-2"></div>
                 </div>
+                ` : ''}
 
+                ${prefs.teamComms ? `
                 <!-- Slack Section -->
                 <div>
                     <div class="flex items-center gap-3 mb-4">
@@ -7169,8 +7369,11 @@ function renderGodView(container) {
                     </div>
                     <div id="godview-slack-list" class="grid grid-cols-1 gap-2"></div>
                 </div>
+                ` : ''}
             </div>
+    ` : '';
 
+    const sectionFocus = prefs.globalFocus ? `
             <div class="mt-12 mb-2 flex items-center gap-3">
                 <h2 class="text-xl font-bold tracking-tight text-white flex items-center gap-3">
                     <i class="fa-solid fa-bolt text-ops-warning"></i> Global Focus
@@ -7179,12 +7382,23 @@ function renderGodView(container) {
             
             <div id="godview-focus-list" class="space-y-3">
             </div>
+    ` : '';
+
+    container.innerHTML = `
+        <div class="max-w-7xl mx-auto p-4 md:p-6 lg:p-8 space-y-8 animate-fade-in pb-[400px]">
+            ${sectionRadar}
+            ${sectionBrief}
+            ${sectionUpcomingTeam}
+            ${sectionFocus}
         </div>
     `;
 
-    document.getElementById('godview-refresh-btn').onclick = async () => {
-        await refreshGodView();
-    };
+    const refreshBtn = container.querySelector('#godview-refresh-btn');
+    if (refreshBtn) {
+        refreshBtn.onclick = async () => {
+            await refreshGodView();
+        };
+    }
 
     if (!state.godViewData) {
         refreshGodView();
@@ -7219,87 +7433,92 @@ function renderGodView(container) {
     }
 
     const radarGrid = container.querySelector('#godview-radar-grid');
-    radarGrid.innerHTML = '';
-    
-    if (businesses && businesses.length > 0) {
-        for (const b of businesses) {
-            const hasNew = b.inboxCount > 0;
-            const card = document.createElement('div');
-            card.className = `dash-card p-4 flex flex-col justify-center cursor-pointer hover:scale-105 transition-transform ${hasNew ? 'border-ops-accent bg-blue-900/10' : ''}`;
-            card.innerHTML = `
-                <div class="flex justify-between items-start mb-2">
-                    <h3 class="font-bold text-white text-lg truncate">${safeText(b.name)}</h3>
-                    ${hasNew ? `<span class="relative flex h-3 w-3"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span><span class="relative inline-flex rounded-full h-3 w-3 bg-blue-500"></span></span>` : ''}
-                </div>
-                <div class="flex items-center gap-2 text-sm">
-                    <i class="fa-solid fa-inbox ${hasNew ? 'text-blue-400' : 'text-zinc-500'}"></i>
-                    <span class="${hasNew ? 'text-blue-300 font-bold' : 'text-zinc-500'}">${b.inboxCount} new items</span>
-                </div>
-            `;
-            card.onclick = () => {
-                setActiveBusinessKey(b.key);
-                openInbox();
-            };
-            radarGrid.appendChild(card);
+    if (radarGrid) {
+        radarGrid.innerHTML = '';
+
+        if (businesses && businesses.length > 0) {
+            for (const b of businesses) {
+                const hasNew = b.inboxCount > 0;
+                const card = document.createElement('div');
+                card.className = `dash-card p-4 flex flex-col justify-center cursor-pointer hover:scale-105 transition-transform ${hasNew ? 'border-ops-accent bg-blue-900/10' : ''}`;
+                card.innerHTML = `
+                    <div class="flex justify-between items-start mb-2">
+                        <h3 class="font-bold text-white text-lg truncate">${safeText(b.name)}</h3>
+                        ${hasNew ? `<span class="relative flex h-3 w-3"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span><span class="relative inline-flex rounded-full h-3 w-3 bg-blue-500"></span></span>` : ''}
+                    </div>
+                    <div class="flex items-center gap-2 text-sm">
+                        <i class="fa-solid fa-inbox ${hasNew ? 'text-blue-400' : 'text-zinc-500'}"></i>
+                        <span class="${hasNew ? 'text-blue-300 font-bold' : 'text-zinc-500'}">${b.inboxCount} new items</span>
+                    </div>
+                `;
+                card.onclick = () => {
+                    setActiveBusinessKey(b.key);
+                    openInbox();
+                };
+                radarGrid.appendChild(card);
+            }
+        } else {
+            radarGrid.innerHTML = '<div class="col-span-full text-zinc-500">No businesses configured.</div>';
         }
-    } else {
-        radarGrid.innerHTML = '<div class="col-span-full text-zinc-500">No businesses configured.</div>';
     }
 
     // --- Google Calendar ---
     const calList = container.querySelector('#godview-calendar-list');
     const callsConnected = !!state.settings?.googleConnected;
     const calls = Array.isArray(state.dashboardCalls?.events) ? state.dashboardCalls.events : [];
-    
-    if (!callsConnected) {
-        calList.innerHTML = `<div class="text-[11px] text-zinc-500 px-3 py-2 border border-zinc-800 border-dashed rounded bg-zinc-950/20">Google Calendar not connected. Link in Settings.</div>`;
-    } else if (state.dashboardCalls?.loading) {
-        calList.innerHTML = `<div class="text-[11px] text-zinc-500 px-3 py-2"><i class="fa-solid fa-circle-notch animate-spin mr-2"></i> Syncing agenda...</div>`;
-    } else if (calls.length === 0) {
-        calList.innerHTML = `<div class="text-[11px] text-zinc-500 px-3 py-2 border border-zinc-800 border-dashed rounded bg-zinc-950/20">No upcoming meetings in the next 24 hours. Clear skies.</div>`;
-    } else {
-        calList.innerHTML = calls.slice(0, 5).map(ev => {
-            const dateObj = new Date(ev.start);
-            const timeStr = Number.isNaN(dateObj.getTime()) ? '' : dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-            const link = safeText(ev.meetingLink) || safeText(ev.htmlLink);
-            const linkHtml = link ? `<a class="px-2 py-1 rounded bg-blue-500/20 text-blue-300 hover:bg-blue-500/30 transition-colors" href="${escapeHtml(link)}" target="_blank" rel="noopener noreferrer"><i class="fa-solid fa-video text-[10px]"></i></a>` : `<span class="text-zinc-600 px-2 py-1"><i class="fa-solid fa-video-slash text-[10px]"></i></span>`;
-            
-            return `
-                <div class="flex items-center justify-between gap-3 border border-zinc-800 rounded-lg bg-zinc-900/40 px-3 py-2 hover:border-zinc-700 transition-colors">
-                    <div class="min-w-0 flex items-center gap-3">
-                        <div class="text-[10px] font-mono text-blue-400 bg-blue-500/10 px-1.5 py-0.5 rounded w-14 text-center shrink-0">${escapeHtml(timeStr || '---')}</div>
-                        <div class="text-xs text-white truncate font-medium">${safeText(ev.summary) || 'Untitled'}</div>
+    if (calList) {
+        if (!callsConnected) {
+            calList.innerHTML = `<div class="text-[11px] text-zinc-500 px-3 py-2 border border-zinc-800 border-dashed rounded bg-zinc-950/20">Google Calendar not connected. Link in Settings.</div>`;
+        } else if (state.dashboardCalls?.loading) {
+            calList.innerHTML = `<div class="text-[11px] text-zinc-500 px-3 py-2"><i class="fa-solid fa-circle-notch animate-spin mr-2"></i> Syncing agenda...</div>`;
+        } else if (calls.length === 0) {
+            calList.innerHTML = `<div class="text-[11px] text-zinc-500 px-3 py-2 border border-zinc-800 border-dashed rounded bg-zinc-950/20">No upcoming meetings in the next 24 hours. Clear skies.</div>`;
+        } else {
+            calList.innerHTML = calls.slice(0, 5).map(ev => {
+                const dateObj = new Date(ev.start);
+                const timeStr = Number.isNaN(dateObj.getTime()) ? '' : dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                const link = safeText(ev.meetingLink) || safeText(ev.htmlLink);
+                const linkHtml = link ? `<a class="px-2 py-1 rounded bg-blue-500/20 text-blue-300 hover:bg-blue-500/30 transition-colors" href="${escapeHtml(link)}" target="_blank" rel="noopener noreferrer"><i class="fa-solid fa-video text-[10px]"></i></a>` : `<span class="text-zinc-600 px-2 py-1"><i class="fa-solid fa-video-slash text-[10px]"></i></span>`;
+                
+                return `
+                    <div class="flex items-center justify-between gap-3 border border-zinc-800 rounded-lg bg-zinc-900/40 px-3 py-2 hover:border-zinc-700 transition-colors">
+                        <div class="min-w-0 flex items-center gap-3">
+                            <div class="text-[10px] font-mono text-blue-400 bg-blue-500/10 px-1.5 py-0.5 rounded w-14 text-center shrink-0">${escapeHtml(timeStr || '---')}</div>
+                            <div class="text-xs text-white truncate font-medium">${safeText(ev.summary) || 'Untitled'}</div>
+                        </div>
+                        <div class="shrink-0 flex items-center">${linkHtml}</div>
                     </div>
-                    <div class="shrink-0 flex items-center">${linkHtml}</div>
-                </div>
-            `;
-        }).join('');
+                `;
+            }).join('');
+        }
     }
 
     // --- Team Comms ---
     const slackContainer = container.querySelector('#godview-slack-list');
-    slackContainer.innerHTML = '';
+    if (slackContainer) slackContainer.innerHTML = '';
     
     const teamMembers = Array.isArray(team) ? team : [];
     
-    if (teamMembers.length === 0) {
-        slackContainer.innerHTML = '<div class="text-gray-400 text-sm italic">No team members</div>';
-    } else {
-        teamMembers.forEach(member => {
-            const memberDiv = document.createElement('div');
-            memberDiv.className = 'godview-slack-item text-sm flex gap-3 text-gray-300 items-start p-2 rounded';
-            memberDiv.innerHTML = '<div class="flex-1">' +
-                '<div class="font-medium">' + (member.name || '') + ' (' + (member.role || '') + ')</div>' +
-                '<div class="text-gray-400">' + (member.email || '') + '</div>' +
-                '</div>';
-            slackContainer.appendChild(memberDiv);
-        });
+    if (slackContainer) {
+        if (teamMembers.length === 0) {
+            slackContainer.innerHTML = '<div class="text-gray-400 text-sm italic">No team members</div>';
+        } else {
+            teamMembers.forEach(member => {
+                const memberDiv = document.createElement('div');
+                memberDiv.className = 'godview-slack-item text-sm flex gap-3 text-gray-300 items-start p-2 rounded';
+                memberDiv.innerHTML = '<div class="flex-1">' +
+                    '<div class="font-medium">' + (member.name || '') + ' (' + (member.role || '') + ')</div>' +
+                    '<div class="text-gray-400">' + (member.email || '') + '</div>' +
+                    '</div>';
+                slackContainer.appendChild(memberDiv);
+            });
+        }
     }
 
     const focusList = container.querySelector('#godview-focus-list');
-    focusList.innerHTML = '';
+    if (focusList) focusList.innerHTML = '';
 
-    if (focusProjects && focusProjects.length > 0) {
+    if (focusList && focusProjects && focusProjects.length > 0) {
         for (const p of focusProjects) {
             const row = document.createElement('div');
             row.className = 'glass-panel rounded-lg p-4 flex items-center justify-between hover:border-ops-accent/50 transition cursor-pointer';
@@ -7339,14 +7558,14 @@ function renderGodView(container) {
             };
             focusList.appendChild(row);
         }
-    } else {
+    } else if (focusList) {
         focusList.innerHTML = `
-            <div class="glass flex flex-col items-center justify-center p-12 rounded-xl border border-ops-border border-dashed text-center">
-                <i class="fa-solid fa-check-double text-4xl text-ops-success mb-4 opacity-80"></i>
-                <h3 class="text-white text-lg font-bold">You're all caught up!</h3>
-                <p class="text-ops-light max-w-md mt-2">No active projects require immediate attention right now. Take a breath.</p>
-            </div>
-        `;
+                <div class="glass flex flex-col items-center justify-center p-12 rounded-xl border border-ops-border border-dashed text-center">
+                    <i class="fa-solid fa-check-double text-4xl text-ops-success mb-4 opacity-80"></i>
+                    <h3 class="text-white text-lg font-bold">You're all caught up!</h3>
+                    <p class="text-ops-light max-w-md mt-2">No active projects require immediate attention right now. Take a breath.</p>
+                </div>
+            `;
     }
 
     restoreViewUiState(snap);
@@ -7359,6 +7578,8 @@ function renderDashboard(container, sidePort) {
 
     const titleEl = document.getElementById('page-title');
     if (titleEl) titleEl.innerText = 'Dashboard';
+
+    const pagePrefs = getPageElementsPreferences(state.settings).dashboard;
 
     /* ── Data gathering ─────────────────────────────────────────── */
     const activeProjects = getActiveProjects();
@@ -7527,7 +7748,7 @@ function renderDashboard(container, sidePort) {
             <span class="stat-pill cursor-pointer hover:text-white" id="dash-shortcuts-btn" title="Keyboard Shortcuts"><i class="fa-solid fa-keyboard text-[8px]"></i>?</span>
         </div>
     `;
-    wrap.appendChild(headerEl);
+    if (pagePrefs.missionControl) wrap.appendChild(headerEl);
 
     // ═══ MARTY AMBIENT INTELLIGENCE BAR ══════════════════════════════
     const martyBar = document.createElement('div');
@@ -7556,10 +7777,10 @@ function renderDashboard(container, sidePort) {
         </div>
         ${extraInsights.length ? `<div class="dash-card-body px-3 pb-3"><div class="space-y-1.5">${extraInsights.map(ins => `<div class="marty-insight flex items-start gap-2"><i class="fa-solid ${ins.icon} text-[10px] mt-0.5 shrink-0"></i><span class="text-[11px] leading-relaxed">${escapeHtml(ins.text)}</span></div>`).join('')}</div></div>` : ''}
     `;
-    wrap.appendChild(martyBar);
+    if (pagePrefs.missionControl) wrap.appendChild(martyBar);
 
     // ═══ OVERDUE ALERT ═══════════════════════════════════════════════
-    if (totalOverdue > 0) {
+    if (pagePrefs.missionControl && totalOverdue > 0) {
         const alertEl = document.createElement('div');
         alertEl.className = 'border border-red-500/30 rounded-xl bg-red-500/8 px-3 py-2.5 flex items-center gap-3';
         const overdueNames = [...overdueTasks.slice(0,3).map(t=>safeText(t?.title)), ...overdueProjects.slice(0,2).map(p=>safeText(p?.name))];
@@ -7580,7 +7801,7 @@ function renderDashboard(container, sidePort) {
         <input id="dash-quick-input" type="text" class="flex-1 bg-ops-bg/60 border border-ops-border rounded-lg px-3 py-1.5 text-[11px] font-mono text-white placeholder-ops-light/40 focus:outline-none focus:ring-1 focus:ring-ops-accent" placeholder="Quick add \u2014 type & hit Enter\u2026" />
         <button id="dash-quick-project" class="px-2.5 py-1.5 rounded-lg border border-ops-border text-[9px] font-mono text-ops-light hover:text-white hover:bg-ops-surface/60 transition-colors shrink-0"><i class="fa-solid fa-folder-plus mr-1"></i>Project</button>
     `;
-    wrap.appendChild(quickAdd);
+    if (pagePrefs.newProjectIntake) wrap.appendChild(quickAdd);
 
     // ═══ INBOX RADAR (compact banner) ════════════════════════════════
     const radarBanner = document.createElement('div');
@@ -7767,29 +7988,31 @@ function renderDashboard(container, sidePort) {
     };
 
     radarBanner.innerHTML = makeRadarHtml(inboxNew);
-    wrap.appendChild(radarBanner);
+    if (pagePrefs.commsRadar) {
+        wrap.appendChild(radarBanner);
 
-    // Upgrade radar to cross-business feed (best-effort).
-    setTimeout(async () => {
-        try {
-            const data = await apiJson('/api/inbox/radar?status=New&limit=60');
-            if (state.currentView !== 'dashboard') return;
-            radarBanner.innerHTML = makeRadarHtml(data);
+        // Upgrade radar to cross-business feed (best-effort).
+        setTimeout(async () => {
+            try {
+                const data = await apiJson('/api/inbox/radar?status=New&limit=60');
+                if (state.currentView !== 'dashboard') return;
+                radarBanner.innerHTML = makeRadarHtml(data);
 
-            // Re-wire events (innerHTML replacement removes listeners).
-            radarBanner.querySelector('button[data-open-inbox]')?.addEventListener('click', () => openInbox());
-            const head = radarBanner.querySelector('.dash-card-head');
-            const body = radarBanner.querySelector('.dash-card-body');
-            if (head && body) {
-                head.addEventListener('click', (e) => {
-                    if (e.target.closest('button') || e.target.closest('a')) return;
-                    radarBanner.classList.toggle('expanded');
-                });
+                // Re-wire events (innerHTML replacement removes listeners).
+                radarBanner.querySelector('button[data-open-inbox]')?.addEventListener('click', () => openInbox());
+                const head = radarBanner.querySelector('.dash-card-head');
+                const body = radarBanner.querySelector('.dash-card-body');
+                if (head && body) {
+                    head.addEventListener('click', (e) => {
+                        if (e.target.closest('button') || e.target.closest('a')) return;
+                        radarBanner.classList.toggle('expanded');
+                    });
+                }
+            } catch {
+                // ignore
             }
-        } catch {
-            // ignore
-        }
-    }, 0);
+        }, 0);
+    }
 
     // ═══ URGENT ROW: Calendar + Due Today + Due This Week ════════════
     const urgentRow = document.createElement('div');
@@ -7808,7 +8031,7 @@ function renderDashboard(container, sidePort) {
     } else { calPreview = `<div class="text-[10px] text-ops-light/50">No events today.</div>`; }
     const calCardRight = `<div class="flex gap-1"><button type="button" data-refresh-calls class="px-1.5 py-0.5 rounded border border-ops-border text-[9px] font-mono text-ops-light hover:text-white transition-colors"><i class="fa-solid fa-rotate text-[8px]"></i></button><button type="button" data-open-calendar class="px-1.5 py-0.5 rounded border border-ops-border text-[9px] font-mono text-ops-light hover:text-white transition-colors">Open</button></div>`;
     const calCard = makeCard('calendar', 'fa-calendar-days', 'text-blue-400', 'Calendar', calCardRight, `<div class="space-y-1">${calPreview}</div>`, calBody);
-    urgentRow.appendChild(calCard);
+    if (pagePrefs.deliveryBoard) urgentRow.appendChild(calCard);
 
     // Due Today card
     const dueTodayItems = Array.isArray(buckets.today) ? buckets.today : [];
@@ -7816,15 +8039,15 @@ function renderDashboard(container, sidePort) {
     const dtPreview = dueTodayItems.length ? `<div class="space-y-1">${dueTodayItems.slice(0,2).map(p=>mkProjBtn(p,'text-red-400/70')).join('')}</div>` : `<div class="text-[10px] text-ops-light/50">Nothing due today.</div>`;
     const dtBody = dueTodayItems.length > 2 ? `<div class="space-y-1">${dueTodayItems.slice(2).map(p=>mkProjBtn(p,'text-red-400/70')).join('')}</div>` : '';
     const dueTodayCard = makeCard('due-today', 'fa-fire', 'text-red-400', 'Due Today', `<span class="text-sm font-semibold text-white">${dueTodayItems.length}</span>`, dtPreview, dtBody, { extraClass: dueTodayItems.length ? 'dash-card--danger' : '' });
-    urgentRow.appendChild(dueTodayCard);
+    if (pagePrefs.deliveryBoard) urgentRow.appendChild(dueTodayCard);
 
     // Due This Week card
     const dueWeekItems = [...(Array.isArray(buckets.tomorrow)?buckets.tomorrow:[]), ...(Array.isArray(buckets.thisWeek)?buckets.thisWeek:[])];
     const dwPreview = dueWeekItems.length ? `<div class="space-y-1">${dueWeekItems.slice(0,2).map(p=>mkProjBtn(p,'text-amber-400/70')).join('')}</div>` : `<div class="text-[10px] text-ops-light/50">Nothing else this week.</div>`;
     const dwBody = dueWeekItems.length > 2 ? `<div class="space-y-1">${dueWeekItems.slice(2).map(p=>mkProjBtn(p,'text-amber-400/70')).join('')}</div>` : '';
     const dueWeekCard = makeCard('due-week', 'fa-calendar-week', 'text-amber-400', 'Due This Week', `<span class="text-sm font-semibold text-white">${dueWeekItems.length}</span>`, dwPreview, dwBody, { extraClass: dueWeekItems.length ? 'dash-card--warning' : '' });
-    urgentRow.appendChild(dueWeekCard);
-    wrap.appendChild(urgentRow);
+    if (pagePrefs.deliveryBoard) urgentRow.appendChild(dueWeekCard);
+    if (pagePrefs.deliveryBoard) wrap.appendChild(urgentRow);
 
     // ═══ MID ROW: Streaks + Focus Timer ══════════════════════════════
     const midRow = document.createElement('div');
@@ -7838,7 +8061,7 @@ function renderDashboard(container, sidePort) {
     }).join('');
     const streakPreview = `<div class="flex items-end gap-0.5 h-12">${barsHtml}</div>`;
     const streakCard = makeCard('streaks', 'fa-chart-bar', 'text-emerald-400', 'Week', `<span class="text-[10px] font-mono text-ops-light/50">${totalDoneWeek} done</span>`, streakPreview, '');
-    midRow.appendChild(streakCard);
+    if (pagePrefs.deliveryBoard) midRow.appendChild(streakCard);
 
     // Focus Timer
     const mins = Math.floor(state.focusTimer.remaining/60);
@@ -7855,8 +8078,8 @@ function renderDashboard(container, sidePort) {
             </div>
         </div>`;
     const timerCard = makeCard('timer', 'fa-hourglass-half', 'text-orange-400', 'Focus', '', timerPreview, '');
-    midRow.appendChild(timerCard);
-    wrap.appendChild(midRow);
+    if (pagePrefs.deliveryBoard) midRow.appendChild(timerCard);
+    if (pagePrefs.deliveryBoard) wrap.appendChild(midRow);
 
     // ═══ TODAY'S FOCUS (outcomes + next actions) ═════════════════════
     const nextActionsHtml = nextActions.length
@@ -7912,7 +8135,7 @@ function renderDashboard(container, sidePort) {
         </div>
         ${extraActions ? `<div class="dash-card-body px-3 pb-3"><div class="text-[9px] font-mono uppercase tracking-widest text-ops-light/60 mb-1.5">More Actions</div><div class="space-y-1">${extraActions}</div></div>` : ''}
     `;
-    wrap.appendChild(focusEl);
+    if (pagePrefs.deliveryBoard) wrap.appendChild(focusEl);
 
     // Wire outcomes
     const outcomesTA = focusEl.querySelector('#today-outcomes');
@@ -8040,7 +8263,7 @@ function renderDashboard(container, sidePort) {
     const actPreview = activityBlocks.slice(0, 3).map(renderActivityBlock).join('');
     const actBody = activityBlocks.length > 3 ? activityBlocks.slice(3, 10).map(renderActivityBlock).join('') : '';
     const actCard = makeCard('activity', 'fa-clock-rotate-left', 'text-sky-400', 'Activity', '', `<div class="space-y-1.5">${actPreview || '<div class="text-[10px] text-ops-light/50">No recent activity.</div>'}</div>`, actBody ? `<div class="space-y-1.5">${actBody}</div>` : '');
-    feedRow.appendChild(actCard);
+    if (pagePrefs.commsRadar) feedRow.appendChild(actCard);
 
     // Slack (group by channel)
     const parseSlackContext = (item) => {
@@ -8095,7 +8318,7 @@ function renderDashboard(container, sidePort) {
         : '';
     const slackCard = makeCard('slack', 'fa-slack', 'text-purple-400', 'Slack', `<button type="button" data-open-slack class="px-1.5 py-0.5 rounded border border-ops-border text-[9px] font-mono text-ops-light hover:text-white transition-colors">Open</button>`, `<div class="space-y-1">${slackPreview}</div>`, slackBody ? `<div class="space-y-1">${slackBody}</div>` : '');
     slackCard.querySelector('.dash-card-head i.fa-slack')?.classList.replace('fa-solid', 'fa-brands');
-    feedRow.appendChild(slackCard);
+    if (pagePrefs.commsRadar) feedRow.appendChild(slackCard);
 
     // Inbox (group by assignment)
     const inboxGroupsByKey = {};
@@ -8185,7 +8408,7 @@ function renderDashboard(container, sidePort) {
         ? inboxGroups.slice(2, 10).map(renderInboxGroupRow).join('')
         : '';
     const inboxCard = makeCard('inbox', 'fa-inbox', 'text-amber-400', 'Inbox', `<button type="button" data-open-inbox2 class="px-1.5 py-0.5 rounded border border-ops-border text-[9px] font-mono text-ops-light hover:text-white transition-colors">Open</button>`, `<div class="space-y-1">${inboxPreview}</div>`, inboxBody ? `<div class="space-y-1">${inboxBody}</div>` : '');
-    feedRow.appendChild(inboxCard);
+    if (pagePrefs.commsRadar) feedRow.appendChild(inboxCard);
 
     // Team (presence + WIP/overdue signals)
     const humanMembers = teamMembers.filter(m => safeText(m?.role).toLowerCase() !== 'ai');
@@ -8202,12 +8425,14 @@ function renderDashboard(container, sidePort) {
     const teamRows = humanMembers.map((m) => {
         const name = safeText(m?.name).trim() || 'Member';
         const role = safeText(m?.role).trim();
-        const sid = safeText(m?.slackMemberId).trim();
-        const pres = sid && state.teamPresenceByMemberId?.[sid];
-        const on = pres && String(pres.presence || '').toLowerCase() === 'active';
-        const dot = on
+        const memberId = safeText(m?.id).trim();
+        const pres = memberId && state.teamPresenceByMemberId?.[memberId];
+        const online = pres && Object.prototype.hasOwnProperty.call(pres, 'online') ? pres.online : null;
+        const dot = online === true
             ? '<span class="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0"></span>'
-            : '<span class="w-1.5 h-1.5 rounded-full bg-zinc-600 shrink-0"></span>';
+            : (online === false
+                ? '<span class="w-1.5 h-1.5 rounded-full bg-zinc-600 shrink-0"></span>'
+                : '<span class="w-1.5 h-1.5 rounded-full bg-amber-300 shrink-0"></span>');
 
         const openCount = Number(openByOwner[name]) || 0;
         const overdueCount = Number(overdueByOwner[name]) || 0;
@@ -8251,8 +8476,8 @@ function renderDashboard(container, sidePort) {
         ? teamRows.slice(3, 10).map((r) => r.html).join('')
         : '';
     const teamCard = makeCard('team', 'fa-users', 'text-emerald-400', 'Team', `<button type="button" data-open-team class="px-1.5 py-0.5 rounded border border-ops-border text-[9px] font-mono text-ops-light hover:text-white transition-colors">Open</button>`, `<div class="space-y-1">${teamPreview}</div>`, teamBody ? `<div class="space-y-1">${teamBody}</div>` : '');
-    feedRow.appendChild(teamCard);
-    wrap.appendChild(feedRow);
+    if (pagePrefs.commsRadar) feedRow.appendChild(teamCard);
+    if (pagePrefs.commsRadar) wrap.appendChild(feedRow);
 
     // ═══ LATER ROW: Next Week + Future Projects ═════════════════════
     const nextWeekItems = Array.isArray(buckets.nextWeek) ? buckets.nextWeek : [];
@@ -8262,14 +8487,14 @@ function renderDashboard(container, sidePort) {
     const nwPreview = nextWeekItems.length ? `<div class="space-y-1">${nextWeekItems.slice(0,2).map(p=>mkProjBtn(p,'text-ops-light/60')).join('')}</div>` : '<div class="text-[10px] text-ops-light/50">Nothing due next week.</div>';
     const nwBody = nextWeekItems.length > 2 ? `<div class="space-y-1">${nextWeekItems.slice(2).map(p=>mkProjBtn(p,'text-ops-light/60')).join('')}</div>` : '';
     const nwCard = makeCard('next-week', 'fa-calendar-check', 'text-sky-400', 'Next Week', `<span class="text-sm font-semibold text-white">${nextWeekItems.length}</span>`, nwPreview, nwBody);
-    laterRow.appendChild(nwCard);
+    if (pagePrefs.deliveryBoard) laterRow.appendChild(nwCard);
 
     const upcoming = (Array.isArray(buckets.upcoming)?buckets.upcoming:[]).slice(0,6);
     const upPreview = upcoming.length ? `<div class="space-y-1">${upcoming.slice(0,2).map(p=>mkProjBtn(p,'text-ops-light/60')).join('')}</div>` : '<div class="text-[10px] text-ops-light/50">No future projects.</div>';
     const upBody = upcoming.length > 2 ? `<div class="space-y-1">${upcoming.slice(2).map(p=>mkProjBtn(p,'text-ops-light/60')).join('')}</div>` : '';
     const upCard = makeCard('upcoming', 'fa-forward', 'text-ops-light/40', 'Future Projects', `<button type="button" data-open-projects class="px-1.5 py-0.5 rounded border border-ops-border text-[9px] font-mono text-ops-light hover:text-white transition-colors">All</button>`, upPreview, upBody);
-    laterRow.appendChild(upCard);
-    wrap.appendChild(laterRow);
+    if (pagePrefs.deliveryBoard) laterRow.appendChild(upCard);
+    if (pagePrefs.deliveryBoard) wrap.appendChild(laterRow);
 
     // ═══ KEYBOARD SHORTCUTS (hidden) ════════════════════════════════
     const shortcutsPanel = document.createElement('div');
@@ -8292,7 +8517,7 @@ function renderDashboard(container, sidePort) {
             <div class="flex justify-between gap-1"><span class="text-ops-light/60">Sync</span><kbd class="font-mono text-white bg-ops-bg/60 px-1 rounded text-[9px]">R</kbd></div>
         </div>
     `;
-    wrap.appendChild(shortcutsPanel);
+    if (pagePrefs.missionControl) wrap.appendChild(shortcutsPanel);
 
     // ═══ MOUNT ═══════════════════════════════════════════════════════
     container.appendChild(wrap);
