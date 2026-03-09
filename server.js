@@ -8610,10 +8610,104 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
         return { content: lines.join('\n') };
       }
 
-      return {
-        content:
-          "AI is not enabled (missing API key). Tell me a project name and I can summarize its tasks/notes/scratchpad from the tracker, or enable AI in Settings → AI for full conversational reasoning.",
+      const today = new Date().toISOString().slice(0, 10);
+      const tasks = Array.isArray(store.tasks) ? store.tasks : [];
+      const inbox = Array.isArray(store.inboxItems) ? store.inboxItems : [];
+      const projects = Array.isArray(store.projects) ? store.projects : [];
+
+      const isDoneStatus = (st) => {
+        const v = String(st == null ? '' : st).trim().toLowerCase();
+        return ['done', 'archived', 'complete', 'completed'].includes(v);
       };
+      const normalizeDue = (d) => {
+        const v = String(d == null ? '' : d).trim();
+        return /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : '';
+      };
+
+      const openTasks = tasks.filter((t) => !isDoneStatus(t.status));
+      const overdue = openTasks.filter((t) => {
+        const due = normalizeDue(t.dueDate);
+        return Boolean(due) && due < today;
+      });
+      const dueToday = openTasks.filter((t) => normalizeDue(t.dueDate) === today);
+
+      const nextTasks = openTasks
+        .slice()
+        .sort((a, b) => {
+          const apRaw = Number(a?.priority);
+          const bpRaw = Number(b?.priority);
+          const ap = Number.isFinite(apRaw) ? apRaw : 2;
+          const bp = Number.isFinite(bpRaw) ? bpRaw : 2;
+          if (ap !== bp) return ap - bp;
+          const ad0 = normalizeDue(a?.dueDate);
+          const bd0 = normalizeDue(b?.dueDate);
+          const ad = ad0 ? ad0 : '9999-12-31';
+          const bd = bd0 ? bd0 : '9999-12-31';
+          if (ad !== bd) return ad.localeCompare(bd);
+          const au = String(a?.updatedAt || '');
+          const bu = String(b?.updatedAt || '');
+          return bu.localeCompare(au);
+        })
+        .slice(0, 10);
+
+      const newInbox = inbox.filter((it) => String(it?.status || '').trim().toLowerCase() === 'new');
+
+      const lines = [];
+      lines.push('AI is not enabled for this area (missing API key), but I can still guide you using the tracker data.');
+      lines.push(`Today: ${today}`);
+      lines.push(`Projects: ${projects.length} • Open tasks: ${openTasks.length} • Overdue: ${overdue.length} • Due today: ${dueToday.length} • New inbox: ${newInbox.length}`);
+      lines.push('');
+
+      if (overdue.length) {
+        lines.push('Overdue (top):');
+        overdue
+          .slice()
+          .sort((a, b) => {
+            const ad0 = normalizeDue(a?.dueDate);
+            const bd0 = normalizeDue(b?.dueDate);
+            const ad = ad0 ? ad0 : '9999-12-31';
+            const bd = bd0 ? bd0 : '9999-12-31';
+            return ad.localeCompare(bd);
+          })
+          .slice(0, 6)
+          .forEach((t, i) => {
+            const priRaw = Number(t?.priority);
+            const priNum = Number.isFinite(priRaw) ? priRaw : 2;
+            const due = normalizeDue(t?.dueDate);
+            const proj = String(t?.project || '').trim();
+            lines.push(`${i + 1}. [P${priNum}] ${String(t?.title || '').trim()}${proj ? ` — ${proj}` : ''}${due ? ` — due ${due}` : ''}`);
+          });
+        lines.push('');
+      }
+
+      lines.push('Next actions (start here):');
+      nextTasks.forEach((t, i) => {
+        const priRaw = Number(t?.priority);
+        const priNum = Number.isFinite(priRaw) ? priRaw : 2;
+        const due = normalizeDue(t?.dueDate);
+        const proj = String(t?.project || '').trim();
+        const st = String(t?.status || 'Next');
+        lines.push(`${i + 1}. [P${priNum}] ${String(t?.title || '').trim()}${proj ? ` — ${proj}` : ''}${due ? ` — due ${due}` : ''} — ${st}`);
+      });
+
+      if (newInbox.length) {
+        lines.push('Inbox triage (newest):');
+        newInbox
+          .slice()
+          .sort((a, b) => String(b?.updatedAt || b?.createdAt || '').localeCompare(String(a?.updatedAt || a?.createdAt || '')))
+          .slice(0, 5)
+          .forEach((it) => {
+            const rawSrc = String(it?.source || '').trim();
+            const src = rawSrc ? rawSrc : 'inbox';
+            const text = String(it?.text || '').replace(/\s+/g, ' ').trim();
+            const head = text.length > 140 ? `${text.slice(0, 140)}…` : text;
+            lines.push(`- [${src}] ${head}`);
+          });
+        lines.push('');
+      }
+
+      lines.push('To enable deeper reasoning + tool-use, set an API key in Settings → AI (OpenAI/OpenRouter).');
+      return { content: lines.join('\n') };
     }
 
     const tools = [];
