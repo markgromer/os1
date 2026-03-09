@@ -4398,54 +4398,46 @@ function renderSettings(container) {
     `;
     wrap.appendChild(ai);
 
-    // Agent personalization
-    const agent = section('Agent', 'Personalize how your agent behaves and what it should remember across chats.');
+    // Marty agent settings
+    const agent = section('Marty', 'Configure what Marty knows, how it helps, and what it watches for.');
     const agentBody = agent.querySelector('[data-slot="body"]');
-    const operatorTone = typeof state.settings.operatorTone === 'string' ? state.settings.operatorTone : '';
-    const operatorVoice = typeof state.settings.operatorVoice === 'string' ? state.settings.operatorVoice : '';
+    const assistantOperatingDoctrine = typeof state.settings.assistantOperatingDoctrine === 'string'
+        ? state.settings.assistantOperatingDoctrine
+        : (typeof state.settings.operatorHelpPrompt === 'string' ? state.settings.operatorHelpPrompt : '');
+    const personalityLayer = typeof state.settings.personalityLayer === 'string' ? state.settings.personalityLayer : '';
+    const attentionRadar = typeof state.settings.attentionRadar === 'string' ? state.settings.attentionRadar : '';
+    const dailyReportingStructure = typeof state.settings.dailyReportingStructure === 'string' ? state.settings.dailyReportingStructure : '';
     agentBody.innerHTML = `
         <div class="grid grid-cols-1 gap-4">
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <div>
-                    <label class="text-xs text-ops-light">Tone</label>
-                    <select id="set-operator-tone" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-xs">
-                        <option value="blunt_sarcastic" ${operatorTone === 'blunt_sarcastic' || !operatorTone ? 'selected' : ''}>Bluntly funny / sarcastic</option>
-                        <option value="direct_calm" ${operatorTone === 'direct_calm' ? 'selected' : ''}>Direct / calm</option>
-                        <option value="warm_supportive" ${operatorTone === 'warm_supportive' ? 'selected' : ''}>Warm / supportive</option>
-                    </select>
-                </div>
-                <div>
-                    <label class="text-xs text-ops-light">Voice</label>
-                    <select id="set-operator-voice" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-xs">
-                        <option value="take_control" ${operatorVoice === 'take_control' || !operatorVoice ? 'selected' : ''}>Take control of my day (push back)</option>
-                        <option value="coach" ${operatorVoice === 'coach' ? 'selected' : ''}>Coach (asks, nudges)</option>
-                        <option value="assistant" ${operatorVoice === 'assistant' ? 'selected' : ''}>Assistant (execute instructions)</option>
-                    </select>
-                </div>
-            </div>
             <div>
-                <label class="text-xs text-ops-light">System prompt (your rules/style)</label>
-                <textarea id="set-agent-system-prompt" rows="5" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-xs font-mono" placeholder="Example: You are Mark's ops copilot. Be blunt, prioritize revenue, always end with next steps.">${escapeHtml(String(state.settings.agentSystemPrompt || ''))}</textarea>
-                <div class="text-[11px] text-ops-light mt-1">This is prepended to the agent's built-in Marty prompt.</div>
-            </div>
-            <div>
-                <label class="text-xs text-ops-light">Memory (facts/preferences to keep in mind)</label>
-                <textarea id="set-agent-memory" rows="6" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-xs font-mono" placeholder="Example: I run a web agency. Preferred tone: concise. My timezone: America/Chicago. My VA's name: ...">${escapeHtml(String(state.settings.agentMemory || ''))}</textarea>
-                <div class="text-[11px] text-ops-light mt-1">Stored locally in your settings file. Included in every chat context (capped).</div>
-            </div>
-            <div>
-                <label class="text-xs text-ops-light">Operator Bio (who you are / roles / needs)</label>
+                <label class="text-xs text-ops-light">Operator Bio (who you are)</label>
                 <textarea id="set-operator-bio" rows="8" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-xs font-mono" placeholder="Example: I am Mark. Roles: owner/operator, PM, closer. Needs: daily agenda + inbox triage + project next actions. Constraints: ...">${escapeHtml(String(state.settings.operatorBio || ''))}</textarea>
                 <div class="text-[11px] text-ops-light mt-1">Included in every Marty context. You can refine it in the Bio chat thread.</div>
             </div>
+
             <div>
-                <label class="text-xs text-ops-light">How you can help me (prompt)</label>
-                <textarea id="set-operator-help-prompt" rows="7" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-xs font-mono" placeholder="Example: If I sound unclear, ask up to 3 clarifying questions. When I ask for updates, summarize in bullets with next actions. Prefer default assumptions over long back-and-forth.">${escapeHtml(String(state.settings.operatorHelpPrompt || ''))}</textarea>
-                <div class="text-[11px] text-ops-light mt-1">Used by Marty to coach you on how to ask and to format answers the way you prefer.</div>
+                <label class="text-xs text-ops-light">Assistant Operating Doctrine (how to help you)</label>
+                <textarea id="set-assistant-operating-doctrine" rows="7" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-xs font-mono" placeholder="Example: If I sound unclear, ask up to 3 clarifying questions. When I ask for updates, summarize in bullets with next actions. Prefer default assumptions over long back-and-forth.">${escapeHtml(String(assistantOperatingDoctrine || ''))}</textarea>
+            </div>
+
+            <div>
+                <label class="text-xs text-ops-light">Personality Layer (how MARTY behaves)</label>
+                <textarea id="set-personality-layer" rows="6" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-xs font-mono" placeholder="Example: Direct, calm, slightly sarcastic. Push back when I drift. End every response with next actions.">${escapeHtml(String(personalityLayer || ''))}</textarea>
+            </div>
+
+            <div>
+                <label class="text-xs text-ops-light">Attention Radar (what MARTY watches for)</label>
+                <textarea id="set-attention-radar" rows="6" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-xs font-mono" placeholder="Example: Missed deadlines, stalled projects, inbox buildup, repeated blockers, context switching, low follow-up cadence.">${escapeHtml(String(attentionRadar || ''))}</textarea>
+            </div>
+
+            <div>
+                <label class="text-xs text-ops-light">Daily Reporting Structure</label>
+                <textarea id="set-daily-reporting-structure" rows="10" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-xs font-mono" placeholder="Morning\n• priorities\n• deadlines\n\nMidday\n• blockers\n• new patterns\n\nEnd of Day\n• what moved\n• what stalled\n• system opportunities detected">${escapeHtml(String(dailyReportingStructure || ''))}</textarea>
+                <div class="text-[11px] text-ops-light mt-1">Pattern detection works best with consistent summaries.</div>
             </div>
         </div>
         <div class="flex gap-2 mt-4">
-            <button id="btn-save-agent" class="px-3 py-2 rounded bg-blue-600 text-white text-xs hover:bg-blue-500">Save Agent</button>
+            <button id="btn-save-agent" class="px-3 py-2 rounded bg-blue-600 text-white text-xs hover:bg-blue-500">Save Marty Settings</button>
         </div>
     `;
     wrap.appendChild(agent);
@@ -5335,14 +5327,22 @@ function renderSettings(container) {
 
     if (btnSaveAgent) btnSaveAgent.onclick = async () => {
         try {
-            const agentSystemPrompt = String(document.getElementById('set-agent-system-prompt')?.value || '').trimEnd();
-            const agentMemory = String(document.getElementById('set-agent-memory')?.value || '').trimEnd();
             const operatorBio = String(document.getElementById('set-operator-bio')?.value || '').trimEnd();
-            const operatorHelpPrompt = String(document.getElementById('set-operator-help-prompt')?.value || '').trimEnd();
-            const operatorTone = String(document.getElementById('set-operator-tone')?.value || '').trim();
-            const operatorVoice = String(document.getElementById('set-operator-voice')?.value || '').trim();
-            await saveSettingsPatch({ agentSystemPrompt, agentMemory, operatorBio, operatorHelpPrompt, operatorTone, operatorVoice });
-            alert('Agent settings saved.');
+            const assistantOperatingDoctrine = String(document.getElementById('set-assistant-operating-doctrine')?.value || '').trimEnd();
+            const personalityLayer = String(document.getElementById('set-personality-layer')?.value || '').trimEnd();
+            const attentionRadar = String(document.getElementById('set-attention-radar')?.value || '').trimEnd();
+            const dailyReportingStructure = String(document.getElementById('set-daily-reporting-structure')?.value || '').trimEnd();
+
+            // Keep legacy key in sync so older server builds still pick it up.
+            await saveSettingsPatch({
+                operatorBio,
+                assistantOperatingDoctrine,
+                personalityLayer,
+                attentionRadar,
+                dailyReportingStructure,
+                operatorHelpPrompt: assistantOperatingDoctrine,
+            });
+            alert('Marty settings saved.');
             renderSettings(container);
         } catch (e) {
             alert(e?.message || 'Failed to save agent settings');

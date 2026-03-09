@@ -3639,7 +3639,12 @@ async function aiNextActions({ project, notes, tasks }) {
 async function aiProjectAssistant({ project, scratchpad, noteEntries, communications, chatMessages }) {
   const settings = await readSettings();
   const operatorBio = typeof settings.operatorBio === 'string' ? settings.operatorBio.trimEnd() : '';
-  const operatorHelpPrompt = typeof settings.operatorHelpPrompt === 'string' ? settings.operatorHelpPrompt.trimEnd() : '';
+  const legacyHelpPrompt = typeof settings.operatorHelpPrompt === 'string' ? settings.operatorHelpPrompt.trimEnd() : '';
+  const assistantOperatingDoctrineRaw = typeof settings.assistantOperatingDoctrine === 'string' ? settings.assistantOperatingDoctrine.trimEnd() : '';
+  const assistantOperatingDoctrine = assistantOperatingDoctrineRaw || legacyHelpPrompt;
+  const personalityLayer = typeof settings.personalityLayer === 'string' ? settings.personalityLayer.trimEnd() : '';
+  const attentionRadar = typeof settings.attentionRadar === 'string' ? settings.attentionRadar.trimEnd() : '';
+  const dailyReportingStructure = typeof settings.dailyReportingStructure === 'string' ? settings.dailyReportingStructure.trimEnd() : '';
   const operatorTone = typeof settings.operatorTone === 'string' ? settings.operatorTone.trim() : '';
   const operatorVoice = typeof settings.operatorVoice === 'string' ? settings.operatorVoice.trim() : '';
 
@@ -3679,7 +3684,12 @@ async function aiProjectAssistant({ project, scratchpad, noteEntries, communicat
 
   const context = {
     operatorBio: operatorBio ? operatorBio.slice(0, 12000) : '',
-    operatorHelpPrompt: operatorHelpPrompt ? operatorHelpPrompt.slice(0, 12000) : '',
+    assistantOperatingDoctrine: assistantOperatingDoctrine ? assistantOperatingDoctrine.slice(0, 12000) : '',
+    personalityLayer: personalityLayer ? personalityLayer.slice(0, 12000) : '',
+    attentionRadar: attentionRadar ? attentionRadar.slice(0, 12000) : '',
+    dailyReportingStructure: dailyReportingStructure ? dailyReportingStructure.slice(0, 12000) : '',
+    // Legacy fields (kept for backward compatibility / easier migrations).
+    operatorHelpPrompt: assistantOperatingDoctrine ? assistantOperatingDoctrine.slice(0, 12000) : (legacyHelpPrompt ? legacyHelpPrompt.slice(0, 12000) : ''),
     operatorTone: operatorTone || '',
     operatorVoice: operatorVoice || '',
     project: {
@@ -8458,7 +8468,15 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
     const userSystemPrompt = typeof settings.agentSystemPrompt === 'string' ? settings.agentSystemPrompt.trimEnd() : '';
     const userMemory = typeof settings.agentMemory === 'string' ? settings.agentMemory.trimEnd() : '';
     const operatorBio = typeof settings.operatorBio === 'string' ? settings.operatorBio.trimEnd() : '';
-    const operatorHelpPrompt = typeof settings.operatorHelpPrompt === 'string' ? settings.operatorHelpPrompt.trimEnd() : '';
+
+    const legacyHelpPrompt = typeof settings.operatorHelpPrompt === 'string' ? settings.operatorHelpPrompt.trimEnd() : '';
+    const assistantOperatingDoctrineRaw = typeof settings.assistantOperatingDoctrine === 'string' ? settings.assistantOperatingDoctrine.trimEnd() : '';
+    const assistantOperatingDoctrine = assistantOperatingDoctrineRaw || legacyHelpPrompt;
+
+    const personalityLayer = typeof settings.personalityLayer === 'string' ? settings.personalityLayer.trimEnd() : '';
+    const attentionRadar = typeof settings.attentionRadar === 'string' ? settings.attentionRadar.trimEnd() : '';
+    const dailyReportingStructure = typeof settings.dailyReportingStructure === 'string' ? settings.dailyReportingStructure.trimEnd() : '';
+
     const operatorTone = typeof settings.operatorTone === 'string' ? settings.operatorTone.trim() : '';
     const operatorVoice = typeof settings.operatorVoice === 'string' ? settings.operatorVoice.trim() : '';
 
@@ -8480,8 +8498,20 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
       context += `OPERATOR BIO (user-provided; treat as true unless contradicted):\n${String(operatorBio).slice(0, 12000)}\n\n`;
     }
 
-    if (operatorHelpPrompt) {
-      context += `HOW TO HELP THE OPERATOR (user-provided preferences for coaching + response format):\n${String(operatorHelpPrompt).slice(0, 12000)}\n\n`;
+    if (assistantOperatingDoctrine) {
+      context += `ASSISTANT OPERATING DOCTRINE (how to help the operator):\n${String(assistantOperatingDoctrine).slice(0, 12000)}\n\n`;
+    }
+
+    if (personalityLayer) {
+      context += `PERSONALITY LAYER (how Marty behaves):\n${String(personalityLayer).slice(0, 12000)}\n\n`;
+    }
+
+    if (attentionRadar) {
+      context += `ATTENTION RADAR (what Marty watches for):\n${String(attentionRadar).slice(0, 12000)}\n\n`;
+    }
+
+    if (dailyReportingStructure) {
+      context += `DAILY REPORTING STRUCTURE (preferred summary cadence/format):\n${String(dailyReportingStructure).slice(0, 12000)}\n\n`;
     }
 
     if (operatorTone || operatorVoice) {
