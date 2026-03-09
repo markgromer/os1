@@ -232,6 +232,34 @@ function getStoredMartyVoiceOut() {
     }
 }
 
+function stripForSpeech(input) {
+    const s = String(input || '');
+    return s
+        .replace(/```[\s\S]*?```/g, ' ')
+        .replace(/`[^`]*`/g, ' ')
+        .replace(/\[(.*?)\]\((.*?)\)/g, '$1')
+        .replace(/[#*_>]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function speakMarty(text) {
+    if (!state.martyVoiceOut) return;
+    try {
+        const spoken = stripForSpeech(text);
+        if (!spoken) return;
+        if (!('speechSynthesis' in window)) return;
+        window.speechSynthesis.cancel();
+        const u = new SpeechSynthesisUtterance(spoken.slice(0, 1200));
+        u.rate = 1;
+        u.pitch = 1;
+        u.volume = 1;
+        window.speechSynthesis.speak(u);
+    } catch {
+        // ignore
+    }
+}
+
 function getStoredMartyOpen() {
     try {
         const raw = String(localStorage.getItem(MARTY_OPEN_STORAGE_KEY) || '').trim().toLowerCase();
@@ -1395,34 +1423,6 @@ function snapshotViewUiState() {
             return window.SpeechRecognition || window.webkitSpeechRecognition || null;
         } catch {
             return null;
-        }
-    }
-
-    function stripForSpeech(input) {
-        const s = String(input || '');
-        return s
-            .replace(/```[\s\S]*?```/g, ' ')
-            .replace(/`[^`]*`/g, ' ')
-            .replace(/\[(.*?)\]\((.*?)\)/g, '$1')
-            .replace(/[#*_>]+/g, ' ')
-            .replace(/\s+/g, ' ')
-            .trim();
-    }
-
-    function speakMarty(text) {
-        if (!state.martyVoiceOut) return;
-        try {
-            const spoken = stripForSpeech(text);
-            if (!spoken) return;
-            if (!('speechSynthesis' in window)) return;
-            window.speechSynthesis.cancel();
-            const u = new SpeechSynthesisUtterance(spoken.slice(0, 1200));
-            u.rate = 1;
-            u.pitch = 1;
-            u.volume = 1;
-            window.speechSynthesis.speak(u);
-        } catch {
-            // ignore
         }
     }
 
