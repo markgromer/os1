@@ -8416,6 +8416,7 @@ function renderDashboard(container, sidePort) {
         const id = safeText(item?.id).trim();
         const ai = id ? aiInboxMap[id] : null;
         const contactName = resolveInboxContactName(item);
+        const projectId = safeText(item?.projectId).trim();
 
         let title = safeText(ai?.title || item?.title || item?.subject).trim();
         if (isBadDashText(title)) {
@@ -8424,6 +8425,7 @@ function renderDashboard(container, sidePort) {
         }
         const rawBody = safeText(item?.text) || safeText(item?.content) || safeText(item?.body) || safeText(item?.message) || '';
         const summary = safeText(ai?.summary).trim() || previewText(rawBody, 120);
+        const detail = previewText(rawBody, 320);
         const stamp = g.latestAt ? formatClock(g.latestAt) : '';
 
         const srcBadges = Object.entries(g.sourceCounts)
@@ -8440,7 +8442,7 @@ function renderDashboard(container, sidePort) {
         const countTone = g.key === 'unassigned' ? 'text-red-300' : 'text-white';
 
         return `
-            <div class="border rounded px-2.5 py-2 ${tone}">
+            <div class="border rounded px-2.5 py-2 ${tone} cursor-pointer select-none" data-inbox-radar-row data-inbox-id="${escapeHtml(id)}" data-project-id="${escapeHtml(projectId)}">
                 <div class="flex items-start justify-between gap-2">
                     <div class="min-w-0 flex-1">
                         <div class="flex items-center justify-between gap-2">
@@ -8454,8 +8456,19 @@ function renderDashboard(container, sidePort) {
                         <div class="mt-1 flex items-center gap-1.5 flex-wrap">
                             ${srcBadges}
                             ${stamp ? `<span class="text-[8px] font-mono text-ops-light/40">${escapeHtml(stamp)}</span>` : ''}
+                            <span class="text-[8px] font-mono text-ops-light/30">Click to expand</span>
                         </div>
                         ${summary ? `<div class="mt-1 text-[9px] font-mono text-ops-light/60 truncate">${escapeHtml(summary)}</div>` : ''}
+                        <div class="mt-2 hidden" data-inbox-radar-details>
+                            ${detail ? `<div class="text-[10px] font-mono text-ops-light/70 leading-relaxed">${escapeHtml(detail)}</div>` : ''}
+                            <div class="mt-2 flex items-center gap-2 flex-wrap">
+                                <button type="button" data-inbox-radar-open class="px-2 py-1 rounded border border-ops-border text-[9px] font-mono text-ops-light hover:text-white transition-colors">Open Inbox</button>
+                                ${projectId ? `<button type="button" data-inbox-radar-open-project class="px-2 py-1 rounded border border-ops-border text-[9px] font-mono text-ops-light hover:text-white transition-colors">Open Project</button>` : ''}
+                                ${id ? `<button type="button" data-inbox-radar-triage class="px-2 py-1 rounded border border-ops-border text-[9px] font-mono text-ops-light hover:text-white transition-colors">Triage</button>` : ''}
+                                ${id ? `<button type="button" data-inbox-radar-done class="px-2 py-1 rounded border border-ops-border text-[9px] font-mono text-ops-light hover:text-white transition-colors">Done</button>` : ''}
+                                ${id ? `<button type="button" data-inbox-radar-archive class="px-2 py-1 rounded border border-ops-border text-[9px] font-mono text-ops-light hover:text-white transition-colors">Archive</button>` : ''}
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -8605,6 +8618,90 @@ function renderDashboard(container, sidePort) {
     wrap.querySelectorAll('button[data-open-projects]').forEach(b => b.addEventListener('click', () => openProjects()));
     calCard.querySelector('button[data-refresh-calls]')?.addEventListener('click', async () => { await refreshDashboardCalls({force:true}); renderMain(); });
     wrap.querySelectorAll('.dash-project-btn').forEach(btn => { btn.addEventListener('click', () => { const pid = btn.dataset.pid; if (pid) openProject(pid); }); });
+
+    // Inbox Radar: expand rows + fast actions
+    wrap.querySelectorAll('[data-inbox-radar-row]').forEach((row) => {
+        row.addEventListener('click', (e) => {
+            if (e.target.closest('button') || e.target.closest('a')) return;
+            const details = row.querySelector('[data-inbox-radar-details]');
+            if (!details) return;
+            details.classList.toggle('hidden');
+        });
+    });
+
+    wrap.querySelectorAll('button[data-inbox-radar-open]').forEach((b) => {
+        b.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            openInbox();
+        });
+    });
+    wrap.querySelectorAll('button[data-inbox-radar-open-project]').forEach((b) => {
+        b.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const row = b.closest('[data-inbox-radar-row]');
+            const pid = safeText(row?.getAttribute('data-project-id')).trim();
+            if (pid) openProject(pid);
+        });
+    });
+    wrap.querySelectorAll('button[data-inbox-radar-triage]').forEach((b) => {
+        b.addEventListener('click', async (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const row = b.closest('[data-inbox-radar-row]');
+            const id = safeText(row?.getAttribute('data-inbox-id')).trim();
+            if (!id) return;
+            b.disabled = true;
+            try {
+                await patchInboxItem(id, { status: 'Triaged' });
+                await fetchState().catch(() => {});
+                if (state.currentView === 'dashboard') renderMain();
+            } catch (err) {
+                alert(err?.message || 'Failed to triage');
+            } finally {
+                b.disabled = false;
+            }
+        });
+    });
+    wrap.querySelectorAll('button[data-inbox-radar-done]').forEach((b) => {
+        b.addEventListener('click', async (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const row = b.closest('[data-inbox-radar-row]');
+            const id = safeText(row?.getAttribute('data-inbox-id')).trim();
+            if (!id) return;
+            b.disabled = true;
+            try {
+                await patchInboxItem(id, { status: 'Done' });
+                await fetchState().catch(() => {});
+                if (state.currentView === 'dashboard') renderMain();
+            } catch (err) {
+                alert(err?.message || 'Failed to mark done');
+            } finally {
+                b.disabled = false;
+            }
+        });
+    });
+    wrap.querySelectorAll('button[data-inbox-radar-archive]').forEach((b) => {
+        b.addEventListener('click', async (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const row = b.closest('[data-inbox-radar-row]');
+            const id = safeText(row?.getAttribute('data-inbox-id')).trim();
+            if (!id) return;
+            b.disabled = true;
+            try {
+                await patchInboxItem(id, { status: 'Archived' });
+                await fetchState().catch(() => {});
+                if (state.currentView === 'dashboard') renderMain();
+            } catch (err) {
+                alert(err?.message || 'Failed to archive');
+            } finally {
+                b.disabled = false;
+            }
+        });
+    });
 
     // Quick-add
     const quickInput = wrap.querySelector('#dash-quick-input');
