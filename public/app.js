@@ -8168,6 +8168,63 @@ function renderDashboard(container, sidePort) {
         return m ? m[0] : '';
     };
 
+    const normalizePhoneForLookup = (value) => {
+        const raw = safeText(value);
+        const digits = raw.replace(/[^0-9]/g, '');
+        return digits;
+    };
+
+    const extractFirstEmail = (value) => {
+        const s = safeText(value);
+        const m = s.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+        return m ? safeText(m[0]).trim().toLowerCase() : '';
+    };
+
+    // Contacts index (state.clients) for quick sender -> name lookup.
+    const contactNameByPhone = {};
+    const contactNameByEmail = {};
+    for (const c of (Array.isArray(state.clients) ? state.clients : [])) {
+        const name = safeText(c?.name).trim();
+        if (!name) continue;
+        const phone = normalizePhoneForLookup(c?.phone);
+        if (phone) {
+            contactNameByPhone[phone] = name;
+            if (phone.length > 10) contactNameByPhone[phone.slice(-10)] = name;
+        }
+        const email = safeText(c?.email).trim().toLowerCase();
+        if (email) contactNameByEmail[email] = name;
+    }
+
+    const resolveInboxContactName = (item) => {
+        const explicit = safeText(item?.contactName).trim() || safeText(item?.fromName).trim();
+        if (explicit) return explicit;
+
+        const senderBits = [
+            safeText(item?.sender).trim(),
+            safeText(item?.fromNumber).trim(),
+            safeText(item?.from).trim(),
+            safeText(item?.phone).trim(),
+            safeText(item?.title).trim(),
+            safeText(item?.subject).trim(),
+        ].filter(Boolean);
+
+        for (const bit of senderBits) {
+            const phone = normalizePhoneForLookup(bit);
+            if (phone && contactNameByPhone[phone]) return contactNameByPhone[phone];
+            if (phone && phone.length > 10 && contactNameByPhone[phone.slice(-10)]) return contactNameByPhone[phone.slice(-10)];
+
+            const email = extractFirstEmail(bit);
+            if (email && contactNameByEmail[email]) return contactNameByEmail[email];
+        }
+
+        // Fallback: show a readable counterparty (phone, email, or raw sender).
+        const phone = normalizePhoneForLookup(item?.sender || item?.fromNumber || item?.phone);
+        if (phone) return phone.length > 10 ? phone.slice(-10) : phone;
+        const email = extractFirstEmail(item?.from || item?.sender || item?.title || item?.subject);
+        if (email) return email;
+        return safeText(item?.sender).trim() || safeText(item?.from).trim();
+    };
+
     const formatClock = (d) => {
         try {
             const dt = (d instanceof Date) ? d : new Date(d);
@@ -8358,12 +8415,15 @@ function renderDashboard(container, sidePort) {
         const item = g.sample;
         const id = safeText(item?.id).trim();
         const ai = id ? aiInboxMap[id] : null;
+        const contactName = resolveInboxContactName(item);
+
         let title = safeText(ai?.title || item?.title || item?.subject).trim();
         if (isBadDashText(title)) {
             const full = safeText(item?.text) || safeText(item?.content) || safeText(item?.body) || safeText(item?.message) || '';
             title = previewText(full, 90) || 'Inbox item';
         }
-        const summary = safeText(ai?.summary).trim() || previewText(safeText(item?.text) || safeText(item?.content) || safeText(item?.body) || '', 120);
+        const rawBody = safeText(item?.text) || safeText(item?.content) || safeText(item?.body) || safeText(item?.message) || '';
+        const summary = safeText(ai?.summary).trim() || previewText(rawBody, 120);
         const stamp = g.latestAt ? formatClock(g.latestAt) : '';
 
         const srcBadges = Object.entries(g.sourceCounts)
@@ -8386,6 +8446,7 @@ function renderDashboard(container, sidePort) {
                         <div class="flex items-center justify-between gap-2">
                             <div class="min-w-0">
                                 <div class="text-[11px] ${g.key === 'unassigned' ? 'text-red-200 font-semibold' : 'text-white'} truncate">${escapeHtml(g.label)}</div>
+                                ${contactName ? `<div class="mt-0.5 text-[9px] font-mono text-ops-light/60 truncate">From: ${escapeHtml(contactName)}</div>` : ''}
                                 <div class="mt-0.5 text-[10px] text-white truncate">${escapeHtml(title)}</div>
                             </div>
                             <div class="shrink-0 text-[11px] font-mono font-semibold ${countTone}">${g.count}</div>
