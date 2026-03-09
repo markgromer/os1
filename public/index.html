@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OS.1 // Operator System</title>
+    <title>Marty — Management Assistant for Routing Tasks and Yield</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -562,8 +562,8 @@
 
     <!-- COMMAND BAR (Left) -->
     <aside id="command-bar" class="w-16 border-r border-ops-border flex flex-col items-center py-4 bg-ops-surface/60 backdrop-blur-2xl z-30 shadow-2xl">
-        <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-600 to-blue-400 mb-6 flex items-center justify-center font-mono font-bold text-white text-[10px] leading-none shadow-lg shadow-blue-500/20" title="OS.1 — Operator System 1">
-            OS.1
+        <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-600 to-blue-400 mb-6 flex items-center justify-center font-mono font-bold text-white text-[10px] leading-none shadow-lg shadow-blue-500/20" title="Marty — Management Assistant for Routing Tasks and Yield">
+            MARTY
         </div>
 
         <nav class="flex-1 w-full flex flex-col gap-2 px-2" id="primary-nav">
@@ -624,6 +624,10 @@
                 <button id="marty-popout-toggle" class="text-ops-light hover:text-white transition-colors text-[11px]" title="Detach MARTY">
                     <i class="fa-solid fa-up-right-from-square"></i>
                 </button>
+                <select id="marty-thread-select" class="bg-ops-bg border border-ops-border rounded px-2 py-1 text-[10px] text-white font-mono focus:outline-none focus:ring-1 focus:ring-ops-accent" title="MARTY thread">
+                    <option value="default">Direct</option>
+                    <option value="operator_bio">Bio</option>
+                </select>
                 <select id="marty-model-select" class="bg-ops-bg border border-ops-border rounded px-2 py-1 text-[10px] text-white font-mono focus:outline-none focus:ring-1 focus:ring-ops-accent">
                     <option value="gpt-5">GPT-5</option>
                     <option value="gpt-5-mini">GPT-5 Mini</option>
@@ -667,6 +671,6 @@
         <div id="marty-resize-handle" aria-hidden="true"></div>
     </aside>
 
-    <script src="app.js?v=ops3.16"></script>
+    <script src="app.js?v=ops3.21"></script>
 </body>
 </html>

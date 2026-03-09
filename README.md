@@ -1,4 +1,6 @@
-# Task Tracker (OneDrive-synced)
+# Marty — Management Assistant for Routing Tasks and Yield
+
+Marty = **(M)anagement (A)ssistant for (R)outing (T)asks and (Y)ield**.
 
 This is a tiny “project command center” that runs locally and stores everything in a OneDrive-sync-friendly JSON file.
 
@@ -72,7 +74,7 @@ The blueprint mounts a persistent disk at `/var/data/task-tracker` and stores:
 
 ## MCP on Render (Option 1: stdio servers in same container)
 
-This app supports MCP (Model Context Protocol) servers over **stdio**. On Render, this means OS.1 spawns MCP servers as child processes inside the same container.
+This app supports MCP (Model Context Protocol) servers over **stdio**. On Render, this means Marty spawns MCP servers as child processes inside the same container.
 
 ### Why this is the easiest option
 
@@ -131,10 +133,10 @@ This repo includes VS Code tasks so you can run everything without remembering c
 
 1. In VS Code: **Terminal → Run Task…**
 2. Pick one of:
-   - **Task Tracker: Start server (free port 3030)** (best default)
-   - **Task Tracker: Start server**
-   - **Task Tracker: Open in browser**
-   - **Task Tracker: Stop server (kill node)**
+   - **Marty: Start server (free port 3030)** (best default)
+   - **Marty: Start server**
+   - **Marty: Open in browser**
+   - **Marty: Stop server (kill node)**
 
 If you want a keyboard shortcut, you can bind it to the task label in VS Code.
 

@@ -182,16 +182,36 @@ function getStoreFileForBusiness(businessKey) {
   return path.join(BUSINESS_DATA_DIR, key, 'tasks.json');
 }
 
-const APP_NAME = 'Task Tracker';
+// Branding: app is called Marty, but keep backward compatibility with existing
+// settings directories that were created under the old name.
+const APP_NAME = 'Marty';
+const LEGACY_APP_NAME = 'Task Tracker';
 
 function getDefaultSettingsDir() {
   const home = os.homedir();
   if (process.platform === 'win32') {
     const appData = typeof process.env.APPDATA === 'string' ? process.env.APPDATA.trim() : '';
-    return path.join(appData || path.join(home, 'AppData', 'Roaming'), APP_NAME);
+    const base = appData || path.join(home, 'AppData', 'Roaming');
+    const next = path.join(base, APP_NAME);
+    const legacy = path.join(base, LEGACY_APP_NAME);
+    // Prefer legacy folder if it already exists to avoid “losing” saved settings.
+    try {
+      if (fs.existsSync(legacy) && !fs.existsSync(next)) return legacy;
+    } catch {
+      // ignore
+    }
+    return next;
   }
   if (process.platform === 'darwin') {
-    return path.join(home, 'Library', 'Application Support', APP_NAME);
+    const base = path.join(home, 'Library', 'Application Support');
+    const next = path.join(base, APP_NAME);
+    const legacy = path.join(base, LEGACY_APP_NAME);
+    try {
+      if (fs.existsSync(legacy) && !fs.existsSync(next)) return legacy;
+    } catch {
+      // ignore
+    }
+    return next;
   }
   const xdg = typeof process.env.XDG_CONFIG_HOME === 'string' ? process.env.XDG_CONFIG_HOME.trim() : '';
   return path.join(xdg || path.join(home, '.config'), 'task-tracker');
@@ -536,6 +556,116 @@ async function getAiConfig() {
   };
 }
 
+function normalizeAiProvider(input) {
+  const s = typeof input === 'string' ? input.trim().toLowerCase() : '';
+  if (s === 'openrouter') return 'openrouter';
+  return 'openai';
+}
+
+function pickObject(input) {
+  return input && typeof input === 'object' && !Array.isArray(input) ? input : {};
+}
+
+function normalizeAiRoutes(input) {
+  const raw = pickObject(input);
+  const keys = ['martyChat', 'operatorBio', 'projectAssistant', 'dashboardPreview'];
+  const out = {};
+  for (const k of keys) {
+    const entry = pickObject(raw[k]);
+    const provider = normalizeAiProvider(entry.provider);
+    const model = typeof entry.model === 'string' ? entry.model.trim() : '';
+    out[k] = { provider, model };
+  }
+  return out;
+}
+
+function getOpenAiSecrets(saved) {
+  const envKey = typeof process.env.OPENAI_API_KEY === 'string' ? process.env.OPENAI_API_KEY.trim() : '';
+  const savedKey = typeof saved?.openaiApiKey === 'string' ? saved.openaiApiKey.trim() : '';
+  const apiKey = envKey || savedKey;
+  const source = envKey ? 'env' : savedKey ? 'saved' : 'none';
+  const last4 = apiKey && apiKey.length >= 4 ? apiKey.slice(-4) : '';
+  const keyHint = last4 ? `••••${last4}` : '';
+  const envModel = typeof process.env.OPENAI_MODEL === 'string' ? process.env.OPENAI_MODEL.trim() : '';
+  const savedModel = typeof saved?.openaiModel === 'string' ? saved.openaiModel.trim() : '';
+  const model = savedModel || envModel || 'gpt-4o-mini';
+  return { apiKey, source, keyHint, model };
+}
+
+function getOpenRouterSecrets(saved) {
+  const envKey = typeof process.env.OPENROUTER_API_KEY === 'string' ? process.env.OPENROUTER_API_KEY.trim() : '';
+  const savedKey = typeof saved?.openrouterApiKey === 'string' ? saved.openrouterApiKey.trim() : '';
+  const apiKey = envKey || savedKey;
+  const source = envKey ? 'env' : savedKey ? 'saved' : 'none';
+  const last4 = apiKey && apiKey.length >= 4 ? apiKey.slice(-4) : '';
+  const keyHint = last4 ? `••••${last4}` : '';
+  const savedModel = typeof saved?.openrouterModel === 'string' ? saved.openrouterModel.trim() : '';
+  const envModel = typeof process.env.OPENROUTER_MODEL === 'string' ? process.env.OPENROUTER_MODEL.trim() : '';
+  const model = savedModel || envModel || 'openai/gpt-4o-mini';
+  return { apiKey, source, keyHint, model };
+}
+
+function resolveAiRoute(saved, routeKey) {
+  const openai = getOpenAiSecrets(saved);
+  const openrouter = getOpenRouterSecrets(saved);
+
+  const routes = normalizeAiRoutes(saved?.aiRoutes);
+  const r = routes?.[routeKey] || { provider: 'openai', model: '' };
+
+  const preferredProvider = normalizeAiProvider(r.provider);
+  const fallbackProvider = openai.apiKey ? 'openai' : (openrouter.apiKey ? 'openrouter' : 'openai');
+  const provider = preferredProvider || fallbackProvider;
+
+  const providerSecrets = provider === 'openrouter' ? openrouter : openai;
+  const defaultModel = provider === 'openrouter' ? openrouter.model : openai.model;
+  const model = (typeof r.model === 'string' && r.model.trim()) ? r.model.trim() : defaultModel;
+
+  return { provider, model, apiKey: providerSecrets.apiKey };
+}
+
+async function aiChatCompletion({ routeKey, messages, tools, tool_choice, timeoutMs = 30_000 }) {
+  const saved = await readSettings();
+  const route = resolveAiRoute(saved, routeKey);
+  if (!route.apiKey) {
+    return { ok: false, error: `AI is not enabled (missing API key for ${route.provider})` };
+  }
+
+  const baseUrl = route.provider === 'openrouter' ? 'https://openrouter.ai/api/v1' : 'https://api.openai.com/v1';
+  const headers = {
+    Authorization: `Bearer ${route.apiKey}`,
+    'Content-Type': 'application/json',
+  };
+  if (route.provider === 'openrouter') {
+    // Optional but helpful for OpenRouter analytics/compliance.
+    headers['HTTP-Referer'] = typeof process.env.OPENROUTER_HTTP_REFERER === 'string' ? process.env.OPENROUTER_HTTP_REFERER.trim() : '';
+    headers['X-Title'] = typeof process.env.OPENROUTER_X_TITLE === 'string' ? process.env.OPENROUTER_X_TITLE.trim() : 'Marty';
+    if (!headers['HTTP-Referer']) delete headers['HTTP-Referer'];
+  }
+
+  const body = {
+    model: route.model,
+    messages,
+  };
+  if (Array.isArray(tools) && tools.length) body.tools = tools;
+  if (tool_choice) body.tool_choice = tool_choice;
+
+  const { resp, data } = await fetchJsonWithTimeout(`${baseUrl}/chat/completions`, {
+    timeoutMs,
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body),
+  });
+
+  if (!resp.ok) {
+    const detail = typeof data?.error?.message === 'string' ? data.error.message : JSON.stringify(data);
+    return { ok: false, error: `AI request failed (${resp.status}). provider=${route.provider}. model=${route.model}. ${detail}`.slice(0, 700) };
+  }
+
+  const msg = data?.choices?.[0]?.message;
+  if (!msg) return { ok: false, error: 'AI returned no message' };
+  return { ok: true, provider: route.provider, model: route.model, message: msg };
+}
+
 async function fetchJsonWithTimeout(url, { timeoutMs = 25_000, ...init } = {}) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(new Error('timeout')), timeoutMs);
@@ -553,6 +683,7 @@ function sanitizeSettingsForClient(settings) {
   const clone = { ...settings };
   // Never send secrets/tokens to the browser.
   delete clone.openaiApiKey;
+  delete clone.openrouterApiKey;
   delete clone.googleClientSecret;
   delete clone.googleTokens;
   delete clone.ga4ServiceAccountJson;
@@ -567,6 +698,25 @@ function sanitizeSettingsForClient(settings) {
   delete clone.airtableByBusinessKey;
   delete clone.airtablePat;
   return clone;
+}
+
+function tryParseDriveFolderId(input) {
+  const s = typeof input === 'string' ? input.trim() : '';
+  if (!s) return '';
+  // Common patterns: https://drive.google.com/drive/folders/<id> or ...?id=<id>
+  const m1 = s.match(/\/drive\/folders\/([a-zA-Z0-9_-]{10,})/);
+  if (m1) return m1[1];
+  const m2 = s.match(/[?&]id=([a-zA-Z0-9_-]{10,})/);
+  if (m2) return m2[1];
+  // If user pasted a raw id
+  if (/^[a-zA-Z0-9_-]{10,}$/.test(s)) return s;
+  return '';
+}
+
+function driveFolderUrlFromId(id) {
+  const s = typeof id === 'string' ? id.trim() : '';
+  if (!s) return '';
+  return `https://drive.google.com/drive/folders/${s}`;
 }
 
 async function getCrmConfig() {
@@ -1919,8 +2069,8 @@ async function ensureGoogleCalendar(calendar, settings) {
 
   const created = await calendar.calendars.insert({
     requestBody: {
-      summary: 'Task Tracker',
-      description: 'Project due dates synced from Task Tracker',
+      summary: 'Marty',
+      description: 'Project due dates synced from Marty',
       timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
     },
   });
@@ -1933,7 +2083,7 @@ async function ensureGoogleCalendar(calendar, settings) {
 
 function ttEventSummary(project) {
   const name = typeof project?.name === 'string' ? project.name.trim() : '';
-  return name ? `[TT] ${name}` : '[TT] Project';
+  return name ? `[MARTY] ${name}` : '[MARTY] Project';
 }
 
 function projectDueDateFromEvent(event) {
@@ -1987,7 +2137,7 @@ async function googleSyncProjects({ req }) {
       summary: ttEventSummary(project),
       start: { date: dueDate },
       end: { date: ymdAddDays(dueDate, 1) || dueDate },
-      description: 'Synced from Task Tracker (project due date)',
+      description: 'Synced from Marty (project due date)',
       transparency: 'transparent',
       extendedProperties: { private: { taskTrackerProjectId: projectId } },
     };
@@ -2975,6 +3125,10 @@ function normalizeProject(input) {
 
   const workspacePath = typeof input.workspacePath === 'string' ? input.workspacePath.trim() : '';
   const airtableUrl = typeof input.airtableUrl === 'string' ? input.airtableUrl.trim() : '';
+  const driveFolderUrlRaw = safeUrl(input.driveFolderUrl);
+  const driveFolderIdRaw = typeof input.driveFolderId === 'string' ? input.driveFolderId.trim() : '';
+  const driveFolderId = tryParseDriveFolderId(driveFolderUrlRaw) || tryParseDriveFolderId(driveFolderIdRaw);
+  const driveFolderUrl = driveFolderId ? driveFolderUrlFromId(driveFolderId) : driveFolderUrlRaw;
 
   const projectValue = typeof input.projectValue === 'string' ? input.projectValue.trim() : '';
   const stripeInvoiceUrl = safeUrl(input.stripeInvoiceUrl);
@@ -2998,6 +3152,8 @@ function normalizeProject(input) {
     clientPhone,
     workspacePath,
     airtableUrl,
+    driveFolderId,
+    driveFolderUrl,
     projectValue,
     stripeInvoiceUrl,
     repoUrl,
@@ -3402,8 +3558,9 @@ function pickProjectNotesValue(entry) {
 }
 
 async function aiNextActions({ project, notes, tasks }) {
-  const { apiKey, model } = await getAiConfig();
-  if (!apiKey) {
+  const settings = await readSettings();
+  const route = resolveAiRoute(settings, 'projectAssistant');
+  if (!route.apiKey) {
     const lines = String(notes || '')
       .split('\n')
       .map((l) => l.trim())
@@ -3434,11 +3591,9 @@ async function aiNextActions({ project, notes, tasks }) {
       top.forEach((t, i) => out.push(`${i + 1}. ${t}`));
       out.push('');
     }
-    out.push('If you want real AI suggestions, set OPENAI_API_KEY and restart the server.');
+    out.push('If you want real AI suggestions, set an API key in Settings → AI (OpenAI or OpenRouter) and restart the server if needed.');
     return out.join('\n');
   }
-
-  // model resolved above
 
   const safeNotes = String(notes || '').slice(0, 8000);
   const safeTasks = (Array.isArray(tasks) ? tasks : []).slice(0, 60).map((t) => ({
@@ -3450,9 +3605,8 @@ async function aiNextActions({ project, notes, tasks }) {
     type: t.type,
   }));
 
-  const payload = {
-    model,
-
+  const result = await aiChatCompletion({
+    routeKey: 'projectAssistant',
     messages: [
       {
         role: 'system',
@@ -3472,24 +3626,10 @@ async function aiNextActions({ project, notes, tasks }) {
         ),
       },
     ],
-  };
-
-  const resp = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(payload),
   });
+  if (!result.ok) throw new Error(result.error || 'AI request failed');
 
-  if (!resp.ok) {
-    const text = await resp.text().catch(() => '');
-    throw new Error(`AI request failed (${resp.status}). ${text}`.slice(0, 400));
-  }
-
-  const json = await resp.json();
-  const content = json?.choices?.[0]?.message?.content;
+  const content = result.message?.content;
   if (typeof content !== 'string' || !content.trim()) {
     throw new Error('AI returned no content');
   }
@@ -3497,7 +3637,11 @@ async function aiNextActions({ project, notes, tasks }) {
 }
 
 async function aiProjectAssistant({ project, scratchpad, noteEntries, communications, chatMessages }) {
-  const { apiKey, model } = await getAiConfig();
+  const settings = await readSettings();
+  const operatorBio = typeof settings.operatorBio === 'string' ? settings.operatorBio.trimEnd() : '';
+  const operatorHelpPrompt = typeof settings.operatorHelpPrompt === 'string' ? settings.operatorHelpPrompt.trimEnd() : '';
+  const operatorTone = typeof settings.operatorTone === 'string' ? settings.operatorTone.trim() : '';
+  const operatorVoice = typeof settings.operatorVoice === 'string' ? settings.operatorVoice.trim() : '';
 
   const projectName = project?.name || '';
   const projectType = project?.type || '';
@@ -3509,7 +3653,8 @@ async function aiProjectAssistant({ project, scratchpad, noteEntries, communicat
   const recentComms = Array.isArray(communications) ? communications.slice(0, 8) : [];
   const recentChat = Array.isArray(chatMessages) ? chatMessages.slice(-16) : [];
 
-  if (!apiKey) {
+  const route = resolveAiRoute(settings, 'projectAssistant');
+  if (!route.apiKey) {
     const lastUser = [...recentChat].reverse().find((m) => m.role === 'user')?.content || '';
     const lines = [];
     lines.push(`I don't have real AI enabled (OPENAI_API_KEY not set).`);
@@ -3528,13 +3673,15 @@ async function aiProjectAssistant({ project, scratchpad, noteEntries, communicat
     lines.push('2. Write a 3-bullet client update (what changed / what you need / ETA).');
     lines.push('3. Add 1-3 concrete deliverables to the scratchpad with owners.');
     lines.push('');
-    lines.push('To enable real AI, set OPENAI_API_KEY and restart the server.');
+    lines.push('To enable real AI, add an API key in Settings → AI (OpenAI or OpenRouter).');
     return { content: lines.join('\n'), tasks: [] };
   }
 
-  // model resolved above
-
   const context = {
+    operatorBio: operatorBio ? operatorBio.slice(0, 12000) : '',
+    operatorHelpPrompt: operatorHelpPrompt ? operatorHelpPrompt.slice(0, 12000) : '',
+    operatorTone: operatorTone || '',
+    operatorVoice: operatorVoice || '',
     project: {
       name: projectName,
       type: projectType,
@@ -3603,31 +3750,14 @@ async function aiProjectAssistant({ project, scratchpad, noteEntries, communicat
     },
   ];
 
-  const payload = {
-    model,
-
+  const result = await aiChatCompletion({
+    routeKey: 'projectAssistant',
     messages,
     tools,
     tool_choice: 'auto',
-  };
-
-  const resp = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(payload),
   });
-
-  if (!resp.ok) {
-    const text = await resp.text().catch(() => '');
-    throw new Error(`AI request failed (${resp.status}). ${text}`.slice(0, 400));
-  }
-
-  const json = await resp.json();
-  const choice = json?.choices?.[0];
-  const msg = choice?.message;
+  if (!result.ok) throw new Error(result.error || 'AI request failed');
+  const msg = result.message;
   
   if (!msg) {
     throw new Error('AI returned no content');
@@ -3723,7 +3853,8 @@ function heuristicallyExtractActionItems(transcript) {
 }
 
 async function aiTranscriptProposal({ project, transcript, tasks, noteEntries }) {
-  const { apiKey, model } = await getAiConfig();
+  const settings = await readSettings();
+  const route = resolveAiRoute(settings, 'projectAssistant');
 
   const safeTranscript = normalizeTranscript(transcript).slice(0, 20000);
   const safeTasks = (Array.isArray(tasks) ? tasks : []).slice(0, 40).map((t) => ({
@@ -3740,7 +3871,7 @@ async function aiTranscriptProposal({ project, transcript, tasks, noteEntries })
     content: String(n.content || '').slice(0, 800),
   }));
 
-  if (!apiKey) {
+  if (!route.apiKey) {
     const actionItems = heuristicallyExtractActionItems(safeTranscript);
     const subject = `Update: ${project?.name || 'Project'}`;
     const recapLines = [];
@@ -3769,9 +3900,8 @@ async function aiTranscriptProposal({ project, transcript, tasks, noteEntries })
     };
   }
 
-  const payload = {
-    model,
-
+  const result = await aiChatCompletion({
+    routeKey: 'projectAssistant',
     messages: [
       {
         role: 'system',
@@ -3797,24 +3927,14 @@ async function aiTranscriptProposal({ project, transcript, tasks, noteEntries })
         ),
       },
     ],
-  };
-
-  const resp = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(payload),
+    timeoutMs: 30_000,
   });
 
-  if (!resp.ok) {
-    const text = await resp.text().catch(() => '');
-    return { ok: false, error: `AI request failed (${resp.status}). ${text}`.slice(0, 400) };
+  if (!result.ok) {
+    return { ok: false, error: result.error || 'AI request failed' };
   }
 
-  const json = await resp.json().catch(() => ({}));
-  const content = json?.choices?.[0]?.message?.content;
+  const content = result.message?.content;
   const parsed = safeParseJsonObject(typeof content === 'string' ? content : '');
   if (!parsed) {
     return { ok: false, error: 'AI returned non-JSON output. Try again or shorten the transcript.' };
@@ -3841,7 +3961,7 @@ async function aiTranscriptProposal({ project, transcript, tasks, noteEntries })
       recapSubject: typeof parsed.recapSubject === 'string' ? parsed.recapSubject.trim() : `Update: ${project?.name || 'Project'}`,
       recapBody: typeof parsed.recapBody === 'string' ? parsed.recapBody.trimEnd() : '',
       internalNote: typeof parsed.internalNote === 'string' ? parsed.internalNote.trimEnd() : '',
-      meta: { source: 'openai' },
+      meta: { source: result.provider || 'ai' },
     },
   };
 }
@@ -3860,6 +3980,13 @@ app.get('/api/settings', async (req, res) => {
   const safe = sanitizeSettingsForClient(settings);
 
   const { apiKey, model, source, keyHint, settingsUpdatedAt } = await getAiConfig();
+  const openrouter = getOpenRouterSecrets(settings);
+  const aiRoutes = normalizeAiRoutes(settings?.aiRoutes);
+
+  const anyAiEnabled = Boolean(
+    getOpenAiSecrets(settings).apiKey ||
+    openrouter.apiKey,
+  );
 
   // Integration hints for the Settings UI.
   const envGoogleClientId = typeof process.env.GOOGLE_CLIENT_ID === 'string' ? process.env.GOOGLE_CLIENT_ID.trim() : '';
@@ -3915,9 +4042,12 @@ app.get('/api/settings', async (req, res) => {
 
   res.json({
     ...safe,
-    aiEnabled: Boolean(apiKey),
+    aiEnabled: anyAiEnabled,
     openaiModel: model,
     openaiKeyHint: keyHint,
+    openrouterKeyHint: openrouter.keyHint,
+    openrouterConfigured: Boolean(openrouter.apiKey),
+    aiRoutes,
     source,
     settingsUpdatedAt,
     googleConfigured,
@@ -4907,6 +5037,7 @@ app.get('/api/integrations/google/auth-url', async (req, res) => {
     scope: [
       'https://www.googleapis.com/auth/calendar',
       'https://www.googleapis.com/auth/analytics.readonly',
+      'https://www.googleapis.com/auth/drive.file',
     ].join(' '),
     state,
   });
@@ -4970,12 +5101,103 @@ app.get('/api/integrations/google/callback', async (req, res) => {
     // Friendly close page
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.send(`<!doctype html><html><head><meta charset="utf-8"><title>Connected</title></head><body style="font-family: system-ui, sans-serif; padding: 24px;">
-      <h1>Google Calendar connected.</h1>
-      <p>You can close this tab and return to Task Tracker.</p>
+      <h1>Google connected.</h1>
+      <p>You can close this tab and return to Marty.</p>
     </body></html>`);
   } catch (err) {
     res.status(500).send(`OAuth failed: ${err?.message || 'unknown error'}`);
   }
+});
+
+app.post('/api/projects/:id/drive-folder/create', async (req, res) => {
+  const projectId = String(req.params.id || '').trim();
+  if (!projectId) {
+    res.status(400).json({ ok: false, error: 'Missing project id' });
+    return;
+  }
+
+  writeLock = writeLock.then(async () => {
+    try {
+      const store = await readStore();
+      const idx = (store.projects || []).findIndex((p) => p.id === projectId);
+      if (idx === -1) {
+        res.status(404).json({ ok: false, error: 'Project not found' });
+        return;
+      }
+
+      const settings = await readSettings();
+      const { clientId, clientSecret, tokens, saved } = await getGoogleOAuthConfig();
+      if (!clientId || !isLikelyGoogleClientId(clientId)) {
+        res.status(400).json({ ok: false, error: 'Google OAuth client is not configured' });
+        return;
+      }
+      if (!tokens || !tokens.refresh_token) {
+        res.status(400).json({ ok: false, error: 'Google is not connected. Run the connect flow in Settings → Integrations.' });
+        return;
+      }
+
+      const scope = String(tokens.scope || '');
+      const hasDrive = scope.includes('https://www.googleapis.com/auth/drive.file') || scope.includes('drive.file') || scope.includes('https://www.googleapis.com/auth/drive');
+      if (!hasDrive) {
+        res.status(400).json({ ok: false, error: 'Google is connected without Drive scope. Reconnect Google to grant Drive access.' });
+        return;
+      }
+
+      const redirectBase = req ? getBaseUrl(req) : getDefaultBaseUrl();
+      const redirectUri = `${redirectBase}/api/integrations/google/callback`;
+      const fresh = await ensureFreshGoogleTokens({ clientId, clientSecret, tokens, saved });
+      const oauth2 = buildOAuthClient({ clientId, clientSecret: clientSecret || '', redirectUri });
+      oauth2.setCredentials(fresh.tokens);
+
+      const drive = google.drive({ version: 'v3', auth: oauth2 });
+      const project = store.projects[idx];
+      const folderName = (typeof project?.name === 'string' ? project.name.trim() : '') || 'Project';
+      const created = await drive.files.create({
+        requestBody: {
+          name: folderName,
+          mimeType: 'application/vnd.google-apps.folder',
+        },
+        fields: 'id, webViewLink',
+      });
+
+      const id = String(created?.data?.id || '').trim();
+      const url = (typeof created?.data?.webViewLink === 'string' && created.data.webViewLink.trim())
+        ? created.data.webViewLink.trim()
+        : (id ? driveFolderUrlFromId(id) : '');
+
+      if (!id) {
+        res.status(500).json({ ok: false, error: 'Drive folder creation succeeded but returned no id' });
+        return;
+      }
+
+      const ts = nowIso();
+      const updatedProject = {
+        ...project,
+        driveFolderId: id,
+        driveFolderUrl: url,
+        updatedAt: ts,
+      };
+
+      const nextProjects = [...store.projects];
+      nextProjects[idx] = updatedProject;
+
+      const nextStore = {
+        ...store,
+        revision: store.revision + 1,
+        updatedAt: ts,
+        projects: nextProjects,
+      };
+
+      await writeStore(nextStore);
+      // also bump settings updatedAt for visibility
+      await writeSettings({ ...settings, updatedAt: ts });
+      res.json({ ok: true, folderId: id, folderUrl: url, store: nextStore });
+    } catch (err) {
+      res.status(500).json({ ok: false, error: err?.message || 'Failed to create Drive folder' });
+    }
+  });
+
+  await writeLock;
 });
 
 app.post('/api/integrations/google/sync', async (req, res) => {
@@ -5484,7 +5706,7 @@ app.get('/api/integrations/slack/oauth/callback', async (req, res) => {
     res.send(`<!doctype html><html><head><meta charset="utf-8"><title>Connected</title></head><body style="font-family: system-ui, sans-serif; padding: 24px;">
       <h1>Slack connected.</h1>
       <p>Workspace: ${escapeHtml(teamName || teamId || 'unknown')}</p>
-      <p>You can close this tab and return to Task Tracker.</p>
+      <p>You can close this tab and return to Marty.</p>
     </body></html>`);
   } catch (err) {
     res.status(500).send(`Slack OAuth failed: ${err?.message || 'unknown error'}`);
@@ -6026,6 +6248,123 @@ app.get('/api/inbox', async (req, res) => {
   res.json({ revision: store.revision, updatedAt: store.updatedAt, items });
 });
 
+// Global Dashboard (cross-business) Focus
+app.get('/api/me/dashboard', async (req, res) => {
+  try {
+    const settings = await readSettings();
+    const cfg = getBusinessConfigFromSettings(settings);
+    const businesses = Array.isArray(cfg.businesses) ? cfg.businesses : [];
+    const today = new Date().toISOString().split('T')[0];
+
+    const globalBusinesses = [];
+    const focusProjects = [];
+    const globalSlackItems = [];
+    const globalTeam = [];
+    const seenTeamNames = new Set();
+
+    for (const b of businesses) {
+      const bizKey = normalizeBusinessKey(b?.key || '');
+      const bizName = typeof b?.name === 'string' ? b.name.trim() : '';
+      if (!bizKey) continue;
+
+      const store = await withBusinessKey(bizKey, async () => readStore());
+
+      const items = Array.isArray(store?.inboxItems) ? store.inboxItems : [];
+      let newInboxCount = 0;
+      for (const item of items) {
+         const itemStatus = String(item.status || '').trim().toLowerCase();
+         if (itemStatus === 'new') {
+           newInboxCount++;
+           if (String(item.source || '').trim().toLowerCase() === 'slack') {
+             globalSlackItems.push({
+               ...item,
+               businessKey: bizKey,
+               businessName: bizName || bizKey
+             });
+           }
+         }
+      }
+
+      globalBusinesses.push({
+        key: bizKey,
+        name: bizName || bizKey,
+        inboxCount: newInboxCount,
+      });
+
+      const storeTeam = Array.isArray(store?.team) ? store.team : [];
+      for (const t of storeTeam) {
+        const tName = String(t.name || '').trim();
+        if (tName && !seenTeamNames.has(tName.toLowerCase())) {
+          seenTeamNames.add(tName.toLowerCase());
+          globalTeam.push({
+            id: t.id || tName,
+            name: tName,
+            title: t.title || '',
+            avatar: t.avatar || '',
+            businessKey: bizKey
+          });
+        }
+      }
+
+      const storeProjects = Array.isArray(store?.projects) ? store.projects : [];
+      const storeTasks = Array.isArray(store?.tasks) ? store.tasks : [];
+
+      for (const proj of storeProjects) {
+        const pStatus = String(proj.status || '').toLowerCase();
+        if (pStatus === 'done' || pStatus === 'archived') continue;
+
+        // Find associated tasks
+        const projTasks = storeTasks.filter(t => t.project === proj.name || t.projectId === proj.id);
+        
+        let total = projTasks.length;
+        let completed = 0;
+        let urgent = 0;
+
+        for (const t of projTasks) {
+          const tStatus = String(t.status || '').toLowerCase();
+          if (tStatus === 'done' || tStatus === 'archived') {
+            completed++;
+            continue;
+          }
+          if (Number(t.priority) === 1 || tStatus === 'urgent' || (t.dueDate && t.dueDate <= today)) {
+            urgent++;
+          }
+        }
+
+        focusProjects.push({
+          id: proj.id,
+          name: proj.name,
+          dueDate: proj.dueDate || '',
+          businessKey: bizKey,
+          businessName: bizName || bizKey,
+          totalTasks: total,
+          completedTasks: completed,
+          urgentTasks: urgent
+        });
+      }
+    }
+
+    // Sort focus projects: urgent tasks first, then by due date
+    focusProjects.sort((a, b) => {
+       if (a.urgentTasks !== b.urgentTasks) return b.urgentTasks - a.urgentTasks;
+       const ad = a.dueDate || '9999-12-31';
+       const bd = b.dueDate || '9999-12-31';
+       return ad.localeCompare(bd);
+    });
+
+    // Sort slack items by recency
+    globalSlackItems.sort((a, b) => {
+       const ad = a.createdAt || '';
+       const bd = b.createdAt || '';
+       return bd.localeCompare(ad);
+    });
+
+    res.json({ businesses: globalBusinesses, focusProjects: focusProjects, slackItems: globalSlackItems, team: globalTeam });
+  } catch (err) {
+    console.error('Error in /api/me/dashboard:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
 // Inbox Radar (cross-business)
 // Returns inbox items across all businesses for dashboard radar.
 app.get('/api/inbox/radar', async (req, res) => {
@@ -7552,9 +7891,10 @@ app.put('/api/project-notes/:project', async (req, res) => {
 });
 
 app.post('/api/ai/agent', async (req, res) => {
-  const { apiKey, model } = await getAiConfig();
-  if (!apiKey) {
-    res.json({ error: 'AI not configured' });
+  const settings = await readSettings();
+  const route = resolveAiRoute(settings, 'martyChat');
+  if (!route.apiKey) {
+    res.json({ error: 'AI not configured (missing API key). Configure OpenAI/OpenRouter in Settings → AI.' });
     return;
   }
 
@@ -7605,28 +7945,17 @@ app.post('/api/ai/agent', async (req, res) => {
     `;
 
     try {
-      const resp = await fetch('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model,
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: context }
-          ],
-
-        }),
+      const result = await aiChatCompletion({
+        routeKey: 'martyChat',
+        timeoutMs: 30_000,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: context },
+        ],
       });
-      
-      if (!resp.ok) {
-        throw new Error(`AI error: ${resp.status}`);
-      }
-      
-      const json = await resp.json();
-      const content = json.choices?.[0]?.message?.content || '{}';
+
+      if (!result.ok) throw new Error(result.error || 'AI request failed');
+      const content = String(result.message?.content || '{}');
       let action;
       try {
         // loose parse in case of markdown wrapping
@@ -7802,8 +8131,9 @@ app.post('/api/dashboard/ai-previews', async (req, res) => {
       return { ok: true, ai: false, tasks: taskMap, inbox: inboxMap };
     };
 
-    const { apiKey, model } = await getAiConfig();
-    if (!apiKey) {
+    const settings = await readSettings();
+    const route = resolveAiRoute(settings, 'dashboardPreview');
+    if (!route.apiKey) {
       res.json(heuristic());
       return;
     }
@@ -7838,28 +8168,21 @@ app.post('/api/dashboard/ai-previews', async (req, res) => {
     };
 
     try {
-      const { resp, data } = await fetchJsonWithTimeout('https://api.openai.com/v1/chat/completions', {
+      const result = await aiChatCompletion({
+        routeKey: 'dashboardPreview',
         timeoutMs: 20_000,
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model,
-          messages: [
-            { role: 'system', content: system },
-            { role: 'user', content: JSON.stringify(user).slice(0, 24000) },
-          ],
-        }),
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: JSON.stringify(user).slice(0, 24000) },
+        ],
       });
 
-      if (!resp.ok) {
+      if (!result.ok) {
         res.json(heuristic());
         return;
       }
 
-      const content = String(data?.choices?.[0]?.message?.content || '').trim();
+      const content = String(result.message?.content || '').trim();
       const clean = content.replace(/```json/g, '').replace(/```/g, '').trim();
       const parsed = tryParseJson(clean);
       if (!parsed || typeof parsed !== 'object') {
@@ -8013,10 +8336,11 @@ app.delete('/api/tasks/:id', async (req, res) => {
 });
 
 /* Global AI Assistant */
-async function aiAgentAction(message, store, projectId = null) {
-  const { apiKey, model } = await getAiConfig();
-
+async function aiAgentAction(message, store, projectId = null, options = {}) {
     const settings = await readSettings();
+    const threadId = typeof options?.threadId === 'string' ? options.threadId.trim() : '';
+    const effectiveThreadId = threadId || 'default';
+    const threadHistory = Array.isArray(options?.threadHistory) ? options.threadHistory : [];
     const mcpEff = getMcpEffectiveSettings(settings);
     const mcpAvailable = Boolean(mcpEff.configured);
 
@@ -8133,14 +8457,46 @@ async function aiAgentAction(message, store, projectId = null) {
 
     const userSystemPrompt = typeof settings.agentSystemPrompt === 'string' ? settings.agentSystemPrompt.trimEnd() : '';
     const userMemory = typeof settings.agentMemory === 'string' ? settings.agentMemory.trimEnd() : '';
+    const operatorBio = typeof settings.operatorBio === 'string' ? settings.operatorBio.trimEnd() : '';
+    const operatorHelpPrompt = typeof settings.operatorHelpPrompt === 'string' ? settings.operatorHelpPrompt.trimEnd() : '';
+    const operatorTone = typeof settings.operatorTone === 'string' ? settings.operatorTone.trim() : '';
+    const operatorVoice = typeof settings.operatorVoice === 'string' ? settings.operatorVoice.trim() : '';
 
     let context = '';
     const baseSystemPrompt =
-      "You are an intelligent project assistant for OS.1 (Operator System 1). Stay concise and action-oriented. You DO have access to the user's OS.1 project data provided in context. Never claim you can't access tasks/notes; if something isn't present in context, ask for it.";
+      "You are Marty — (M)anagement (A)ssistant for (R)outing (T)asks and (Y)ield. Stay concise and action-oriented. You DO have access to the user's project data provided in context. Never claim you can't access tasks/notes; if something isn't present in context, ask for it.";
     let systemPrompt = userSystemPrompt ? `${userSystemPrompt}\n\n---\n${baseSystemPrompt}` : baseSystemPrompt;
+
+    if (effectiveThreadId === 'operator_bio') {
+      systemPrompt =
+        "You are Marty — (M)anagement (A)ssistant for (R)outing (T)asks and (Y)ield. This is the OPERATOR BIO thread. Your job is to help the operator define and refine their bio, roles, responsibilities, preferences, needs, constraints, and operating principles.\n\nYou MUST keep the Operator Bio up to date by calling the tool set_operator_bio whenever the operator provides new or corrected information.\n\nGuidelines:\n- Ask 1-3 clarifying questions when needed.\n- Produce a short summary + recommended next action.\n- Keep the bio factual and actionable; avoid fluff.\n- Do not modify projects/tasks in this thread.";
+    }
 
     if (userMemory) {
       context += `GLOBAL MEMORY (user-provided; treat as true unless contradicted):\n${String(userMemory).slice(0, 12000)}\n\n`;
+    }
+
+    if (operatorBio) {
+      context += `OPERATOR BIO (user-provided; treat as true unless contradicted):\n${String(operatorBio).slice(0, 12000)}\n\n`;
+    }
+
+    if (operatorHelpPrompt) {
+      context += `HOW TO HELP THE OPERATOR (user-provided preferences for coaching + response format):\n${String(operatorHelpPrompt).slice(0, 12000)}\n\n`;
+    }
+
+    if (operatorTone || operatorVoice) {
+      context += `TONE/VOICE PREFERENCES:\n`;
+      if (operatorTone) context += `- Tone: ${operatorTone}\n`;
+      if (operatorVoice) context += `- Voice: ${operatorVoice}\n`;
+      if (operatorVoice === 'take_control') {
+        context +=
+          `\nBehavior rules for take_control voice:\n` +
+          `- Take control of the operator's day: propose a plan, schedule, and next actions.\n` +
+          `- Push back on weak excuses; argue if the operator ignores priorities.\n` +
+          `- Accept logical reasoning for deviations (update the plan accordingly).\n` +
+          `- Keep it bluntly funny/sarcastic when appropriate, but still useful.\n`;
+      }
+      context += `\n`;
     }
 
     if (effectiveProjectId && effectiveProject) {
@@ -8191,8 +8547,10 @@ async function aiAgentAction(message, store, projectId = null) {
       context += `ALL PROJECTS (JSON): ${JSON.stringify(projectsOverview).slice(0, 24000)}\n\n`;
     }
 
-    // If OpenAI isn't configured, still answer from local data.
-    if (!apiKey) {
+    const routeKey = effectiveThreadId === 'operator_bio' ? 'operatorBio' : 'martyChat';
+    const route = resolveAiRoute(settings, routeKey);
+    // If AI isn't configured for this area, still answer from local data.
+    if (!route.apiKey) {
       if (effectiveProjectId && effectiveProject) {
         const tasks = (store.tasks || []).filter((t) => t.project === effectiveProject.name || t.project === effectiveProjectId);
         const open = tasks.filter((t) => String(t.status || '').toLowerCase() !== 'done');
@@ -8217,118 +8575,137 @@ async function aiAgentAction(message, store, projectId = null) {
           lines.push(`${i + 1}. [${pri}] ${t.title} � ${st}${due}`);
         });
         lines.push('');
-        lines.push('AI is not enabled (OPENAI_API_KEY not set), but I can still show you everything in the tracker.');
-        lines.push('If you want deeper reasoning/rewrites, set the key in Settings ? OpenAI.');
+        lines.push('AI is not enabled for this area (missing API key), but I can still show you everything in the tracker.');
+        lines.push('If you want deeper reasoning/rewrites, set a key in Settings → AI (OpenAI/OpenRouter).');
         return { content: lines.join('\n') };
       }
 
       return {
         content:
-          "AI is not enabled (OPENAI_API_KEY not set). Tell me a project name and I can summarize its tasks/notes/scratchpad from the tracker, or enable OpenAI in Settings ? OpenAI for full conversational reasoning.",
+          "AI is not enabled (missing API key). Tell me a project name and I can summarize its tasks/notes/scratchpad from the tracker, or enable AI in Settings → AI for full conversational reasoning.",
       };
     }
 
-    const tools = [
-      {
-        type: "function",
+    const tools = [];
+
+    if (effectiveThreadId === 'operator_bio') {
+      tools.push({
+        type: 'function',
         function: {
-          name: "create_project",
-          description: "Create a new project with full details (due date, links, value, etc).",
+          name: 'set_operator_bio',
+          description: 'Persist the operator bio (global) to settings. Provide the full updated bio text.',
           parameters: {
-            type: "object",
+            type: 'object',
             properties: {
-              name: { type: "string", description: "Name of the project" },
-              type: { type: "string", enum: ["Build", "Rebuild", "Revision", "Workflow", "Cleanup", "Other"] },
-              owner: { type: "string", description: "Optional assignee / owner name (team member)" },
-              dueDate: { type: "string", description: "YYYY-MM-DD" },
-              status: { type: "string", enum: ["Active", "On Hold", "Done", "Archived"] },
-              accountManagerName: { type: "string" },
-              accountManagerEmail: { type: "string" },
-              workspacePath: { type: "string", description: "Local folder path for VS Code" },
-              airtableUrl: { type: "string", description: "http(s) URL" },
-              projectValue: { type: "string", description: "Optional, e.g. $5000" },
-              stripeInvoiceUrl: { type: "string", description: "http(s) URL" },
-              repoUrl: { type: "string", description: "http(s) URL" },
-              docsUrl: { type: "string", description: "http(s) URL" },
-              scratchpad: { type: "string", description: "Initial scratchpad / notes" },
-              tasks: {
-                type: "array",
-                items: {
+              operatorBio: { type: 'string', description: 'Full operator bio text' },
+            },
+            required: ['operatorBio'],
+          },
+        },
+      });
+    } else {
+      tools.push(
+        {
+          type: "function",
+          function: {
+            name: "create_project",
+            description: "Create a new project with full details (due date, links, value, etc).",
+            parameters: {
+              type: "object",
+              properties: {
+                name: { type: "string", description: "Name of the project" },
+                type: { type: "string", enum: ["Build", "Rebuild", "Revision", "Workflow", "Cleanup", "Other"] },
+                owner: { type: "string", description: "Optional assignee / owner name (team member)" },
+                dueDate: { type: "string", description: "YYYY-MM-DD" },
+                status: { type: "string", enum: ["Active", "On Hold", "Done", "Archived"] },
+                accountManagerName: { type: "string" },
+                accountManagerEmail: { type: "string" },
+                workspacePath: { type: "string", description: "Local folder path for VS Code" },
+                airtableUrl: { type: "string", description: "http(s) URL" },
+                projectValue: { type: "string", description: "Optional, e.g. $5000" },
+                stripeInvoiceUrl: { type: "string", description: "http(s) URL" },
+                repoUrl: { type: "string", description: "http(s) URL" },
+                docsUrl: { type: "string", description: "http(s) URL" },
+                scratchpad: { type: "string", description: "Initial scratchpad / notes" },
+                tasks: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    properties: {
+                      title: { type: "string" },
+                      priority: { type: "integer", minimum: 1, maximum: 3 },
+                      dueDate: { type: "string", description: "YYYY-MM-DD" }
+                    },
+                    required: ["title"]
+                  }
+                }
+              },
+              required: ["name", "type"]
+            }
+          }
+        },
+        {
+          type: "function",
+          function: {
+            name: "update_project",
+            description: "Update an existing project by id or name. Use when the user provides new details for an existing project.",
+            parameters: {
+              type: "object",
+              properties: {
+                projectId: { type: "string", description: "Preferred when known" },
+                projectName: { type: "string", description: "Case-insensitive match if id not provided" },
+                patch: {
                   type: "object",
                   properties: {
-                    title: { type: "string" },
-                    priority: { type: "integer", minimum: 1, maximum: 3 },
-                    dueDate: { type: "string", description: "YYYY-MM-DD" }
-                  },
-                  required: ["title"]
+                    name: { type: "string" },
+                    type: { type: "string", enum: ["Build", "Rebuild", "Revision", "Workflow", "Cleanup", "Other"] },
+                    owner: { type: "string", description: "Optional assignee / owner name (team member)" },
+                    dueDate: { type: "string", description: "YYYY-MM-DD" },
+                    status: { type: "string", enum: ["Active", "On Hold", "Done", "Archived"] },
+                    accountManagerName: { type: "string" },
+                    accountManagerEmail: { type: "string" },
+                    workspacePath: { type: "string" },
+                    airtableUrl: { type: "string" },
+                    projectValue: { type: "string" },
+                    stripeInvoiceUrl: { type: "string" },
+                    repoUrl: { type: "string" },
+                    docsUrl: { type: "string" },
+                    scratchpad: { type: "string" }
+                  }
                 }
-              }
-            },
-            required: ["name", "type"]
+              },
+              required: ["patch"]
+            }
+          }
+        },
+        {
+          type: "function",
+          function: {
+            name: "create_tasks",
+            description: "Create multiple tasks.",
+            parameters: {
+              type: "object",
+              properties: {
+                projectName: { type: "string", description: "Name of the project. Optional if inside a project context." },
+                tasks: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    properties: {
+                      title: { type: "string" },
+                      priority: { type: "integer", minimum: 1, maximum: 3 },
+                      dueDate: { type: "string", description: "YYYY-MM-DD" }
+                    },
+                    required: ["title"]
+                  }
+                }
+              },
+              required: ["tasks"]
+            }
           }
         }
-      },
-      {
-        type: "function",
-        function: {
-          name: "update_project",
-          description: "Update an existing project by id or name. Use when the user provides new details for an existing project.",
-          parameters: {
-            type: "object",
-            properties: {
-              projectId: { type: "string", description: "Preferred when known" },
-              projectName: { type: "string", description: "Case-insensitive match if id not provided" },
-              patch: {
-                type: "object",
-                properties: {
-                  name: { type: "string" },
-                  type: { type: "string", enum: ["Build", "Rebuild", "Revision", "Workflow", "Cleanup", "Other"] },
-                  owner: { type: "string", description: "Optional assignee / owner name (team member)" },
-                  dueDate: { type: "string", description: "YYYY-MM-DD" },
-                  status: { type: "string", enum: ["Active", "On Hold", "Done", "Archived"] },
-                  accountManagerName: { type: "string" },
-                  accountManagerEmail: { type: "string" },
-                  workspacePath: { type: "string" },
-                  airtableUrl: { type: "string" },
-                  projectValue: { type: "string" },
-                  stripeInvoiceUrl: { type: "string" },
-                  repoUrl: { type: "string" },
-                  docsUrl: { type: "string" },
-                  scratchpad: { type: "string" }
-                }
-              }
-            },
-            required: ["patch"]
-          }
-        }
-      },
-      {
-        type: "function",
-        function: {
-          name: "create_tasks",
-          description: "Create multiple tasks.",
-          parameters: {
-            type: "object",
-            properties: {
-              projectName: { type: "string", description: "Name of the project. Optional if inside a project context." },
-              tasks: {
-                type: "array",
-                items: {
-                  type: "object",
-                  properties: {
-                    title: { type: "string" },
-                    priority: { type: "integer", minimum: 1, maximum: 3 },
-                    dueDate: { type: "string", description: "YYYY-MM-DD" }
-                  },
-                  required: ["title"]
-                }
-              }
-            },
-            required: ["tasks"]
-          }
-        }
-      }
-    ];
+      );
+    }
 
     if (mcpAvailable) {
       tools.push({
@@ -8373,7 +8750,7 @@ async function aiAgentAction(message, store, projectId = null) {
       });
     }
 
-      if (apiKey) {
+      if (getOpenAiSecrets(settings).apiKey) {
         tools.push({
           type: 'function',
           function: {
@@ -8409,12 +8786,21 @@ async function aiAgentAction(message, store, projectId = null) {
           role: 'system',
           content:
             systemPrompt +
-            "\n\nIMPORTANT: When the user asks to create or update a project (due date, links, invoice, repo, docs, value, status, account manager), you MUST use tool calls (create_project / update_project / create_tasks). If you need external data, use MCP tools when available.",
+            (effectiveThreadId === 'operator_bio'
+              ? "\n\nIMPORTANT: Use set_operator_bio to persist changes to the bio."
+              : "\n\nIMPORTANT: When the user asks to create or update a project (due date, links, invoice, repo, docs, value, status, account manager), you MUST use tool calls (create_project / update_project / create_tasks). If you need external data, use MCP tools when available."),
         },
       ];
 
       // Include a small amount of history for continuity (before the current message).
-      if (effectiveProjectId && store.projectChats && store.projectChats[effectiveProjectId]) {
+      if (effectiveThreadId === 'operator_bio' && threadHistory.length) {
+        for (const m of threadHistory.slice(-16)) {
+          const role = m.role === 'user' ? 'user' : m.role === 'ai' ? 'assistant' : m.role === 'assistant' ? 'assistant' : '';
+          if (!role) continue;
+          const content = String(m.content || '').slice(0, 2000);
+          if (content) messages.push({ role, content });
+        }
+      } else if (effectiveProjectId && store.projectChats && store.projectChats[effectiveProjectId]) {
         const h = store.projectChats[effectiveProjectId];
         const history = Array.isArray(h) ? h : Array.isArray(h.messages) ? h.messages : [];
         for (const m of history.slice(-8)) {
@@ -8427,35 +8813,27 @@ async function aiAgentAction(message, store, projectId = null) {
 
     messages.push({ role: 'user', content: `${context}User Request: ${message}` });
 
-    const callOpenAi = async () => {
-      // Some newer models reject non-default sampling params; omit temperature entirely.
-      const body = {
-        model,
+    const callChat = async () => {
+      const result = await aiChatCompletion({
+        routeKey,
         messages,
         tools,
         tool_choice: 'auto',
-      };
-
-      const { resp, data } = await fetchJsonWithTimeout('https://api.openai.com/v1/chat/completions', {
         timeoutMs: 30_000,
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(body),
       });
-
-      if (!resp.ok) {
-        const detail = typeof data?.error?.message === 'string' ? data.error.message : JSON.stringify(data);
-        throw new Error(`AI request failed (${resp.status}). model=${model}. ${detail}`.slice(0, 600));
-      }
-      const msg = data?.choices?.[0]?.message;
-      if (!msg) throw new Error('AI returned no message');
-      return msg;
+      if (!result.ok) throw new Error(result.error || 'AI request failed');
+      return result.message;
     };
 
     const execTool = async (toolName, args) => {
+      if (toolName === 'set_operator_bio') {
+        const nextBio = typeof args?.operatorBio === 'string' ? args.operatorBio.trimEnd() : '';
+        const saved = await readSettings();
+        const ts = nowIso();
+        const next = { ...saved, operatorBio: nextBio, updatedAt: ts };
+        await writeSettings(next);
+        return { ok: true, updatedAt: ts, operatorBioLength: nextBio.length };
+      }
       if (toolName === 'create_project') return doCreateProject(args);
       if (toolName === 'update_project') return doUpdateProject(args);
       if (toolName === 'create_tasks') return doCreateTasks(args);
@@ -8484,12 +8862,13 @@ async function aiAgentAction(message, store, projectId = null) {
         return await googleListUpcomingEvents({ days, max });
       }
       if (toolName === 'generate_image') {
-        if (!apiKey) return { ok: false, error: 'No API key' };
+        const openai = getOpenAiSecrets(settings);
+        if (!openai.apiKey) return { ok: false, error: 'OpenAI key required for image generation' };
         try {
           const body = { model: 'dall-e-3', prompt: args.prompt, n: 1, size: '1024x1024' };
           const { resp, data } = await fetchJsonWithTimeout('https://api.openai.com/v1/images/generations', {
             method: 'POST',
-            headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+            headers: { Authorization: `Bearer ${openai.apiKey}`, 'Content-Type': 'application/json' },
             body: JSON.stringify(body),
             timeoutMs: 45000
           });
@@ -8534,7 +8913,7 @@ async function aiAgentAction(message, store, projectId = null) {
 
       try {
         for (let step = 0; step < 4; step++) {
-          const msg = await callOpenAi();
+          const msg = await callChat();
 
           // Preserve the assistant message in the transcript for tool-call chaining.
           const assistantMsg = { role: 'assistant', content: msg.content || '' };
@@ -8580,12 +8959,34 @@ async function aiAgentAction(message, store, projectId = null) {
 app.post('/api/chat', async (req, res) => {
   const message = typeof req.body?.message === 'string' ? req.body.message : '';
   const projectId = typeof req.body?.projectId === 'string' ? req.body.projectId : null;
+  const threadIdRaw = typeof req.body?.threadId === 'string' ? req.body.threadId : '';
+  const threadId = String(threadIdRaw || '').trim() || 'default';
 
   if (!message.trim()) return res.status(400).json({ error: 'Message required' });
 
   writeLock = writeLock.then(async () => {
     try {
       const store = await readStore();
+
+      if (threadId === 'operator_bio') {
+        const settings = await readSettings();
+        const existing = settings.operatorBioChat && typeof settings.operatorBioChat === 'object' ? settings.operatorBioChat : {};
+        const history = Array.isArray(existing.messages) ? existing.messages : [];
+
+        const response = await aiAgentAction(message, store, null, { threadId, threadHistory: history });
+        const reply = String(response.content || '').trim();
+
+        const ts = nowIso();
+        const nextHistory = [...history, { role: 'user', content: message, timestamp: ts }, { role: 'ai', content: reply, timestamp: ts }].slice(-120);
+        await writeSettings({
+          ...settings,
+          operatorBioChat: { messages: nextHistory, updatedAt: ts },
+          updatedAt: ts,
+        });
+
+        res.json({ reply });
+        return;
+      }
 
       const resolved = resolveProjectForMessage(store, message, projectId);
       if (resolved && typeof resolved === 'object' && resolved.ambiguous) {
@@ -8598,7 +8999,7 @@ app.post('/api/chat', async (req, res) => {
       const effectiveProjectId = resolved && typeof resolved === 'object' ? resolved.id : projectId;
 
       const deterministic = tryHandleDeterministicTaskRequest(store, message, effectiveProjectId);
-      const response = deterministic?.handled ? { content: deterministic.reply } : await aiAgentAction(message, store, effectiveProjectId);
+      const response = deterministic?.handled ? { content: deterministic.reply } : await aiAgentAction(message, store, effectiveProjectId, { threadId: 'default' });
       const reply = String(response.content || '').trim();
 
       if (effectiveProjectId) {
@@ -8629,6 +9030,20 @@ app.post('/api/chat', async (req, res) => {
   await writeLock;
 });
 
+app.get('/api/chat/thread/:id', async (req, res) => {
+  const id = String(req.params.id || '').trim();
+  if (id !== 'operator_bio') {
+    res.status(404).json({ ok: false, error: 'Unknown thread' });
+    return;
+  }
+
+  const settings = await readSettings();
+  const existing = settings.operatorBioChat && typeof settings.operatorBioChat === 'object' ? settings.operatorBioChat : {};
+  const history = Array.isArray(existing.messages) ? existing.messages : [];
+  const operatorBio = typeof settings.operatorBio === 'string' ? settings.operatorBio : '';
+  res.json({ ok: true, threadId: id, operatorBio, history });
+});
+
 app.listen(PORT, async () => {
   await refreshBusinessCacheFromSettings();
   const businesses = Array.isArray(cachedBusinesses) ? cachedBusinesses : [{ key: DEFAULT_BUSINESS_KEY }];
@@ -8656,7 +9071,7 @@ app.listen(PORT, async () => {
   startGa4Scheduler();
   startAirtableRequestsAutoSyncScheduler();
   // eslint-disable-next-line no-console
-  console.log(`Task Tracker running on http://localhost:${PORT}`);
+  console.log(`Marty running on http://localhost:${PORT}`);
 });
 
 

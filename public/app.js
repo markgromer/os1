@@ -1,19 +1,20 @@
 /* =========================================
-   NEURAL OPS - CORE LOGIC V2.4 "REBIRTH"
-   Restores: Team, Due Dates, Auto-Delegate, Rich Chat
-   Compatible with Neural Ops V2 Shell
-   ========================================= */
+    MARTY — (M)anagement (A)ssistant for (R)outing (T)asks and (Y)ield
+    ========================================= */
 
 /* --- State Management --- */
 const state = {
     revision: 1,
     updatedAt: "",
 
-    currentView: "dashboard",
+    currentView: "godview",
     currentProjectId: null,
     currentClientName: null,
     settingsPane: "",
     projectsSettingsLimit: 200,
+
+    godViewData: null,
+    godViewLoading: false,
 
     projects: [],
     clients: [],
@@ -32,7 +33,10 @@ const state = {
 
     chatHistory: [],
     globalChatHistory: [],
+    operatorBioChatHistory: [],
     isChatOpen: true,
+
+    chatThreadId: 'default',
 
     settings: {
         openaiModel: "gpt-4o-mini",
@@ -72,7 +76,7 @@ const state = {
         { id: "u1", name: "Mark", role: "admin", avatar: "M" },
         { id: "u2", name: "Sarah", role: "designer", avatar: "S" },
         { id: "u3", name: "David", role: "developer", avatar: "D" },
-        { id: "ai", name: "Neural Core", role: "ai", avatar: "AI" },
+        { id: "ai", name: "Marty", role: "ai", avatar: "AI" },
     ],
 };
 
@@ -102,7 +106,10 @@ function stopPolling() {
 function startPolling() {
     stopPolling();
     const seconds = Math.max(10, Number(state.uiPrefs.autoRefreshSeconds) || 30);
-    pollIntervalId = setInterval(() => fetchState({ background: true }), seconds * 1000);
+    pollIntervalId = setInterval(() => {
+        fetchState({ background: true });
+        if (state.currentView === 'godview') refreshGodView();
+    }, seconds * 1000);
 }
 
 async function refreshAuthStatus() {
@@ -134,10 +141,12 @@ const BUSINESS_KEY_STORAGE_KEY = 'opsBusinessKey';
 const MARTY_OPEN_STORAGE_KEY = 'opsMartyOpen';
 const MARTY_DETACHED_STORAGE_KEY = 'opsMartyDetached';
 const MARTY_PANEL_STORAGE_KEY = 'opsMartyPanel';
+const MARTY_THREAD_STORAGE_KEY = 'opsMartyThread';
 const MARTY_SYNC_CHANNEL = 'opsMartySync';
 const MARTY_SYNC_STORAGE_KEY = 'opsMartySyncEvent';
 const MARTY_VOICE_IN_STORAGE_KEY = 'opsMartyVoiceIn';
 const MARTY_VOICE_OUT_STORAGE_KEY = 'opsMartyVoiceOut';
+const MARTY_FOCUS_NUDGE_LAST_TS_KEY = 'opsMartyFocusNudgeLastTs';
 
 const MARTY_PANEL_MIN_WIDTH = 320;
 const MARTY_PANEL_MIN_HEIGHT = 420;
@@ -230,6 +239,43 @@ function getStoredMartyOpen() {
         return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'open';
     } catch {
         return true;
+    }
+}
+
+function setStoredMartyThread(threadId) {
+    try {
+        const t = safeText(threadId).trim() || 'default';
+        localStorage.setItem(MARTY_THREAD_STORAGE_KEY, t);
+    } catch {
+        // ignore
+    }
+}
+
+function getStoredMartyThread() {
+    try {
+        const raw = String(localStorage.getItem(MARTY_THREAD_STORAGE_KEY) || '').trim();
+        return raw || 'default';
+    } catch {
+        return 'default';
+    }
+}
+
+function getStoredMartyFocusNudgeLastTs() {
+    try {
+        const raw = String(localStorage.getItem(MARTY_FOCUS_NUDGE_LAST_TS_KEY) || '').trim();
+        const n = Number(raw);
+        return Number.isFinite(n) ? n : 0;
+    } catch {
+        return 0;
+    }
+}
+
+function setStoredMartyFocusNudgeLastTs(ts) {
+    try {
+        const n = Number(ts) || 0;
+        localStorage.setItem(MARTY_FOCUS_NUDGE_LAST_TS_KEY, String(n));
+    } catch {
+        // ignore
     }
 }
 
@@ -399,6 +445,7 @@ function applyMartyRemoteChat(payload) {
     const entry = p.entry && typeof p.entry === 'object' ? p.entry : null;
     if (!entry) return;
     const targetProjectId = safeText(p.projectId || '');
+    const targetThreadId = safeText(p.threadId || 'default') || 'default';
     const localProjectId = safeText(state.currentProjectId || '');
 
     if (targetProjectId !== localProjectId) return;
@@ -406,15 +453,24 @@ function applyMartyRemoteChat(payload) {
     const normalizedEntry = { role: normalizeRole(entry.role), content: safeText(entry.content) };
     if (!normalizedEntry.content) return;
 
-    const target = targetProjectId ? (Array.isArray(state.chatHistory) ? state.chatHistory : []) : (Array.isArray(state.globalChatHistory) ? state.globalChatHistory : []);
+    const target = targetProjectId
+        ? (Array.isArray(state.chatHistory) ? state.chatHistory : [])
+        : (targetThreadId === 'operator_bio'
+            ? (Array.isArray(state.operatorBioChatHistory) ? state.operatorBioChatHistory : [])
+            : (Array.isArray(state.globalChatHistory) ? state.globalChatHistory : []));
     const last = target[target.length - 1];
     if (last && sameChatEntry(last, normalizedEntry)) return;
 
     if (targetProjectId) {
         state.chatHistory = [...target, normalizedEntry];
     } else {
-        state.globalChatHistory = [...target, normalizedEntry];
-        state.chatHistory = state.globalChatHistory;
+        if (targetThreadId === 'operator_bio') {
+            state.operatorBioChatHistory = [...target, normalizedEntry];
+            if ((state.chatThreadId || 'default') === 'operator_bio') state.chatHistory = state.operatorBioChatHistory;
+        } else {
+            state.globalChatHistory = [...target, normalizedEntry];
+            if (!state.currentProjectId && (state.chatThreadId || 'default') !== 'operator_bio') state.chatHistory = state.globalChatHistory;
+        }
     }
     renderChat();
 }
@@ -1455,7 +1511,7 @@ function snapshotViewUiState() {
         }
     }
 
-    if (state.currentView === 'dashboard') {
+    if (state.currentView === 'dashboard' || state.currentView === 'godview') {
         const scrollEl = viewPort.querySelector('.dash-stagger');
         if (scrollEl) {
             snap.scrollSelector = '.dash-stagger';
@@ -1521,7 +1577,7 @@ function ensureAiTeamMember() {
     const list = Array.isArray(state.team) ? state.team : [];
     const hasAi = list.some((m) => safeText(m?.id) === 'ai');
     if (hasAi) return;
-    state.team = [...list, { id: 'ai', name: 'Neural Core', role: 'ai', avatar: 'AI' }];
+    state.team = [...list, { id: 'ai', name: 'Marty', role: 'ai', avatar: 'AI' }];
 }
 
 function normalizeCsvList(text) {
@@ -1900,7 +1956,8 @@ function applyInitialDeepLinkFromUrl() {
 
 async function init() {
     try {
-        console.log("Initializing Neural Ops v2.4...");
+        console.log("Initializing Marty...");
+        state.lastInteractionAt = Date.now();
         applyTheme(getStoredTheme() || 'dark');
         applyLayout(getStoredLayout() || 'standard');
         showLoading();
@@ -1939,6 +1996,8 @@ async function init() {
         if (!(state.auth.required && !state.auth.authenticated)) {
             startPolling();
         }
+
+        startProactiveFocusNudges();
         
         console.log("System Online");
     } catch (e) {
@@ -2307,6 +2366,7 @@ function setupEventListeners() {
     const input = document.getElementById("cmd-input");
     const send = document.getElementById("cmd-send");
     const modelSelect = document.getElementById('marty-model-select');
+    const threadSelect = document.getElementById('marty-thread-select');
 
     // Submit behavior (robust across browsers):
     // - Enter submits, Shift+Enter inserts newline
@@ -2376,6 +2436,32 @@ function setupEventListeners() {
             } catch (e) {
                 alert(e?.message || 'Failed to save model');
             }
+        });
+    }
+
+    if (threadSelect) {
+        // Initialize from storage.
+        const stored = getStoredMartyThread();
+        threadSelect.value = stored;
+        state.chatThreadId = stored;
+
+        threadSelect.addEventListener('change', async () => {
+            const next = safeText(threadSelect.value).trim() || 'default';
+            // Threads only apply to global chat.
+            if (state.currentProjectId) {
+                threadSelect.value = 'default';
+                state.chatThreadId = 'default';
+                setStoredMartyThread('default');
+                alert('Bio thread is only available when no project is selected.');
+                await loadChatHistory();
+                renderChat();
+                return;
+            }
+
+            state.chatThreadId = next;
+            setStoredMartyThread(next);
+            await loadChatHistory();
+            renderChat();
         });
     }
 
@@ -2507,7 +2593,7 @@ function showLoading() {
     const container = document.getElementById("view-port") || document.getElementById("main-port");
     if(container) container.innerHTML = `<div class="flex h-full items-center justify-center text-blue-500">
         <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500 mr-3"></div>
-        <span class="font-mono text-xs tracking-widest">CONNECTING TO NEURAL CORE...</span>
+        <span class="font-mono text-xs tracking-widest">CONNECTING TO MARTY...</span>
     </div>`;
 }
 
@@ -2520,6 +2606,28 @@ function showError(msg) {
 }
 
 /* --- API --- */
+
+async function refreshGodView() {
+    if (state.godViewLoading) return;
+    state.godViewLoading = true;
+    try {
+        const res = await apiFetch('/api/me/dashboard');
+        if (res.ok) {
+            state.godViewData = await res.json();
+            
+            const connected = !!state.settings?.googleConnected;
+            if (connected) {
+                await refreshDashboardCalls({ force: false }).catch(() => {});
+            }
+            
+            if (state.currentView === 'godview') renderMain();
+        }
+    } catch(e) {
+        console.error("Failed to refresh god view", e);
+    } finally {
+        state.godViewLoading = false;
+    }
+}
 
 async function fetchState({ background = false } = {}) {
     try {
@@ -2641,9 +2749,15 @@ function updateSystemStatus(online) {
 function renderNav() {
     const nav = document.getElementById("primary-nav");
     if (!nav) return;
-    
+
     // Preserve Create Button if it exists? No, rebuild.
     nav.innerHTML = "";
+
+    nav.appendChild(createNavIcon("fa-satellite-dish", "God View", () => openGodView(), state.currentView === "godview"));
+
+    const bizSepTop = document.createElement('div');
+    bizSepTop.className = 'h-px w-8 bg-zinc-800 mx-auto my-2';
+    nav.appendChild(bizSepTop);
 
     // Businesses (workspaces)
     const businesses = Array.isArray(state.businesses) && state.businesses.length ? state.businesses : [{ key: 'personal', name: 'Personal' }];
@@ -2672,6 +2786,15 @@ function renderNav() {
     nav.appendChild(sep);
 
     nav.appendChild(createNavIcon("fa-gear", "Settings", () => openSettings(), state.currentView === "settings"));
+}
+
+async function openGodView() {
+    state.currentView = 'godview';
+    state.currentProjectId = null;
+    state.currentClientName = null;
+    renderNav();
+    renderMain();
+    renderChat();
 }
 
 async function openDashboard() {
@@ -2866,13 +2989,17 @@ function renderMain() {
     }
 
     // Reduce full-page scrolling: scroll inside panes for data-heavy views.
-    if (state.currentView === 'project' || state.currentView === 'projects' || state.currentView === 'revisions' || state.currentView === 'dashboard' || state.currentView === 'inbox' || state.currentView === 'calendar' || state.currentView === 'team') {
+    if (state.currentView === 'project' || state.currentView === 'projects' || state.currentView === 'revisions' || state.currentView === 'dashboard' || state.currentView === 'godview' || state.currentView === 'inbox' || state.currentView === 'calendar' || state.currentView === 'team') {
         setMainPortScrolling(false);
     } else {
         setMainPortScrolling(true);
     }
-    
-    if (state.currentView === "dashboard") {
+
+    if (state.currentView === "godview") {
+        dockMartyToPersistentSlot();
+        container.className = 'min-h-0 overflow-y-auto';
+        renderGodView(container);
+    } else if (state.currentView === "dashboard") {
         // Restore the classic layout: Dashboard in the main pane, MARTY on the right.
         dockMartyToPersistentSlot();
         container.className = 'min-h-0 overflow-y-auto';
@@ -4249,7 +4376,7 @@ function renderSettings(container) {
     }
 
     // AI
-    const ai = section('AI', 'Configure OpenAI key/model used for “Neural Link”.');
+    const ai = section('AI', 'Configure the API key/model used by Marty.');
     const aiBody = ai.querySelector('[data-slot="body"]');
     aiBody.innerHTML = `
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -4274,17 +4401,47 @@ function renderSettings(container) {
     // Agent personalization
     const agent = section('Agent', 'Personalize how your agent behaves and what it should remember across chats.');
     const agentBody = agent.querySelector('[data-slot="body"]');
+    const operatorTone = typeof state.settings.operatorTone === 'string' ? state.settings.operatorTone : '';
+    const operatorVoice = typeof state.settings.operatorVoice === 'string' ? state.settings.operatorVoice : '';
     agentBody.innerHTML = `
         <div class="grid grid-cols-1 gap-4">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                    <label class="text-xs text-ops-light">Tone</label>
+                    <select id="set-operator-tone" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-xs">
+                        <option value="blunt_sarcastic" ${operatorTone === 'blunt_sarcastic' || !operatorTone ? 'selected' : ''}>Bluntly funny / sarcastic</option>
+                        <option value="direct_calm" ${operatorTone === 'direct_calm' ? 'selected' : ''}>Direct / calm</option>
+                        <option value="warm_supportive" ${operatorTone === 'warm_supportive' ? 'selected' : ''}>Warm / supportive</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="text-xs text-ops-light">Voice</label>
+                    <select id="set-operator-voice" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-xs">
+                        <option value="take_control" ${operatorVoice === 'take_control' || !operatorVoice ? 'selected' : ''}>Take control of my day (push back)</option>
+                        <option value="coach" ${operatorVoice === 'coach' ? 'selected' : ''}>Coach (asks, nudges)</option>
+                        <option value="assistant" ${operatorVoice === 'assistant' ? 'selected' : ''}>Assistant (execute instructions)</option>
+                    </select>
+                </div>
+            </div>
             <div>
                 <label class="text-xs text-ops-light">System prompt (your rules/style)</label>
                 <textarea id="set-agent-system-prompt" rows="5" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-xs font-mono" placeholder="Example: You are Mark's ops copilot. Be blunt, prioritize revenue, always end with next steps.">${escapeHtml(String(state.settings.agentSystemPrompt || ''))}</textarea>
-                <div class="text-[11px] text-ops-light mt-1">This is prepended to the agent's built-in OS.1 prompt.</div>
+                <div class="text-[11px] text-ops-light mt-1">This is prepended to the agent's built-in Marty prompt.</div>
             </div>
             <div>
                 <label class="text-xs text-ops-light">Memory (facts/preferences to keep in mind)</label>
                 <textarea id="set-agent-memory" rows="6" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-xs font-mono" placeholder="Example: I run a web agency. Preferred tone: concise. My timezone: America/Chicago. My VA's name: ...">${escapeHtml(String(state.settings.agentMemory || ''))}</textarea>
                 <div class="text-[11px] text-ops-light mt-1">Stored locally in your settings file. Included in every chat context (capped).</div>
+            </div>
+            <div>
+                <label class="text-xs text-ops-light">Operator Bio (who you are / roles / needs)</label>
+                <textarea id="set-operator-bio" rows="8" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-xs font-mono" placeholder="Example: I am Mark. Roles: owner/operator, PM, closer. Needs: daily agenda + inbox triage + project next actions. Constraints: ...">${escapeHtml(String(state.settings.operatorBio || ''))}</textarea>
+                <div class="text-[11px] text-ops-light mt-1">Included in every Marty context. You can refine it in the Bio chat thread.</div>
+            </div>
+            <div>
+                <label class="text-xs text-ops-light">How you can help me (prompt)</label>
+                <textarea id="set-operator-help-prompt" rows="7" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-xs font-mono" placeholder="Example: If I sound unclear, ask up to 3 clarifying questions. When I ask for updates, summarize in bullets with next actions. Prefer default assumptions over long back-and-forth.">${escapeHtml(String(state.settings.operatorHelpPrompt || ''))}</textarea>
+                <div class="text-[11px] text-ops-light mt-1">Used by Marty to coach you on how to ask and to format answers the way you prefer.</div>
             </div>
         </div>
         <div class="flex gap-2 mt-4">
@@ -4724,7 +4881,7 @@ function renderSettings(container) {
     wrap.appendChild(ghl);
 
     // MCP
-    const m = section('MCP', 'Run MCP servers alongside this app (stdio) so “Neural Link” can call MCP tools (Render-friendly).');
+    const m = section('MCP', 'Run MCP servers alongside this app (stdio) so Marty can call MCP tools (Render-friendly).');
     const mBody = m.querySelector('[data-slot="body"]');
     const mcp = (state.settings && state.settings.mcp && typeof state.settings.mcp === 'object') ? state.settings.mcp : {};
     const mcpEnabled = !!state.settings.mcpEnabled;
@@ -5180,7 +5337,11 @@ function renderSettings(container) {
         try {
             const agentSystemPrompt = String(document.getElementById('set-agent-system-prompt')?.value || '').trimEnd();
             const agentMemory = String(document.getElementById('set-agent-memory')?.value || '').trimEnd();
-            await saveSettingsPatch({ agentSystemPrompt, agentMemory });
+            const operatorBio = String(document.getElementById('set-operator-bio')?.value || '').trimEnd();
+            const operatorHelpPrompt = String(document.getElementById('set-operator-help-prompt')?.value || '').trimEnd();
+            const operatorTone = String(document.getElementById('set-operator-tone')?.value || '').trim();
+            const operatorVoice = String(document.getElementById('set-operator-voice')?.value || '').trim();
+            await saveSettingsPatch({ agentSystemPrompt, agentMemory, operatorBio, operatorHelpPrompt, operatorTone, operatorVoice });
             alert('Agent settings saved.');
             renderSettings(container);
         } catch (e) {
@@ -5419,7 +5580,7 @@ function renderSettings(container) {
                 slackTestOutput.textContent = 'Sending Slack test message...';
             }
             const payload = {
-                text: `Task Tracker Slack test (${new Date().toISOString()})`,
+                text: `Marty Slack test (${new Date().toISOString()})`,
             };
             payload.channel = target;
 
@@ -5725,7 +5886,7 @@ function renderProjects(container) {
                     </div>
                 </div>
                 <div class="md:col-span-2">
-                    <label class="text-[11px] text-zinc-400">Agent brief (saved to project Scratchpad for Neural Link)</label>
+                    <label class="text-[11px] text-zinc-400">Agent brief (saved to project Scratchpad for Marty)</label>
                     <textarea id="np-brief" rows="4" class="mt-1 w-full bg-zinc-950/40 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white" placeholder="What is this project? Scope, constraints, stakeholders, success criteria...">${String(d.agentBrief || '')}</textarea>
                 </div>
             </div>
@@ -6196,7 +6357,7 @@ function renderDashboardLegacy(container) {
     banner.innerHTML = `
         <div class="flex items-end justify-between gap-4">
             <div>
-                <h2 class="text-2xl text-white font-light leading-tight">OS.1 Command Dashboard</h2>
+                <h2 class="text-2xl text-white font-light leading-tight">Marty Command Dashboard</h2>
                 <div class="text-xs text-zinc-500 mt-1">${activeProjects.length} active projects • rev ${state.revision}</div>
             </div>
             <div class="flex items-center gap-2">
@@ -6445,7 +6606,7 @@ function renderDashboardLegacy(container) {
                     </div>
                 </div>
                 <div class="md:col-span-2">
-                    <label class="text-[11px] text-zinc-400">Agent brief (saved to project Scratchpad for Neural Link)</label>
+                    <label class="text-[11px] text-zinc-400">Agent brief (saved to project Scratchpad for Marty)</label>
                     <textarea id="np-brief" rows="4" class="mt-1 w-full bg-zinc-950/40 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white" placeholder="What is this project? Scope, constraints, stakeholders, success criteria...">${String(d.agentBrief || '')}</textarea>
                 </div>
             </div>
@@ -6960,6 +7121,205 @@ function renderDashboardLegacy(container) {
             }
         });
     });
+}
+
+function renderGodView(container) {
+    const titleEl = document.getElementById("page-title");
+    if(titleEl) titleEl.innerText = "Global Overview";
+
+    const snap = snapshotViewUiState();
+
+    container.innerHTML = `
+        <div class="max-w-7xl mx-auto p-4 md:p-6 lg:p-8 space-y-8 animate-fade-in pb-[400px]">
+            <div class="flex items-center justify-between mb-2">
+                <h2 class="text-xl font-bold tracking-tight text-white flex items-center gap-3">
+                    <i class="fa-solid fa-satellite-dish text-ops-accent"></i> Businesses Radar
+                </h2>
+                <button id="godview-refresh-btn" class="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-xs font-semibold rounded text-zinc-300 transition flex items-center gap-2">
+                    <i class="fa-solid fa-rotate ${state.godViewLoading ? 'animate-spin' : ''}"></i> Refresh
+                </button>
+            </div>
+            
+            <div id="godview-radar-grid" class="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                <div class="col-span-full text-center text-zinc-500 text-sm py-8"><i class="fa-solid fa-circle-notch animate-ping"></i> Scraping data...</div>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 mt-12 mb-12">
+                <!-- Calendar Section -->
+                <div>
+                    <div class="flex items-center gap-3 mb-4">
+                        <h2 class="text-xl font-bold tracking-tight text-white flex items-center gap-2">
+                            <i class="fa-regular fa-calendar text-blue-400"></i> Upcoming
+                        </h2>
+                    </div>
+                    <div id="godview-calendar-list" class="space-y-2"></div>
+                </div>
+
+                <!-- Slack Section -->
+                <div>
+                    <div class="flex items-center gap-3 mb-4">
+                        <h2 class="text-xl font-bold tracking-tight text-white flex items-center gap-2">
+                            <i class="fa-brands fa-slack text-purple-400"></i> Team Comms
+                        </h2>
+                    </div>
+                    <div id="godview-slack-list" class="grid grid-cols-1 gap-2"></div>
+                </div>
+            </div>
+
+            <div class="mt-12 mb-2 flex items-center gap-3">
+                <h2 class="text-xl font-bold tracking-tight text-white flex items-center gap-3">
+                    <i class="fa-solid fa-bolt text-ops-warning"></i> Global Focus
+                </h2>
+            </div>
+            
+            <div id="godview-focus-list" class="space-y-3">
+            </div>
+        </div>
+    `;
+
+    document.getElementById('godview-refresh-btn').onclick = async () => {
+        await refreshGodView();
+    };
+
+    if (!state.godViewData) {
+        refreshGodView();
+        return;
+    }
+
+    const { businesses, focusProjects, slackItems, team } = state.godViewData;
+
+    const radarGrid = container.querySelector('#godview-radar-grid');
+    radarGrid.innerHTML = '';
+    
+    if (businesses && businesses.length > 0) {
+        for (const b of businesses) {
+            const hasNew = b.inboxCount > 0;
+            const card = document.createElement('div');
+            card.className = `dash-card p-4 flex flex-col justify-center cursor-pointer hover:scale-105 transition-transform ${hasNew ? 'border-ops-accent bg-blue-900/10' : ''}`;
+            card.innerHTML = `
+                <div class="flex justify-between items-start mb-2">
+                    <h3 class="font-bold text-white text-lg truncate">${safeText(b.name)}</h3>
+                    ${hasNew ? `<span class="relative flex h-3 w-3"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span><span class="relative inline-flex rounded-full h-3 w-3 bg-blue-500"></span></span>` : ''}
+                </div>
+                <div class="flex items-center gap-2 text-sm">
+                    <i class="fa-solid fa-inbox ${hasNew ? 'text-blue-400' : 'text-zinc-500'}"></i>
+                    <span class="${hasNew ? 'text-blue-300 font-bold' : 'text-zinc-500'}">${b.inboxCount} new items</span>
+                </div>
+            `;
+            card.onclick = () => {
+                setActiveBusinessKey(b.key);
+                openInbox();
+            };
+            radarGrid.appendChild(card);
+        }
+    } else {
+        radarGrid.innerHTML = '<div class="col-span-full text-zinc-500">No businesses configured.</div>';
+    }
+
+    // --- Google Calendar ---
+    const calList = container.querySelector('#godview-calendar-list');
+    const callsConnected = !!state.settings?.googleConnected;
+    const calls = Array.isArray(state.dashboardCalls?.events) ? state.dashboardCalls.events : [];
+    
+    if (!callsConnected) {
+        calList.innerHTML = `<div class="text-[11px] text-zinc-500 px-3 py-2 border border-zinc-800 border-dashed rounded bg-zinc-950/20">Google Calendar not connected. Link in Settings.</div>`;
+    } else if (state.dashboardCalls?.loading) {
+        calList.innerHTML = `<div class="text-[11px] text-zinc-500 px-3 py-2"><i class="fa-solid fa-circle-notch animate-spin mr-2"></i> Syncing agenda...</div>`;
+    } else if (calls.length === 0) {
+        calList.innerHTML = `<div class="text-[11px] text-zinc-500 px-3 py-2 border border-zinc-800 border-dashed rounded bg-zinc-950/20">No upcoming meetings in the next 24 hours. Clear skies.</div>`;
+    } else {
+        calList.innerHTML = calls.slice(0, 5).map(ev => {
+            const dateObj = new Date(ev.start);
+            const timeStr = Number.isNaN(dateObj.getTime()) ? '' : dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            const link = safeText(ev.meetingLink) || safeText(ev.htmlLink);
+            const linkHtml = link ? `<a class="px-2 py-1 rounded bg-blue-500/20 text-blue-300 hover:bg-blue-500/30 transition-colors" href="${escapeHtml(link)}" target="_blank" rel="noopener noreferrer"><i class="fa-solid fa-video text-[10px]"></i></a>` : `<span class="text-zinc-600 px-2 py-1"><i class="fa-solid fa-video-slash text-[10px]"></i></span>`;
+            
+            return `
+                <div class="flex items-center justify-between gap-3 border border-zinc-800 rounded-lg bg-zinc-900/40 px-3 py-2 hover:border-zinc-700 transition-colors">
+                    <div class="min-w-0 flex items-center gap-3">
+                        <div class="text-[10px] font-mono text-blue-400 bg-blue-500/10 px-1.5 py-0.5 rounded w-14 text-center shrink-0">${escapeHtml(timeStr || '---')}</div>
+                        <div class="text-xs text-white truncate font-medium">${safeText(ev.summary) || 'Untitled'}</div>
+                    </div>
+                    <div class="shrink-0 flex items-center">${linkHtml}</div>
+                </div>
+            `;
+        }).join('');
+    }
+
+    // --- Team Comms ---
+    const slackContainer = container.querySelector('#godview-slack-list');
+    slackContainer.innerHTML = '';
+    
+    const teamMembers = Array.isArray(team) ? team : [];
+    
+    if (teamMembers.length === 0) {
+        slackContainer.innerHTML = '<div class="text-gray-400 text-sm italic">No team members</div>';
+    } else {
+        teamMembers.forEach(member => {
+            const memberDiv = document.createElement('div');
+            memberDiv.className = 'godview-slack-item text-sm flex gap-3 text-gray-300 items-start p-2 rounded';
+            memberDiv.innerHTML = '<div class="flex-1">' +
+                '<div class="font-medium">' + (member.name || '') + ' (' + (member.role || '') + ')</div>' +
+                '<div class="text-gray-400">' + (member.email || '') + '</div>' +
+                '</div>';
+            slackContainer.appendChild(memberDiv);
+        });
+    }
+
+    const focusList = container.querySelector('#godview-focus-list');
+    focusList.innerHTML = '';
+
+    if (focusProjects && focusProjects.length > 0) {
+        for (const p of focusProjects) {
+            const row = document.createElement('div');
+            row.className = 'glass-panel rounded-lg p-4 flex items-center justify-between hover:border-ops-accent/50 transition cursor-pointer';
+            
+            const isDue = p.dueDate && p.dueDate <= new Date().toISOString().split('T')[0];
+            const hasUrgent = p.urgentTasks > 0;
+            const openTasks = p.totalTasks - p.completedTasks;
+            
+            let badges = '';
+            if (hasUrgent) badges += `<span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-red-500/20 text-red-400 border border-red-500/30">${p.urgentTasks} Urgent</span> `;
+            
+            if (isDue) badges += `<span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-yellow-500/20 text-yellow-400 border border-yellow-500/30">Due</span> `;
+
+            row.innerHTML = `
+                <div class="flex items-center gap-4 overflow-hidden">
+                    <div class="flex-shrink-0 w-2 h-2 rounded-full ${hasUrgent ? 'bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.8)]' : isDue ? 'bg-yellow-500' : 'bg-emerald-500'}"></div>
+                    <div class="min-w-0 flex flex-col">
+                        <div class="text-white font-bold text-base truncate flex items-center gap-2">${safeText(p.name)} ${badges}</div>
+                        <div class="text-xs text-zinc-400 flex items-center gap-2 mt-1">
+                            <span class="text-zinc-300 font-medium whitespace-nowrap"><i class="fa-solid fa-briefcase text-zinc-500 mr-1"></i>${safeText(p.businessName)}</span>
+                            <span>&bull;</span>
+                            <span class="text-zinc-500">${openTasks} Open Tasks</span>
+                            ${p.completedTasks > 0 ? `<span class="text-emerald-500/70 ml-2"><i class="fa-solid fa-check mr-1"></i>${p.completedTasks} Done</span>` : ''}
+                        </div>
+                    </div>
+                </div>
+                <div class="flex-shrink-0 ml-4 pl-4 border-l border-zinc-800 text-xs text-zinc-500 flex flex-col items-end gap-1">
+                    ${p.dueDate ? `<div class="text-yellow-500/80"><i class="fa-regular fa-clock mr-1"></i>${p.dueDate}</div>` : '<div class="opacity-50">No deadline</div>'}
+                </div>
+            `;
+            row.onclick = () => {
+                setActiveBusinessKey(p.businessKey);
+                state.currentProjectId = p.id;
+                state.currentView = 'project';
+                renderNav();
+                renderMain();
+            };
+            focusList.appendChild(row);
+        }
+    } else {
+        focusList.innerHTML = `
+            <div class="glass flex flex-col items-center justify-center p-12 rounded-xl border border-ops-border border-dashed text-center">
+                <i class="fa-solid fa-check-double text-4xl text-ops-success mb-4 opacity-80"></i>
+                <h3 class="text-white text-lg font-bold">You're all caught up!</h3>
+                <p class="text-ops-light max-w-md mt-2">No active projects require immediate attention right now. Take a breath.</p>
+            </div>
+        `;
+    }
+
+    restoreViewUiState(snap);
 }
 
 function renderDashboard(container, sidePort) {
@@ -10217,12 +10577,14 @@ async function handleChatSubmit() {
     showMartyTypingIndicator();
     
     try {
+        const threadId = state.currentProjectId ? 'default' : (state.chatThreadId || 'default');
         const res = await apiFetch("/api/chat", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ 
                 message: msg,
-                projectId: state.currentProjectId || undefined
+                projectId: state.currentProjectId || undefined,
+                threadId,
             })
         });
 
@@ -10266,12 +10628,18 @@ function recordChatMessage(role, text) {
     if (state.currentProjectId) {
         state.chatHistory.push(entry);
     } else {
-        state.globalChatHistory.push(entry);
-        state.chatHistory = state.globalChatHistory;
+        if ((state.chatThreadId || 'default') === 'operator_bio') {
+            state.operatorBioChatHistory.push(entry);
+            state.chatHistory = state.operatorBioChatHistory;
+        } else {
+            state.globalChatHistory.push(entry);
+            state.chatHistory = state.globalChatHistory;
+        }
     }
 
     publishMartySync('chat-entry', {
         projectId: safeText(state.currentProjectId || ''),
+        threadId: safeText(state.currentProjectId ? 'default' : (state.chatThreadId || 'default')),
         entry,
     });
 }
@@ -10291,7 +10659,10 @@ function addChatMessage(role, text, animate = false) {
 
     const header = document.createElement("span");
     header.className = `text-[9px] uppercase font-bold tracking-widest ${role === 'ai' ? 'text-blue-400 ml-1' : 'text-zinc-400 text-right mr-1'}`;
-    header.innerText = role === 'ai' ? 'MARTY // DIRECT' : 'Operator';
+    const threadLabel = state.currentProjectId
+        ? 'DIRECT'
+        : ((state.chatThreadId || 'default') === 'operator_bio' ? 'BIO' : 'DIRECT');
+    header.innerText = role === 'ai' ? `MARTY // ${threadLabel}` : 'Operator';
 
     const bubble = document.createElement("div");
     bubble.className = `text-[13px] leading-relaxed max-w-[85%] break-words ${bubbleClasses}`;
@@ -10365,6 +10736,194 @@ function renderChat() {
     }
 }
 
+function computeFocusNudgeSnapshot() {
+    const now = Date.now();
+    const last = Number(state.lastInteractionAt || 0);
+    const idleMs = last ? Math.max(0, now - last) : 60 * 60 * 1000;
+    const idleMinutes = Math.floor(idleMs / 60000);
+
+    const today = ymdFromLocalDate(new Date());
+    const allTasks = Array.isArray(state.tasks) ? state.tasks : [];
+    const openTasks = allTasks.filter((t) => !isDoneTask(t));
+
+    const urgentDue = openTasks
+        .filter((t) => {
+            const pr = Number(t?.priority) || 3;
+            if (pr > 2) return false;
+            const d = safeText(t?.dueDate).trim();
+            return d && d <= today;
+        })
+        .sort((a, b) => {
+            const ap = Number(a?.priority) || 3;
+            const bp = Number(b?.priority) || 3;
+            if (ap !== bp) return ap - bp;
+            const ad = safeText(a?.dueDate).trim();
+            const bd = safeText(b?.dueDate).trim();
+            if (ad !== bd) return ad < bd ? -1 : 1;
+            return safeText(a?.title).localeCompare(safeText(b?.title));
+        });
+
+    const inboxItems = Array.isArray(state.inboxItems) ? state.inboxItems : [];
+    const inboxNew = inboxItems.filter((x) => String(x?.status || '').trim().toLowerCase() === 'new');
+
+    const topTasks = urgentDue.slice(0, 3).map((t) => {
+        const pr = Number(t?.priority) || 3;
+        const title = safeText(t?.title).trim() || 'Untitled task';
+        const project = safeText(t?.project).trim();
+        const dueDate = safeText(t?.dueDate).trim();
+        return { priority: pr, title, project, dueDate };
+    });
+
+    return {
+        idleMinutes,
+        inboxNewCount: inboxNew.length,
+        openTasksCount: openTasks.length,
+        urgentDueCount: urgentDue.length,
+        topTasks,
+    };
+}
+
+function shouldTriggerFocusNudge(snapshot) {
+    if (!snapshot) return { ok: false, reason: '' };
+
+    // Don't interrupt when you're already in a deliberate focus session.
+    if (state.focusTimer?.running) return { ok: false, reason: '' };
+
+    // Only nudge when there are real signals.
+    const idle = Number(snapshot.idleMinutes) || 0;
+    const inboxNew = Number(snapshot.inboxNewCount) || 0;
+    const urgentDue = Number(snapshot.urgentDueCount) || 0;
+    const openTasks = Number(snapshot.openTasksCount) || 0;
+
+    if (idle >= 12 && (urgentDue > 0 || inboxNew >= 2)) {
+        return { ok: true, reason: `Idle ${idle}m with ${urgentDue} urgent due tasks and ${inboxNew} new inbox items` };
+    }
+    if (idle >= 25 && (openTasks >= 12 || inboxNew >= 5)) {
+        return { ok: true, reason: `Idle ${idle}m with ${openTasks} open tasks and ${inboxNew} new inbox items` };
+    }
+    if (urgentDue >= 4 && idle >= 5) {
+        return { ok: true, reason: `${urgentDue} urgent tasks due/overdue` };
+    }
+    if (inboxNew >= 10 && idle >= 5) {
+        return { ok: true, reason: `${inboxNew} new inbox items piling up` };
+    }
+
+    return { ok: false, reason: '' };
+}
+
+async function sendProactiveFocusNudge(reason, snapshot) {
+    // Only do this from the main app context; avoid popout duplicating nudges.
+    if (IS_MARTY_POPOUT) return;
+
+    // Skip if operator is in the Bio thread (training mode).
+    if (!state.currentProjectId && (state.chatThreadId || 'default') === 'operator_bio') return;
+
+    // Make sure Marty is visible so this actually initiates a conversation.
+    applyMartyOpenState(true);
+    setStoredMartyOpen(true);
+
+    const status = document.getElementById('ai-status');
+    if (status) status.style.opacity = '1';
+    setMartyPresence('busy');
+    showMartyTypingIndicator();
+
+    const top = Array.isArray(snapshot?.topTasks) ? snapshot.topTasks : [];
+    const topLines = top.length
+        ? top.map((t) => {
+            const pr = Number(t?.priority) || 3;
+            const title = safeText(t?.title).trim();
+            const proj = safeText(t?.project).trim();
+            const due = safeText(t?.dueDate).trim();
+            return `- P${pr}: ${title}${proj ? ` (${proj})` : ''}${due ? ` due ${due}` : ''}`;
+        }).join('\n')
+        : '- (No urgent tasks detected.)';
+
+    const prompt =
+        `PROACTIVE FOCUS NUDGE (system event; do not mention this tag):\n` +
+        `You are initiating the conversation because focus likely drifted.\n\n` +
+        `Reason: ${String(reason || '').slice(0, 400)}\n` +
+        `Signals: idleMinutes=${Number(snapshot?.idleMinutes) || 0}, inboxNew=${Number(snapshot?.inboxNewCount) || 0}, urgentDue=${Number(snapshot?.urgentDueCount) || 0}, openTasks=${Number(snapshot?.openTasksCount) || 0}\n\n` +
+        `Top urgent tasks:\n${topLines}\n\n` +
+        `Output format:\n` +
+        `1) One blunt sentence that snaps me back.\n` +
+        `2) Ask exactly ONE yes/no question to confirm the focus target.\n` +
+        `3) Give a 3-step plan for the next 30 minutes.\n` +
+        `If I give a weak excuse, push back. If I give logical reasoning for deviation, accept it and update the plan.`;
+
+    try {
+        const res = await apiFetch('/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message: prompt, threadId: 'default' }),
+        });
+
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data?.error || `Request failed (${res.status})`);
+
+        const reply = data.reply || data.text || '';
+        removeMartyTypingIndicator();
+        setMartyPresence('responding');
+        if (reply) {
+            // Record only the AI message so it feels like Marty initiated it.
+            const prevThread = state.chatThreadId;
+            state.chatThreadId = 'default';
+            recordChatMessage('ai', reply);
+            state.chatThreadId = prevThread;
+            addChatMessage('ai', reply, true);
+            speakMarty(reply);
+        }
+    } catch (e) {
+        removeMartyTypingIndicator();
+        const friendly = safeText(e?.message || '').trim() || 'Failed to send focus nudge.';
+        const prevThread = state.chatThreadId;
+        state.chatThreadId = 'default';
+        recordChatMessage('ai', `Focus nudge failed: ${friendly}`);
+        state.chatThreadId = prevThread;
+        addChatMessage('ai', `Focus nudge failed: ${friendly}`);
+    } finally {
+        if (status) status.style.opacity = '0';
+        setMartyPresence('idle');
+    }
+}
+
+function startProactiveFocusNudges() {
+    try {
+        if (state.__focusNudgeIntervalId) return;
+        state.__focusNudgeIntervalId = setInterval(async () => {
+            try {
+                if (document.visibilityState && document.visibilityState !== 'visible') return;
+                if (state.auth.required && !state.auth.authenticated) return;
+                if (isUserEditingNow()) return;
+
+                // Rate limit: at most once per 20 minutes.
+                const now = Date.now();
+                const last = getStoredMartyFocusNudgeLastTs();
+                if (last && (now - last) < (20 * 60 * 1000)) return;
+
+                const snapshot = computeFocusNudgeSnapshot();
+                const decision = shouldTriggerFocusNudge(snapshot);
+                if (!decision.ok) return;
+
+                setStoredMartyFocusNudgeLastTs(now);
+                await sendProactiveFocusNudge(decision.reason, snapshot);
+            } catch {
+                // ignore
+            }
+        }, 60 * 1000);
+
+        // small delayed first check
+        setTimeout(() => {
+            try {
+                state.lastInteractionAt = state.lastInteractionAt || Date.now();
+            } catch {
+                // ignore
+            }
+        }, 1500);
+    } catch {
+        // ignore
+    }
+}
+
 async function loadChatHistory() {
     // Project-specific chat is persisted server-side.
     if (state.currentProjectId) {
@@ -10383,7 +10942,27 @@ async function loadChatHistory() {
         return;
     }
 
-    // Global chat is local-only.
+    // Global chat: either local-only (default) or persisted (operator_bio).
+    if ((state.chatThreadId || 'default') === 'operator_bio') {
+        try {
+            const res = await apiFetch('/api/chat/thread/operator_bio');
+            if (!res.ok) throw new Error('Failed to load bio thread');
+            const data = await res.json().catch(() => ({}));
+            const history = Array.isArray(data?.history) ? data.history : [];
+            state.operatorBioChatHistory = history.map(m => ({
+                role: normalizeRole(m.role),
+                content: typeof m.content === 'string' ? m.content : String(m.content || ''),
+            }));
+        } catch {
+            // Keep whatever is currently in memory.
+            state.operatorBioChatHistory = Array.isArray(state.operatorBioChatHistory)
+                ? state.operatorBioChatHistory
+                : [];
+        }
+        state.chatHistory = state.operatorBioChatHistory;
+        return;
+    }
+
     state.chatHistory = state.globalChatHistory;
 }
 

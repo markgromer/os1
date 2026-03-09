@@ -2,7 +2,7 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "Task Tracker: Install deps",
+      "label": "Marty: Install deps",
       "type": "shell",
       "command": "npm",
       "args": ["install"],
@@ -10,7 +10,7 @@
       "group": "build"
     },
     {
-      "label": "Task Tracker: Start server",
+      "label": "Marty: Start server",
       "type": "shell",
       "command": "powershell",
       "args": [
@@ -28,7 +28,7 @@
       }
     },
     {
-      "label": "Task Tracker: Start server (free port 3030)",
+      "label": "Marty: Start server (free port 3030)",
       "type": "shell",
       "command": "powershell",
       "args": [
@@ -43,7 +43,7 @@
       "group": "build"
     },
     {
-      "label": "Task Tracker: Open in browser",
+      "label": "Marty: Open in browser",
       "type": "shell",
       "command": "powershell",
       "args": [
@@ -57,7 +57,7 @@
       "group": "test"
     },
     {
-      "label": "Task Tracker: Stop server (kill node)",
+      "label": "Marty: Stop server (kill node)",
       "type": "shell",
       "command": "powershell",
       "args": [
