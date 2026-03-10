@@ -2997,6 +2997,47 @@ function buildMartyInboxRecommendation(store, item) {
   };
 }
 
+function hasActionCueInText(text) {
+  const s = String(text || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  if (!s) return false;
+  if (s.includes('?')) return true;
+  return /\b(need|needs|please|can you|could you|follow up|send|call|schedule|review|fix|update|quote|invoice|confirm|ship|deploy|publish|prepare|asap|urgent|tomorrow|today|deadline|due|assign|delegate)\b/.test(s);
+}
+
+function isGenericRadarNoiseText(text) {
+  const normalized = normalizeAckSignalText(text);
+  if (!normalized) return true;
+
+  const exact = new Set([
+    'received', 'delivered', 'seen', 'read', 'noted', 'copy that',
+    'message sent', 'sent', 'done thanks', 'ok thanks', 'thanks', 'thank you',
+  ]);
+  if (exact.has(normalized)) return true;
+
+  if (/^(message|email|sms|text)\s+(sent|received|delivered|read)$/.test(normalized)) return true;
+  if (/^(got it|ok|okay|yep|yup|yes|no)(\s+(thanks|thank you|thx|ty))?$/.test(normalized)) return true;
+
+  return false;
+}
+
+function shouldSuppressInboxRadarItem(item, settings) {
+  const it = item && typeof item === 'object' ? item : {};
+  const src = String(it?.source || '').trim().toLowerCase();
+  const signal = extractInboxSignalText(it);
+  const level = normalizeSmsAckFilterLevel(settings?.smsAckFilterLevel);
+
+  if (src === 'marty') return true;
+  if (isLowSignalAcknowledgementText(signal, level)) return true;
+
+  const isSystemLike = src.includes('system') || src.includes('notification') || src.includes('alert');
+  if (isSystemLike && !hasActionCueInText(signal)) return true;
+
+  const compact = String(signal || '').replace(/\s+/g, ' ').trim();
+  if (compact.length <= 28 && !hasActionCueInText(compact) && isGenericRadarNoiseText(compact)) return true;
+
+  return false;
+}
+
 function normalizeInboxItem(input) {
   const i = input && typeof input === 'object' ? input : {};
   const text = normalizeInboxText(i.text);
@@ -6916,13 +6957,7 @@ app.get('/api/inbox/radar', async (req, res) => {
         const it = item && typeof item === 'object' ? item : {};
         const itStatus = String(it.status || '').trim();
         if (statusLower && itStatus.toLowerCase() !== statusLower) continue;
-
-        const src = String(it?.source || '').trim().toLowerCase();
-        const isSmsLike = isSmsLikeInboxSource(src);
-        if (isSmsLike) {
-          const smsAckFilterLevel = normalizeSmsAckFilterLevel(settings?.smsAckFilterLevel);
-          if (isLowSignalAcknowledgementText(extractInboxSignalText(it), smsAckFilterLevel)) continue;
-        }
+        if (shouldSuppressInboxRadarItem(it, settings)) continue;
 
         const pid = String(it.projectId || '').trim();
         const normalized = {

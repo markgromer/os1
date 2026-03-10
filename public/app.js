@@ -3580,12 +3580,35 @@ function isLowSignalAcknowledgementTextClient(text, levelRaw = 'medium') {
 
 function shouldHideInboxItemByNoiseFilter(item) {
     const source = normalizeInboxSourceKey(item?.source);
+    const sourceRaw = safeText(item?.source).trim().toLowerCase();
+    if (sourceRaw === 'marty') return true;
+
+    const body = safeText(item?.text) || safeText(item?.content) || safeText(item?.body) || safeText(item?.message);
+
+    const hasActionCue = (() => {
+        const s = safeText(body).toLowerCase();
+        if (!s) return false;
+        if (s.includes('?')) return true;
+        return /\b(need|needs|please|can you|could you|follow up|send|call|schedule|review|fix|update|quote|invoice|confirm|ship|deploy|publish|prepare|asap|urgent|tomorrow|today|deadline|due|assign|delegate)\b/.test(s);
+    })();
+
+    if (sourceRaw.includes('system') || sourceRaw.includes('notification') || sourceRaw.includes('alert')) {
+        if (!hasActionCue) return true;
+    }
+
+    const compact = safeText(body).replace(/\s+/g, ' ').trim();
+    const normalized = normalizeAckSignalTextClient(compact);
+    const genericShortNoise = compact.length <= 28 && (
+        /^(message|email|sms|text)\s+(sent|received|delivered|read)$/i.test(normalized)
+        || /^(got it|ok|okay|yep|yup|yes|no)(\s+(thanks|thank you|thx|ty))?$/i.test(normalized)
+        || ['received', 'delivered', 'seen', 'read', 'noted', 'copy that', 'message sent', 'sent', 'done thanks', 'ok thanks', 'thanks', 'thank you'].includes(normalized)
+    );
+    if (genericShortNoise && !hasActionCue) return true;
+
     if (source !== 'sms') return false;
 
     const level = normalizeSmsAckFilterLevelClient(state.settings?.smsAckFilterLevel);
     if (level === 'off') return false;
-
-    const body = safeText(item?.text) || safeText(item?.content) || safeText(item?.body) || safeText(item?.message);
     return isLowSignalAcknowledgementTextClient(body, level);
 }
 
