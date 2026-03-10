@@ -4984,6 +4984,7 @@ function renderSettings(container) {
     // Quo (SMS/Calls)
     const quo = section('Quo (SMS/Calls)', 'Ingest inbound SMS and missed calls into Inbox (Twilio-style signature verified).');
     const quoBody = quo.querySelector('[data-slot="body"]');
+    const smsAckFilterLevel = safeText(state.settings?.smsAckFilterLevel).trim().toLowerCase() || 'medium';
     const quoMapRaw = (state.settings && typeof state.settings.phoneBusinessMap === 'object' && state.settings.phoneBusinessMap)
         ? state.settings.phoneBusinessMap
         : {};
@@ -5012,6 +5013,16 @@ function renderSettings(container) {
                 <div class="mt-2 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-xs font-mono">POST /api/integrations/quo/calls</div>
                 <div class="text-[11px] text-ops-light mt-1">Header: <span class="font-mono">X-Twilio-Signature</span></div>
             </div>
+        </div>
+        <div class="mt-4 border border-ops-border rounded-lg p-3 bg-ops-bg/20">
+            <label class="text-xs text-white font-semibold">SMS acknowledgement noise filter</label>
+            <div class="text-[11px] text-ops-light mt-1">Choose how aggressively Marty suppresses non-actionable acknowledgements (ok/thanks/etc.) from Inbox/Radar.</div>
+            <select id="set-sms-ack-filter-level" class="mt-2 w-full md:w-80 bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-xs">
+                <option value="off" ${smsAckFilterLevel === 'off' ? 'selected' : ''}>Off (show everything)</option>
+                <option value="low" ${smsAckFilterLevel === 'low' ? 'selected' : ''}>Low (only obvious filler)</option>
+                <option value="medium" ${smsAckFilterLevel === 'medium' ? 'selected' : ''}>Medium (recommended)</option>
+                <option value="high" ${smsAckFilterLevel === 'high' ? 'selected' : ''}>High (very strict)</option>
+            </select>
         </div>
         <div class="mt-4 border border-ops-border rounded-lg p-3 bg-ops-bg/20">
             <div class="text-xs text-white font-semibold">Business Routing (by destination number)</div>
@@ -5821,6 +5832,10 @@ function renderSettings(container) {
     if (btnSaveQuo) btnSaveQuo.onclick = async () => {
         try {
             const token = String(document.getElementById('set-quo-auth-token')?.value || '').trim();
+            const rawLevel = String(document.getElementById('set-sms-ack-filter-level')?.value || '').trim().toLowerCase();
+            const smsAckFilterLevel = (rawLevel === 'off' || rawLevel === 'low' || rawLevel === 'medium' || rawLevel === 'high')
+                ? rawLevel
+                : 'medium';
             const phoneInputs = Array.from(document.querySelectorAll('[data-quo-map-phone]'));
             const businessInputs = Array.from(document.querySelectorAll('[data-quo-map-business]'));
             const map = {};
@@ -5836,7 +5851,7 @@ function renderSettings(container) {
                 throw new Error('Add auth token and at least one phone mapping');
             }
 
-            const patch = { phoneBusinessMap: map };
+            const patch = { phoneBusinessMap: map, smsAckFilterLevel };
             if (token) patch.quoAuthToken = token;
             await saveSettingsPatch(patch);
             alert('Quo settings saved.');

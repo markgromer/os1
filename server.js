@@ -2622,6 +2622,65 @@ function normalizeInboxText(text) {
   return text.replace(/\r\n/g, '\n').trim();
 }
 
+function normalizeAckSignalText(text) {
+  return String(text || '')
+    .toLowerCase()
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/[^a-z0-9'\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function normalizeSmsAckFilterLevel(levelRaw) {
+  const level = String(levelRaw || '').trim().toLowerCase();
+  if (level === 'off' || level === 'low' || level === 'medium' || level === 'high') return level;
+  return 'medium';
+}
+
+function isLowSignalAcknowledgementText(text, levelRaw = 'medium') {
+  const level = normalizeSmsAckFilterLevel(levelRaw);
+  if (level === 'off') return false;
+
+  const raw = String(text || '').trim();
+  if (!raw) return false;
+
+  // Emoji-only / reaction-style replies are usually acknowledgement noise.
+  const emojiOnly = raw
+    .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\uFE0F\u200D\s]/gu, '')
+    .trim();
+  if (!emojiOnly) return true;
+
+  const normalized = normalizeAckSignalText(raw);
+  if (!normalized) return true;
+  const maxLenByLevel = level === 'high' ? 80 : level === 'low' ? 24 : 48;
+  if (normalized.length > maxLenByLevel) return false;
+
+  const exact = new Set(level === 'low'
+    ? [
+      'k', 'kk', 'ok', 'okay', 'yep', 'yup', 'yeah', 'yes',
+      'got it', 'copy', 'roger', 'understood', 'noted',
+      'thanks', 'thank you', 'thx', 'ty',
+    ]
+    : [
+      'k', 'kk', 'ok', 'okay', 'yep', 'yup', 'yeah', 'yes', 'no',
+      'got it', 'copy', 'roger', 'understood', 'noted',
+      'sounds good', 'all good', 'we re good',
+      'thanks', 'thank you', 'thx', 'ty', 'tysm', 'appreciate it',
+      'cool', 'great', 'awesome', 'perfect', 'done',
+    ]);
+  if (exact.has(normalized)) return true;
+
+  // Common combinations like "ok thanks", "yep got it", "thanks man".
+  if (/^(ok|okay|yep|yup|yeah|yes|got it|copy|roger|understood|noted)(\s+(thanks|thank you|thx|ty|appreciate it))?$/.test(normalized)) return true;
+  if (/^(thanks|thank you|thx|ty|appreciate it)(\s+(man|bro|dude|sir|maam|m'am))?$/.test(normalized)) return true;
+
+  if (level === 'high') {
+    if (/^(sounds good|all good|we re good|cool|great|awesome|perfect|done)(\s+(thanks|thank you|thx|ty))?$/.test(normalized)) return true;
+  }
+
+  return false;
+}
+
 function normalizeInboxItem(input) {
   const i = input && typeof input === 'object' ? input : {};
   const text = normalizeInboxText(i.text);
@@ -5953,6 +6012,20 @@ app.post('/api/integrations/quo/sms', async (req, res) => {
         from: from || '',
         to: to || '',
         contentType: req.headers['content-type'],
+      });
+      res.status(200).type('text/plain').send('OK');
+      return;
+    }
+
+    const smsAckFilterLevel = normalizeSmsAckFilterLevel(settings?.smsAckFilterLevel);
+
+    if (isLowSignalAcknowledgementText(body, smsAckFilterLevel)) {
+      debugWebhookLog('Quo SMS ignored (low-signal acknowledgement)', {
+        sid: sid || '',
+        from: from || '',
+        to: to || '',
+        level: smsAckFilterLevel,
+        bodyPreview: previewTextServer(body, 80),
       });
       res.status(200).type('text/plain').send('OK');
       return;
