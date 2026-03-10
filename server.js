@@ -2694,7 +2694,7 @@ function getVisibleInboxItemsFromSettings(items, settings) {
   return list.filter((item) => {
     const it = item && typeof item === 'object' ? item : {};
     if (!isSmsLikeInboxSource(it?.source)) return true;
-    return !isLowSignalAcknowledgementText(it?.text, level);
+    return !isLowSignalAcknowledgementText(extractInboxSignalText(it), level);
   });
 }
 
@@ -2703,6 +2703,23 @@ function applyInboxVisibilityToStore(store, settings) {
   const visibleInbox = getVisibleInboxItemsFromSettings(s.inboxItems, settings);
   if (!Array.isArray(s.inboxItems) || visibleInbox.length === s.inboxItems.length) return s;
   return { ...s, inboxItems: visibleInbox };
+}
+
+function extractInboxSignalText(item) {
+  const it = item && typeof item === 'object' ? item : {};
+  const source = String(it?.source || '').trim().toLowerCase();
+  const raw = String(it?.text || '').replace(/\r\n/g, '\n').trim();
+  if (!raw) return '';
+
+  // SMS items are often stored with headers (From/To) plus body after a blank line.
+  if (isSmsLikeInboxSource(source)) {
+    const blocks = raw.split(/\n\s*\n/).map((s) => s.trim()).filter(Boolean);
+    if (blocks.length > 1) return blocks[blocks.length - 1];
+    const lines = raw.split('\n').map((s) => s.trim()).filter(Boolean);
+    return lines.length ? lines[lines.length - 1] : raw;
+  }
+
+  return raw;
 }
 
 function normalizeInboxItem(input) {
@@ -6375,14 +6392,17 @@ app.post('/api/inbox/marty-filter', async (req, res) => {
 
     const nextList = list.map((item) => {
       const it = item && typeof item === 'object' ? item : {};
-      const src = String(it?.source || '').trim();
-      if (!isSmsLikeInboxSource(src)) return item;
+      const status = String(it?.status || '').trim().toLowerCase();
+      if (status !== 'new') return item;
+
+      const src = String(it?.source || '').trim().toLowerCase();
+      const signalText = extractInboxSignalText(it);
+      const sourceIsSystemNoise = src === 'marty';
+      const isAckNoise = isLowSignalAcknowledgementText(signalText, level);
+      if (!sourceIsSystemNoise && !isAckNoise) return item;
 
       scanned += 1;
-      if (!isLowSignalAcknowledgementText(it?.text, level)) return item;
-
       matched += 1;
-      const status = String(it?.status || '').trim().toLowerCase();
       if (status === 'archived') return item;
 
       archived += 1;
@@ -6392,7 +6412,7 @@ app.post('/api/inbox/marty-filter', async (req, res) => {
         updatedAt: ts,
         martyFilterLevel: level,
         martyFilteredAt: ts,
-        martyFilterReason: 'low-signal-ack',
+        martyFilterReason: sourceIsSystemNoise ? 'system-radar-noise' : 'low-signal-ack',
       });
     });
 
@@ -6587,10 +6607,10 @@ app.get('/api/inbox/radar', async (req, res) => {
         if (statusLower && itStatus.toLowerCase() !== statusLower) continue;
 
         const src = String(it?.source || '').trim().toLowerCase();
-        const isSmsLike = src.includes('sms') || src.includes('quo') || src.includes('twilio') || src.includes('text');
+        const isSmsLike = isSmsLikeInboxSource(src);
         if (isSmsLike) {
           const smsAckFilterLevel = normalizeSmsAckFilterLevel(settings?.smsAckFilterLevel);
-          if (isLowSignalAcknowledgementText(it?.text, smsAckFilterLevel)) continue;
+          if (isLowSignalAcknowledgementText(extractInboxSignalText(it), smsAckFilterLevel)) continue;
         }
 
         const pid = String(it.projectId || '').trim();
