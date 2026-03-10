@@ -3674,10 +3674,13 @@ function renderInbox(container) {
                 <h2 class="text-2xl text-white font-light leading-tight">Global Inbox</h2>
                 <div class="text-xs text-zinc-500 mt-1">${newCount} new • ${visible.length} shown • rev ${state.revision}</div>
             </div>
-            <label class="flex items-center gap-2 text-xs text-zinc-400 select-none">
-                <input id="inbox-show-archived" type="checkbox" class="accent-blue-500" ${state.inboxShowArchived ? 'checked' : ''} />
-                Show archived
-            </label>
+            <div class="flex items-center gap-2">
+                <button id="btn-inbox-marty-filter" class="px-3 py-1.5 rounded border border-amber-600/40 bg-amber-600/15 text-[11px] font-mono text-amber-200 hover:bg-amber-600/25 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Run Marty Filter</button>
+                <label class="flex items-center gap-2 text-xs text-zinc-400 select-none">
+                    <input id="inbox-show-archived" type="checkbox" class="accent-blue-500" ${state.inboxShowArchived ? 'checked' : ''} />
+                    Show archived
+                </label>
+            </div>
         </div>
 
         <div class="mt-4 grid grid-cols-1 md:grid-cols-6 gap-3">
@@ -3800,6 +3803,27 @@ function renderInbox(container) {
                 alert(e?.message || 'Failed to add inbox item');
             } finally {
                 addBtn.disabled = false;
+            }
+        };
+    }
+
+    const filterBtn = header.querySelector('#btn-inbox-marty-filter');
+    if (filterBtn) {
+        filterBtn.onclick = async () => {
+            filterBtn.disabled = true;
+            const prev = filterBtn.textContent;
+            filterBtn.textContent = 'Filtering…';
+            try {
+                const result = await runMartyInboxFilter();
+                const archived = Number(result?.archived || 0);
+                const matched = Number(result?.matched || 0);
+                alert(`Marty filter complete. Archived: ${archived}. Matched: ${matched}.`);
+                renderMain();
+            } catch (e) {
+                alert(e?.message || 'Marty filter failed');
+            } finally {
+                filterBtn.disabled = false;
+                filterBtn.textContent = prev;
             }
         };
     }
@@ -3947,6 +3971,19 @@ async function saveSettingsPatch(patch) {
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data?.error || 'Failed to save settings');
     await fetchSettings();
+    return data;
+}
+
+async function runMartyInboxFilter() {
+    const res = await apiFetch('/api/inbox/marty-filter', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ baseRevision: state.revision }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data?.ok === false) throw new Error(data?.error || 'Marty filter failed');
+    if (data?.store && typeof data.store === 'object') applyStore(data.store);
+    await fetchState({ background: false });
     return data;
 }
 
@@ -8066,6 +8103,7 @@ function renderDashboard(container, sidePort) {
                     </div>
                 </div>
                 <div class="flex items-center gap-1.5 shrink-0">
+                    <button type="button" data-run-marty-filter class="px-2.5 py-1 rounded border border-amber-600/40 bg-amber-600/15 text-[9px] font-mono text-amber-200 hover:bg-amber-600/25 transition-colors">Run Marty Filter</button>
                     <button type="button" data-open-inbox class="px-2.5 py-1 rounded border border-ops-border text-[9px] font-mono text-ops-light hover:text-white hover:bg-ops-surface/60 transition-colors">Open Inbox</button>
                     ${showCount ? '<i class="fa-solid fa-chevron-down expand-chevron"></i>' : ''}
                 </div>
@@ -8087,6 +8125,15 @@ function renderDashboard(container, sidePort) {
 
                 // Re-wire events (innerHTML replacement removes listeners).
                 radarBanner.querySelector('button[data-open-inbox]')?.addEventListener('click', () => openInbox());
+                radarBanner.querySelector('button[data-run-marty-filter]')?.addEventListener('click', async () => {
+                    try {
+                        const result = await runMartyInboxFilter();
+                        alert(`Marty filter complete. Archived: ${Number(result?.archived || 0)}. Matched: ${Number(result?.matched || 0)}.`);
+                        renderMain();
+                    } catch (e) {
+                        alert(e?.message || 'Marty filter failed');
+                    }
+                });
                 const head = radarBanner.querySelector('.dash-card-head');
                 const body = radarBanner.querySelector('.dash-card-body');
                 if (head && body) {
@@ -8698,6 +8745,21 @@ function renderDashboard(container, sidePort) {
 
     // Nav buttons
     wrap.querySelectorAll('button[data-open-inbox]').forEach(b => b.addEventListener('click', () => openInbox()));
+    wrap.querySelectorAll('button[data-run-marty-filter]').forEach((b) => b.addEventListener('click', async () => {
+        b.disabled = true;
+        const prev = b.textContent;
+        b.textContent = 'Filtering…';
+        try {
+            const result = await runMartyInboxFilter();
+            alert(`Marty filter complete. Archived: ${Number(result?.archived || 0)}. Matched: ${Number(result?.matched || 0)}.`);
+            renderMain();
+        } catch (e) {
+            alert(e?.message || 'Marty filter failed');
+        } finally {
+            b.disabled = false;
+            b.textContent = prev;
+        }
+    }));
     wrap.querySelector('button[data-open-inbox2]')?.addEventListener('click', () => openInbox());
     wrap.querySelectorAll('button[data-open-slack]').forEach(b => b.addEventListener('click', () => openInbox()));
     wrap.querySelector('button[data-open-calendar]')?.addEventListener('click', () => openCalendar());
@@ -9167,6 +9229,7 @@ function renderDashboardCommandCenter(container, sidePort) {
                     </div>
                 </div>
                 <div class="flex items-center gap-1.5 shrink-0">
+                    <button type="button" data-run-marty-filter class="px-2.5 py-1 rounded border border-amber-600/40 bg-amber-600/15 text-[9px] font-mono text-amber-200 hover:bg-amber-600/25 transition-colors">Run Marty Filter</button>
                     <button type="button" data-open-inbox class="px-2.5 py-1 rounded border border-ops-border text-[9px] font-mono text-ops-light hover:text-white hover:bg-ops-surface/60 transition-colors">Open Inbox</button>
                     ${showCount ? '<i class="fa-solid fa-chevron-down expand-chevron"></i>' : ''}
                 </div>
@@ -9188,6 +9251,15 @@ function renderDashboardCommandCenter(container, sidePort) {
             if (state.currentView !== 'dashboard') return;
             radarBanner.innerHTML = makeRadarHtml(data);
             radarBanner.querySelector('button[data-open-inbox]')?.addEventListener('click', () => openInbox());
+            radarBanner.querySelector('button[data-run-marty-filter]')?.addEventListener('click', async () => {
+                try {
+                    const result = await runMartyInboxFilter();
+                    alert(`Marty filter complete. Archived: ${Number(result?.archived || 0)}. Matched: ${Number(result?.matched || 0)}.`);
+                    renderMain();
+                } catch (e) {
+                    alert(e?.message || 'Marty filter failed');
+                }
+            });
         } catch {
             // ignore
         }
@@ -9226,8 +9298,38 @@ function renderDashboardCommandCenter(container, sidePort) {
     sideWrap.appendChild(calCard);
 
     sideWrap.querySelectorAll('button[data-open-inbox]').forEach((b) => b.addEventListener('click', () => openInbox()));
+    sideWrap.querySelectorAll('button[data-run-marty-filter]').forEach((b) => b.addEventListener('click', async () => {
+        b.disabled = true;
+        const prev = b.textContent;
+        b.textContent = 'Filtering…';
+        try {
+            const result = await runMartyInboxFilter();
+            alert(`Marty filter complete. Archived: ${Number(result?.archived || 0)}. Matched: ${Number(result?.matched || 0)}.`);
+            renderMain();
+        } catch (e) {
+            alert(e?.message || 'Marty filter failed');
+        } finally {
+            b.disabled = false;
+            b.textContent = prev;
+        }
+    }));
     sideWrap.querySelectorAll('button[data-open-calendar]').forEach((b) => b.addEventListener('click', () => openCalendar()));
     root.querySelectorAll('button[data-open-inbox]').forEach((b) => b.addEventListener('click', () => openInbox()));
+    root.querySelectorAll('button[data-run-marty-filter]').forEach((b) => b.addEventListener('click', async () => {
+        b.disabled = true;
+        const prev = b.textContent;
+        b.textContent = 'Filtering…';
+        try {
+            const result = await runMartyInboxFilter();
+            alert(`Marty filter complete. Archived: ${Number(result?.archived || 0)}. Matched: ${Number(result?.matched || 0)}.`);
+            renderMain();
+        } catch (e) {
+            alert(e?.message || 'Marty filter failed');
+        } finally {
+            b.disabled = false;
+            b.textContent = prev;
+        }
+    }));
     root.querySelectorAll('button[data-open-calendar]').forEach((b) => b.addEventListener('click', () => openCalendar()));
 }
 

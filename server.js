@@ -6361,6 +6361,59 @@ app.get('/api/inbox', async (req, res) => {
   res.json({ revision: store.revision, updatedAt: store.updatedAt, items });
 });
 
+app.post('/api/inbox/marty-filter', async (req, res) => {
+  writeLock = writeLock.then(async () => {
+    const store = await readStore();
+    const settings = await readSettings();
+    const level = normalizeSmsAckFilterLevel(settings?.smsAckFilterLevel);
+
+    const list = Array.isArray(store.inboxItems) ? store.inboxItems : [];
+    let scanned = 0;
+    let matched = 0;
+    let archived = 0;
+    const ts = nowIso();
+
+    const nextList = list.map((item) => {
+      const it = item && typeof item === 'object' ? item : {};
+      const src = String(it?.source || '').trim();
+      if (!isSmsLikeInboxSource(src)) return item;
+
+      scanned += 1;
+      if (!isLowSignalAcknowledgementText(it?.text, level)) return item;
+
+      matched += 1;
+      const status = String(it?.status || '').trim().toLowerCase();
+      if (status === 'archived') return item;
+
+      archived += 1;
+      return normalizeInboxItem({
+        ...it,
+        status: 'Archived',
+        updatedAt: ts,
+        martyFilterLevel: level,
+        martyFilteredAt: ts,
+        martyFilterReason: 'low-signal-ack',
+      });
+    });
+
+    if (!archived) {
+      res.json({ ok: true, scanned, matched, archived: 0, level, store: applyInboxVisibilityToStore(store, settings) });
+      return;
+    }
+
+    const nextStore = {
+      ...store,
+      revision: store.revision + 1,
+      updatedAt: ts,
+      inboxItems: nextList,
+    };
+    await writeStore(nextStore);
+    res.json({ ok: true, scanned, matched, archived, level, store: applyInboxVisibilityToStore(nextStore, settings) });
+  });
+
+  await writeLock;
+});
+
 // Global Dashboard (cross-business) Focus
 app.get('/api/me/dashboard', async (req, res) => {
   try {
