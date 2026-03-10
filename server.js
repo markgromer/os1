@@ -2722,6 +2722,281 @@ function extractInboxSignalText(item) {
   return raw;
 }
 
+function tokenizeRecommendationText(text) {
+  const raw = String(text || '')
+    .toLowerCase()
+    .replace(/https?:\/\/\S+/g, ' ')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!raw) return [];
+  const stop = new Set([
+    'the', 'and', 'for', 'with', 'that', 'this', 'from', 'your', 'you', 'our', 'are', 'was', 'were', 'have', 'has',
+    'had', 'can', 'will', 'would', 'should', 'could', 'not', 'but', 'just', 'about', 'into', 'need', 'needs', 'please',
+    'thanks', 'thank', 'okay', 'ok', 'yep', 'yup', 'yes', 'no', 'text', 'sms', 'message', 'call', 'email', 'slack',
+  ]);
+  return raw
+    .split(' ')
+    .map((w) => w.trim())
+    .filter((w) => w.length >= 3 && !stop.has(w));
+}
+
+function guessWhoForInboxItem(store, item, projectMatch) {
+  const s = store && typeof store === 'object' ? store : {};
+  const it = item && typeof item === 'object' ? item : {};
+  const senderRaw = String(it?.sender || it?.fromNumber || '').trim();
+  const senderDigits = normalizePhoneForLookup(senderRaw);
+  const projects = Array.isArray(s.projects) ? s.projects : [];
+
+  if (senderDigits) {
+    for (const p of projects) {
+      const pDigits = normalizePhoneForLookup(p?.clientPhone || '');
+      if (!pDigits) continue;
+      if (pDigits === senderDigits || (pDigits.length > 10 && senderDigits.endsWith(pDigits.slice(-10))) || (senderDigits.length > 10 && pDigits.endsWith(senderDigits.slice(-10)))) {
+        const clientName = String(p?.clientName || '').trim();
+        if (clientName) {
+          return {
+            name: clientName,
+            kind: 'client',
+            confidence: 0.92,
+            reason: 'Matched sender phone number to project client phone',
+          };
+        }
+      }
+    }
+  }
+
+  if (projectMatch && projectMatch.projectId) {
+    const p = projects.find((x) => String(x?.id || '') === String(projectMatch.projectId || '')) || null;
+    if (p) {
+      const clientName = String(p?.clientName || '').trim();
+      if (clientName) {
+        return {
+          name: clientName,
+          kind: 'client',
+          confidence: 0.8,
+          reason: 'Inferred from matched project client',
+        };
+      }
+    }
+  }
+
+  if (senderRaw.includes('@')) {
+    const local = senderRaw.split('@')[0] || '';
+    const cleaned = local.replace(/[._-]+/g, ' ').trim();
+    if (cleaned) {
+      return {
+        name: cleaned,
+        kind: 'contact',
+        confidence: 0.65,
+        reason: 'Derived from sender handle',
+      };
+    }
+  }
+
+  if (senderRaw) {
+    return {
+      name: senderRaw,
+      kind: 'contact',
+      confidence: 0.55,
+      reason: 'Using sender metadata',
+    };
+  }
+
+  return {
+    name: 'Unknown sender',
+    kind: 'unknown',
+    confidence: 0.2,
+    reason: 'No sender metadata available',
+  };
+}
+
+function inferProjectRecommendationForInboxItem(store, item, signalText) {
+  const s = store && typeof store === 'object' ? store : {};
+  const it = item && typeof item === 'object' ? item : {};
+  const projects = Array.isArray(s.projects) ? s.projects : [];
+
+  const currentProjectId = String(it?.projectId || '').trim();
+  if (currentProjectId && currentProjectId !== String(it?.id || '').trim()) {
+    const p = projects.find((x) => String(x?.id || '') === currentProjectId) || null;
+    return {
+      projectId: currentProjectId,
+      projectName: String(it?.projectName || p?.name || '').trim(),
+      confidence: 1,
+      reason: 'Inbox item is already linked',
+      action: 'already-linked',
+    };
+  }
+
+  const senderRaw = String(it?.sender || it?.fromNumber || '').trim();
+  if (senderRaw) {
+    const bySender = resolveSenderProjectMapping(s, senderRaw);
+    if (bySender && bySender.projectId) {
+      return {
+        projectId: String(bySender.projectId || '').trim(),
+        projectName: String(bySender.projectName || '').trim(),
+        confidence: 0.9,
+        reason: 'Matched sender to existing sender-project mapping',
+        action: 'link-project',
+      };
+    }
+  }
+
+  const byText = matchProjectFromText(s, signalText);
+  if (byText && byText.id) {
+    return {
+      projectId: String(byText.id || '').trim(),
+      projectName: String(byText.name || '').trim(),
+      confidence: 0.83,
+      reason: 'Matched project name in message text',
+      action: 'link-project',
+    };
+  }
+
+  const tokens = tokenizeRecommendationText(signalText);
+  let best = null;
+  for (const p of projects) {
+    const bag = `${String(p?.name || '')} ${String(p?.clientName || '')}`.toLowerCase();
+    if (!bag.trim()) continue;
+    let score = 0;
+    for (const t of tokens) {
+      if (bag.includes(t)) score += t.length >= 6 ? 2 : 1;
+    }
+    if (!score) continue;
+    if (!best || score > best.score) {
+      best = {
+        score,
+        projectId: String(p?.id || '').trim(),
+        projectName: String(p?.name || '').trim(),
+      };
+    }
+  }
+
+  if (best && best.projectId) {
+    const confidence = Math.max(0.55, Math.min(0.8, 0.55 + (best.score * 0.05)));
+    return {
+      projectId: best.projectId,
+      projectName: best.projectName,
+      confidence,
+      reason: 'Matched project/client keywords in message',
+      action: 'link-project',
+    };
+  }
+
+  return {
+    projectId: '',
+    projectName: '',
+    confidence: 0.25,
+    reason: 'No strong project match found',
+    action: 'create-project',
+  };
+}
+
+function suggestTasksFromInboxText(signalText, projectName) {
+  const text = String(signalText || '').replace(/\s+/g, ' ').trim();
+  if (!text) return [];
+
+  const chunks = text
+    .split(/(?<=[.!?])\s+/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .slice(0, 8);
+
+  const taskPhrases = [];
+  for (const c of chunks) {
+    const lower = c.toLowerCase();
+    const actionable = /\b(need|please|can you|follow up|send|call|schedule|review|fix|update|quote|invoice|confirm|ship|deploy|publish|prepare)\b/.test(lower);
+    if (!actionable) continue;
+    taskPhrases.push(c);
+  }
+
+  const cleaned = (taskPhrases.length ? taskPhrases : [text])
+    .map((c) => c.replace(/^\W+|\W+$/g, '').trim())
+    .filter(Boolean)
+    .slice(0, 3);
+
+  const projectHint = String(projectName || '').trim();
+  return cleaned.map((phrase, idx) => {
+    const titleBase = phrase.length > 110 ? `${phrase.slice(0, 109).trim()}...` : phrase;
+    return {
+      title: projectHint ? `${titleBase} (${projectHint})` : titleBase,
+      priority: idx === 0 ? 1 : 2,
+      reason: idx === 0 ? 'Most actionable statement in message' : 'Follow-up action inferred from message',
+    };
+  });
+}
+
+function suggestDelegateForInboxItem(store, signalText, projectRecommendation) {
+  const s = store && typeof store === 'object' ? store : {};
+  const team = Array.isArray(s.team) ? s.team.filter((m) => String(m?.id || '') !== 'ai') : [];
+  if (!team.length) return null;
+
+  const text = String(signalText || '').toLowerCase();
+  const projectId = String(projectRecommendation?.projectId || '').trim();
+  const project = projectId
+    ? (Array.isArray(s.projects) ? s.projects : []).find((p) => String(p?.id || '') === projectId) || null
+    : null;
+
+  let best = null;
+  for (const member of team) {
+    const name = String(member?.name || '').trim();
+    if (!name) continue;
+    const skillBag = [
+      ...((Array.isArray(member?.skills) ? member.skills : []).map((x) => String(x || '').toLowerCase())),
+      ...((Array.isArray(member?.abilities) ? member.abilities : []).map((x) => String(x || '').toLowerCase())),
+      String(member?.title || '').toLowerCase(),
+      name.toLowerCase(),
+    ].filter(Boolean);
+
+    let score = 0;
+    for (const k of skillBag) {
+      if (k && text.includes(k)) score += 2;
+    }
+
+    if (project) {
+      const owner = String(project?.owner || '').trim().toLowerCase();
+      const am = String(project?.accountManagerName || '').trim().toLowerCase();
+      if (owner && owner === name.toLowerCase()) score += 3;
+      if (am && am === name.toLowerCase()) score += 2;
+    }
+
+    if (!best || score > best.score) {
+      best = { member, score };
+    }
+  }
+
+  if (!best || !best.member) return null;
+  const confidence = best.score >= 5 ? 0.9 : best.score >= 3 ? 0.75 : 0.6;
+  return {
+    teamId: String(best.member.id || '').trim(),
+    name: String(best.member.name || '').trim(),
+    confidence,
+    reason: best.score >= 3
+      ? 'Best team skill/ownership match for this message'
+      : 'Defaulted to strongest available team match',
+  };
+}
+
+function buildMartyInboxRecommendation(store, item) {
+  const it = item && typeof item === 'object' ? item : {};
+  const signalText = extractInboxSignalText(it);
+  const project = inferProjectRecommendationForInboxItem(store, it, signalText);
+  const who = guessWhoForInboxItem(store, it, project);
+  const tasks = suggestTasksFromInboxText(signalText, project?.projectName || it?.projectName || '').slice(0, 3);
+  const delegate = suggestDelegateForInboxItem(store, signalText, project);
+
+  return {
+    itemId: String(it?.id || '').trim(),
+    source: String(it?.source || '').trim(),
+    who,
+    project,
+    tasks,
+    delegate,
+    signalPreview: previewTextServer(signalText, 140),
+    generatedAt: nowIso(),
+  };
+}
+
 function normalizeInboxItem(input) {
   const i = input && typeof input === 'object' ? input : {};
   const text = normalizeInboxText(i.text);
@@ -6432,6 +6707,42 @@ app.post('/api/inbox/marty-filter', async (req, res) => {
   });
 
   await writeLock;
+});
+
+app.get('/api/inbox/marty-triage', async (req, res) => {
+  try {
+    const store = await readStore();
+    const settings = await readSettings();
+    const includeArchived = String(req.query?.includeArchived || '').trim().toLowerCase() === '1';
+    const onlyNew = String(req.query?.onlyNew || '').trim().toLowerCase() !== '0';
+    const limitRaw = Number(req.query?.limit);
+    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(200, Math.floor(limitRaw))) : 60;
+
+    const visible = getVisibleInboxItemsFromSettings(store.inboxItems, settings);
+    let list = visible;
+    if (!includeArchived) {
+      list = list.filter((x) => String(x?.status || '').trim().toLowerCase() !== 'archived');
+    }
+    if (onlyNew) {
+      list = list.filter((x) => String(x?.status || '').trim().toLowerCase() === 'new');
+    }
+
+    const recommendations = list
+      .slice(0, limit)
+      .map((item) => buildMartyInboxRecommendation(store, item));
+
+    res.json({
+      ok: true,
+      count: recommendations.length,
+      onlyNew,
+      includeArchived,
+      limit,
+      recommendations,
+      generatedAt: nowIso(),
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message || 'Failed to build Marty triage recommendations' });
+  }
 });
 
 // Global Dashboard (cross-business) Focus

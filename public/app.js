@@ -20,6 +20,7 @@ const state = {
     clients: [],
     tasks: [],
     inboxItems: [],
+    inboxMartyRecommendationsById: {},
 
     projectScratchpads: {},
     projectNoteEntries: {},
@@ -3676,6 +3677,7 @@ function renderInbox(container) {
             </div>
             <div class="flex items-center gap-2">
                 <button id="btn-inbox-marty-filter" class="px-3 py-1.5 rounded border border-amber-600/40 bg-amber-600/15 text-[11px] font-mono text-amber-200 hover:bg-amber-600/25 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Run Marty Filter</button>
+                <button id="btn-inbox-marty-triage" class="px-3 py-1.5 rounded border border-blue-600/40 bg-blue-600/15 text-[11px] font-mono text-blue-200 hover:bg-blue-600/25 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Run Marty Triage</button>
                 <label class="flex items-center gap-2 text-xs text-zinc-400 select-none">
                     <input id="inbox-show-archived" type="checkbox" class="accent-blue-500" ${state.inboxShowArchived ? 'checked' : ''} />
                     Show archived
@@ -3726,9 +3728,44 @@ function renderInbox(container) {
                 const status = safeText(item?.status) || 'New';
                 const createdAt = safeText(item?.createdAt);
                 const updatedAt = safeText(item?.updatedAt);
+                const recommendation = getMartyInboxRecommendation(id);
                 const projectId = safeText((state.inboxConvertProjectById && state.inboxConvertProjectById[id]) || item?.projectId);
                 const isAssigned = projectId && projectId !== id;
                 const isUnassignedNew = !isAssigned && String(status || '').trim().toLowerCase() === 'new';
+
+                const recWho = safeText(recommendation?.who?.name).trim();
+                const recProjectName = safeText(recommendation?.project?.projectName).trim();
+                const recProjectId = safeText(recommendation?.project?.projectId).trim();
+                const recDelegate = safeText(recommendation?.delegate?.name).trim();
+                const recTasks = Array.isArray(recommendation?.tasks) ? recommendation.tasks : [];
+                const recPanel = recommendation
+                    ? `
+                    <div class="mt-3 rounded-lg border border-blue-600/30 bg-blue-950/20 p-3 space-y-2">
+                        <div class="text-[11px] font-mono uppercase tracking-wide text-blue-200">Marty Recommendation</div>
+                        <div class="text-[12px] text-zinc-200">
+                            <span class="text-zinc-400">Who:</span> ${escapeHtml(recWho || 'Unknown')}
+                            ${recommendation?.who?.confidence != null ? `<span class="text-zinc-500"> (${escapeHtml(formatMartyConfidence(recommendation?.who?.confidence))})</span>` : ''}
+                        </div>
+                        <div class="text-[12px] text-zinc-200">
+                            <span class="text-zinc-400">Project:</span> ${escapeHtml(recProjectName || 'Create new project')}
+                            ${recommendation?.project?.confidence != null ? `<span class="text-zinc-500"> (${escapeHtml(formatMartyConfidence(recommendation?.project?.confidence))})</span>` : ''}
+                        </div>
+                        <div class="text-[12px] text-zinc-200">
+                            <span class="text-zinc-400">Delegate:</span> ${escapeHtml(recDelegate || 'Unassigned')}
+                            ${recommendation?.delegate?.confidence != null ? `<span class="text-zinc-500"> (${escapeHtml(formatMartyConfidence(recommendation?.delegate?.confidence))})</span>` : ''}
+                        </div>
+                        <div class="text-[12px] text-zinc-300">
+                            <span class="text-zinc-400">Task ideas:</span>
+                            ${recTasks.length
+                                ? `<ul class="mt-1 space-y-1">${recTasks.slice(0, 2).map((t) => `<li>- ${escapeHtml(safeText(t?.title) || 'Follow up')}</li>`).join('')}</ul>`
+                                : '<span> none</span>'}
+                        </div>
+                        <div class="flex flex-wrap gap-2 pt-1">
+                            ${recProjectId ? `<button data-marty-apply-link="${escapeHtml(id)}" class="px-2 py-1 rounded border border-blue-600/40 bg-blue-600/20 text-[10px] font-mono text-blue-100 hover:bg-blue-600/30">Apply Link</button>` : ''}
+                            ${recTasks.length ? `<button data-marty-create-task="${escapeHtml(id)}" class="px-2 py-1 rounded border border-emerald-600/40 bg-emerald-600/20 text-[10px] font-mono text-emerald-100 hover:bg-emerald-600/30">Create Top Task</button>` : ''}
+                        </div>
+                    </div>`
+                    : '';
 
                 const card = document.createElement('div');
                 card.className = `border ${isUnassignedNew ? 'border-red-500/30 bg-red-500/5' : 'border-zinc-800 bg-zinc-900/30'} rounded-xl p-4`;
@@ -3743,6 +3780,7 @@ function renderInbox(container) {
                                 <div class="text-[11px] text-zinc-500 font-mono">${escapeHtml(createdAt ? formatTimeFromIso(createdAt) : '')}${updatedAt && updatedAt !== createdAt ? ` • upd ${escapeHtml(formatTimeFromIso(updatedAt))}` : ''}</div>
                             </div>
                             <div class="mt-2 text-sm text-zinc-200 whitespace-pre-wrap break-words">${escapeHtml(safeText(item?.text))}</div>
+                            ${recPanel}
                             <div class="mt-3 flex flex-wrap items-center gap-2">
                                 <select data-inbox-project="${escapeHtml(id)}" class="bg-zinc-950/40 border border-zinc-800 rounded px-2 py-1 text-xs text-zinc-200">
                                     <option value="">Project (optional)</option>
@@ -3754,6 +3792,7 @@ function renderInbox(container) {
                             </div>
                         </div>
                         <div class="shrink-0 flex flex-col gap-2">
+                            <button data-inbox-marty-recommend="${escapeHtml(id)}" class="px-3 py-1.5 rounded border border-blue-600/40 bg-blue-600/15 text-[11px] font-mono text-blue-200 hover:bg-blue-600/25 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Marty Recommend</button>
                             <button data-inbox-triage="${escapeHtml(id)}" class="px-3 py-1.5 rounded border border-zinc-800 text-[11px] font-mono text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Triage</button>
                             <button data-inbox-done="${escapeHtml(id)}" class="px-3 py-1.5 rounded bg-emerald-600/20 border border-emerald-600/40 text-[11px] font-mono text-emerald-200 hover:bg-emerald-600/30 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Done</button>
                             ${isAssigned
@@ -3828,6 +3867,25 @@ function renderInbox(container) {
         };
     }
 
+    const triageBtn = header.querySelector('#btn-inbox-marty-triage');
+    if (triageBtn) {
+        triageBtn.onclick = async () => {
+            triageBtn.disabled = true;
+            const prev = triageBtn.textContent;
+            triageBtn.textContent = 'Triaging...';
+            try {
+                const result = await runMartyInboxTriage({ onlyNew: true, includeArchived: false, limit: 120 });
+                alert(`Marty triage complete. Recommendations: ${Number(result?.count || 0)}.`);
+                renderMain();
+            } catch (e) {
+                alert(e?.message || 'Marty triage failed');
+            } finally {
+                triageBtn.disabled = false;
+                triageBtn.textContent = prev;
+            }
+        };
+    }
+
     // Wire row actions
     container.querySelectorAll('select[data-inbox-project]').forEach((sel) => {
         sel.addEventListener('change', (e) => {
@@ -3850,6 +3908,64 @@ function renderInbox(container) {
                 renderMain();
             } catch (e) {
                 alert(e?.message || 'Failed to update inbox item');
+            }
+        });
+    });
+
+    container.querySelectorAll('button[data-inbox-marty-recommend]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+            const inboxId = safeText(btn.getAttribute('data-inbox-marty-recommend')).trim();
+            if (!inboxId) return;
+            btn.disabled = true;
+            const prev = btn.textContent;
+            btn.textContent = 'Thinking...';
+            try {
+                await runMartyInboxTriage({ onlyNew: false, includeArchived: false, limit: 200 });
+                renderMain();
+            } catch (e) {
+                alert(e?.message || 'Marty recommendation failed');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = prev;
+            }
+        });
+    });
+
+    container.querySelectorAll('button[data-marty-apply-link]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+            const inboxId = safeText(btn.getAttribute('data-marty-apply-link')).trim();
+            if (!inboxId) return;
+            const rec = getMartyInboxRecommendation(inboxId);
+            const projectId = safeText(rec?.project?.projectId).trim();
+            if (!projectId) {
+                alert('No project recommendation to apply');
+                return;
+            }
+            btn.disabled = true;
+            try {
+                await linkInboxItemToProject(inboxId, projectId);
+                renderMain();
+            } catch (e) {
+                alert(e?.message || 'Failed to apply project link');
+            } finally {
+                btn.disabled = false;
+            }
+        });
+    });
+
+    container.querySelectorAll('button[data-marty-create-task]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+            const inboxId = safeText(btn.getAttribute('data-marty-create-task')).trim();
+            if (!inboxId) return;
+            const rec = getMartyInboxRecommendation(inboxId);
+            btn.disabled = true;
+            try {
+                await createTaskFromMartyRecommendation(inboxId, rec);
+                renderMain();
+            } catch (e) {
+                alert(e?.message || 'Failed to create task from recommendation');
+            } finally {
+                btn.disabled = false;
             }
         });
     });
@@ -3985,6 +4101,62 @@ async function runMartyInboxFilter() {
     if (data?.store && typeof data.store === 'object') applyStore(data.store);
     await fetchState({ background: false });
     return data;
+}
+
+function formatMartyConfidence(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return '';
+    return `${Math.round(Math.max(0, Math.min(1, n)) * 100)}%`;
+}
+
+function getMartyInboxRecommendation(inboxId) {
+    const id = safeText(inboxId).trim();
+    if (!id) return null;
+    const map = state.inboxMartyRecommendationsById && typeof state.inboxMartyRecommendationsById === 'object'
+        ? state.inboxMartyRecommendationsById
+        : {};
+    const rec = map[id];
+    return rec && typeof rec === 'object' ? rec : null;
+}
+
+async function runMartyInboxTriage(options = {}) {
+    const onlyNew = options.onlyNew !== false;
+    const includeArchived = options.includeArchived === true;
+    const limit = Number.isFinite(Number(options.limit)) ? Math.max(1, Math.min(200, Math.floor(Number(options.limit)))) : 80;
+    const qs = new URLSearchParams();
+    qs.set('onlyNew', onlyNew ? '1' : '0');
+    qs.set('includeArchived', includeArchived ? '1' : '0');
+    qs.set('limit', String(limit));
+
+    const res = await apiFetch(`/api/inbox/marty-triage?${qs.toString()}`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data?.ok === false) throw new Error(data?.error || 'Marty triage failed');
+
+    const list = Array.isArray(data?.recommendations) ? data.recommendations : [];
+    const next = { ...(state.inboxMartyRecommendationsById || {}) };
+    for (const rec of list) {
+        const itemId = safeText(rec?.itemId).trim();
+        if (!itemId) continue;
+        next[itemId] = rec;
+    }
+    state.inboxMartyRecommendationsById = next;
+    return { ...data, recommendations: list };
+}
+
+async function createTaskFromMartyRecommendation(inboxId, recommendation) {
+    const id = safeText(inboxId).trim();
+    if (!id) throw new Error('Missing inbox id');
+    const rec = recommendation && typeof recommendation === 'object' ? recommendation : {};
+    const topTask = Array.isArray(rec.tasks) && rec.tasks.length ? rec.tasks[0] : null;
+    if (!topTask) throw new Error('No suggested task available');
+    const payload = {
+        title: safeText(topTask.title).trim() || 'Inbox follow-up',
+        owner: safeText(rec?.delegate?.name).trim(),
+        priority: [1, 2, 3].includes(Number(topTask.priority)) ? Number(topTask.priority) : 2,
+    };
+    const pid = safeText(rec?.project?.projectId).trim();
+    if (pid) payload.projectId = pid;
+    return convertInboxItem(id, 'task', payload);
 }
 
 async function openGoogleAuthWindow() {
