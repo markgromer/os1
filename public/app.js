@@ -5925,6 +5925,7 @@ function renderSettings(container) {
             const patch = { phoneBusinessMap: map, smsAckFilterLevel };
             if (token) patch.quoAuthToken = token;
             await saveSettingsPatch(patch);
+            await fetchState({ background: false });
             alert('Quo settings saved.');
             renderSettings(container);
         } catch (e) {

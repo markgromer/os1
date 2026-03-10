@@ -2681,6 +2681,30 @@ function isLowSignalAcknowledgementText(text, levelRaw = 'medium') {
   return false;
 }
 
+function isSmsLikeInboxSource(sourceRaw) {
+  const src = String(sourceRaw || '').trim().toLowerCase();
+  if (!src) return false;
+  return src.includes('sms') || src.includes('quo') || src.includes('twilio') || src.includes('text');
+}
+
+function getVisibleInboxItemsFromSettings(items, settings) {
+  const list = Array.isArray(items) ? items : [];
+  const level = normalizeSmsAckFilterLevel(settings?.smsAckFilterLevel);
+  if (level === 'off') return list;
+  return list.filter((item) => {
+    const it = item && typeof item === 'object' ? item : {};
+    if (!isSmsLikeInboxSource(it?.source)) return true;
+    return !isLowSignalAcknowledgementText(it?.text, level);
+  });
+}
+
+function applyInboxVisibilityToStore(store, settings) {
+  const s = store && typeof store === 'object' ? store : structuredClone(EMPTY_STORE);
+  const visibleInbox = getVisibleInboxItemsFromSettings(s.inboxItems, settings);
+  if (!Array.isArray(s.inboxItems) || visibleInbox.length === s.inboxItems.length) return s;
+  return { ...s, inboxItems: visibleInbox };
+}
+
 function normalizeInboxItem(input) {
   const i = input && typeof input === 'object' ? input : {};
   const text = normalizeInboxText(i.text);
@@ -6324,13 +6348,16 @@ app.get('/api/tasks', async (req, res) => {
     res.status(500).json({ ok: false, error: outError?.message || 'Failed to load store' });
     return;
   }
-  res.json(outStore || structuredClone(EMPTY_STORE));
+  const settings = await readSettings();
+  const visibleStore = applyInboxVisibilityToStore(outStore || structuredClone(EMPTY_STORE), settings);
+  res.json(visibleStore);
 });
 
 // Inbox (global capture)
 app.get('/api/inbox', async (req, res) => {
   const store = await readStore();
-  const items = Array.isArray(store.inboxItems) ? store.inboxItems : [];
+  const settings = await readSettings();
+  const items = getVisibleInboxItemsFromSettings(store.inboxItems, settings);
   res.json({ revision: store.revision, updatedAt: store.updatedAt, items });
 });
 
@@ -6356,7 +6383,7 @@ app.get('/api/me/dashboard', async (req, res) => {
 
       const store = await withBusinessKey(bizKey, async () => readStore());
 
-      const items = Array.isArray(store?.inboxItems) ? store.inboxItems : [];
+      const items = getVisibleInboxItemsFromSettings(store?.inboxItems, settings);
 
       // Latest Marty brief (if any) for this business.
       let latestBrief = null;
@@ -8642,7 +8669,7 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
     try {
       const today = new Date().toISOString().slice(0, 10);
       const tasks = Array.isArray(store.tasks) ? store.tasks : [];
-      const inbox = Array.isArray(store.inboxItems) ? store.inboxItems : [];
+      const inbox = getVisibleInboxItemsFromSettings(store.inboxItems, settings);
       const projects = Array.isArray(store.projects) ? store.projects : [];
 
       const isDoneStatus = (st) => {
@@ -8753,7 +8780,7 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
             const bName = String(b?.name || '').trim() || bKey;
             const bStore = await withBusinessKey(bKey, async () => readStore());
             const tasks = Array.isArray(bStore?.tasks) ? bStore.tasks : [];
-            const inbox = Array.isArray(bStore?.inboxItems) ? bStore.inboxItems : [];
+            const inbox = getVisibleInboxItemsFromSettings(bStore?.inboxItems, settings);
             const projects = Array.isArray(bStore?.projects) ? bStore.projects : [];
 
             const openTasks = tasks.filter((t) => {
@@ -8907,7 +8934,7 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
 
       const today = new Date().toISOString().slice(0, 10);
       const tasks = Array.isArray(store.tasks) ? store.tasks : [];
-      const inbox = Array.isArray(store.inboxItems) ? store.inboxItems : [];
+      const inbox = getVisibleInboxItemsFromSettings(store.inboxItems, settings);
       const projects = Array.isArray(store.projects) ? store.projects : [];
 
       const isDoneStatus = (st) => {
@@ -9486,10 +9513,10 @@ function briefKindLabel(kind) {
   return k.toUpperCase() || 'BRIEF';
 }
 
-function buildDeterministicBrief({ kind, store, businessName }) {
+function buildDeterministicBrief({ kind, store, businessName, settings }) {
   const today = new Date().toISOString().slice(0, 10);
   const tasks = Array.isArray(store?.tasks) ? store.tasks : [];
-  const inbox = Array.isArray(store?.inboxItems) ? store.inboxItems : [];
+  const inbox = getVisibleInboxItemsFromSettings(store?.inboxItems, settings);
   const projects = Array.isArray(store?.projects) ? store.projects : [];
   const isDoneStatus = (st) => {
     const v = String(st == null ? '' : st).trim().toLowerCase();
@@ -9571,7 +9598,7 @@ async function sendMartyBriefsForAllBusinesses(kind, settings) {
     const bKey = normalizeBusinessKey(b?.key || '') || DEFAULT_BUSINESS_KEY;
     const bName = String(b?.name || '').trim() || getBusinessNameForKey(bKey);
     const store = await withBusinessKey(bKey, async () => readStore());
-    const text = buildDeterministicBrief({ kind, store, businessName: bName });
+    const text = buildDeterministicBrief({ kind, store, businessName: bName, settings });
     await addInboxIntegrationItem({
       source: 'marty',
       externalId: `brief:${String(kind || 'brief').toLowerCase()}:${today}`,
