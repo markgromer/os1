@@ -3445,7 +3445,7 @@ function renderTeam(container) {
 }
 
 function getInboxItems() {
-    const list = Array.isArray(state.inboxItems) ? state.inboxItems : [];
+    const list = getDisplayInboxItems();
     if (state.inboxShowArchived) return list;
     return list.filter((x) => String(x?.status || '').toLowerCase() !== 'archived');
 }
@@ -3522,6 +3522,77 @@ function groupInboxItemsByBusiness(items) {
         .sort((a, b) => b.items.length - a.items.length || a.label.localeCompare(b.label));
 }
 
+function normalizeSmsAckFilterLevelClient(levelRaw) {
+    const level = safeText(levelRaw).trim().toLowerCase();
+    if (level === 'off' || level === 'low' || level === 'medium' || level === 'high') return level;
+    return 'medium';
+}
+
+function normalizeAckSignalTextClient(text) {
+    return safeText(text)
+        .toLowerCase()
+        .replace(/[\u2018\u2019]/g, "'")
+        .replace(/[^a-z0-9'\s]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function isLowSignalAcknowledgementTextClient(text, levelRaw = 'medium') {
+    const level = normalizeSmsAckFilterLevelClient(levelRaw);
+    if (level === 'off') return false;
+
+    const raw = safeText(text).trim();
+    if (!raw) return false;
+
+    const emojiOnly = raw
+        .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\uFE0F\u200D\s]/gu, '')
+        .trim();
+    if (!emojiOnly) return true;
+
+    const normalized = normalizeAckSignalTextClient(raw);
+    if (!normalized) return true;
+
+    const maxLenByLevel = level === 'high' ? 80 : level === 'low' ? 24 : 48;
+    if (normalized.length > maxLenByLevel) return false;
+
+    const exact = new Set(level === 'low'
+        ? [
+            'k', 'kk', 'ok', 'okay', 'yep', 'yup', 'yeah', 'yes',
+            'got it', 'copy', 'roger', 'understood', 'noted',
+            'thanks', 'thank you', 'thx', 'ty',
+        ]
+        : [
+            'k', 'kk', 'ok', 'okay', 'yep', 'yup', 'yeah', 'yes', 'no',
+            'got it', 'copy', 'roger', 'understood', 'noted',
+            'sounds good', 'all good', 'we re good',
+            'thanks', 'thank you', 'thx', 'ty', 'tysm', 'appreciate it',
+            'cool', 'great', 'awesome', 'perfect', 'done',
+        ]);
+    if (exact.has(normalized)) return true;
+
+    if (/^(ok|okay|yep|yup|yeah|yes|got it|copy|roger|understood|noted)(\s+(thanks|thank you|thx|ty|appreciate it))?$/.test(normalized)) return true;
+    if (/^(thanks|thank you|thx|ty|appreciate it)(\s+(man|bro|dude|sir|maam|m'am))?$/.test(normalized)) return true;
+    if (level === 'high' && /^(sounds good|all good|we re good|cool|great|awesome|perfect|done)(\s+(thanks|thank you|thx|ty))?$/.test(normalized)) return true;
+
+    return false;
+}
+
+function shouldHideInboxItemByNoiseFilter(item) {
+    const source = normalizeInboxSourceKey(item?.source);
+    if (source !== 'sms') return false;
+
+    const level = normalizeSmsAckFilterLevelClient(state.settings?.smsAckFilterLevel);
+    if (level === 'off') return false;
+
+    const body = safeText(item?.text) || safeText(item?.content) || safeText(item?.body) || safeText(item?.message);
+    return isLowSignalAcknowledgementTextClient(body, level);
+}
+
+function getDisplayInboxItems() {
+    const list = Array.isArray(state.inboxItems) ? state.inboxItems : [];
+    return list.filter((item) => !shouldHideInboxItemByNoiseFilter(item));
+}
+
 async function createInboxItem(text) {
     const cleanText = safeText(text).trim();
     if (!cleanText) throw new Error('Inbox text is required');
@@ -3588,7 +3659,7 @@ function renderInbox(container) {
     const titleEl = document.getElementById('page-title');
     if (titleEl) titleEl.innerText = 'Inbox';
 
-    const all = Array.isArray(state.inboxItems) ? state.inboxItems : [];
+    const all = getDisplayInboxItems();
     const visible = getInboxItems();
     const newCount = all.filter((x) => String(x?.status || '').toLowerCase() === 'new').length;
 
@@ -3746,7 +3817,7 @@ function renderInbox(container) {
     container.querySelectorAll('button[data-inbox-edit]').forEach((btn) => {
         btn.addEventListener('click', async () => {
             const inboxId = safeText(btn.getAttribute('data-inbox-edit')).trim();
-            const item = (Array.isArray(state.inboxItems) ? state.inboxItems : []).find((x) => safeText(x?.id) === inboxId);
+            const item = getDisplayInboxItems().find((x) => safeText(x?.id) === inboxId);
             if (!inboxId || !item) return;
             const next = prompt('Edit inbox item:', safeText(item?.text));
             if (next === null) return;
@@ -3779,7 +3850,7 @@ function renderInbox(container) {
     container.querySelectorAll('button[data-inbox-create-project]').forEach((btn) => {
         btn.addEventListener('click', async () => {
             const inboxId = safeText(btn.getAttribute('data-inbox-create-project')).trim();
-            const item = (Array.isArray(state.inboxItems) ? state.inboxItems : []).find((x) => safeText(x?.id) === inboxId);
+            const item = getDisplayInboxItems().find((x) => safeText(x?.id) === inboxId);
             if (!inboxId || !item) return;
 
             const defaultName = safeText(item?.projectName).trim() || `Inbox Project ${new Date().toISOString().slice(0, 10)}`;
@@ -6598,7 +6669,7 @@ function renderDashboardLegacy(container) {
     content.className = `flex-1 min-h-0 overflow-y-auto ${portraitCompact ? 'p-3' : 'p-6'}`;
     const buckets = bucketProjectsByDueDate(activeProjects);
 
-    const allInboxItems = Array.isArray(state.inboxItems) ? state.inboxItems : [];
+    const allInboxItems = getDisplayInboxItems();
     const sourceCounts = {};
     for (const item of allInboxItems) {
         if (String(item?.status || '').toLowerCase() !== 'new') continue;
@@ -6828,7 +6899,7 @@ function renderDashboardLegacy(container) {
     content.appendChild(intake);
 
     // Unreads (Inbox)
-    const unreadItems = (Array.isArray(state.inboxItems) ? state.inboxItems : [])
+    const unreadItems = getDisplayInboxItems()
         .filter((x) => String(x?.status || '') === 'New')
         .slice()
         .sort((a, b) => String(b?.createdAt || '').localeCompare(String(a?.createdAt || '')));
@@ -7604,7 +7675,7 @@ function renderDashboard(container, sidePort) {
         (Array.isArray(buckets.tomorrow) ? buckets.tomorrow.length : 0) +
         (Array.isArray(buckets.thisWeek) ? buckets.thisWeek.length : 0);
 
-    const inboxItems = Array.isArray(state.inboxItems) ? state.inboxItems : [];
+    const inboxItems = getDisplayInboxItems();
     const inboxNew = inboxItems.filter((x) => String(x?.status || '').trim().toLowerCase() === 'new');
     const inboxNewCount = inboxNew.length;
     const inboxUnassignedNew = inboxNew.filter((x) => !safeText(x?.projectId).trim());
@@ -8745,7 +8816,7 @@ function renderDashboardCommandCenter(container, sidePort) {
     const titleEl = document.getElementById('page-title');
     if (titleEl) titleEl.innerText = 'Dashboard';
 
-    const inboxItems = Array.isArray(state.inboxItems) ? state.inboxItems : [];
+    const inboxItems = getDisplayInboxItems();
     const inboxNew = inboxItems.filter((x) => String(x?.status || '').trim().toLowerCase() === 'new');
 
     const activeProjects = getActiveProjects();
@@ -9306,7 +9377,7 @@ function getProjectTasks(project) {
 }
 
 function getProjectLinkedInboxItems(project) {
-    const list = Array.isArray(state.inboxItems) ? state.inboxItems : [];
+    const list = getDisplayInboxItems();
     const projectId = safeText(project?.id).trim();
     const projectName = safeText(project?.name).trim();
     return list
@@ -11191,7 +11262,7 @@ function computeFocusNudgeSnapshot() {
             return safeText(a?.title).localeCompare(safeText(b?.title));
         });
 
-    const inboxItems = Array.isArray(state.inboxItems) ? state.inboxItems : [];
+    const inboxItems = getDisplayInboxItems();
     const inboxNew = inboxItems.filter((x) => String(x?.status || '').trim().toLowerCase() === 'new');
 
     const topTasks = urgentDue.slice(0, 3).map((t) => {

@@ -6505,6 +6505,14 @@ app.get('/api/inbox/radar', async (req, res) => {
         const it = item && typeof item === 'object' ? item : {};
         const itStatus = String(it.status || '').trim();
         if (statusLower && itStatus.toLowerCase() !== statusLower) continue;
+
+        const src = String(it?.source || '').trim().toLowerCase();
+        const isSmsLike = src.includes('sms') || src.includes('quo') || src.includes('twilio') || src.includes('text');
+        if (isSmsLike) {
+          const smsAckFilterLevel = normalizeSmsAckFilterLevel(settings?.smsAckFilterLevel);
+          if (isLowSignalAcknowledgementText(it?.text, smsAckFilterLevel)) continue;
+        }
+
         const pid = String(it.projectId || '').trim();
         const normalized = {
           ...it,
