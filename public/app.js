@@ -3942,6 +3942,32 @@ function renderInbox(container) {
             };
             renderMain();
         });
+
+        inp.addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter') return;
+            e.preventDefault();
+            const inboxId = safeText(inp.getAttribute('data-inbox-project-search')).trim();
+            if (!inboxId) return;
+
+            const card = inp.closest('.rounded-xl');
+            const select = card?.querySelector(`select[data-inbox-project="${inboxId}"]`);
+            if (!select) return;
+
+            const firstMatch = Array.from(select.options || []).find((opt) => safeText(opt?.value).trim());
+            if (!firstMatch) return;
+
+            const projectId = safeText(firstMatch.value).trim();
+            if (!projectId) return;
+
+            select.value = projectId;
+            state.inboxConvertProjectById = {
+                ...(state.inboxConvertProjectById || {}),
+                [inboxId]: projectId,
+            };
+
+            const linkBtn = card?.querySelector(`button[data-inbox-link-project="${inboxId}"]`);
+            if (linkBtn && typeof linkBtn.focus === 'function') linkBtn.focus();
+        });
     });
 
     container.querySelectorAll('select[data-inbox-project]').forEach((sel) => {
