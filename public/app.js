@@ -7915,9 +7915,6 @@ function renderDashboard(container, sidePort) {
 
     const inboxItems = getDisplayInboxItems();
     const inboxNew = inboxItems.filter((x) => String(x?.status || '').trim().toLowerCase() === 'new');
-    const inboxNewCount = inboxNew.length;
-    const inboxUnassignedNew = inboxNew.filter((x) => !safeText(x?.projectId).trim());
-    const inboxUnassignedNewCount = inboxUnassignedNew.length;
     const teamMembers = Array.isArray(state.team) ? state.team : [];
 
     const callsConnected = !!state.settings?.googleConnected;
@@ -7925,10 +7922,6 @@ function renderDashboard(container, sidePort) {
     const callsError = safeText(state.dashboardCalls?.error);
     const callsLoading = !!state.dashboardCalls?.loading;
     if (callsConnected) setTimeout(() => refreshDashboardCalls({ force: false }), 0);
-
-    const slackNew = inboxNew.filter((x) => normalizeInboxSourceKey(x?.source) === 'slack');
-    const emailNew = inboxNew.filter((x) => normalizeInboxSourceKey(x?.source) === 'email');
-    const otherNew = inboxNew.filter((x) => { const k = normalizeInboxSourceKey(x?.source); return k !== 'slack' && k !== 'email'; });
 
     const nextActions = getTodayNextActions();
     const outcomes = safeText(state.settings?.todayOutcomes);
@@ -7944,12 +7937,43 @@ function renderDashboard(container, sidePort) {
         return !v || v === '[object object]' || v === 'item' || v === 'inbox item';
     };
 
+    const hasActionCue = (text) => {
+        const s = safeText(text).toLowerCase();
+        if (!s) return false;
+        if (s.includes('?')) return true;
+        return /\b(need|needs|please|can you|could you|follow up|send|call|schedule|review|fix|update|quote|invoice|confirm|ship|deploy|publish|prepare|asap|urgent|today|tomorrow|deadline|due|assign|delegate)\b/.test(s);
+    };
+
+    const hasMeaningfulInboxText = (item) => {
+        const txt = safeText(item?.text) || safeText(item?.content) || safeText(item?.body) || safeText(item?.message);
+        if (!txt) return false;
+        const normalized = txt.replace(/\s+/g, ' ').trim();
+        if (!normalized) return false;
+        if (normalized.length < 18 && !hasActionCue(normalized)) return false;
+        const lowNoise = /^(ok|okay|thanks|thank you|got it|received|read|seen|delivered|message sent|sent)$/i.test(normalized.toLowerCase());
+        if (lowNoise) return false;
+        return true;
+    };
+
+    const dashboardInbox = inboxNew.filter((x) => {
+        const source = safeText(x?.source).toLowerCase();
+        if (source === 'marty') return false;
+        return hasMeaningfulInboxText(x) || !isBadDashText(safeText(x?.title) || safeText(x?.subject));
+    });
+
+    const inboxNewCount = dashboardInbox.length;
+    const inboxUnassignedNew = dashboardInbox.filter((x) => !safeText(x?.projectId).trim());
+    const inboxUnassignedNewCount = inboxUnassignedNew.length;
+    const slackNew = dashboardInbox.filter((x) => normalizeInboxSourceKey(x?.source) === 'slack');
+    const emailNew = dashboardInbox.filter((x) => normalizeInboxSourceKey(x?.source) === 'email');
+    const otherNew = dashboardInbox.filter((x) => { const k = normalizeInboxSourceKey(x?.source); return k !== 'slack' && k !== 'email'; });
+
     // Best-effort AI previews for what we actually show on the dashboard.
     setTimeout(() => {
         try {
             refreshDashboardAiPreviews({
                 taskIds: nextActions.map((t) => safeText(t?.id)).filter(Boolean).slice(0, 10),
-                inboxIds: inboxNew.map((x) => safeText(x?.id)).filter(Boolean).slice(0, 16),
+                inboxIds: dashboardInbox.map((x) => safeText(x?.id)).filter(Boolean).slice(0, 16),
                 force: false,
             });
         } catch {
@@ -8312,7 +8336,7 @@ function renderDashboard(container, sidePort) {
         `;
     };
 
-    radarBanner.innerHTML = makeRadarHtml(inboxNew);
+    radarBanner.innerHTML = makeRadarHtml(dashboardInbox);
     if (pagePrefs.commsRadar) {
         wrap.appendChild(radarBanner);
 
@@ -8701,19 +8725,19 @@ function renderDashboard(container, sidePort) {
         `;
     };
 
-    const slackPreview = slackNew.length
-        ? slackChannels.slice(0, 2).map(renderSlackRow).join('')
-        : '<div class="text-[10px] text-ops-light/50">No Slack messages.</div>';
-    const slackBody = slackNew.length && slackChannels.length > 2
-        ? slackChannels.slice(2, 8).map(renderSlackRow).join('')
-        : '';
-    const slackCard = makeCard('slack', 'fa-slack', 'text-purple-400', 'Slack', `<button type="button" data-open-slack class="px-1.5 py-0.5 rounded border border-ops-border text-[9px] font-mono text-ops-light hover:text-white transition-colors">Open</button>`, `<div class="space-y-1">${slackPreview}</div>`, slackBody ? `<div class="space-y-1">${slackBody}</div>` : '');
-    slackCard.querySelector('.dash-card-head i.fa-slack')?.classList.replace('fa-solid', 'fa-brands');
-    if (pagePrefs.commsRadar) feedRow.appendChild(slackCard);
+    if (slackNew.length) {
+        const slackPreview = slackChannels.slice(0, 2).map(renderSlackRow).join('');
+        const slackBody = slackChannels.length > 2
+            ? slackChannels.slice(2, 8).map(renderSlackRow).join('')
+            : '';
+        const slackCard = makeCard('slack', 'fa-slack', 'text-purple-400', 'Slack', `<button type="button" data-open-slack class="px-1.5 py-0.5 rounded border border-ops-border text-[9px] font-mono text-ops-light hover:text-white transition-colors">Open</button>`, `<div class="space-y-1">${slackPreview}</div>`, slackBody ? `<div class="space-y-1">${slackBody}</div>` : '');
+        slackCard.querySelector('.dash-card-head i.fa-slack')?.classList.replace('fa-solid', 'fa-brands');
+        if (pagePrefs.commsRadar) feedRow.appendChild(slackCard);
+    }
 
     // Inbox (group by assignment)
     const inboxGroupsByKey = {};
-    for (const item of inboxNew) {
+    for (const item of dashboardInbox) {
         const id = safeText(item?.id).trim();
         const projectId = safeText(item?.projectId).trim();
         const key = projectId ? `project:${projectId}` : 'unassigned';
@@ -8809,14 +8833,14 @@ function renderDashboard(container, sidePort) {
         `;
     };
 
-    const inboxPreview = inboxNew.length
-        ? inboxGroups.slice(0, 2).map(renderInboxGroupRow).join('')
-        : '<div class="text-[10px] text-ops-light/50">Inbox zero.</div>';
-    const inboxBody = inboxNew.length && inboxGroups.length > 2
-        ? inboxGroups.slice(2, 10).map(renderInboxGroupRow).join('')
-        : '';
-    const inboxCard = makeCard('inbox', 'fa-inbox', 'text-amber-400', 'Inbox', `<button type="button" data-open-inbox2 class="px-1.5 py-0.5 rounded border border-ops-border text-[9px] font-mono text-ops-light hover:text-white transition-colors">Open</button>`, `<div class="space-y-1">${inboxPreview}</div>`, inboxBody ? `<div class="space-y-1">${inboxBody}</div>` : '');
-    if (pagePrefs.commsRadar) feedRow.appendChild(inboxCard);
+    if (inboxGroups.length) {
+        const inboxPreview = inboxGroups.slice(0, 2).map(renderInboxGroupRow).join('');
+        const inboxBody = inboxGroups.length > 2
+            ? inboxGroups.slice(2, 10).map(renderInboxGroupRow).join('')
+            : '';
+        const inboxCard = makeCard('inbox', 'fa-inbox', 'text-amber-400', 'Inbox', `<button type="button" data-open-inbox2 class="px-1.5 py-0.5 rounded border border-ops-border text-[9px] font-mono text-ops-light hover:text-white transition-colors">Open</button>`, `<div class="space-y-1">${inboxPreview}</div>`, inboxBody ? `<div class="space-y-1">${inboxBody}</div>` : '');
+        if (pagePrefs.commsRadar) feedRow.appendChild(inboxCard);
+    }
 
     // Team (presence + WIP/overdue signals)
     const humanMembers = teamMembers.filter(m => safeText(m?.role).toLowerCase() !== 'ai');
