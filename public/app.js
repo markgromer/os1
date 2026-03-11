@@ -3931,6 +3931,41 @@ function renderInbox(container) {
     }
 
     // Wire row actions
+    const refreshProjectSelectForInput = (inp) => {
+        const inboxId = safeText(inp?.getAttribute('data-inbox-project-search')).trim();
+        if (!inboxId) return;
+
+        const card = inp.closest('.rounded-xl');
+        const select = card?.querySelector(`select[data-inbox-project="${inboxId}"]`);
+        if (!select) return;
+
+        const selectedId = safeText(state.inboxConvertProjectById?.[inboxId] || select.value).trim();
+        const query = safeText(inp.value).trim().toLowerCase();
+        const allProjects = Array.isArray(state.projects) ? state.projects : [];
+        const filtered = allProjects.filter((p) => {
+            if (!query) return true;
+            const name = safeText(p?.name).toLowerCase();
+            const client = safeText(p?.clientName).toLowerCase();
+            return name.includes(query) || client.includes(query);
+        });
+
+        const options = [`<option value="">Project (optional)</option>`];
+        for (const p of filtered) {
+            const pid = safeText(p?.id);
+            const pname = safeText(p?.name) || 'Project';
+            const client = safeText(p?.clientName).trim();
+            const label = client ? `${pname} — ${client}` : pname;
+            options.push(`<option value="${escapeHtml(pid)}" ${pid === selectedId ? 'selected' : ''}>${escapeHtml(label)}</option>`);
+        }
+        if (!filtered.length) {
+            options.push('<option value="" disabled>No matches</option>');
+        }
+        select.innerHTML = options.join('');
+        if (selectedId && filtered.some((p) => safeText(p?.id) === selectedId)) {
+            select.value = selectedId;
+        }
+    };
+
     container.querySelectorAll('input[data-inbox-project-search]').forEach((inp) => {
         inp.addEventListener('input', (e) => {
             const inboxId = safeText(inp.getAttribute('data-inbox-project-search')).trim();
@@ -3940,7 +3975,7 @@ function renderInbox(container) {
                 ...(state.inboxProjectSearchById || {}),
                 [inboxId]: value,
             };
-            renderMain();
+            refreshProjectSelectForInput(inp);
         });
 
         inp.addEventListener('keydown', (e) => {
