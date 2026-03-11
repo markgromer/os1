@@ -3753,6 +3753,14 @@ function renderInbox(container) {
                 const updatedAt = safeText(item?.updatedAt);
                 const recommendation = getMartyInboxRecommendation(id);
                 const projectId = safeText((state.inboxConvertProjectById && state.inboxConvertProjectById[id]) || item?.projectId);
+                const projectSearch = safeText(state.inboxProjectSearchById?.[id]).trim().toLowerCase();
+                const allProjects = Array.isArray(state.projects) ? state.projects : [];
+                const filteredProjects = allProjects.filter((p) => {
+                    if (!projectSearch) return true;
+                    const n = safeText(p?.name).toLowerCase();
+                    const c = safeText(p?.clientName).toLowerCase();
+                    return n.includes(projectSearch) || c.includes(projectSearch);
+                });
                 const isAssigned = projectId && projectId !== id;
                 const isUnassignedNew = !isAssigned && String(status || '').trim().toLowerCase() === 'new';
 
@@ -3808,10 +3816,18 @@ function renderInbox(container) {
                             <div class="mt-2 text-sm text-zinc-200 whitespace-pre-wrap break-words">${escapeHtml(safeText(item?.text))}</div>
                             ${recPanel}
                             <div class="mt-3 flex flex-wrap items-center gap-2">
-                                <select data-inbox-project="${escapeHtml(id)}" class="bg-zinc-950/40 border border-zinc-800 rounded px-2 py-1 text-xs text-zinc-200">
+                                <input data-inbox-project-search="${escapeHtml(id)}" value="${escapeHtml(state.inboxProjectSearchById?.[id] || '')}" placeholder="Find project/client..." class="bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs text-zinc-100 placeholder-zinc-500 min-w-[180px]" />
+                                <select data-inbox-project="${escapeHtml(id)}" style="color-scheme: dark;" class="bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs text-zinc-100 min-w-[220px]">
                                     <option value="">Project (optional)</option>
-                                    ${(Array.isArray(state.projects) ? state.projects : []).map((p) => `<option value="${escapeHtml(safeText(p?.id))}" ${safeText(p?.id) === projectId ? 'selected' : ''}>${escapeHtml(safeText(p?.name) || 'Project')}</option>`).join('')}
+                                    ${filteredProjects.map((p) => {
+                                        const pid = safeText(p?.id);
+                                        const pname = safeText(p?.name) || 'Project';
+                                        const client = safeText(p?.clientName).trim();
+                                        const label = client ? `${pname} — ${client}` : pname;
+                                        return `<option value="${escapeHtml(pid)}" ${pid === projectId ? 'selected' : ''}>${escapeHtml(label)}</option>`;
+                                    }).join('')}
                                 </select>
+                                ${projectSearch && !filteredProjects.length ? '<span class="text-[10px] font-mono text-zinc-500">No matches</span>' : ''}
                                 <button data-inbox-link-project="${escapeHtml(id)}" class="px-2 py-1 rounded border border-blue-600/40 bg-blue-600/20 text-[11px] font-mono text-blue-200 hover:bg-blue-600/30 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Link</button>
                                 <button data-inbox-create-project="${escapeHtml(id)}" class="px-2 py-1 rounded border border-emerald-600/40 bg-emerald-600/20 text-[11px] font-mono text-emerald-200 hover:bg-emerald-600/30 transition-colors transition-transform duration-150 ease-out active:translate-y-px">New Project</button>
                                 <button data-inbox-edit="${escapeHtml(id)}" class="px-2 py-1 rounded border border-zinc-800 text-[11px] font-mono text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Edit</button>
@@ -3915,6 +3931,19 @@ function renderInbox(container) {
     }
 
     // Wire row actions
+    container.querySelectorAll('input[data-inbox-project-search]').forEach((inp) => {
+        inp.addEventListener('input', (e) => {
+            const inboxId = safeText(inp.getAttribute('data-inbox-project-search')).trim();
+            if (!inboxId) return;
+            const value = safeText(e.target.value);
+            state.inboxProjectSearchById = {
+                ...(state.inboxProjectSearchById || {}),
+                [inboxId]: value,
+            };
+            renderMain();
+        });
+    });
+
     container.querySelectorAll('select[data-inbox-project]').forEach((sel) => {
         sel.addEventListener('change', (e) => {
             const inboxId = safeText(sel.getAttribute('data-inbox-project')).trim();
