@@ -245,6 +245,11 @@ const AIRTABLE_AUTO_SYNC_ENABLED = String(process.env.TASK_TRACKER_AIRTABLE_AUTO
 const AIRTABLE_AUTO_SYNC_MINUTES = parsePositiveIntEnv(process.env.TASK_TRACKER_AIRTABLE_AUTO_SYNC_MINUTES || process.env.AIRTABLE_AUTO_SYNC_MINUTES, 5);
 const AIRTABLE_AUTO_SYNC_INTERVAL_MS = AIRTABLE_AUTO_SYNC_MINUTES * 60 * 1000;
 
+function shouldMaterializeAirtableRevisionRequests(settings) {
+  const s = settings && typeof settings === 'object' ? settings : {};
+  return s.airtableMaterializeRevisionRequests === true;
+}
+
 function backupTimestamp(d = new Date()) {
   return d.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
 }
@@ -1116,7 +1121,7 @@ function resolveBusinessForInbound({ settings, toNumber }) {
   return { businessKey: DEFAULT_BUSINESS_KEY, businessLabel: 'Personal' };
 }
 
-async function addInboxIntegrationItem({ source, externalId, text, projectId = '', projectName = '', businessKey = '', businessLabel = '', toNumber = '', fromNumber = '', channel = '' }) {
+async function addInboxIntegrationItem({ source, externalId, text, projectId = '', projectName = '', businessKey = '', businessLabel = '', toNumber = '', fromNumber = '', channel = '', contactName = '', fromName = '', threadKey = '', threadMerge = false }) {
   const cleanSource = typeof source === 'string' ? source.trim().slice(0, 32) : '';
   const cleanExternalId = typeof externalId === 'string' ? externalId.trim() : '';
   const cleanText = normalizeInboxText(text);
@@ -1130,7 +1135,49 @@ async function addInboxIntegrationItem({ source, externalId, text, projectId = '
   writeLock = writeLock.then(() => withBusinessKey(targetBusinessKey, async () => {
     const store = await readStore();
     const list = Array.isArray(store.inboxItems) ? store.inboxItems : [];
-    if (cleanExternalId && list.some((x) => String(x?.id || '') === id)) {
+    const existingIdx = cleanExternalId ? list.findIndex((x) => String(x?.id || '') === id) : -1;
+    if (existingIdx >= 0) {
+      if (!threadMerge) {
+        created = false;
+        return;
+      }
+
+      const ts = nowIso();
+      const existing = list[existingIdx] || {};
+      const prevText = String(existing?.text || '').trim();
+      const who = String(contactName || fromName || fromNumber || existing?.contactName || existing?.fromName || existing?.fromNumber || 'Sender').trim();
+      const nextText = prevText ? `${prevText}\n${cleanText}` : cleanText;
+      const nextCount = Number(existing?.messageCount || 1) + 1;
+
+      const merged = normalizeInboxItem({
+        ...existing,
+        text: nextText,
+        projectId: projectId || existing?.projectId || '',
+        projectName: projectName || existing?.projectName || '',
+        businessKey: targetBusinessKey,
+        businessLabel: businessLabel || existing?.businessLabel || '',
+        toNumber: toNumber || existing?.toNumber || '',
+        fromNumber: fromNumber || existing?.fromNumber || '',
+        sender: fromNumber || existing?.sender || '',
+        contactName: contactName || existing?.contactName || '',
+        fromName: fromName || who,
+        threadKey: threadKey || existing?.threadKey || '',
+        messageCount: nextCount,
+        lastMessageAt: ts,
+        status: String(existing?.status || 'New') === 'Archived' ? 'Triaged' : (existing?.status || 'New'),
+        updatedAt: ts,
+      });
+
+      const nextList = [...list];
+      nextList.splice(existingIdx, 1);
+      nextList.unshift(merged);
+      const nextStore = {
+        ...store,
+        revision: store.revision + 1,
+        updatedAt: ts,
+        inboxItems: nextList.slice(0, 500),
+      };
+      await writeStore(nextStore);
       created = false;
       return;
     }
@@ -1162,6 +1209,11 @@ async function addInboxIntegrationItem({ source, externalId, text, projectId = '
         toNumber,
         fromNumber,
         sender: senderKey,
+        contactName,
+        fromName,
+        threadKey,
+        messageCount: 1,
+        lastMessageAt: ts,
         channel,
         createdAt: ts,
         updatedAt: ts,
@@ -2433,6 +2485,32 @@ function isAirtableRevisionRequestsProject(project) {
   return false;
 }
 
+function stripAirtableRevisionMaterializedData(store, settings) {
+  if (shouldMaterializeAirtableRevisionRequests(settings)) return store;
+  const s = store && typeof store === 'object' ? store : structuredClone(EMPTY_STORE);
+  const projects = Array.isArray(s.projects) ? s.projects : [];
+  const tasks = Array.isArray(s.tasks) ? s.tasks : [];
+
+  const removedProjects = projects.filter((p) => isAirtableRevisionRequestsProject(p));
+  if (!removedProjects.length) return s;
+
+  const removedNames = new Set(removedProjects.map((p) => String(p?.name || '').trim()).filter(Boolean));
+  const nextProjects = projects.filter((p) => !isAirtableRevisionRequestsProject(p));
+  const nextTasks = tasks.filter((t) => {
+    const id = String(t?.id || '');
+    if (id.startsWith('airtable:rev:')) return false;
+    const proj = String(t?.project || '').trim();
+    if (proj && removedNames.has(proj)) return false;
+    return true;
+  });
+
+  return {
+    ...s,
+    projects: nextProjects,
+    tasks: nextTasks,
+  };
+}
+
 function normalizeSiteLabelLoose(input) {
   const raw = typeof input === 'string' ? input.trim() : '';
   if (!raw) return '';
@@ -3038,6 +3116,92 @@ function shouldSuppressInboxRadarItem(item, settings) {
   return false;
 }
 
+function collapseSmsInboxThreads(store) {
+  const s = store && typeof store === 'object' ? store : structuredClone(EMPTY_STORE);
+  const list = Array.isArray(s.inboxItems) ? s.inboxItems : [];
+  if (!list.length) return { changed: false, store: s, collapsedThreads: 0, mergedItems: 0 };
+
+  const byKey = new Map();
+  for (let i = 0; i < list.length; i++) {
+    const it = list[i] && typeof list[i] === 'object' ? list[i] : {};
+    if (!isSmsLikeInboxSource(it?.source)) continue;
+    const status = String(it?.status || '').trim().toLowerCase();
+    if (status === 'archived') continue;
+    const from = normalizePhoneForLookup(it?.fromNumber || it?.sender || '');
+    const to = normalizePhoneForLookup(it?.toNumber || '');
+    const biz = String(it?.businessKey || '').trim();
+    const key = `${biz}|${from || 'unknown'}|${to || 'unknown'}`;
+    const group = byKey.get(key) || [];
+    group.push(i);
+    byKey.set(key, group);
+  }
+
+  let changed = false;
+  let collapsedThreads = 0;
+  let mergedItems = 0;
+  const removeIdx = new Set();
+  const nextList = [...list];
+
+  const parseMs = (it) => {
+    const t = String(it?.updatedAt || it?.createdAt || '').trim();
+    const ms = Date.parse(t);
+    return Number.isFinite(ms) ? ms : 0;
+  };
+
+  for (const idxs of byKey.values()) {
+    if (!Array.isArray(idxs) || idxs.length <= 1) continue;
+    const items = idxs
+      .map((idx) => ({ idx, item: nextList[idx] }))
+      .filter((x) => x.item && typeof x.item === 'object')
+      .sort((a, b) => parseMs(a.item) - parseMs(b.item));
+    if (items.length <= 1) continue;
+
+    const keeper = items[items.length - 1];
+    const keeperItem = keeper.item;
+    const who = String(keeperItem?.contactName || keeperItem?.fromName || keeperItem?.sender || keeperItem?.fromNumber || 'Sender').trim();
+
+    const lines = [];
+    for (const row of items) {
+      const msg = extractInboxSignalText(row.item);
+      if (!msg) continue;
+      const stamp = String(row.item?.updatedAt || row.item?.createdAt || '').trim() || nowIso();
+      lines.push(`[${stamp}] ${who}: ${msg}`);
+    }
+    if (!lines.length) continue;
+
+    const merged = normalizeInboxItem({
+      ...keeperItem,
+      text: lines.join('\n'),
+      messageCount: Math.max(Number(keeperItem?.messageCount || 1), lines.length),
+      threadKey: String(keeperItem?.threadKey || '').trim() || `sms-thread:${normalizePhoneForLookup(keeperItem?.fromNumber || keeperItem?.sender || '') || 'unknown'}:${normalizePhoneForLookup(keeperItem?.toNumber || '') || 'unknown'}`,
+      updatedAt: nowIso(),
+      lastMessageAt: String(keeperItem?.updatedAt || keeperItem?.createdAt || '').trim() || nowIso(),
+    });
+
+    nextList[keeper.idx] = merged;
+    for (const row of items.slice(0, -1)) {
+      removeIdx.add(row.idx);
+      mergedItems += 1;
+    }
+    collapsedThreads += 1;
+    changed = true;
+  }
+
+  if (!changed) return { changed: false, store: s, collapsedThreads: 0, mergedItems: 0 };
+  const compact = nextList.filter((_, idx) => !removeIdx.has(idx));
+  return {
+    changed: true,
+    collapsedThreads,
+    mergedItems,
+    store: {
+      ...s,
+      revision: Number(s.revision || 0) + 1,
+      updatedAt: nowIso(),
+      inboxItems: compact,
+    },
+  };
+}
+
 function normalizeInboxItem(input) {
   const i = input && typeof input === 'object' ? input : {};
   const text = normalizeInboxText(i.text);
@@ -3052,8 +3216,14 @@ function normalizeInboxItem(input) {
   const businessLabel = typeof i.businessLabel === 'string' ? i.businessLabel.trim() : '';
   const toNumber = typeof i.toNumber === 'string' ? i.toNumber.trim() : '';
   const fromNumber = typeof i.fromNumber === 'string' ? i.fromNumber.trim() : '';
-    const sender = typeof i.sender === 'string' ? i.sender.trim() : (fromNumber || '');
-    const channel = typeof i.channel === 'string' ? i.channel.trim().slice(0, 32) : '';
+  const sender = typeof i.sender === 'string' ? i.sender.trim() : (fromNumber || '');
+  const contactName = typeof i.contactName === 'string' ? i.contactName.trim().slice(0, 120) : '';
+  const fromName = typeof i.fromName === 'string' ? i.fromName.trim().slice(0, 120) : '';
+  const threadKey = typeof i.threadKey === 'string' ? i.threadKey.trim().slice(0, 140) : '';
+  const messageCountRaw = Number(i.messageCount);
+  const messageCount = Number.isFinite(messageCountRaw) ? Math.max(1, Math.min(5000, Math.floor(messageCountRaw))) : 1;
+  const channel = typeof i.channel === 'string' ? i.channel.trim().slice(0, 32) : '';
+  const lastMessageAt = typeof i.lastMessageAt === 'string' ? i.lastMessageAt : updatedAt;
 
   return {
     id: typeof i.id === 'string' && i.id.trim() ? i.id.trim() : makeId(),
@@ -3066,9 +3236,14 @@ function normalizeInboxItem(input) {
     businessLabel,
     toNumber,
     fromNumber,
-      sender,
-      channel,
-      createdAt,
+    sender,
+    contactName,
+    fromName,
+    threadKey,
+    messageCount,
+    lastMessageAt,
+    channel,
+    createdAt,
     updatedAt,
     converted,
   };
@@ -4902,6 +5077,24 @@ async function runAirtableRevisionRequestsSync({ businessKey, limit = 200, windo
     throw err;
   }
 
+  if (!shouldMaterializeAirtableRevisionRequests(saved)) {
+    return {
+      ok: true,
+      mode: 'airtable-fetch-only',
+      businessKey: key,
+      windowDays: days,
+      created: 0,
+      updated: 0,
+      skipped: 0,
+      skippedOld: 0,
+      notesAppended: 0,
+      tasksCreated: 0,
+      tasksUpdated: 0,
+      archivedDuplicates: 0,
+      totalFetched: (out.records || []).length,
+    };
+  }
+
   const mapProjectStatus = (fields) => {
     const raw = firstNonEmptyString(fields, [], ['status', 'stage', 'state']);
     const s = String(raw || '').trim().toLowerCase();
@@ -5401,6 +5594,7 @@ function startAirtableRequestsAutoSyncScheduler() {
 
     writeLock = writeLock.then(async () => {
       const settings = await readSettings();
+      if (!shouldMaterializeAirtableRevisionRequests(settings)) return;
       const businesses = Array.isArray(cachedBusinesses) ? cachedBusinesses : [];
       for (const biz of businesses) {
         const bKey = normalizeBusinessKey(biz?.key || '');
@@ -6350,6 +6544,11 @@ app.post('/api/integrations/quo/sms', async (req, res) => {
       ],
       ['body', 'message', 'text', 'content', 'sms', 'smsbody'],
     );
+    const contactName = firstNonEmptyString(
+      payload,
+      ['FromName', 'fromName', 'contactName', 'contact.name', 'data.fromName', 'data.contactName', 'data.contact.name', 'profile.name', 'senderName', 'data.senderName'],
+      ['fromname', 'contactname', 'sendername', 'name'],
+    );
 
     debugWebhookLog('Quo SMS payload', {
       keys: Object.keys(payload || {}).slice(0, 40),
@@ -6394,7 +6593,7 @@ app.post('/api/integrations/quo/sms', async (req, res) => {
       const businessStore = await readStore();
       const match = matchProjectFromText(businessStore, body);
       let projName = match?.name || '';
-      let label = from || '';
+      let label = contactName || from || '';
 
       const storeForMap = {
         ...businessStore,
@@ -6412,23 +6611,25 @@ app.post('/api/integrations/quo/sms', async (req, res) => {
       return { matched: match, finalProjectName: projName, fromLabel: label };
     });
 
-    const lines = [];
-    lines.push(`📱 SMS • ${routing.businessLabel}`);
-    lines.push(`From: ${fromLabel}`);
-    lines.push(`To: ${to}`);
-    lines.push(``);
-    lines.push(body);
+    const senderDigits = normalizePhoneForLookup(from);
+    const toDigits = normalizePhoneForLookup(to);
+    const smsThreadKey = `sms-thread:${senderDigits || from || 'unknown'}:${toDigits || to || 'unknown'}`;
+    const lineText = `[${nowIso()}] ${String(contactName || fromLabel || from || 'Sender').trim()}: ${body}`;
 
     await addInboxIntegrationItem({
       source: 'sms',
-      externalId: `sms:${sid || crypto.createHash('sha1').update(`${from}|${to}|${body}`).digest('hex')}`,
-      text: lines.join('\n'),
+      externalId: smsThreadKey,
+      text: lineText,
       projectId: matched?.id || '',
       projectName: finalProjectName,
       businessKey: routing.businessKey,
       businessLabel: routing.businessLabel,
       toNumber: to,
       fromNumber: from,
+      contactName: contactName || '',
+      fromName: fromLabel || contactName || '',
+      threadKey: smsThreadKey,
+      threadMerge: true,
       channel: 'sms',
     });
 
@@ -6682,7 +6883,7 @@ app.get('/api/tasks', async (req, res) => {
     return;
   }
   const settings = await readSettings();
-  const visibleStore = applyInboxVisibilityToStore(outStore || structuredClone(EMPTY_STORE), settings);
+  const visibleStore = applyInboxVisibilityToStore(stripAirtableRevisionMaterializedData(outStore || structuredClone(EMPTY_STORE), settings), settings);
   res.json(visibleStore);
 });
 
@@ -6697,10 +6898,12 @@ app.get('/api/inbox', async (req, res) => {
 app.post('/api/inbox/marty-filter', async (req, res) => {
   writeLock = writeLock.then(async () => {
     const store = await readStore();
+    const collapsed = collapseSmsInboxThreads(store);
+    const workingStore = collapsed.changed ? collapsed.store : store;
     const settings = await readSettings();
     const level = normalizeSmsAckFilterLevel(settings?.smsAckFilterLevel);
 
-    const list = Array.isArray(store.inboxItems) ? store.inboxItems : [];
+    const list = Array.isArray(workingStore.inboxItems) ? workingStore.inboxItems : [];
     let scanned = 0;
     let matched = 0;
     let archived = 0;
@@ -6733,18 +6936,21 @@ app.post('/api/inbox/marty-filter', async (req, res) => {
     });
 
     if (!archived) {
-      res.json({ ok: true, scanned, matched, archived: 0, level, store: applyInboxVisibilityToStore(store, settings) });
+      if (collapsed.changed) {
+        await writeStore(workingStore);
+      }
+      res.json({ ok: true, scanned, matched, archived: 0, collapsedThreads: Number(collapsed.collapsedThreads || 0), mergedMessages: Number(collapsed.mergedItems || 0), level, store: applyInboxVisibilityToStore(workingStore, settings) });
       return;
     }
 
     const nextStore = {
-      ...store,
-      revision: store.revision + 1,
+      ...workingStore,
+      revision: workingStore.revision + 1,
       updatedAt: ts,
       inboxItems: nextList,
     };
     await writeStore(nextStore);
-    res.json({ ok: true, scanned, matched, archived, level, store: applyInboxVisibilityToStore(nextStore, settings) });
+    res.json({ ok: true, scanned, matched, archived, collapsedThreads: Number(collapsed.collapsedThreads || 0), mergedMessages: Number(collapsed.mergedItems || 0), level, store: applyInboxVisibilityToStore(nextStore, settings) });
   });
 
   await writeLock;

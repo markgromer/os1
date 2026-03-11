@@ -3761,6 +3761,8 @@ function renderInbox(container) {
                 const recProjectId = safeText(recommendation?.project?.projectId).trim();
                 const recDelegate = safeText(recommendation?.delegate?.name).trim();
                 const recTasks = Array.isArray(recommendation?.tasks) ? recommendation.tasks : [];
+                const senderLabel = safeText(item?.contactName || item?.fromName || item?.sender || item?.fromNumber).trim();
+                const msgCount = Number(item?.messageCount || 1);
                 const recPanel = recommendation
                     ? `
                     <div class="mt-3 rounded-lg border border-blue-600/30 bg-blue-950/20 p-3 space-y-2">
@@ -3799,7 +3801,8 @@ function renderInbox(container) {
                                 ${inboxStatusBadge(status)}
                                 ${inboxSourceBadge(item?.source)}
                                 <span class="px-2 py-0.5 rounded border border-zinc-800 bg-zinc-950/40 text-[10px] font-mono text-zinc-300">${escapeHtml(inboxBusinessLabel(item))}</span>
-                                  ${(item?.sender || item?.fromNumber) ? `<span class="px-2 py-0.5 rounded border border-zinc-500/30 bg-zinc-800/40 text-[10px] font-mono text-zinc-300">From: ${escapeHtml(item?.sender || item?.fromNumber)}</span>` : ""}
+                                                                    ${senderLabel ? `<span class="px-2 py-0.5 rounded border border-zinc-500/30 bg-zinc-800/40 text-[10px] font-mono text-zinc-300">From: ${escapeHtml(senderLabel)}</span>` : ""}
+                                                                    ${msgCount > 1 ? `<span class="px-2 py-0.5 rounded border border-blue-600/30 bg-blue-600/10 text-[10px] font-mono text-blue-200">${msgCount} msgs</span>` : ''}
                                 <div class="text-[11px] text-zinc-500 font-mono">${escapeHtml(createdAt ? formatTimeFromIso(createdAt) : '')}${updatedAt && updatedAt !== createdAt ? ` • upd ${escapeHtml(formatTimeFromIso(updatedAt))}` : ''}</div>
                             </div>
                             <div class="mt-2 text-sm text-zinc-200 whitespace-pre-wrap break-words">${escapeHtml(safeText(item?.text))}</div>
@@ -3879,7 +3882,9 @@ function renderInbox(container) {
                 const result = await runMartyInboxFilter();
                 const archived = Number(result?.archived || 0);
                 const matched = Number(result?.matched || 0);
-                alert(`Marty filter complete. Archived: ${archived}. Matched: ${matched}.`);
+                const collapsedThreads = Number(result?.collapsedThreads || 0);
+                const mergedMessages = Number(result?.mergedMessages || 0);
+                alert(`Marty filter complete. Archived: ${archived}. Matched: ${matched}. Thread groups collapsed: ${collapsedThreads}. Messages merged: ${mergedMessages}.`);
                 renderMain();
             } catch (e) {
                 alert(e?.message || 'Marty filter failed');
