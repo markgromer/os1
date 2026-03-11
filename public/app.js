@@ -8051,9 +8051,17 @@ function renderDashboard(container, sidePort) {
         return hasMeaningfulInboxText(x) || !isBadDashText(safeText(x?.title) || safeText(x?.subject));
     });
 
+    const actionOnlyMode = state.settings?.dashboardActionOnly === true;
+
     const inboxNewCount = dashboardInbox.length;
     const inboxUnassignedNew = dashboardInbox.filter((x) => !safeText(x?.projectId).trim());
     const inboxUnassignedNewCount = inboxUnassignedNew.length;
+    const inboxAssignedActionable = dashboardInbox.filter((x) => {
+        const pid = safeText(x?.projectId).trim();
+        if (!pid) return false;
+        if (String(x?.status || '').trim().toLowerCase() === 'done') return false;
+        return true;
+    });
     const slackNew = dashboardInbox.filter((x) => normalizeInboxSourceKey(x?.source) === 'slack');
     const emailNew = dashboardInbox.filter((x) => normalizeInboxSourceKey(x?.source) === 'email');
     const otherNew = dashboardInbox.filter((x) => { const k = normalizeInboxSourceKey(x?.source); return k !== 'slack' && k !== 'email'; });
@@ -8075,6 +8083,21 @@ function renderDashboard(container, sidePort) {
     const overdueTasks = allTasks.filter((t) => { if (isDoneTask(t)) return false; const d = safeText(t?.dueDate).trim(); return d && d < today; });
     const overdueProjects = activeProjects.filter((p) => { const d = safeText(p?.dueDate).trim(); return d && d < today; });
     const totalOverdue = overdueTasks.length + overdueProjects.length;
+
+    const doTodayLane = [
+        ...overdueTasks.slice(0, 2).map((t) => ({
+            kind: 'task',
+            title: safeText(t?.title) || 'Overdue task',
+            sub: safeText(t?.project) || 'Task',
+        })),
+        ...nextActions.slice(0, 3).map((t) => ({
+            kind: 'task',
+            title: safeText(t?.title) || 'Next action',
+            sub: safeText(t?.project) || 'Task',
+        })),
+    ].slice(0, 4);
+    const needsLinkLane = inboxUnassignedNew.slice(0, 4);
+    const waitingLane = inboxAssignedActionable.slice(0, 4);
 
     // Week streaks
     const weekDays = [];
@@ -8183,6 +8206,7 @@ function renderDashboard(container, sidePort) {
             ${calls.length ? `<span class="stat-pill"><i class="fa-solid fa-video text-[8px] text-blue-400"></i>${calls.length} call${calls.length>1?'s':''}</span>` : ''}
             <span class="stat-pill ${inboxNewCount ? 'stat-pill--accent' : 'stat-pill--muted'}"><i class="fa-solid fa-inbox text-[8px] text-purple-400"></i>${inboxNewCount} inbox</span>
             <span class="stat-pill ${totalDoneWeek ? 'stat-pill--success' : 'stat-pill--muted'}"><i class="fa-solid fa-check text-[8px] text-emerald-400"></i>${totalDoneWeek} done</span>
+            <button id="dash-action-only-toggle" class="stat-pill ${actionOnlyMode ? 'stat-pill--accent' : 'stat-pill--muted'}" title="Show only high-confidence actionable items">${actionOnlyMode ? 'Action Only: On' : 'Action Only: Off'}</button>
             <span class="stat-pill cursor-pointer hover:text-white" id="dash-shortcuts-btn" title="Keyboard Shortcuts"><i class="fa-solid fa-keyboard text-[8px]"></i>?</span>
         </div>
     `;
@@ -8217,8 +8241,56 @@ function renderDashboard(container, sidePort) {
     `;
     if (pagePrefs.missionControl) wrap.appendChild(martyBar);
 
+    const actionStrip = document.createElement('div');
+    actionStrip.className = 'dash-card';
+    actionStrip.dataset.cardId = 'action-strip';
+    const renderInboxActionRow = (item) => {
+        const id = safeText(item?.id).trim();
+        const text = safeText(item?.text || item?.subject || item?.title);
+        const preview = text.replace(/\s+/g, ' ').trim().slice(0, 88) || 'Inbox item';
+        return `
+            <div class="border border-ops-border rounded bg-ops-bg/40 px-2 py-1.5 flex items-center justify-between gap-2">
+                <div class="text-[10px] text-white truncate">${escapeHtml(preview)}</div>
+                <div class="flex items-center gap-1 shrink-0">
+                    <button data-action-open-inbox="${escapeHtml(id)}" class="px-1.5 py-0.5 rounded border border-ops-border text-[9px] font-mono text-ops-light hover:text-white">Open</button>
+                    <button data-action-done-inbox="${escapeHtml(id)}" class="px-1.5 py-0.5 rounded border border-emerald-600/40 text-[9px] font-mono text-emerald-200 hover:bg-emerald-600/20">Done</button>
+                </div>
+            </div>
+        `;
+    };
+    actionStrip.innerHTML = `
+        <div class="dash-card-head flex items-center justify-between gap-2 px-3 py-2.5">
+            <div class="flex items-center gap-2 min-w-0">
+                <i class="fa-solid fa-bolt text-amber-400 text-[10px] shrink-0"></i>
+                <span class="text-[10px] font-mono uppercase tracking-widest text-ops-light truncate">Action Lanes</span>
+            </div>
+            <button data-open-inbox class="px-2 py-0.5 rounded border border-ops-border text-[9px] font-mono text-ops-light hover:text-white">Inbox</button>
+        </div>
+        <div class="px-3 pb-3 grid grid-cols-1 md:grid-cols-3 gap-2">
+            <div class="border border-red-500/25 rounded-lg bg-red-500/5 p-2">
+                <div class="text-[9px] font-mono uppercase tracking-widest text-red-300 mb-1.5">Do Today</div>
+                <div class="space-y-1">
+                    ${doTodayLane.length ? doTodayLane.map((x) => `<div class="border border-red-500/20 rounded bg-ops-bg/40 px-2 py-1.5"><div class="text-[10px] text-white truncate">${escapeHtml(x.title)}</div><div class="text-[9px] font-mono text-red-300/70 truncate">${escapeHtml(x.sub)}</div></div>`).join('') : '<div class="text-[10px] text-ops-light/50">No immediate tasks.</div>'}
+                </div>
+            </div>
+            <div class="border border-amber-500/25 rounded-lg bg-amber-500/5 p-2">
+                <div class="text-[9px] font-mono uppercase tracking-widest text-amber-300 mb-1.5">Needs Linking</div>
+                <div class="space-y-1">
+                    ${needsLinkLane.length ? needsLinkLane.map(renderInboxActionRow).join('') : '<div class="text-[10px] text-ops-light/50">Nothing unlinked.</div>'}
+                </div>
+            </div>
+            <div class="border border-blue-500/25 rounded-lg bg-blue-500/5 p-2">
+                <div class="text-[9px] font-mono uppercase tracking-widest text-blue-300 mb-1.5">Waiting / Follow-up</div>
+                <div class="space-y-1">
+                    ${waitingLane.length ? waitingLane.map(renderInboxActionRow).join('') : '<div class="text-[10px] text-ops-light/50">No follow-ups queued.</div>'}
+                </div>
+            </div>
+        </div>
+    `;
+    if (pagePrefs.missionControl) wrap.appendChild(actionStrip);
+
     // ═══ OVERDUE ALERT ═══════════════════════════════════════════════
-    if (pagePrefs.missionControl && totalOverdue > 0) {
+    if (!actionOnlyMode && pagePrefs.missionControl && totalOverdue > 0) {
         const alertEl = document.createElement('div');
         alertEl.className = 'border border-red-500/30 rounded-xl bg-red-500/8 px-3 py-2.5 flex items-center gap-3';
         const overdueNames = [...overdueTasks.slice(0,3).map(t=>safeText(t?.title)), ...overdueProjects.slice(0,2).map(p=>safeText(p?.name))];
@@ -8239,7 +8311,7 @@ function renderDashboard(container, sidePort) {
         <input id="dash-quick-input" type="text" class="flex-1 bg-ops-bg/60 border border-ops-border rounded-lg px-3 py-1.5 text-[11px] font-mono text-white placeholder-ops-light/40 focus:outline-none focus:ring-1 focus:ring-ops-accent" placeholder="Quick add \u2014 type & hit Enter\u2026" />
         <button id="dash-quick-project" class="px-2.5 py-1.5 rounded-lg border border-ops-border text-[9px] font-mono text-ops-light hover:text-white hover:bg-ops-surface/60 transition-colors shrink-0"><i class="fa-solid fa-folder-plus mr-1"></i>Project</button>
     `;
-    if (pagePrefs.newProjectIntake) wrap.appendChild(quickAdd);
+    if (!actionOnlyMode && pagePrefs.newProjectIntake) wrap.appendChild(quickAdd);
 
     // ═══ INBOX RADAR (compact banner) ════════════════════════════════
     const radarBanner = document.createElement('div');
@@ -8495,7 +8567,7 @@ function renderDashboard(container, sidePort) {
     const dwBody = dueWeekItems.length > 2 ? `<div class="space-y-1">${dueWeekItems.slice(2).map(p=>mkProjBtn(p,'text-amber-400/70')).join('')}</div>` : '';
     const dueWeekCard = makeCard('due-week', 'fa-calendar-week', 'text-amber-400', 'Due This Week', `<span class="text-sm font-semibold text-white">${dueWeekItems.length}</span>`, dwPreview, dwBody, { extraClass: dueWeekItems.length ? 'dash-card--warning' : '' });
     if (pagePrefs.deliveryBoard) urgentRow.appendChild(dueWeekCard);
-    if (pagePrefs.deliveryBoard) wrap.appendChild(urgentRow);
+    if (!actionOnlyMode && pagePrefs.deliveryBoard) wrap.appendChild(urgentRow);
 
     // ═══ MID ROW: Streaks + Focus Timer ══════════════════════════════
     const midRow = document.createElement('div');
@@ -8527,7 +8599,7 @@ function renderDashboard(container, sidePort) {
         </div>`;
     const timerCard = makeCard('timer', 'fa-hourglass-half', 'text-orange-400', 'Focus', '', timerPreview, '');
     if (pagePrefs.deliveryBoard) midRow.appendChild(timerCard);
-    if (pagePrefs.deliveryBoard) wrap.appendChild(midRow);
+    if (!actionOnlyMode && pagePrefs.deliveryBoard) wrap.appendChild(midRow);
 
     // ═══ TODAY'S FOCUS (outcomes + next actions) ═════════════════════
     const nextActionsHtml = nextActions.length
@@ -8999,7 +9071,7 @@ function renderDashboard(container, sidePort) {
         : '';
     const teamCard = makeCard('team', 'fa-users', 'text-emerald-400', 'Team', `<button type="button" data-open-team class="px-1.5 py-0.5 rounded border border-ops-border text-[9px] font-mono text-ops-light hover:text-white transition-colors">Open</button>`, `<div class="space-y-1">${teamPreview}</div>`, teamBody ? `<div class="space-y-1">${teamBody}</div>` : '');
     if (pagePrefs.commsRadar) feedRow.appendChild(teamCard);
-    if (pagePrefs.commsRadar) wrap.appendChild(feedRow);
+    if (!actionOnlyMode && pagePrefs.commsRadar) wrap.appendChild(feedRow);
 
     // ═══ LATER ROW: Next Week + Future Projects ═════════════════════
     const nextWeekItems = Array.isArray(buckets.nextWeek) ? buckets.nextWeek : [];
@@ -9016,7 +9088,7 @@ function renderDashboard(container, sidePort) {
     const upBody = upcoming.length > 2 ? `<div class="space-y-1">${upcoming.slice(2).map(p=>mkProjBtn(p,'text-ops-light/60')).join('')}</div>` : '';
     const upCard = makeCard('upcoming', 'fa-forward', 'text-ops-light/40', 'Future Projects', `<button type="button" data-open-projects class="px-1.5 py-0.5 rounded border border-ops-border text-[9px] font-mono text-ops-light hover:text-white transition-colors">All</button>`, upPreview, upBody);
     if (pagePrefs.deliveryBoard) laterRow.appendChild(upCard);
-    if (pagePrefs.deliveryBoard) wrap.appendChild(laterRow);
+    if (!actionOnlyMode && pagePrefs.deliveryBoard) wrap.appendChild(laterRow);
 
     // ═══ KEYBOARD SHORTCUTS (hidden) ════════════════════════════════
     const shortcutsPanel = document.createElement('div');
@@ -9059,6 +9131,29 @@ function renderDashboard(container, sidePort) {
 
     // Nav buttons
     wrap.querySelectorAll('button[data-open-inbox]').forEach(b => b.addEventListener('click', () => openInbox()));
+    wrap.querySelectorAll('button[data-action-open-inbox]').forEach((b) => {
+        b.addEventListener('click', (e) => {
+            e.preventDefault();
+            openInbox();
+        });
+    });
+    wrap.querySelectorAll('button[data-action-done-inbox]').forEach((b) => {
+        b.addEventListener('click', async (e) => {
+            e.preventDefault();
+            const id = safeText(b.getAttribute('data-action-done-inbox')).trim();
+            if (!id) return;
+            b.disabled = true;
+            try {
+                await patchInboxItem(id, { status: 'Done' });
+                await fetchState().catch(() => {});
+                if (state.currentView === 'dashboard') renderMain();
+            } catch (err) {
+                alert(err?.message || 'Failed to mark done');
+            } finally {
+                b.disabled = false;
+            }
+        });
+    });
     wrap.querySelectorAll('button[data-run-marty-filter]').forEach((b) => b.addEventListener('click', async () => {
         b.disabled = true;
         const prev = b.textContent;
@@ -9183,8 +9278,24 @@ function renderDashboard(container, sidePort) {
 
     // Shortcuts
     const shortcutsBtn = wrap.querySelector('#dash-shortcuts-btn');
+    const actionOnlyBtn = wrap.querySelector('#dash-action-only-toggle');
     const shortcutsPanelEl = wrap.querySelector('#dash-shortcuts-panel');
     const shortcutsClose = wrap.querySelector('#dash-shortcuts-close');
+    if (actionOnlyBtn) {
+        actionOnlyBtn.addEventListener('click', async () => {
+            const next = !Boolean(state.settings?.dashboardActionOnly === true);
+            state.settings = (state.settings && typeof state.settings === 'object') ? state.settings : {};
+            state.settings.dashboardActionOnly = next;
+            renderMain();
+            try {
+                await saveSettingsPatch({ dashboardActionOnly: next });
+            } catch (err) {
+                state.settings.dashboardActionOnly = !next;
+                renderMain();
+                alert(err?.message || 'Failed to save Action Only mode');
+            }
+        });
+    }
     if (shortcutsBtn && shortcutsPanelEl) shortcutsBtn.addEventListener('click', () => shortcutsPanelEl.classList.toggle('hidden'));
     if (shortcutsClose && shortcutsPanelEl) shortcutsClose.addEventListener('click', () => shortcutsPanelEl.classList.add('hidden'));
 }
