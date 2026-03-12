@@ -20,6 +20,7 @@ const state = {
     clients: [],
     tasks: [],
     inboxItems: [],
+    inboxConvertContactById: {},
     inboxMartyRecommendationsById: {},
     inboxAutomationDigest: { items: [], loading: false, loadedAt: 0, error: '' },
     inboxDigestSelectionsById: {},
@@ -3803,6 +3804,20 @@ async function linkInboxItemToProject(inboxId, projectId) {
     return data;
 }
 
+async function linkInboxItemToContact(inboxId, contactId) {
+    const id = safeText(inboxId).trim();
+    const cid = safeText(contactId).trim();
+    if (!id) throw new Error('Missing inbox id');
+    if (!cid) throw new Error('Select a contact first');
+    const data = await withRevisionRetry(() => apiJson(`/api/inbox/${encodeURIComponent(id)}/link-contact`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ baseRevision: state.revision, contactId: cid }),
+    }));
+    if (data?.store) applyStore(data.store);
+    return data;
+}
+
 async function createProjectFromInboxItem(inboxId, project) {
     const id = safeText(inboxId).trim();
     if (!id) throw new Error('Missing inbox id');
@@ -3963,6 +3978,9 @@ function renderInbox(container) {
                 const updatedAt = safeText(item?.updatedAt);
                 const recommendation = getMartyInboxRecommendation(id);
                 const projectId = safeText((state.inboxConvertProjectById && state.inboxConvertProjectById[id]) || item?.projectId);
+                const allContacts = Array.isArray(state.clients) ? state.clients : [];
+                const contactByName = allContacts.find((c) => safeText(c?.name).trim().toLowerCase() === safeText(item?.contactName).trim().toLowerCase());
+                const contactId = safeText((state.inboxConvertContactById && state.inboxConvertContactById[id]) || item?.contactId || contactByName?.id);
                 const projectSearch = safeText(state.inboxProjectSearchById?.[id]).trim().toLowerCase();
                 const allProjects = Array.isArray(state.projects) ? state.projects : [];
                 const filteredProjects = allProjects.filter((p) => {
@@ -4035,6 +4053,17 @@ function renderInbox(container) {
                                 </select>
                                 ${projectSearch && !filteredProjects.length ? '<span class="text-[10px] font-mono text-zinc-500">No matches</span>' : ''}
                                 <button data-inbox-link-project="${escapeHtml(id)}" class="px-2 py-1 rounded border border-blue-600/40 bg-blue-600/20 text-[11px] font-mono text-blue-200 hover:bg-blue-600/30 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Link</button>
+                                <select data-inbox-contact="${escapeHtml(id)}" style="color-scheme: dark;" class="bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs text-zinc-100 min-w-[220px]">
+                                    <option value="">Contact (optional)</option>
+                                    ${allContacts.map((c) => {
+                                        const cid = safeText(c?.id);
+                                        const cname = safeText(c?.name) || 'Contact';
+                                        const cphone = safeText(c?.phone).trim();
+                                        const label = cphone ? `${cname} — ${cphone}` : cname;
+                                        return `<option value="${escapeHtml(cid)}" ${cid === contactId ? 'selected' : ''}>${escapeHtml(label)}</option>`;
+                                    }).join('')}
+                                </select>
+                                <button data-inbox-link-contact="${escapeHtml(id)}" class="px-2 py-1 rounded border border-purple-600/40 bg-purple-600/20 text-[11px] font-mono text-purple-200 hover:bg-purple-600/30 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Link Contact</button>
                                 <button data-inbox-create-project="${escapeHtml(id)}" class="px-2 py-1 rounded border border-emerald-600/40 bg-emerald-600/20 text-[11px] font-mono text-emerald-200 hover:bg-emerald-600/30 transition-colors transition-transform duration-150 ease-out active:translate-y-px">New Project</button>
                                 <button data-inbox-edit="${escapeHtml(id)}" class="px-2 py-1 rounded border border-zinc-800 text-[11px] font-mono text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Edit</button>
                             </div>
@@ -4340,6 +4369,15 @@ function renderInbox(container) {
         });
     });
 
+    container.querySelectorAll('select[data-inbox-contact]').forEach((sel) => {
+        sel.addEventListener('change', (e) => {
+            const inboxId = safeText(sel.getAttribute('data-inbox-contact')).trim();
+            if (!inboxId) return;
+            const contactId = safeText(e.target.value).trim();
+            state.inboxConvertContactById = { ...(state.inboxConvertContactById || {}), [inboxId]: contactId };
+        });
+    });
+
     container.querySelectorAll('button[data-inbox-edit]').forEach((btn) => {
         btn.addEventListener('click', async () => {
             const inboxId = safeText(btn.getAttribute('data-inbox-edit')).trim();
@@ -4446,6 +4484,23 @@ function renderInbox(container) {
                 renderMain();
             } catch (e) {
                 alert(e?.message || 'Failed to link inbox item');
+            } finally {
+                btn.disabled = false;
+            }
+        });
+    });
+
+    container.querySelectorAll('button[data-inbox-link-contact]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+            const inboxId = safeText(btn.getAttribute('data-inbox-link-contact')).trim();
+            if (!inboxId) return;
+            const contactId = safeText(state.inboxConvertContactById?.[inboxId]).trim();
+            btn.disabled = true;
+            try {
+                await linkInboxItemToContact(inboxId, contactId);
+                renderMain();
+            } catch (e) {
+                alert(e?.message || 'Failed to link inbox item to contact');
             } finally {
                 btn.disabled = false;
             }

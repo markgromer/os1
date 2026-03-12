@@ -2633,6 +2633,65 @@ function normalizeClientRecord(input) {
   };
 }
 
+function upsertClientForProjectInboxLink(clientsInput, { project, inboxItem, ts = nowIso() } = {}) {
+  const clients = Array.isArray(clientsInput) ? [...clientsInput] : [];
+  const p = project && typeof project === 'object' ? project : {};
+  const item = inboxItem && typeof inboxItem === 'object' ? inboxItem : {};
+
+  const deriveName = [
+    String(p.clientName || '').trim(),
+    String(item.contactName || '').trim(),
+    String(item.fromName || '').trim(),
+  ].find(Boolean) || '';
+
+  const phoneCandidates = [
+    String(p.clientPhone || '').trim(),
+    String(item.fromNumber || '').trim(),
+    String(item.sender || '').trim(),
+  ].filter(Boolean);
+  const derivePhone = phoneCandidates.find((x) => normalizePhoneForLookup(x)) || '';
+
+  if (!deriveName && !derivePhone) {
+    return { clients, client: null };
+  }
+
+  const phoneKey = normalizePhoneForLookup(derivePhone);
+  const nameKey = deriveName.toLowerCase();
+
+  let idx = -1;
+  if (phoneKey) {
+    idx = clients.findIndex((c) => normalizePhoneForLookup(c?.phone || '') === phoneKey);
+  }
+  if (idx < 0 && nameKey) {
+    idx = clients.findIndex((c) => String(c?.name || '').trim().toLowerCase() === nameKey);
+  }
+
+  if (idx >= 0) {
+    const existing = clients[idx] && typeof clients[idx] === 'object' ? clients[idx] : {};
+    const merged = normalizeClientRecord({
+      ...existing,
+      name: String(existing.name || '').trim() || deriveName,
+      phone: String(existing.phone || '').trim() || derivePhone,
+      accountManagerName: String(existing.accountManagerName || '').trim() || String(p.accountManagerName || '').trim(),
+      accountManagerEmail: String(existing.accountManagerEmail || '').trim() || String(p.accountManagerEmail || '').trim(),
+      updatedAt: ts,
+    });
+    clients[idx] = merged;
+    return { clients, client: merged };
+  }
+
+  const created = normalizeClientRecord({
+    name: deriveName || derivePhone,
+    phone: derivePhone,
+    accountManagerName: String(p.accountManagerName || '').trim(),
+    accountManagerEmail: String(p.accountManagerEmail || '').trim(),
+    createdAt: ts,
+    updatedAt: ts,
+  });
+  clients.unshift(created);
+  return { clients, client: created };
+}
+
 function isLegacyAirtableClientProject(project) {
   const p = project && typeof project === 'object' ? project : {};
   const brief = String(p.agentBrief || '').toLowerCase();
@@ -3450,6 +3509,7 @@ function normalizeInboxItem(input) {
   const toNumber = typeof i.toNumber === 'string' ? i.toNumber.trim() : '';
   const fromNumber = typeof i.fromNumber === 'string' ? i.fromNumber.trim() : '';
   const sender = typeof i.sender === 'string' ? i.sender.trim() : (fromNumber || '');
+  const contactId = typeof i.contactId === 'string' ? i.contactId.trim() : '';
   const contactName = typeof i.contactName === 'string' ? i.contactName.trim().slice(0, 120) : '';
   const fromName = typeof i.fromName === 'string' ? i.fromName.trim().slice(0, 120) : '';
   const threadKey = typeof i.threadKey === 'string' ? i.threadKey.trim().slice(0, 140) : '';
@@ -3470,6 +3530,7 @@ function normalizeInboxItem(input) {
     toNumber,
     fromNumber,
     sender,
+    contactId,
     contactName,
     fromName,
     threadKey,
@@ -8048,6 +8109,14 @@ app.post('/api/inbox/:id/link-project', async (req, res) => {
 
     const ts = nowIso();
     const current = list[idx];
+    const linked = upsertClientForProjectInboxLink(Array.isArray(store.clients) ? store.clients : [], {
+      project,
+      inboxItem: current,
+      ts,
+    });
+    const nextClients = linked.clients;
+    const linkedContactId = String(linked.client?.id || '').trim();
+    const linkedContactName = String(linked.client?.name || current.contactName || project.clientName || '').trim();
     const matchSender = current.sender || current.fromNumber || '';
     const matchKeys = senderLookupKeys(matchSender);
     
@@ -8057,6 +8126,8 @@ app.post('/api/inbox/:id/link-project', async (req, res) => {
           ...item,
           projectId: String(project.id || ''),
           projectName: String(project.name || ''),
+          contactId: linkedContactId || item.contactId || '',
+          contactName: linkedContactName || item.contactName || '',
           status: item.status === 'New' ? 'Triaged' : item.status,
           updatedAt: ts,
         });
@@ -8070,6 +8141,8 @@ app.post('/api/inbox/:id/link-project', async (req, res) => {
           ...item,
           projectId: String(project.id || ''),
           projectName: String(project.name || ''),
+          contactId: linkedContactId || item.contactId || '',
+          contactName: linkedContactName || item.contactName || '',
           status: item.status === 'New' ? 'Triaged' : item.status,
           updatedAt: ts,
         });
@@ -8088,11 +8161,93 @@ app.post('/api/inbox/:id/link-project', async (req, res) => {
       revision: store.revision + 1,
       updatedAt: ts,
       inboxItems: nextList,
+      clients: nextClients,
     };
 
     await writeStore(nextStore);
     const updated = nextList[idx] || null;
     res.json({ ok: true, store: nextStore, item: updated, project });
+  });
+
+  await writeLock;
+});
+
+app.post('/api/inbox/:id/link-contact', async (req, res) => {
+  const inboxId = String(req.params.id || '').trim();
+  const baseRevision = Number(req.body?.baseRevision);
+  const contactId = typeof req.body?.contactId === 'string' ? req.body.contactId.trim() : '';
+
+  if (!inboxId) {
+    res.status(400).json({ ok: false, error: 'Missing inbox id' });
+    return;
+  }
+  if (!contactId) {
+    res.status(400).json({ ok: false, error: 'contactId is required' });
+    return;
+  }
+
+  writeLock = writeLock.then(async () => {
+    const store = await readStore();
+    if (Number.isFinite(baseRevision) && baseRevision !== store.revision) {
+      res.status(409).json({ ok: false, error: 'Revision mismatch. Reload and try again.', currentRevision: store.revision });
+      return;
+    }
+
+    const list = Array.isArray(store.inboxItems) ? store.inboxItems : [];
+    const idx = list.findIndex((x) => String(x?.id || '') === inboxId);
+    if (idx === -1) {
+      res.status(404).json({ ok: false, error: 'Inbox item not found' });
+      return;
+    }
+
+    const clients = Array.isArray(store.clients) ? store.clients : [];
+    const contact = clients.find((c) => String(c?.id || '').trim() === contactId);
+    if (!contact) {
+      res.status(404).json({ ok: false, error: 'Contact not found' });
+      return;
+    }
+
+    const ts = nowIso();
+    const current = list[idx];
+    const matchSender = current.sender || current.fromNumber || '';
+    const matchKeys = senderLookupKeys(matchSender);
+
+    const nextList = list.map((item, i) => {
+      if (i === idx) {
+        return normalizeInboxItem({
+          ...item,
+          contactId: String(contact.id || ''),
+          contactName: String(contact.name || ''),
+          status: item.status === 'New' ? 'Triaged' : item.status,
+          updatedAt: ts,
+        });
+      }
+
+      const itemSender = item.sender || item.fromNumber || '';
+      const itemKeys = senderLookupKeys(itemSender);
+      const sameThread = matchKeys.length && itemKeys.length && itemKeys.some((k) => matchKeys.includes(k));
+      if (sameThread && !item.contactId) {
+        return normalizeInboxItem({
+          ...item,
+          contactId: String(contact.id || ''),
+          contactName: String(contact.name || ''),
+          status: item.status === 'New' ? 'Triaged' : item.status,
+          updatedAt: ts,
+        });
+      }
+      return item;
+    });
+
+    const nextStore = {
+      ...store,
+      revision: store.revision + 1,
+      updatedAt: ts,
+      inboxItems: nextList,
+    };
+
+    await writeStore(nextStore);
+    const updated = nextList[idx] || null;
+    res.json({ ok: true, store: nextStore, item: updated, contact });
   });
 
   await writeLock;
@@ -8156,10 +8311,19 @@ app.post('/api/inbox/:id/create-project', async (req, res) => {
       updatedAt: ts,
     };
 
+    const linked = upsertClientForProjectInboxLink(Array.isArray(store.clients) ? store.clients : [], {
+      project: createdProject,
+      inboxItem: item,
+      ts,
+    });
+    const nextClients = linked.clients;
+
     const nextItem = normalizeInboxItem({
       ...item,
       projectId: createdProject.id,
       projectName: createdProject.name,
+      contactId: String(linked.client?.id || item.contactId || '').trim(),
+      contactName: String(linked.client?.name || item.contactName || createdProject.clientName || '').trim(),
       status: item?.status === 'New' ? 'Triaged' : item?.status,
       updatedAt: ts,
     });
@@ -8173,6 +8337,7 @@ app.post('/api/inbox/:id/create-project', async (req, res) => {
       updatedAt: ts,
       projects: [createdProject, ...(Array.isArray(store.projects) ? store.projects : [])],
       inboxItems: nextList,
+      clients: nextClients,
     };
 
     await writeStore(nextStore);
@@ -8292,6 +8457,12 @@ app.post('/api/inbox/:id/convert', async (req, res) => {
       nextProjectComms[projectId] = [createdComm, ...existing];
     }
 
+    let nextClients = Array.isArray(store.clients) ? [...store.clients] : [];
+    const linked = (projectId && project)
+      ? upsertClientForProjectInboxLink(nextClients, { project, inboxItem: item, ts })
+      : { clients: nextClients, client: null };
+    nextClients = linked.clients;
+
     const nextList = [...list];
     const converted = {
       kind,
@@ -8308,6 +8479,8 @@ app.post('/api/inbox/:id/convert', async (req, res) => {
       converted,
       projectId: projectId || item.projectId || '',
       projectName: project?.name || item.projectName || '',
+      contactId: String(linked.client?.id || item.contactId || '').trim(),
+      contactName: String(linked.client?.name || item.contactName || project?.clientName || '').trim(),
     });
 
     const nextStore = {
@@ -8318,6 +8491,7 @@ app.post('/api/inbox/:id/convert', async (req, res) => {
       tasks: nextTasks,
       projectNoteEntries: nextProjectNoteEntries,
       projectCommunications: nextProjectComms,
+      clients: nextClients,
     };
 
     await writeStore(nextStore);
