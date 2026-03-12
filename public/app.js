@@ -3196,7 +3196,15 @@ function renderMain() {
         // All other views keep M.A.R.C.U.S. docked on the right.
         dockMarcusToPersistentSlot();
         container.className = 'min-h-0 overflow-y-auto';
-        renderInbox(container);
+        try {
+            renderInbox(container);
+        } catch (e) {
+            console.error('Inbox render failed', e);
+            const msg = safeText(e?.message || 'Unknown inbox error').trim();
+            const stack = safeText(e?.stack).trim();
+            const detail = `Inbox render failed: ${msg}${stack ? `\n\n${stack}` : ''}`;
+            showError(detail.slice(0, 4000));
+        }
     } else if (state.currentView === "revisions") {
         dockMarcusToPersistentSlot();
         container.className = 'min-h-0 overflow-y-auto';
@@ -4625,18 +4633,10 @@ async function runMarcusInboxFilter() {
     return data;
 }
 
-async function runMarcusInboxFilter() {
-    return runMarcusInboxFilter();
-}
-
 function formatMarcusConfidence(value) {
     const n = Number(value);
     if (!Number.isFinite(n)) return '';
     return `${Math.round(Math.max(0, Math.min(1, n)) * 100)}%`;
-}
-
-function formatMarcusConfidence(value) {
-    return formatMarcusConfidence(value);
 }
 
 function getMarcusInboxRecommendation(inboxId) {
@@ -4649,10 +4649,6 @@ function getMarcusInboxRecommendation(inboxId) {
             : {});
     const rec = map[id];
     return rec && typeof rec === 'object' ? rec : null;
-}
-
-function getMarcusInboxRecommendation(inboxId) {
-    return getMarcusInboxRecommendation(inboxId);
 }
 
 async function runMarcusInboxTriage(options = {}) {
