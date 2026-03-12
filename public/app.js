@@ -5322,6 +5322,31 @@ function renderSettings(container) {
     const modelOptionHtml = openAiModelOptions
         .map((m) => `<option value="${escapeHtml(m)}" ${m === currentOpenAiModel ? 'selected' : ''}>${escapeHtml(m)}</option>`)
         .join('');
+    const routeDefs = [
+        { key: 'martyChat', label: 'Marty Chat' },
+        { key: 'operatorBio', label: 'Operator Bio' },
+        { key: 'projectAssistant', label: 'Project Assistant' },
+        { key: 'dashboardPreview', label: 'Dashboard Preview' },
+    ];
+    const routeRowsHtml = routeDefs.map((r) => {
+        const entry = (state.settings?.aiRoutes && typeof state.settings.aiRoutes === 'object' && state.settings.aiRoutes[r.key] && typeof state.settings.aiRoutes[r.key] === 'object')
+            ? state.settings.aiRoutes[r.key]
+            : {};
+        const provider = String(entry.provider || 'openai').trim().toLowerCase() || 'openai';
+        const model = provider === 'openai' ? String(entry.model || '').trim() : '';
+        const options = [`<option value="" ${model ? '' : 'selected'}>Use global (${escapeHtml(currentOpenAiModel)})</option>`]
+            .concat(openAiModelOptions.map((m) => `<option value="${escapeHtml(m)}" ${m === model ? 'selected' : ''}>${escapeHtml(m)}</option>`))
+            .join('');
+        return `
+            <div>
+                <label class="text-xs text-ops-light">${escapeHtml(r.label)} model</label>
+                <select id="set-openai-route-model-${escapeHtml(r.key)}" ${provider !== 'openai' ? 'disabled' : ''} class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-sm ${provider !== 'openai' ? 'opacity-60' : ''}">
+                    ${options}
+                </select>
+                <div class="text-[10px] text-ops-light mt-1">Provider: ${escapeHtml(provider)}</div>
+            </div>
+        `;
+    }).join('');
     aiBody.innerHTML = `
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
@@ -5340,6 +5365,12 @@ function renderSettings(container) {
                     Apply model to all OpenAI routes
                 </label>
                 <div class="text-[11px] text-ops-light mt-1">Effective model: ${escapeHtml(currentOpenAiModel)} • AI Enabled: ${state.settings.aiEnabled ? 'Yes' : 'No'}</div>
+            </div>
+        </div>
+        <div class="mt-4 border border-ops-border rounded p-3 bg-ops-bg/30">
+            <div class="text-xs text-ops-light mb-2">Per-route OpenAI models</div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                ${routeRowsHtml}
             </div>
         </div>
         <div class="flex gap-2 mt-4">
@@ -6306,6 +6337,22 @@ function renderSettings(container) {
                     } else {
                         routes[rk] = { ...existing, provider };
                     }
+                }
+                patch.aiRoutes = routes;
+            } else {
+                const routes = (state.settings?.aiRoutes && typeof state.settings.aiRoutes === 'object')
+                    ? { ...state.settings.aiRoutes }
+                    : {};
+                const routeKeys = ['martyChat', 'operatorBio', 'projectAssistant', 'dashboardPreview'];
+                for (const rk of routeKeys) {
+                    const existing = (routes[rk] && typeof routes[rk] === 'object') ? routes[rk] : {};
+                    const provider = String(existing.provider || 'openai').trim().toLowerCase() || 'openai';
+                    if (provider !== 'openai') {
+                        routes[rk] = { ...existing, provider };
+                        continue;
+                    }
+                    const selectedModel = String(document.getElementById(`set-openai-route-model-${rk}`)?.value || '').trim();
+                    routes[rk] = { ...existing, provider: 'openai', model: selectedModel };
                 }
                 patch.aiRoutes = routes;
             }
