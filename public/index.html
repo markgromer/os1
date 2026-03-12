@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Marty — Management Assistant for Routing Tasks and Yield</title>
+    <title>M.A.R.C.U.S. — Modular Autonomous Routing & Coordination Utility System</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -602,8 +602,8 @@
 
     <!-- COMMAND BAR (Left) -->
     <aside id="command-bar" class="w-16 border-r border-ops-border flex flex-col items-center py-4 bg-ops-surface/60 backdrop-blur-2xl z-30 shadow-2xl">
-        <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-600 to-blue-400 mb-6 flex items-center justify-center font-mono font-bold text-white text-[10px] leading-none shadow-lg shadow-blue-500/20" title="Marty — Management Assistant for Routing Tasks and Yield">
-            MARTY
+        <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-600 to-blue-400 mb-6 flex items-center justify-center font-mono font-bold text-white text-[10px] leading-none shadow-lg shadow-blue-500/20" title="M.A.R.C.U.S. — Modular Autonomous Routing & Coordination Utility System">
+            MARCUS
         </div>
 
         <nav class="flex-1 w-full flex flex-col gap-2 px-2" id="primary-nav">
@@ -639,7 +639,7 @@
                 </button>
                 <div class="h-4 w-px bg-ops-border"></div>
                 <button id="toggle-chat" class="text-ops-accent hover:text-blue-400 transition-colors text-xs font-medium flex items-center gap-2">
-                    <i class="fa-solid fa-bolt"></i> MARTY
+                    <i class="fa-solid fa-bolt"></i> M.A.R.C.U.S.
                 </button>
                 <span id="marty-detached-indicator" class="hidden px-2 py-0.5 rounded border border-blue-600/40 bg-blue-600/10 text-blue-300 text-[10px] font-mono uppercase tracking-wider">Pop-out active</span>
             </div>
@@ -657,14 +657,14 @@
             <div class="flex items-center gap-2 min-w-0">
                 <div id="marty-orb" class="marty-orb idle"></div>
                 <span class="text-[11px] font-mono font-bold text-ops-light tracking-widest uppercase truncate">
-                    <i class="fa-solid fa-microchip mr-1.5 text-ops-accent"></i>MARTY
+                    <i class="fa-solid fa-microchip mr-1.5 text-ops-accent"></i>M.A.R.C.U.S.
                 </span>
             </div>
             <div class="flex items-center gap-2">
-                <button id="marty-popout-toggle" class="text-ops-light hover:text-white transition-colors text-[11px]" title="Detach MARTY">
+                <button id="marty-popout-toggle" class="text-ops-light hover:text-white transition-colors text-[11px]" title="Detach M.A.R.C.U.S.">
                     <i class="fa-solid fa-up-right-from-square"></i>
                 </button>
-                <select id="marty-thread-select" class="bg-ops-bg border border-ops-border rounded px-2 py-1 text-[10px] text-white font-mono focus:outline-none focus:ring-1 focus:ring-ops-accent" title="MARTY thread">
+                <select id="marty-thread-select" class="bg-ops-bg border border-ops-border rounded px-2 py-1 text-[10px] text-white font-mono focus:outline-none focus:ring-1 focus:ring-ops-accent" title="M.A.R.C.U.S. thread">
                     <option value="default">Direct</option>
                     <option value="operator_bio">Bio</option>
                 </select>
@@ -682,7 +682,7 @@
         <div id="chat-stream" class="flex-1 overflow-y-auto p-3 space-y-3 font-mono text-xs">
             <div class="text-center mt-10 opacity-30">
                 <i class="fa-solid fa-terminal text-2xl mb-2"></i>
-                <p>MARTY ready for directives.</p>
+                <p>M.A.R.C.U.S. ready for directives.</p>
             </div>
         </div>
 
@@ -704,7 +704,7 @@
                 </div>
             </div>
             <div id="ai-status" class="flex justify-between mt-2 text-[10px] text-ops-light font-mono opacity-0 transition-opacity">
-                <span id="marty-state">MARTY IDLE</span>
+                <span id="marty-state">M.A.R.C.U.S. IDLE</span>
                 <span class="animate-pulse">///</span>
             </div>
         </div>

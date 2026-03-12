@@ -2,7 +2,7 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "Marty: Install deps",
+      "label": "M.A.R.C.U.S.: Install deps",
       "type": "shell",
       "command": "npm",
       "args": ["install"],
@@ -10,7 +10,7 @@
       "group": "build"
     },
     {
-      "label": "Marty: Start server",
+      "label": "M.A.R.C.U.S.: Start server",
       "type": "shell",
       "command": "powershell",
       "args": [
@@ -28,7 +28,7 @@
       }
     },
     {
-      "label": "Marty: Start server (free port 3030)",
+      "label": "M.A.R.C.U.S.: Start server (free port 3030)",
       "type": "shell",
       "command": "powershell",
       "args": [
@@ -43,7 +43,7 @@
       "group": "build"
     },
     {
-      "label": "Marty: Open in browser",
+      "label": "M.A.R.C.U.S.: Open in browser",
       "type": "shell",
       "command": "powershell",
       "args": [
@@ -57,7 +57,7 @@
       "group": "test"
     },
     {
-      "label": "Marty: Stop server (kill node)",
+      "label": "M.A.R.C.U.S.: Stop server (kill node)",
       "type": "shell",
       "command": "powershell",
       "args": [

@@ -1,5 +1,5 @@
 /* =========================================
-    MARTY — (M)anagement (A)ssistant for (R)outing (T)asks and (Y)ield
+    M.A.R.C.U.S. — Modular Autonomous Routing & Coordination Utility System
     ========================================= */
 
 /* --- State Management --- */
@@ -81,7 +81,7 @@ const state = {
         { id: "u1", name: "Mark", role: "admin", avatar: "M" },
         { id: "u2", name: "Sarah", role: "designer", avatar: "S" },
         { id: "u3", name: "David", role: "developer", avatar: "D" },
-        { id: "ai", name: "Marty", role: "ai", avatar: "AI" },
+        { id: "ai", name: "M.A.R.C.U.S.", role: "ai", avatar: "AI" },
     ],
 };
 
@@ -912,12 +912,12 @@ function setMartyPresence(mode = 'idle') {
     if (statusText) {
         if (busy) {
             const line = MARTY_THINKING_LINES[Math.floor(Math.random() * MARTY_THINKING_LINES.length)];
-            statusText.textContent = `MARTY THINKING • ${line}`;
+            statusText.textContent = `M.A.R.C.U.S. THINKING • ${line}`;
         } else if (responding) {
             const line = MARTY_RESPONDING_LINES[Math.floor(Math.random() * MARTY_RESPONDING_LINES.length)];
-            statusText.textContent = `MARTY RESPONDING • ${line}`;
+            statusText.textContent = `M.A.R.C.U.S. RESPONDING • ${line}`;
         } else {
-            statusText.textContent = 'MARTY IDLE • READY FOR ORDERS';
+            statusText.textContent = 'M.A.R.C.U.S. IDLE • READY FOR ORDERS';
         }
     }
 }

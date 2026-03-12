@@ -185,9 +185,9 @@ function getStoreFileForBusiness(businessKey) {
   return path.join(BUSINESS_DATA_DIR, key, 'tasks.json');
 }
 
-// Branding: app is called Marty, but keep backward compatibility with existing
+// Branding: app is called M.A.R.C.U.S., but keep backward compatibility with existing
 // settings directories that were created under the old name.
-const APP_NAME = 'Marty';
+const APP_NAME = 'M.A.R.C.U.S.';
 const LEGACY_APP_NAME = 'Task Tracker';
 
 function getDefaultSettingsDir() {
@@ -861,7 +861,7 @@ async function aiChatCompletion({ routeKey, messages, tools, tool_choice, timeou
   if (route.provider === 'openrouter') {
     // Optional but helpful for OpenRouter analytics/compliance.
     headers['HTTP-Referer'] = typeof process.env.OPENROUTER_HTTP_REFERER === 'string' ? process.env.OPENROUTER_HTTP_REFERER.trim() : '';
-    headers['X-Title'] = typeof process.env.OPENROUTER_X_TITLE === 'string' ? process.env.OPENROUTER_X_TITLE.trim() : 'Marty';
+    headers['X-Title'] = typeof process.env.OPENROUTER_X_TITLE === 'string' ? process.env.OPENROUTER_X_TITLE.trim() : 'M.A.R.C.U.S.';
     if (!headers['HTTP-Referer']) delete headers['HTTP-Referer'];
   }
 
@@ -2358,8 +2358,8 @@ async function ensureGoogleCalendar(calendar, settings) {
 
   const created = await calendar.calendars.insert({
     requestBody: {
-      summary: 'Marty',
-      description: 'Project due dates synced from Marty',
+      summary: 'M.A.R.C.U.S.',
+      description: 'Project due dates synced from M.A.R.C.U.S.',
       timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
     },
   });
@@ -2372,7 +2372,7 @@ async function ensureGoogleCalendar(calendar, settings) {
 
 function ttEventSummary(project) {
   const name = typeof project?.name === 'string' ? project.name.trim() : '';
-  return name ? `[MARTY] ${name}` : '[MARTY] Project';
+  return name ? `[M.A.R.C.U.S.] ${name}` : '[M.A.R.C.U.S.] Project';
 }
 
 function projectDueDateFromEvent(event) {
@@ -2426,7 +2426,7 @@ async function googleSyncProjects({ req }) {
       summary: ttEventSummary(project),
       start: { date: dueDate },
       end: { date: ymdAddDays(dueDate, 1) || dueDate },
-      description: 'Synced from Marty (project due date)',
+      description: 'Synced from M.A.R.C.U.S. (project due date)',
       transparency: 'transparent',
       extendedProperties: { private: { taskTrackerProjectId: projectId } },
     };
@@ -2642,7 +2642,8 @@ function upsertClientForProjectInboxLink(clientsInput, { project, inboxItem, ts 
     String(p.clientName || '').trim(),
     String(item.contactName || '').trim(),
     String(item.fromName || '').trim(),
-  ].find(Boolean) || '';
+    String(p.name || '').trim(),
+  ].find(Boolean) || 'Unknown Contact';
 
   const phoneCandidates = [
     String(p.clientPhone || '').trim(),
@@ -2650,10 +2651,6 @@ function upsertClientForProjectInboxLink(clientsInput, { project, inboxItem, ts 
     String(item.sender || '').trim(),
   ].filter(Boolean);
   const derivePhone = phoneCandidates.find((x) => normalizePhoneForLookup(x)) || '';
-
-  if (!deriveName && !derivePhone) {
-    return { clients, client: null };
-  }
 
   const phoneKey = normalizePhoneForLookup(derivePhone);
   const nameKey = deriveName.toLowerCase();
@@ -6063,7 +6060,7 @@ app.get('/api/integrations/google/callback', async (req, res) => {
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.send(`<!doctype html><html><head><meta charset="utf-8"><title>Connected</title></head><body style="font-family: system-ui, sans-serif; padding: 24px;">
       <h1>Google connected.</h1>
-      <p>You can close this tab and return to Marty.</p>
+      <p>You can close this tab and return to M.A.R.C.U.S.</p>
     </body></html>`);
   } catch (err) {
     res.status(500).send(`OAuth failed: ${err?.message || 'unknown error'}`);
@@ -6667,7 +6664,7 @@ app.get('/api/integrations/slack/oauth/callback', async (req, res) => {
     res.send(`<!doctype html><html><head><meta charset="utf-8"><title>Connected</title></head><body style="font-family: system-ui, sans-serif; padding: 24px;">
       <h1>Slack connected.</h1>
       <p>Workspace: ${escapeHtml(teamName || teamId || 'unknown')}</p>
-      <p>You can close this tab and return to Marty.</p>
+      <p>You can close this tab and return to M.A.R.C.U.S.</p>
     </body></html>`);
   } catch (err) {
     res.status(500).send(`Slack OAuth failed: ${err?.message || 'unknown error'}`);
@@ -7326,7 +7323,7 @@ app.get('/api/inbox/marty-triage', async (req, res) => {
       generatedAt: nowIso(),
     });
   } catch (err) {
-    res.status(500).json({ ok: false, error: err?.message || 'Failed to build Marty triage recommendations' });
+    res.status(500).json({ ok: false, error: err?.message || 'Failed to build M.A.R.C.U.S. triage recommendations' });
   }
 });
 
@@ -10050,12 +10047,12 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
 
     let context = '';
     const baseSystemPrompt =
-      "You are Marty — (M)anagement (A)ssistant for (R)outing (T)asks and (Y)ield. Stay concise and action-oriented. You DO have access to the user's project data provided in context. Never claim you can't access tasks/notes; if something isn't present in context, ask for it.\n\nDefault behavior (unless the user explicitly asks otherwise):\n- Be proactive: infer what matters now from OPS SNAPSHOT + CROSS-BUSINESS ROLLUP and propose next actions.\n- Output structure: (1) Situation (1-2 lines), (2) Next actions (3-7 bullets), (3) Questions (0-2) only if needed to unblock.\n- If the user message is vague (e.g., \"hi\", \"what now\"), treat it as a request for a prioritized plan from the snapshot.";
+      "You are M.A.R.C.U.S. — Modular Autonomous Routing & Coordination Utility System. Stay concise and action-oriented. You DO have access to the user's project data provided in context. Never claim you can't access tasks/notes; if something isn't present in context, ask for it.\n\nDefault behavior (unless the user explicitly asks otherwise):\n- Be proactive: infer what matters now from OPS SNAPSHOT + CROSS-BUSINESS ROLLUP and propose next actions.\n- Output structure: (1) Situation (1-2 lines), (2) Next actions (3-7 bullets), (3) Questions (0-2) only if needed to unblock.\n- If the user message is vague (e.g., \"hi\", \"what now\"), treat it as a request for a prioritized plan from the snapshot.";
     let systemPrompt = userSystemPrompt ? `${userSystemPrompt}\n\n---\n${baseSystemPrompt}` : baseSystemPrompt;
 
     if (effectiveThreadId === 'operator_bio') {
       systemPrompt =
-        "You are Marty — (M)anagement (A)ssistant for (R)outing (T)asks and (Y)ield. This is the OPERATOR BIO thread. Your job is to help the operator define and refine their bio, roles, responsibilities, preferences, needs, constraints, and operating principles.\n\nYou MUST keep the Operator Bio up to date by calling the tool set_operator_bio whenever the operator provides new or corrected information.\n\nGuidelines:\n- Ask 1-3 clarifying questions when needed.\n- Produce a short summary + recommended next action.\n- Keep the bio factual and actionable; avoid fluff.\n- Do not modify projects/tasks in this thread.";
+        "You are M.A.R.C.U.S. — Modular Autonomous Routing & Coordination Utility System. This is the OPERATOR BIO thread. Your job is to help the operator define and refine their bio, roles, responsibilities, preferences, needs, constraints, and operating principles.\n\nYou MUST keep the Operator Bio up to date by calling the tool set_operator_bio whenever the operator provides new or corrected information.\n\nGuidelines:\n- Ask 1-3 clarifying questions when needed.\n- Produce a short summary + recommended next action.\n- Keep the bio factual and actionable; avoid fluff.\n- Do not modify projects/tasks in this thread.";
     }
 
     if (userMemory) {
@@ -10071,11 +10068,11 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
     }
 
     if (personalityLayer) {
-      context += `PERSONALITY LAYER (how Marty behaves):\n${String(personalityLayer).slice(0, 12000)}\n\n`;
+      context += `PERSONALITY LAYER (how M.A.R.C.U.S. behaves):\n${String(personalityLayer).slice(0, 12000)}\n\n`;
     }
 
     if (attentionRadar) {
-      context += `ATTENTION RADAR (what Marty watches for):\n${String(attentionRadar).slice(0, 12000)}\n\n`;
+      context += `ATTENTION RADAR (what M.A.R.C.U.S. watches for):\n${String(attentionRadar).slice(0, 12000)}\n\n`;
     }
 
     if (dailyReportingStructure) {
@@ -10985,7 +10982,7 @@ function buildDeterministicBrief({ kind, store, businessName, settings }) {
     .slice(0, 8);
 
   const lines = [];
-  lines.push(`Marty Brief — ${briefKindLabel(kind)} — ${today}${businessName ? ` — ${businessName}` : ''}`);
+  lines.push(`M.A.R.C.U.S. Brief — ${briefKindLabel(kind)} — ${today}${businessName ? ` — ${businessName}` : ''}`);
   lines.push('');
   lines.push(`Situation: ${projects.length} projects • ${openTasks.length} open tasks • ${overdue.length} overdue • ${dueToday.length} due today • ${inboxNew.length} new inbox`);
   lines.push('');
@@ -11144,7 +11141,7 @@ app.listen(PORT, async () => {
   startAirtableRequestsAutoSyncScheduler();
   startMartyBriefScheduler();
   // eslint-disable-next-line no-console
-  console.log(`Marty running on http://localhost:${PORT}`);
+  console.log(`M.A.R.C.U.S. running on http://localhost:${PORT}`);
 });
 
 

@@ -183,7 +183,7 @@ export async function withMcpClient(config, fn) {
       {
         protocolVersion: DEFAULT_PROTOCOL_VERSION,
         capabilities: {},
-        clientInfo: { name: 'Marty', version: '1.0' },
+        clientInfo: { name: 'M.A.R.C.U.S.', version: '1.0' },
       },
       { timeoutMs: 30000 }
     );

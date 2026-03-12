@@ -1,6 +1,6 @@
-# Marty — Management Assistant for Routing Tasks and Yield
+# M.A.R.C.U.S. — Modular Autonomous Routing & Coordination Utility System
 
-Marty = **(M)anagement (A)ssistant for (R)outing (T)asks and (Y)ield**.
+M.A.R.C.U.S. = **Modular Autonomous Routing & Coordination Utility System**.
 
 This is a tiny “project command center” that runs locally and stores everything in a OneDrive-sync-friendly JSON file.
 
@@ -74,7 +74,7 @@ The blueprint mounts a persistent disk at `/var/data/task-tracker` and stores:
 
 ## MCP on Render (Option 1: stdio servers in same container)
 
-This app supports MCP (Model Context Protocol) servers over **stdio**. On Render, this means Marty spawns MCP servers as child processes inside the same container.
+This app supports MCP (Model Context Protocol) servers over **stdio**. On Render, this means M.A.R.C.U.S. spawns MCP servers as child processes inside the same container.
 
 ### Why this is the easiest option
 
@@ -133,10 +133,10 @@ This repo includes VS Code tasks so you can run everything without remembering c
 
 1. In VS Code: **Terminal → Run Task…**
 2. Pick one of:
-   - **Marty: Start server (free port 3030)** (best default)
-   - **Marty: Start server**
-   - **Marty: Open in browser**
-   - **Marty: Stop server (kill node)**
+   - **M.A.R.C.U.S.: Start server (free port 3030)** (best default)
+   - **M.A.R.C.U.S.: Start server**
+   - **M.A.R.C.U.S.: Open in browser**
+   - **M.A.R.C.U.S.: Stop server (kill node)**
 
 If you want a keyboard shortcut, you can bind it to the task label in VS Code.
 
