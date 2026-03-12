@@ -7001,6 +7001,8 @@ function renderProjects(container) {
 
     const activeProjects = getActiveProjects();
     const archivedProjects = getArchivedProjects();
+    const teamMembers = getHumanTeamMembers();
+    const teamOwnerOptions = [''].concat(teamMembers.map((m) => safeText(m?.name).trim()).filter(Boolean));
 
     const wrap = document.createElement('div');
     wrap.className = 'h-full flex flex-col min-h-0';
@@ -7125,10 +7127,11 @@ function renderProjects(container) {
                 body.appendChild(empty);
             } else {
                 for (const p of list) {
-                    const card = document.createElement('button');
-                    card.type = 'button';
+                    const card = document.createElement('div');
                     card.setAttribute('data-project-card', '1');
-                    card.dataset.searchKey = searchKey(p?.name, p?.clientName, p?.agentBrief, p?.type, p?.status, p?.dueDate);
+                    const ownerName = getProjectOwnerName(p);
+                    const isActiveProject = !isArchivedProject(p);
+                    card.dataset.searchKey = searchKey(p?.name, p?.clientName, p?.agentBrief, p?.type, p?.status, p?.dueDate, ownerName);
                     // Glassy Card
                     card.className = 'group w-full text-left p-4 rounded-xl border border-white/10 bg-white/5 backdrop-blur-md hover:bg-white/10 hover:border-white/20 transition-all duration-300 hover:-translate-y-1 hover:shadow-xl relative overflow-hidden flex flex-col gap-3 min-h-[120px]';
                     card.innerHTML = `
@@ -7142,15 +7145,58 @@ function renderProjects(container) {
                                 ${safeText(p?.dueDate) ? `Due ${escapeHtml(safeText(p?.dueDate))}` : 'No due date'}
                             </div>
                         </div>
-                        <div class="relative z-10 mt-auto flex items-center gap-2">
+                        <div class="relative z-10 mt-auto flex items-center gap-2 flex-wrap">
                             <span class="text-[10px] font-mono uppercase tracking-wider px-2 py-1 rounded border border-white/10 bg-black/20 text-emerald-300">
                                 ${escapeHtml(safeText(p?.status) || 'Active')}
                             </span>
                             <span class="text-[10px] font-mono uppercase tracking-wider px-2 py-1 rounded border border-white/10 bg-black/20 text-purple-300">
                                 ${escapeHtml(safeText(p?.type) || 'Other')}
                             </span>
+                            <span class="text-[10px] font-mono uppercase tracking-wider px-2 py-1 rounded border ${ownerName ? 'border-blue-500/30 bg-blue-500/10 text-blue-200' : 'border-zinc-800 bg-black/20 text-zinc-500'}">
+                                ${escapeHtml(ownerName || 'Unassigned')}
+                            </span>
+                        </div>
+                        <div class="relative z-10 flex items-center gap-2">
+                            ${isActiveProject ? `
+                            <select data-project-owner="${escapeHtml(safeText(p?.id))}" class="flex-1 bg-zinc-950/40 border border-zinc-800 rounded px-2 py-1.5 text-[10px] font-mono text-zinc-200">
+                                ${teamOwnerOptions.map((name) => {
+                                    const label = name ? name : 'Unassigned';
+                                    const selected = (name ? name : '') === (ownerName ? ownerName : '') ? 'selected' : '';
+                                    return `<option value="${escapeHtml(name)}" ${selected}>${escapeHtml(label)}</option>`;
+                                }).join('')}
+                            </select>` : `<div class="flex-1 text-[10px] text-zinc-500 font-mono">Archived project</div>`}
+                            <button type="button" data-project-open="${escapeHtml(safeText(p?.id))}" class="px-2.5 py-1.5 rounded border border-zinc-800 bg-zinc-950/30 hover:bg-zinc-900/40 text-zinc-300 text-[10px] font-mono">Open</button>
                         </div>
                     `;
+
+                    card.querySelectorAll('select,button').forEach((el) => {
+                        el.addEventListener('click', (e) => e.stopPropagation());
+                        el.addEventListener('mousedown', (e) => e.stopPropagation());
+                    });
+
+                    const ownerSelect = card.querySelector('select[data-project-owner]');
+                    if (ownerSelect && p?.id) {
+                        ownerSelect.addEventListener('change', async (e) => {
+                            const nextOwner = safeText(e?.target?.value).trim();
+                            ownerSelect.disabled = true;
+                            try {
+                                await saveProjectPatch(p.id, { owner: nextOwner });
+                                renderNav();
+                                renderMain();
+                            } catch (err) {
+                                alert(err?.message || 'Failed to delegate project');
+                                ownerSelect.disabled = false;
+                            }
+                        });
+                    }
+
+                    const openBtn = card.querySelector('button[data-project-open]');
+                    if (openBtn) {
+                        openBtn.addEventListener('click', async () => {
+                            if (p?.id) await openProject(p.id);
+                        });
+                    }
+
                     card.onclick = async () => {
                         if (p?.id) await openProject(p.id);
                     };
