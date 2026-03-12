@@ -518,10 +518,14 @@ async function readSettings() {
     await fs.mkdir(SETTINGS_DIR, { recursive: true });
     const raw = await fs.readFile(SETTINGS_FILE, 'utf8');
     const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object') return {};
-    return parsed;
+    if (!parsed || typeof parsed !== 'object') return { automationConfig: normalizeAutomationConfig({}), automationDigestQueue: [] };
+    return {
+      ...parsed,
+      automationConfig: normalizeAutomationConfig(parsed.automationConfig),
+      automationDigestQueue: normalizeAutomationDigestQueue(parsed.automationDigestQueue),
+    };
   } catch {
-    return {};
+    return { automationConfig: normalizeAutomationConfig({}), automationDigestQueue: [] };
   }
 }
 
@@ -585,6 +589,106 @@ function normalizeAiRoutes(input) {
     out[k] = { provider, model };
   }
   return out;
+}
+
+function clampUnit(input, fallback) {
+  const n = Number(input);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(0, Math.min(1, n));
+}
+
+function normalizeAutomationConfig(input) {
+  const raw = pickObject(input);
+  const inbox = pickObject(raw.inboxAutoConvert);
+  const delegation = pickObject(raw.autoDelegation);
+  const overdue = pickObject(raw.workloadRebalance);
+
+  const approvalModeRaw = typeof raw.approvalMode === 'string' ? raw.approvalMode.trim().toLowerCase() : '';
+  const approvalMode = ['manual', 'dailydigest', 'auto'].includes(approvalModeRaw)
+    ? (approvalModeRaw === 'dailydigest' ? 'dailyDigest' : approvalModeRaw)
+    : 'dailyDigest';
+
+  const maxTasksPerItemRaw = Number(inbox.maxTasksPerItem);
+  const maxTasksPerItem = Number.isFinite(maxTasksPerItemRaw)
+    ? Math.max(1, Math.min(5, Math.floor(maxTasksPerItemRaw)))
+    : 3;
+
+  const limitRaw = Number(inbox.limit);
+  const limit = Number.isFinite(limitRaw)
+    ? Math.max(1, Math.min(300, Math.floor(limitRaw)))
+    : 120;
+
+  const overdueDaysRaw = Number(overdue.overdueDays);
+  const overdueDays = Number.isFinite(overdueDaysRaw)
+    ? Math.max(1, Math.min(30, Math.floor(overdueDaysRaw)))
+    : 5;
+
+  return {
+    enabled: raw.enabled !== false,
+    approvalMode,
+    inboxAutoConvert: {
+      enabled: inbox.enabled !== false,
+      onlyNew: inbox.onlyNew !== false,
+      includeArchived: inbox.includeArchived === true,
+      limit,
+      minProjectConfidence: clampUnit(inbox.minProjectConfidence, 0.8),
+      minDelegateConfidence: clampUnit(inbox.minDelegateConfidence, 0.85),
+      autoLinkProject: inbox.autoLinkProject !== false,
+      autoDelegate: inbox.autoDelegate !== false,
+      markInboxDoneOnApply: inbox.markInboxDoneOnApply !== false,
+      maxTasksPerItem,
+    },
+    autoDelegation: {
+      enabled: delegation.enabled !== false,
+      skipConfirmIfConfidence: clampUnit(delegation.skipConfirmIfConfidence, 0.85),
+      respectWipLimits: delegation.respectWipLimits !== false,
+      skillMatchRequired: delegation.skillMatchRequired !== false,
+    },
+    commsDraft: {
+      enabled: pickObject(raw.commsDraft).enabled === true,
+    },
+    autoArchiveLinkedInbox: raw.autoArchiveLinkedInbox === true,
+    workloadRebalance: {
+      enabled: overdue.enabled === true,
+      overdueDays,
+      escalateToSlack: overdue.escalateToSlack === true,
+    },
+    auditLog: raw.auditLog !== false,
+    notificationBatching: raw.notificationBatching !== false,
+  };
+}
+
+function normalizeAutomationDigestQueue(input) {
+  if (!Array.isArray(input)) return [];
+  return input
+    .map((entry) => {
+      const e = entry && typeof entry === 'object' ? entry : {};
+      const tasks = Array.isArray(e.tasks)
+        ? e.tasks.map((t) => ({
+          title: String(t?.title || '').trim(),
+          priority: [1, 2, 3].includes(Number(t?.priority)) ? Number(t.priority) : 2,
+        })).filter((t) => t.title).slice(0, 5)
+        : [];
+      return {
+        id: String(e.id || '').trim() || makeId(),
+        itemId: String(e.itemId || '').trim(),
+        status: ['pending', 'applied', 'rejected'].includes(String(e.status || '').trim().toLowerCase())
+          ? String(e.status || '').trim().toLowerCase()
+          : 'pending',
+        createdAt: safeIsoMaybe(String(e.createdAt || '').trim()) || nowIso(),
+        runId: String(e.runId || '').trim(),
+        source: String(e.source || '').trim() || 'marty-automation',
+        signalPreview: previewTextServer(String(e.signalPreview || '').trim(), 220),
+        projectId: String(e.projectId || '').trim(),
+        projectName: String(e.projectName || '').trim(),
+        projectConfidence: clampUnit(e.projectConfidence, 0),
+        delegateName: String(e.delegateName || '').trim(),
+        delegateConfidence: clampUnit(e.delegateConfidence, 0),
+        tasks,
+      };
+    })
+    .filter((e) => e.itemId)
+    .slice(0, 500);
 }
 
 function getOpenAiSecrets(saved) {
@@ -4675,6 +4779,8 @@ app.put('/api/settings', async (req, res) => {
   writeLock = writeLock.then(async () => {
     const saved = await readSettings();
     const next = { ...saved, ...body, updatedAt: nowIso() };
+    next.automationConfig = normalizeAutomationConfig(next.automationConfig);
+    next.automationDigestQueue = normalizeAutomationDigestQueue(next.automationDigestQueue);
     await writeSettings(next);
     // Never echo settings back (could include secrets).
     res.json({ ok: true });
@@ -6990,6 +7096,228 @@ app.get('/api/inbox/marty-triage', async (req, res) => {
   } catch (err) {
     res.status(500).json({ ok: false, error: err?.message || 'Failed to build Marty triage recommendations' });
   }
+});
+
+app.get('/api/inbox/automation/digest', async (req, res) => {
+  try {
+    const settings = await readSettings();
+    const queue = normalizeAutomationDigestQueue(settings?.automationDigestQueue);
+    const pending = queue.filter((e) => e.status === 'pending');
+    res.json({ ok: true, count: pending.length, items: pending.slice(0, 200) });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message || 'Failed to load automation digest queue' });
+  }
+});
+
+app.post('/api/inbox/automation/run', async (req, res) => {
+  const body = req.body && typeof req.body === 'object' ? req.body : {};
+  const approvalOverrideRaw = typeof body.approvalMode === 'string' ? body.approvalMode.trim().toLowerCase() : '';
+  const approvalOverride = ['manual', 'dailydigest', 'auto'].includes(approvalOverrideRaw)
+    ? (approvalOverrideRaw === 'dailydigest' ? 'dailyDigest' : approvalOverrideRaw)
+    : '';
+
+  writeLock = writeLock.then(async () => {
+    const store = await readStore();
+    const settings = await readSettings();
+    const cfg = normalizeAutomationConfig(settings?.automationConfig);
+    const inboxCfg = cfg.inboxAutoConvert;
+    const runId = `auto-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const ts = nowIso();
+    const effectiveApprovalMode = approvalOverride || cfg.approvalMode;
+
+    if (!cfg.enabled || !inboxCfg.enabled) {
+      res.json({
+        ok: true,
+        runId,
+        enabled: false,
+        approvalMode: effectiveApprovalMode,
+        scanned: 0,
+        proposed: 0,
+        applied: 0,
+        skipped: 0,
+        reason: 'automation disabled in settings',
+      });
+      return;
+    }
+
+    const visible = getVisibleInboxItemsFromSettings(store.inboxItems, settings);
+    let list = visible;
+    if (!inboxCfg.includeArchived) {
+      list = list.filter((x) => String(x?.status || '').trim().toLowerCase() !== 'archived');
+    }
+    if (inboxCfg.onlyNew) {
+      list = list.filter((x) => String(x?.status || '').trim().toLowerCase() === 'new');
+    }
+    list = list.slice(0, inboxCfg.limit);
+
+    const byId = new Map((Array.isArray(store.inboxItems) ? store.inboxItems : []).map((x) => [String(x?.id || ''), x]));
+    const nextList = Array.isArray(store.inboxItems) ? [...store.inboxItems] : [];
+    const nextTasks = Array.isArray(store.tasks) ? [...store.tasks] : [];
+    const existingQueue = normalizeAutomationDigestQueue(settings?.automationDigestQueue);
+    const queueByItem = new Set(existingQueue.filter((e) => e.status === 'pending').map((e) => e.itemId));
+    const appendedQueue = [];
+
+    let scanned = 0;
+    let proposed = 0;
+    let applied = 0;
+    let skipped = 0;
+
+    for (const item of list) {
+      const itemId = String(item?.id || '').trim();
+      if (!itemId) continue;
+      scanned += 1;
+
+      const current = byId.get(itemId) && typeof byId.get(itemId) === 'object' ? byId.get(itemId) : item;
+      const alreadyAutomated = Array.isArray(current?.automation?.appliedTaskIds) && current.automation.appliedTaskIds.length;
+      const alreadyConverted = String(current?.converted?.kind || '').trim().toLowerCase() === 'task';
+      if (alreadyAutomated || alreadyConverted) {
+        skipped += 1;
+        continue;
+      }
+
+      const recommendation = buildMartyInboxRecommendation(store, current);
+      const recTasks = Array.isArray(recommendation?.tasks)
+        ? recommendation.tasks.map((t) => ({
+          title: String(t?.title || '').trim(),
+          priority: [1, 2, 3].includes(Number(t?.priority)) ? Number(t.priority) : 2,
+        })).filter((t) => t.title).slice(0, inboxCfg.maxTasksPerItem)
+        : [];
+      if (!recTasks.length) {
+        skipped += 1;
+        continue;
+      }
+
+      const recProjectId = String(recommendation?.project?.projectId || '').trim();
+      const recProjectName = String(recommendation?.project?.projectName || '').trim();
+      const recProjectConfidence = clampUnit(recommendation?.project?.confidence, 0);
+      const canAutoLinkProject = Boolean(recProjectId && recProjectConfidence >= inboxCfg.minProjectConfidence);
+
+      const recDelegateName = String(recommendation?.delegate?.name || '').trim();
+      const recDelegateConfidence = clampUnit(recommendation?.delegate?.confidence, 0);
+      const canAutoDelegate = Boolean(inboxCfg.autoDelegate && recDelegateName && recDelegateConfidence >= inboxCfg.minDelegateConfidence);
+
+      const resolvedProjectId = canAutoLinkProject ? recProjectId : String(current?.projectId || '').trim();
+      const resolvedProject = resolvedProjectId
+        ? (Array.isArray(store.projects) ? store.projects : []).find((p) => String(p?.id || '').trim() === resolvedProjectId)
+        : null;
+      const resolvedProjectName = String(
+        resolvedProject?.name
+        || (canAutoLinkProject ? recProjectName : '')
+        || current?.projectName
+        || recProjectName
+        || 'Other'
+      ).trim() || 'Other';
+
+      if (effectiveApprovalMode === 'dailyDigest' || effectiveApprovalMode === 'manual') {
+        if (!queueByItem.has(itemId)) {
+          appendedQueue.push({
+            id: makeId(),
+            itemId,
+            status: 'pending',
+            createdAt: ts,
+            runId,
+            source: 'marty-automation',
+            signalPreview: String(recommendation?.signalPreview || '').trim(),
+            projectId: canAutoLinkProject ? recProjectId : '',
+            projectName: resolvedProjectName,
+            projectConfidence: recProjectConfidence,
+            delegateName: canAutoDelegate ? recDelegateName : '',
+            delegateConfidence: recDelegateConfidence,
+            tasks: recTasks,
+          });
+          queueByItem.add(itemId);
+          proposed += 1;
+        } else {
+          skipped += 1;
+        }
+        continue;
+      }
+
+      const createdTaskIds = [];
+      for (const t of recTasks) {
+        const task = {
+          id: makeId(),
+          title: t.title,
+          project: resolvedProjectName,
+          type: 'Other',
+          owner: canAutoDelegate ? recDelegateName : '',
+          status: 'Next',
+          priority: t.priority,
+          dueDate: '',
+          createdAt: ts,
+          updatedAt: ts,
+          createdBy: 'marty-automation',
+        };
+        nextTasks.unshift(task);
+        createdTaskIds.push(task.id);
+      }
+
+      const idx = nextList.findIndex((x) => String(x?.id || '') === itemId);
+      if (idx >= 0) {
+        nextList[idx] = normalizeInboxItem({
+          ...current,
+          status: inboxCfg.markInboxDoneOnApply ? 'Done' : current?.status,
+          updatedAt: ts,
+          projectId: inboxCfg.autoLinkProject && canAutoLinkProject ? recProjectId : current?.projectId,
+          projectName: inboxCfg.autoLinkProject && canAutoLinkProject ? resolvedProjectName : current?.projectName,
+          automation: {
+            mode: 'auto',
+            runId,
+            appliedAt: ts,
+            approvalMode: effectiveApprovalMode,
+            appliedTaskIds: createdTaskIds,
+            projectLinked: Boolean(inboxCfg.autoLinkProject && canAutoLinkProject),
+            delegatedTo: canAutoDelegate ? recDelegateName : '',
+            recommendation,
+          },
+        });
+      }
+
+      applied += 1;
+    }
+
+    const nextQueue = normalizeAutomationDigestQueue([...existingQueue, ...appendedQueue]);
+    const anyStoreChanges = applied > 0;
+    const anySettingsChanges = appendedQueue.length > 0;
+
+    let nextStore = store;
+    if (anyStoreChanges) {
+      nextStore = {
+        ...store,
+        revision: store.revision + 1,
+        updatedAt: ts,
+        inboxItems: nextList,
+        tasks: nextTasks,
+      };
+      await writeStore(nextStore);
+    }
+
+    if (anySettingsChanges) {
+      await writeSettings({
+        ...settings,
+        automationConfig: cfg,
+        automationDigestQueue: nextQueue,
+        updatedAt: ts,
+      });
+    }
+
+    const storeForResponse = anyStoreChanges ? nextStore : store;
+    res.json({
+      ok: true,
+      runId,
+      enabled: true,
+      approvalMode: effectiveApprovalMode,
+      scanned,
+      proposed,
+      applied,
+      skipped,
+      digestPending: nextQueue.filter((e) => e.status === 'pending').length,
+      store: applyInboxVisibilityToStore(storeForResponse, settings),
+      preview: appendedQueue.slice(0, 5),
+    });
+  });
+
+  await writeLock;
 });
 
 // Global Dashboard (cross-business) Focus

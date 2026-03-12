@@ -3701,6 +3701,7 @@ function renderInbox(container) {
             <div class="flex items-center gap-2">
                 <button id="btn-inbox-marty-filter" class="px-3 py-1.5 rounded border border-amber-600/40 bg-amber-600/15 text-[11px] font-mono text-amber-200 hover:bg-amber-600/25 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Run Marty Filter</button>
                 <button id="btn-inbox-marty-triage" class="px-3 py-1.5 rounded border border-blue-600/40 bg-blue-600/15 text-[11px] font-mono text-blue-200 hover:bg-blue-600/25 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Run Marty Triage</button>
+                <button id="btn-inbox-marty-auto" class="px-3 py-1.5 rounded border border-emerald-600/40 bg-emerald-600/15 text-[11px] font-mono text-emerald-200 hover:bg-emerald-600/25 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Run Marty Auto</button>
                 <label class="flex items-center gap-2 text-xs text-zinc-400 select-none">
                     <input id="inbox-show-archived" type="checkbox" class="accent-blue-500" ${state.inboxShowArchived ? 'checked' : ''} />
                     Show archived
@@ -3927,6 +3928,30 @@ function renderInbox(container) {
             } finally {
                 triageBtn.disabled = false;
                 triageBtn.textContent = prev;
+            }
+        };
+    }
+
+    const autoBtn = header.querySelector('#btn-inbox-marty-auto');
+    if (autoBtn) {
+        autoBtn.onclick = async () => {
+            autoBtn.disabled = true;
+            const prev = autoBtn.textContent;
+            autoBtn.textContent = 'Running...';
+            try {
+                const result = await runMartyInboxAutomation();
+                const scanned = Number(result?.scanned || 0);
+                const proposed = Number(result?.proposed || 0);
+                const applied = Number(result?.applied || 0);
+                const pending = Number(result?.digestPending || 0);
+                const mode = safeText(result?.approvalMode).trim() || 'dailyDigest';
+                alert(`Marty automation complete. Mode: ${mode}. Scanned: ${scanned}. Proposed: ${proposed}. Auto-applied: ${applied}. Digest pending: ${pending}.`);
+                renderMain();
+            } catch (e) {
+                alert(e?.message || 'Marty automation run failed');
+            } finally {
+                autoBtn.disabled = false;
+                autoBtn.textContent = prev;
             }
         };
     }
@@ -4281,6 +4306,22 @@ async function runMartyInboxTriage(options = {}) {
     }
     state.inboxMartyRecommendationsById = next;
     return { ...data, recommendations: list };
+}
+
+async function runMartyInboxAutomation(options = {}) {
+    const mode = safeText(options.approvalMode).trim();
+    const payload = {};
+    if (mode) payload.approvalMode = mode;
+    const res = await apiFetch('/api/inbox/automation/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data?.ok === false) throw new Error(data?.error || 'Marty automation run failed');
+    if (data?.store && typeof data.store === 'object') applyStore(data.store);
+    await fetchState({ background: false });
+    return data;
 }
 
 async function createTaskFromMartyRecommendation(inboxId, recommendation) {
