@@ -6968,7 +6968,7 @@ app.put('/api/settings/openai', async (req, res) => {
     res.json({
       ok: true,
       aiEnabled: Boolean(openaiApiKey),
-      openaiModel: openaiModel || 'gpt-4.1-mini',
+      openaiModel: openaiModel || 'gpt-4o-mini',
       openaiKeyHint: keyHint,
       source: openaiApiKey ? 'saved' : 'none',
       settingsUpdatedAt: next.updatedAt,

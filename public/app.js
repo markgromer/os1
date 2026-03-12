@@ -5309,6 +5309,19 @@ function renderSettings(container) {
     // AI
     const ai = section('AI', 'Configure the API key/model used by Marty.');
     const aiBody = ai.querySelector('[data-slot="body"]');
+    const currentOpenAiModel = String(state.settings.openaiModel || '').trim() || 'gpt-4o-mini';
+    const openAiModelOptions = [
+        'gpt-5',
+        'gpt-5-mini',
+        'gpt-5-nano',
+        'gpt-4.1',
+        'gpt-4.1-mini',
+        'gpt-4o',
+        'gpt-4o-mini',
+    ];
+    const modelOptionHtml = openAiModelOptions
+        .map((m) => `<option value="${escapeHtml(m)}" ${m === currentOpenAiModel ? 'selected' : ''}>${escapeHtml(m)}</option>`)
+        .join('');
     aiBody.innerHTML = `
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
@@ -5317,9 +5330,16 @@ function renderSettings(container) {
                 <div class="text-[11px] text-ops-light mt-1">Current: ${maskHint(state.settings.openaiKeyHint)}</div>
             </div>
             <div>
-                <label class="text-xs text-ops-light">Model</label>
-                <input id="set-openai-model" type="text" placeholder="gpt-4o-mini" value="${String(state.settings.openaiModel || '')}" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-sm" />
-                <div class="text-[11px] text-ops-light mt-1">AI Enabled: ${state.settings.aiEnabled ? 'Yes' : 'No'}</div>
+                <label class="text-xs text-ops-light">OpenAI Model</label>
+                <select id="set-openai-model-select" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-sm">
+                    ${modelOptionHtml}
+                </select>
+                <input id="set-openai-model" type="text" placeholder="Custom model ID" value="${escapeHtml(currentOpenAiModel)}" class="mt-2 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-sm" />
+                <label class="mt-2 inline-flex items-center gap-2 text-[11px] text-ops-light">
+                    <input id="set-openai-apply-routes" type="checkbox" class="accent-blue-500" checked />
+                    Apply model to all OpenAI routes
+                </label>
+                <div class="text-[11px] text-ops-light mt-1">Effective model: ${escapeHtml(currentOpenAiModel)} • AI Enabled: ${state.settings.aiEnabled ? 'Yes' : 'No'}</div>
             </div>
         </div>
         <div class="flex gap-2 mt-4">
@@ -5915,6 +5935,8 @@ function renderSettings(container) {
     const btnClearAuth = document.getElementById('btn-clear-auth');
     const btnSaveAi = document.getElementById('btn-save-ai');
     const btnClearAi = document.getElementById('btn-clear-ai');
+    const openAiModelSelect = document.getElementById('set-openai-model-select');
+    const openAiModelInput = document.getElementById('set-openai-model');
     const btnSaveGoogle = document.getElementById('btn-save-google');
     const btnConnectGoogle = document.getElementById('btn-connect-google');
     const btnDisconnectGoogle = document.getElementById('btn-disconnect-google');
@@ -5954,6 +5976,13 @@ function renderSettings(container) {
     const btnSyncAirtableRequests = document.getElementById('btn-sync-airtable-requests');
     const airtableStatusLine = document.getElementById('airtable-status-line');
     const airtableOutput = document.getElementById('airtable-output');
+
+    if (openAiModelSelect && openAiModelInput) {
+        openAiModelSelect.addEventListener('change', () => {
+            const selected = String(openAiModelSelect.value || '').trim();
+            if (selected) openAiModelInput.value = selected;
+        });
+    }
 
     const refreshAuthStatus = async () => {
         const line = document.getElementById('auth-status-line');
@@ -6257,10 +6286,31 @@ function renderSettings(container) {
         try {
             const key = String(document.getElementById('set-openai-key')?.value || '').trim();
             const model = String(document.getElementById('set-openai-model')?.value || '').trim();
+            const applyRoutes = !!document.getElementById('set-openai-apply-routes')?.checked;
+            if (!model) {
+                alert('OpenAI model is required.');
+                return;
+            }
             const patch = { openaiModel: model };
             if (key) patch.openaiApiKey = key;
+            if (applyRoutes) {
+                const routes = (state.settings?.aiRoutes && typeof state.settings.aiRoutes === 'object')
+                    ? { ...state.settings.aiRoutes }
+                    : {};
+                const routeKeys = ['martyChat', 'operatorBio', 'projectAssistant', 'dashboardPreview'];
+                for (const rk of routeKeys) {
+                    const existing = (routes[rk] && typeof routes[rk] === 'object') ? routes[rk] : {};
+                    const provider = String(existing.provider || 'openai').trim().toLowerCase() || 'openai';
+                    if (provider === 'openai') {
+                        routes[rk] = { ...existing, provider: 'openai', model };
+                    } else {
+                        routes[rk] = { ...existing, provider };
+                    }
+                }
+                patch.aiRoutes = routes;
+            }
             await saveSettingsPatch(patch);
-            alert('AI settings saved.');
+            alert(applyRoutes ? 'AI settings saved and applied to OpenAI routes.' : 'AI settings saved.');
             renderSettings(container);
         } catch (e) {
             alert(e?.message || 'Failed to save AI settings');
