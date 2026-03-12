@@ -1719,6 +1719,15 @@ function getCurrentUserName() {
     return firstHuman || 'Operator';
 }
 
+function getAssignableOwnerNames() {
+    const humanNames = getHumanTeamMembers()
+        .map((m) => safeText(m?.name).trim())
+        .filter(Boolean);
+    const me = safeText(getCurrentUserName()).trim();
+    const merged = me ? [me, ...humanNames] : humanNames;
+    return Array.from(new Set(merged));
+}
+
 function getProjectOwnerName(project) {
     const owner = safeText(project?.owner).trim();
     return owner;
@@ -7001,8 +7010,7 @@ function renderProjects(container) {
 
     const activeProjects = getActiveProjects();
     const archivedProjects = getArchivedProjects();
-    const teamMembers = getHumanTeamMembers();
-    const teamOwnerOptions = [''].concat(teamMembers.map((m) => safeText(m?.name).trim()).filter(Boolean));
+    const teamOwnerOptions = [''].concat(getAssignableOwnerNames());
 
     const wrap = document.createElement('div');
     wrap.className = 'h-full flex flex-col min-h-0';
@@ -7364,8 +7372,7 @@ function renderRevisions(container) {
     const revisionsArchived = all.filter((p) => isRevisionRequestProject(p) && !isContactOnlyProject(p) && isArchivedProject(p));
 
     const me = getCurrentUserName();
-    const humans = getHumanTeamMembers();
-    const assigneeOptions = [''].concat(humans.map((m) => safeText(m?.name).trim()).filter(Boolean));
+    const assigneeOptions = [''].concat(getAssignableOwnerNames());
 
     const latestRevisionSummaryPreview = (projectId) => {
         const notes = Array.isArray(state.projectNoteEntries?.[projectId]) ? state.projectNoteEntries[projectId] : [];
@@ -11114,8 +11121,7 @@ function renderProjectView(container) {
         };
 
         if (tab === 'details') {
-            const humans = getHumanTeamMembers();
-            const ownerOptions = [''].concat(humans.map((m) => safeText(m?.name).trim()).filter(Boolean));
+            const ownerOptions = [''].concat(getAssignableOwnerNames());
             const currentOwner = getProjectOwnerName(project);
             const ownerOptionsHtml = ownerOptions.map((name) => {
                 const label = name ? name : 'Unassigned';
