@@ -229,7 +229,7 @@
         .spinner { animation: spin 1s linear infinite; }
         @keyframes spin { 100% { transform: rotate(360deg); } }
 
-        .marty-orb {
+        .marcus-orb {
             position: relative;
             width: 12px;
             height: 12px;
@@ -239,39 +239,39 @@
             transition: transform 0.2s ease;
         }
 
-        .marty-orb.idle {
-            animation: martyIdle 2.4s ease-in-out infinite;
+        .marcus-orb.idle {
+            animation: marcusIdle 2.4s ease-in-out infinite;
         }
 
-        .marty-orb.busy {
-            animation: martyBusy 0.9s ease-in-out infinite;
+        .marcus-orb.busy {
+            animation: marcusBusy 0.9s ease-in-out infinite;
         }
 
-        .marty-orb.responding {
-            animation: martyRespond 0.55s ease-in-out infinite;
+        .marcus-orb.responding {
+            animation: marcusRespond 0.55s ease-in-out infinite;
         }
 
-        @keyframes martyIdle {
+        @keyframes marcusIdle {
             0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(59,130,246,0.45); }
             50% { transform: scale(1.08); box-shadow: 0 0 0 6px rgba(59,130,246,0.08); }
         }
 
-        @keyframes martyBusy {
+        @keyframes marcusBusy {
             0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(59,130,246,0.6); }
             70% { transform: scale(1.2); box-shadow: 0 0 0 10px rgba(59,130,246,0); }
             100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(59,130,246,0); }
         }
 
-        @keyframes martyRespond {
+        @keyframes marcusRespond {
             0%, 100% { transform: translateY(0); box-shadow: 0 0 0 0 rgba(34,197,94,0.4); }
             50% { transform: translateY(-1px); box-shadow: 0 0 0 6px rgba(34,197,94,0.08); }
         }
 
-        #neural-drawer.marty-thinking {
+        #neural-drawer.marcus-thinking {
             box-shadow: 0 0 0 1px rgba(59,130,246,0.35), 0 18px 50px rgba(2,6,23,0.45);
         }
 
-        #neural-drawer.marty-responding {
+        #neural-drawer.marcus-responding {
             box-shadow: 0 0 0 1px rgba(16,185,129,0.35), 0 18px 50px rgba(2,6,23,0.45);
         }
 
@@ -280,7 +280,7 @@
             min-height: 260px;
         }
 
-        #marty-resize-handle {
+        #marcus-resize-handle {
             position: absolute;
             right: 4px;
             bottom: 4px;
@@ -290,7 +290,7 @@
             opacity: 0.7;
         }
 
-        #marty-resize-handle::before {
+        #marcus-resize-handle::before {
             content: "";
             position: absolute;
             right: 0;
@@ -302,16 +302,16 @@
             border-radius: 1px;
         }
 
-        body.marty-popout-mode {
+        body.marcus-popout-mode {
             overflow: hidden;
         }
 
-        body.marty-popout-mode #command-bar,
-        body.marty-popout-mode #workspace-main {
+        body.marcus-popout-mode #command-bar,
+        body.marcus-popout-mode #workspace-main {
             display: none !important;
         }
 
-        body.marty-popout-mode #neural-drawer {
+        body.marcus-popout-mode #neural-drawer {
             position: fixed !important;
             inset: 0 !important;
             width: 100vw !important;
@@ -322,11 +322,11 @@
             border: 0 !important;
         }
 
-        body.marty-popout-mode #marty-drag-handle {
+        body.marcus-popout-mode #marcus-drag-handle {
             cursor: default;
         }
 
-        body.marty-popout-mode #marty-resize-handle {
+        body.marcus-popout-mode #marcus-resize-handle {
             display: none;
         }
 
@@ -376,50 +376,50 @@
             color: rgb(var(--ops-accent));
         }
 
-        /* MARTY Ambient Intelligence Bar */
-        .marty-ambient {
+        /* M.A.R.C.U.S. Ambient Intelligence Bar */
+        .marcus-ambient {
             background: linear-gradient(135deg, rgb(59 130 246 / 0.06), rgb(16 185 129 / 0.04));
             border: 1px solid rgb(59 130 246 / 0.15);
             border-radius: 0.75rem;
             transition: border-color 0.3s, box-shadow 0.3s;
         }
-        .marty-ambient.marty-live {
-            animation: martyGlow 1.1s ease-in-out 1;
+        .marcus-ambient.marcus-live {
+            animation: marcusGlow 1.1s ease-in-out 1;
             border-color: rgb(59 130 246 / 0.35);
             box-shadow: 0 0 22px rgb(59 130 246 / 0.15);
         }
-        .marty-ambient.marty-busy {
+        .marcus-ambient.marcus-busy {
             border-color: rgb(56 189 248 / 0.4);
         }
-        .marty-ambient.marty-responding {
+        .marcus-ambient.marcus-responding {
             border-color: rgb(16 185 129 / 0.4);
             box-shadow: 0 0 24px rgb(16 185 129 / 0.15);
         }
-        .marty-ambient:hover {
+        .marcus-ambient:hover {
             border-color: rgb(59 130 246 / 0.3);
             box-shadow: 0 0 20px rgb(59 130 246 / 0.08);
         }
-        .marty-status-dot {
+        .marcus-status-dot {
             width: 6px; height: 6px; border-radius: 50%;
             background: rgb(59 130 246);
-            animation: martyDotPulse 2.5s ease-in-out infinite;
+            animation: marcusDotPulse 2.5s ease-in-out infinite;
         }
-        .marty-ambient.marty-live .marty-status-dot {
+        .marcus-ambient.marcus-live .marcus-status-dot {
             animation-duration: 0.85s;
         }
-        .marty-ambient.marty-responding .marty-status-dot {
+        .marcus-ambient.marcus-responding .marcus-status-dot {
             background: rgb(16 185 129);
         }
-        @keyframes martyDotPulse {
+        @keyframes marcusDotPulse {
             0%, 100% { opacity: 0.5; box-shadow: 0 0 0 0 rgb(59 130 246 / 0.4); }
             50% { opacity: 1; box-shadow: 0 0 0 4px rgb(59 130 246 / 0); }
         }
-        @keyframes martyGlow {
+        @keyframes marcusGlow {
             0% { transform: translateY(0); box-shadow: 0 0 0 rgb(59 130 246 / 0); }
             50% { transform: translateY(-1px); box-shadow: 0 0 24px rgb(59 130 246 / 0.18); }
             100% { transform: translateY(0); box-shadow: 0 0 0 rgb(59 130 246 / 0); }
         }
-        .marty-insight {
+        .marcus-insight {
             padding: 6px 10px;
             border-radius: 6px;
             background: rgb(59 130 246 / 0.06);
@@ -428,22 +428,22 @@
             color: rgb(var(--ops-text) / 0.8);
             transition: background 0.2s;
         }
-        .marty-ambient.marty-live .marty-insight {
-            animation: martyInsightShift 1.1s ease-out 1;
+        .marcus-ambient.marcus-live .marcus-insight {
+            animation: marcusInsightShift 1.1s ease-out 1;
         }
-        .marty-insight:hover {
+        .marcus-insight:hover {
             background: rgb(59 130 246 / 0.1);
         }
-        @keyframes martyInsightShift {
+        @keyframes marcusInsightShift {
             0% { transform: translateX(0); }
             35% { transform: translateX(2px); }
             100% { transform: translateX(0); }
         }
 
         @media (prefers-reduced-motion: reduce) {
-            .marty-ambient,
-            .marty-status-dot,
-            .marty-insight {
+            .marcus-ambient,
+            .marcus-status-dot,
+            .marcus-insight {
                 animation: none !important;
                 transition: none !important;
             }
@@ -499,7 +499,7 @@
         .dash-card--warning { border-color: rgb(var(--ops-warning) / 0.30) !important; }
         .dash-card--danger { border-color: rgb(var(--ops-danger) / 0.34) !important; }
 
-        /* MARTY drawer: glass + cleaner internal chrome */
+        /* M.A.R.C.U.S. drawer: glass + cleaner internal chrome */
         #neural-drawer {
             background-color: rgb(var(--ops-surface) / 0.92) !important;
             backdrop-filter: blur(10px) saturate(120%);
@@ -537,7 +537,7 @@
             #main-port {
                 grid-template-columns: 1fr !important;
             }
-            #marty-port {
+            #marcus-port {
                 display: none !important;
             }
         }
@@ -566,7 +566,7 @@
         html[data-layout="landscape"] .dash-stagger > * {
             margin-top: 0 !important;
         }
-        /* Make header, marty bar, and wide banners span full width */
+        /* Make header, marcus bar, and wide banners span full width */
         html[data-layout="landscape"] .dash-stagger > *:nth-child(1),
         html[data-layout="landscape"] .dash-stagger > *:nth-child(2),
         html[data-layout="landscape"] .dash-stagger > *:nth-child(3),
@@ -641,7 +641,7 @@
                 <button id="toggle-chat" class="text-ops-accent hover:text-blue-400 transition-colors text-xs font-medium flex items-center gap-2">
                     <i class="fa-solid fa-bolt"></i> M.A.R.C.U.S.
                 </button>
-                <span id="marty-detached-indicator" class="hidden px-2 py-0.5 rounded border border-blue-600/40 bg-blue-600/10 text-blue-300 text-[10px] font-mono uppercase tracking-wider">Pop-out active</span>
+                <span id="marcus-detached-indicator" class="hidden px-2 py-0.5 rounded border border-blue-600/40 bg-blue-600/10 text-blue-300 text-[10px] font-mono uppercase tracking-wider">Pop-out active</span>
             </div>
         </header>
 
@@ -651,24 +651,24 @@
         </div>
     </main>
 
-    <!-- MARTY FLOATING PANEL -->
+    <!-- M.A.R.C.U.S. FLOATING PANEL -->
     <aside id="neural-drawer" class="fixed right-6 bottom-6 w-[22rem] h-[32rem] border border-white/10 rounded-2xl bg-ops-surface/50 backdrop-blur-2xl flex flex-col z-40 shadow-[0_8px_32px_rgba(0,0,0,0.5)] overflow-hidden transition-all duration-300">
-        <div id="marty-drag-handle" class="p-2.5 border-b border-white/5 flex justify-between items-center bg-white/5 cursor-move select-none">
+        <div id="marcus-drag-handle" class="p-2.5 border-b border-white/5 flex justify-between items-center bg-white/5 cursor-move select-none">
             <div class="flex items-center gap-2 min-w-0">
-                <div id="marty-orb" class="marty-orb idle"></div>
+                <div id="marcus-orb" class="marcus-orb idle"></div>
                 <span class="text-[11px] font-mono font-bold text-ops-light tracking-widest uppercase truncate">
                     <i class="fa-solid fa-microchip mr-1.5 text-ops-accent"></i>M.A.R.C.U.S.
                 </span>
             </div>
             <div class="flex items-center gap-2">
-                <button id="marty-popout-toggle" class="text-ops-light hover:text-white transition-colors text-[11px]" title="Detach M.A.R.C.U.S.">
+                <button id="marcus-popout-toggle" class="text-ops-light hover:text-white transition-colors text-[11px]" title="Detach M.A.R.C.U.S.">
                     <i class="fa-solid fa-up-right-from-square"></i>
                 </button>
-                <select id="marty-thread-select" class="bg-ops-bg border border-ops-border rounded px-2 py-1 text-[10px] text-white font-mono focus:outline-none focus:ring-1 focus:ring-ops-accent" title="M.A.R.C.U.S. thread">
+                <select id="marcus-thread-select" class="bg-ops-bg border border-ops-border rounded px-2 py-1 text-[10px] text-white font-mono focus:outline-none focus:ring-1 focus:ring-ops-accent" title="M.A.R.C.U.S. thread">
                     <option value="default">Direct</option>
                     <option value="operator_bio">Bio</option>
                 </select>
-                <select id="marty-model-select" class="bg-ops-bg border border-ops-border rounded px-2 py-1 text-[10px] text-white font-mono focus:outline-none focus:ring-1 focus:ring-ops-accent">
+                <select id="marcus-model-select" class="bg-ops-bg border border-ops-border rounded px-2 py-1 text-[10px] text-white font-mono focus:outline-none focus:ring-1 focus:ring-ops-accent">
                     <option value="gpt-5">GPT-5</option>
                     <option value="gpt-5-mini">GPT-5 Mini</option>
                     <option value="gpt-4.1">GPT-4.1</option>
@@ -704,11 +704,11 @@
                 </div>
             </div>
             <div id="ai-status" class="flex justify-between mt-2 text-[10px] text-ops-light font-mono opacity-0 transition-opacity">
-                <span id="marty-state">M.A.R.C.U.S. IDLE</span>
+                <span id="marcus-state">M.A.R.C.U.S. IDLE</span>
                 <span class="animate-pulse">///</span>
             </div>
         </div>
-        <div id="marty-resize-handle" aria-hidden="true"></div>
+        <div id="marcus-resize-handle" aria-hidden="true"></div>
     </aside>
 
     <script src="app.js?v=ops3.21"></script>

@@ -596,7 +596,7 @@ function pickObject(input) {
 
 function normalizeAiRoutes(input) {
   const raw = pickObject(input);
-  const keys = ['martyChat', 'operatorBio', 'projectAssistant', 'dashboardPreview'];
+  const keys = ['marcusChat', 'operatorBio', 'projectAssistant', 'dashboardPreview'];
   const out = {};
   for (const k of keys) {
     const entry = pickObject(raw[k]);
@@ -694,7 +694,7 @@ function normalizeAutomationDigestQueue(input) {
         createdAt: safeIsoMaybe(String(e.createdAt || '').trim()) || nowIso(),
         decidedAt: safeIsoMaybe(String(e.decidedAt || '').trim()) || '',
         runId: String(e.runId || '').trim(),
-        source: String(e.source || '').trim() || 'marty-automation',
+        source: String(e.source || '').trim() || 'marcus-automation',
         signalPreview: previewTextServer(String(e.signalPreview || '').trim(), 220),
         projectId: String(e.projectId || '').trim(),
         projectName: String(e.projectName || '').trim(),
@@ -3364,8 +3364,6 @@ function buildMarcusInboxRecommendation(store, item) {
   };
 }
 
-const buildMartyInboxRecommendation = buildMarcusInboxRecommendation;
-
 function hasActionCueInText(text) {
   const s = String(text || '').toLowerCase().replace(/\s+/g, ' ').trim();
   if (!s) return false;
@@ -3395,7 +3393,7 @@ function shouldSuppressInboxRadarItem(item, settings) {
   const signal = extractInboxSignalText(it);
   const level = normalizeSmsAckFilterLevel(settings?.smsAckFilterLevel);
 
-  if (src === 'marty' || src === 'marcus') return true;
+  if (src === 'marcus' || src === 'marcus') return true;
   if (isLowSignalAcknowledgementText(signal, level)) return true;
 
   const isSystemLike = src.includes('system') || src.includes('notification') || src.includes('alert');
@@ -7232,7 +7230,7 @@ app.get('/api/inbox', async (req, res) => {
   res.json({ revision: store.revision, updatedAt: store.updatedAt, items });
 });
 
-app.post(['/api/inbox/marcus-filter', '/api/inbox/marty-filter'], async (req, res) => {
+app.post('/api/inbox/marcus-filter', async (req, res) => {
   writeLock = writeLock.then(async () => {
     const store = await readStore();
     const collapsed = collapseSmsInboxThreads(store);
@@ -7253,7 +7251,7 @@ app.post(['/api/inbox/marcus-filter', '/api/inbox/marty-filter'], async (req, re
 
       const src = String(it?.source || '').trim().toLowerCase();
       const signalText = extractInboxSignalText(it);
-      const sourceIsSystemNoise = src === 'marty' || src === 'marcus';
+      const sourceIsSystemNoise = src === 'marcus';
       const isAckNoise = isLowSignalAcknowledgementText(signalText, level);
       if (!sourceIsSystemNoise && !isAckNoise) return item;
 
@@ -7266,9 +7264,9 @@ app.post(['/api/inbox/marcus-filter', '/api/inbox/marty-filter'], async (req, re
         ...it,
         status: 'Archived',
         updatedAt: ts,
-        martyFilterLevel: level,
-        martyFilteredAt: ts,
-        martyFilterReason: sourceIsSystemNoise ? 'system-radar-noise' : 'low-signal-ack',
+        marcusFilterLevel: level,
+        marcusFilteredAt: ts,
+        marcusFilterReason: sourceIsSystemNoise ? 'system-radar-noise' : 'low-signal-ack',
       });
     });
 
@@ -7293,7 +7291,7 @@ app.post(['/api/inbox/marcus-filter', '/api/inbox/marty-filter'], async (req, re
   await writeLock;
 });
 
-app.get(['/api/inbox/marcus-triage', '/api/inbox/marty-triage'], async (req, res) => {
+app.get('/api/inbox/marcus-triage', async (req, res) => {
   try {
     const store = await readStore();
     const settings = await readSettings();
@@ -7412,7 +7410,7 @@ app.post('/api/inbox/automation/digest/:id/decision', async (req, res) => {
         dueDate: '',
         createdAt: ts,
         updatedAt: ts,
-        createdBy: 'marty-automation',
+        createdBy: 'marcus-automation',
       };
       nextTasks.unshift(task);
       createdTaskIds.push(task.id);
@@ -7581,7 +7579,7 @@ app.post('/api/inbox/automation/run', async (req, res) => {
             status: 'pending',
             createdAt: ts,
             runId,
-            source: 'marty-automation',
+            source: 'marcus-automation',
             signalPreview: String(recommendation?.signalPreview || '').trim(),
             projectId: canAutoLinkProject ? recProjectId : '',
             projectName: resolvedProjectName,
@@ -7611,7 +7609,7 @@ app.post('/api/inbox/automation/run', async (req, res) => {
           dueDate: '',
           createdAt: ts,
           updatedAt: ts,
-          createdBy: 'marty-automation',
+          createdBy: 'marcus-automation',
         };
         nextTasks.unshift(task);
         createdTaskIds.push(task.id);
@@ -7713,7 +7711,7 @@ app.get('/api/me/dashboard', async (req, res) => {
       let latestBrief = null;
       for (const item of items) {
         const src = String(item?.source || '').trim().toLowerCase();
-        if (src !== 'marty' && src !== 'marcus') continue;
+        if (src !== 'marcus' && src !== 'marcus') continue;
         const ts = String(item?.updatedAt || item?.createdAt || '').trim();
         const bestTs = String(latestBrief?.updatedAt || latestBrief?.createdAt || '').trim();
         if (!latestBrief || ts > bestTs) latestBrief = item;
@@ -9469,7 +9467,7 @@ app.put('/api/project-notes/:project', async (req, res) => {
 
 app.post('/api/ai/agent', async (req, res) => {
   const settings = await readSettings();
-  const route = resolveAiRoute(settings, 'martyChat');
+  const route = resolveAiRoute(settings, 'marcusChat');
   if (!route.apiKey) {
     res.json({ error: 'AI not configured (missing API key). Configure OpenAI/OpenRouter in Settings → AI.' });
     return;
@@ -9523,7 +9521,7 @@ app.post('/api/ai/agent', async (req, res) => {
 
     try {
       const result = await aiChatCompletion({
-        routeKey: 'martyChat',
+        routeKey: 'marcusChat',
         timeoutMs: 30_000,
         messages: [
           { role: 'system', content: systemPrompt },
@@ -10096,7 +10094,7 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
       context += `\n`;
     }
 
-    // Always include a compact operational snapshot so Marty can be proactive.
+    // Always include a compact operational snapshot so Marcus can be proactive.
     try {
       const today = new Date().toISOString().slice(0, 10);
       const tasks = Array.isArray(store.tasks) ? store.tasks : [];
@@ -10138,7 +10136,7 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
 
       const inboxNew = inbox.filter((it) => {
         const src = String(it?.source || '').trim().toLowerCase();
-        return String(it?.status || '').trim().toLowerCase() === 'new' && src !== 'marty' && src !== 'marcus';
+        return String(it?.status || '').trim().toLowerCase() === 'new' && src !== 'marcus' && src !== 'marcus';
       });
       const inboxLines = inboxNew
         .slice()
@@ -10228,7 +10226,7 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
             const dueToday = openTasks.filter((t) => String(t?.dueDate || '').trim() === today);
             const newInbox = inbox.filter((it) => {
               const src = String(it?.source || '').trim().toLowerCase();
-              return String(it?.status || '').trim().toLowerCase() === 'new' && src !== 'marty' && src !== 'marcus';
+              return String(it?.status || '').trim().toLowerCase() === 'new' && src !== 'marcus' && src !== 'marcus';
             });
             byBiz.push({ key: bKey, name: bName, open: openTasks.length, overdue: overdue.length, dueToday: dueToday.length, inboxNew: newInbox.length });
 
@@ -10336,7 +10334,7 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
       context += `ALL PROJECTS (JSON): ${JSON.stringify(projectsOverview).slice(0, 24000)}\n\n`;
     }
 
-    const routeKey = effectiveThreadId === 'operator_bio' ? 'operatorBio' : 'martyChat';
+    const routeKey = effectiveThreadId === 'operator_bio' ? 'operatorBio' : 'marcusChat';
     const route = resolveAiRoute(settings, routeKey);
     // If AI isn't configured for this area, still answer from local data.
     if (!route.apiKey) {
@@ -10411,7 +10409,7 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
 
       const newInbox = inbox.filter((it) => {
         const src = String(it?.source || '').trim().toLowerCase();
-        return String(it?.status || '').trim().toLowerCase() === 'new' && src !== 'marty' && src !== 'marcus';
+        return String(it?.status || '').trim().toLowerCase() === 'new' && src !== 'marcus' && src !== 'marcus';
       });
 
       const lines = [];
@@ -10975,7 +10973,7 @@ function buildDeterministicBrief({ kind, store, businessName, settings }) {
   const dueToday = openTasks.filter((t) => normalizeDue(t?.dueDate) === today);
   const inboxNew = inbox.filter((it) => {
     const src = String(it?.source || '').trim().toLowerCase();
-    return String(it?.status || '').trim().toLowerCase() === 'new' && src !== 'marty' && src !== 'marcus';
+    return String(it?.status || '').trim().toLowerCase() === 'new' && src !== 'marcus' && src !== 'marcus';
   });
 
   const nextTasks = openTasks
@@ -11053,7 +11051,7 @@ async function sendMarcusBriefsForAllBusinesses(kind, settings) {
 }
 
 function getBriefScheduleFromSettings(settings) {
-  const raw = settings && typeof settings === 'object' ? settings.martyBriefSchedule : null;
+  const raw = settings && typeof settings === 'object' ? settings.marcusBriefSchedule : null;
   const times = (raw && typeof raw === 'object' && raw.times && typeof raw.times === 'object') ? raw.times : {};
   const lastSent = (raw && typeof raw === 'object' && raw.lastSent && typeof raw.lastSent === 'object') ? raw.lastSent : {};
   return {
@@ -11075,7 +11073,7 @@ async function markBriefSent(kind, today) {
   const sched = getBriefScheduleFromSettings(settings);
   const next = {
     ...settings,
-    martyBriefSchedule: {
+    marcusBriefSchedule: {
       times: { ...sched.times },
       lastSent: { ...sched.lastSent, [String(kind)]: today },
     },

@@ -22,7 +22,7 @@ const state = {
     inboxItems: [],
     inboxConvertContactById: {},
     inboxMarcusRecommendationsById: {},
-    inboxMartyRecommendationsById: {},
+    inboxMarcusRecommendationsById: {},
     inboxAutomationDigest: { items: [], loading: false, loadedAt: 0, error: '' },
     inboxDigestSelectionsById: {},
 
@@ -88,7 +88,7 @@ const state = {
 
 let pollIntervalId = null;
 
-function preserveMartyDrawerDuringRerender() {
+function preserveMarcusDrawerDuringRerender() {
     const drawer = document.getElementById('neural-drawer');
     if (!drawer) return;
     // If a view rerender is about to clear a parent via `.innerHTML = ''`,
@@ -144,94 +144,94 @@ const ADMIN_TOKEN_STORAGE_KEY = 'opsAdminToken';
 
 const BUSINESS_KEY_STORAGE_KEY = 'opsBusinessKey';
 
-const MARTY_OPEN_STORAGE_KEY = 'opsMartyOpen';
-const MARTY_DETACHED_STORAGE_KEY = 'opsMartyDetached';
-const MARTY_PANEL_STORAGE_KEY = 'opsMartyPanel';
-const MARTY_THREAD_STORAGE_KEY = 'opsMartyThread';
-const MARTY_SYNC_CHANNEL = 'opsMartySync';
-const MARTY_SYNC_STORAGE_KEY = 'opsMartySyncEvent';
-const MARTY_VOICE_IN_STORAGE_KEY = 'opsMartyVoiceIn';
-const MARTY_VOICE_OUT_STORAGE_KEY = 'opsMartyVoiceOut';
-const MARTY_FOCUS_NUDGE_LAST_TS_KEY = 'opsMartyFocusNudgeLastTs';
+const MARCUS_OPEN_STORAGE_KEY = 'opsMarcusOpen';
+const MARCUS_DETACHED_STORAGE_KEY = 'opsMarcusDetached';
+const MARCUS_PANEL_STORAGE_KEY = 'opsMarcusPanel';
+const MARCUS_THREAD_STORAGE_KEY = 'opsMarcusThread';
+const MARCUS_SYNC_CHANNEL = 'opsMarcusSync';
+const MARCUS_SYNC_STORAGE_KEY = 'opsMarcusSyncEvent';
+const MARCUS_VOICE_IN_STORAGE_KEY = 'opsMarcusVoiceIn';
+const MARCUS_VOICE_OUT_STORAGE_KEY = 'opsMarcusVoiceOut';
+const MARCUS_FOCUS_NUDGE_LAST_TS_KEY = 'opsMarcusFocusNudgeLastTs';
 
-const MARTY_PANEL_MIN_WIDTH = 320;
-const MARTY_PANEL_MIN_HEIGHT = 420;
-const MARTY_TYPING_ID = 'marty-typing-indicator';
+const MARCUS_PANEL_MIN_WIDTH = 320;
+const MARCUS_PANEL_MIN_HEIGHT = 420;
+const MARCUS_TYPING_ID = 'marcus-typing-indicator';
 
-const MARTY_THINKING_LINES = [
+const MARCUS_THINKING_LINES = [
     'SCANNING',
     'SYNTHESIZING',
     'MODELING',
     'ROUTING',
     'EVALUATING',
 ];
-const MARTY_RESPONDING_LINES = [
+const MARCUS_RESPONDING_LINES = [
     'DRAFTING',
     'COMPILING',
     'TRANSMITTING',
     'CONFIRMING',
 ];
 
-const IS_MARTY_POPOUT = (() => {
+const IS_MARCUS_POPOUT = (() => {
     try {
-        return new URLSearchParams(window.location.search).get('martyPopout') === '1';
+        return new URLSearchParams(window.location.search).get('marcusPopout') === '1';
     } catch {
         return false;
     }
 })();
 
-const MARTY_INSTANCE_ID = (() => {
+const MARCUS_INSTANCE_ID = (() => {
     try {
-        const k = 'opsMartyInstanceId';
+        const k = 'opsMarcusInstanceId';
         const existing = String(sessionStorage.getItem(k) || '').trim();
         if (existing) return existing;
-        const id = `marty_${Math.random().toString(16).slice(2)}_${Date.now().toString(16)}`;
+        const id = `marcus_${Math.random().toString(16).slice(2)}_${Date.now().toString(16)}`;
         sessionStorage.setItem(k, id);
         return id;
     } catch {
-        return `marty_${Math.random().toString(16).slice(2)}_${Date.now().toString(16)}`;
+        return `marcus_${Math.random().toString(16).slice(2)}_${Date.now().toString(16)}`;
     }
 })();
 
-let martySyncChannel = null;
-let martyDockRestore = null;
+let marcusSyncChannel = null;
+let marcusDockRestore = null;
 
-function setStoredMartyOpen(open) {
+function setStoredMarcusOpen(open) {
     try {
-        localStorage.setItem(MARTY_OPEN_STORAGE_KEY, open ? '1' : '0');
+        localStorage.setItem(MARCUS_OPEN_STORAGE_KEY, open ? '1' : '0');
     } catch {
         // ignore
     }
 }
 
-function setStoredMartyVoiceIn(enabled) {
+function setStoredMarcusVoiceIn(enabled) {
     try {
-        localStorage.setItem(MARTY_VOICE_IN_STORAGE_KEY, enabled ? '1' : '0');
+        localStorage.setItem(MARCUS_VOICE_IN_STORAGE_KEY, enabled ? '1' : '0');
     } catch {
         // ignore
     }
 }
 
-function getStoredMartyVoiceIn() {
+function getStoredMarcusVoiceIn() {
     try {
-        const raw = String(localStorage.getItem(MARTY_VOICE_IN_STORAGE_KEY) || '').trim().toLowerCase();
+        const raw = String(localStorage.getItem(MARCUS_VOICE_IN_STORAGE_KEY) || '').trim().toLowerCase();
         return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
     } catch {
         return false;
     }
 }
 
-function setStoredMartyVoiceOut(enabled) {
+function setStoredMarcusVoiceOut(enabled) {
     try {
-        localStorage.setItem(MARTY_VOICE_OUT_STORAGE_KEY, enabled ? '1' : '0');
+        localStorage.setItem(MARCUS_VOICE_OUT_STORAGE_KEY, enabled ? '1' : '0');
     } catch {
         // ignore
     }
 }
 
-function getStoredMartyVoiceOut() {
+function getStoredMarcusVoiceOut() {
     try {
-        const raw = String(localStorage.getItem(MARTY_VOICE_OUT_STORAGE_KEY) || '').trim().toLowerCase();
+        const raw = String(localStorage.getItem(MARCUS_VOICE_OUT_STORAGE_KEY) || '').trim().toLowerCase();
         return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
     } catch {
         return false;
@@ -249,20 +249,20 @@ function stripForSpeech(input) {
         .trim();
 }
 
-function pulseMartyAmbient(mode = 'active', durationMs = 1400) {
+function pulseMarcusAmbient(mode = 'active', durationMs = 1400) {
     try {
-        const bars = document.querySelectorAll('.marty-ambient');
-        const avatars = document.querySelectorAll('.marty-dashboard-avatar');
+        const bars = document.querySelectorAll('.marcus-ambient');
+        const avatars = document.querySelectorAll('.marcus-dashboard-avatar');
         if ((!bars || !bars.length) && (!avatars || !avatars.length)) return;
         bars.forEach((bar) => {
-            bar.classList.remove('marty-busy', 'marty-responding');
-            if (mode === 'busy') bar.classList.add('marty-busy');
-            else if (mode === 'responding') bar.classList.add('marty-responding');
-            bar.classList.add('marty-live');
+            bar.classList.remove('marcus-busy', 'marcus-responding');
+            if (mode === 'busy') bar.classList.add('marcus-busy');
+            else if (mode === 'responding') bar.classList.add('marcus-responding');
+            bar.classList.add('marcus-live');
 
             const activeMs = Number.isFinite(Number(durationMs)) ? Math.max(250, Math.min(5000, Number(durationMs))) : 1400;
             window.setTimeout(() => {
-                bar.classList.remove('marty-live', 'marty-busy', 'marty-responding');
+                bar.classList.remove('marcus-live', 'marcus-busy', 'marcus-responding');
             }, activeMs);
         });
         avatars.forEach((avatar) => {
@@ -282,9 +282,9 @@ function pulseMartyAmbient(mode = 'active', durationMs = 1400) {
     }
 }
 
-function speakMarty(text) {
-    pulseMartyAmbient('responding', 1800);
-    if (!state.martyVoiceOut) return;
+function speakMarcus(text) {
+    pulseMarcusAmbient('responding', 1800);
+    if (!state.marcusVoiceOut) return;
     try {
         const spoken = stripForSpeech(text);
         if (!spoken) return;
@@ -300,9 +300,9 @@ function speakMarty(text) {
     }
 }
 
-function getStoredMartyOpen() {
+function getStoredMarcusOpen() {
     try {
-        const raw = String(localStorage.getItem(MARTY_OPEN_STORAGE_KEY) || '').trim().toLowerCase();
+        const raw = String(localStorage.getItem(MARCUS_OPEN_STORAGE_KEY) || '').trim().toLowerCase();
         if (!raw) return true;
         return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'open';
     } catch {
@@ -310,27 +310,27 @@ function getStoredMartyOpen() {
     }
 }
 
-function setStoredMartyThread(threadId) {
+function setStoredMarcusThread(threadId) {
     try {
         const t = safeText(threadId).trim() || 'default';
-        localStorage.setItem(MARTY_THREAD_STORAGE_KEY, t);
+        localStorage.setItem(MARCUS_THREAD_STORAGE_KEY, t);
     } catch {
         // ignore
     }
 }
 
-function getStoredMartyThread() {
+function getStoredMarcusThread() {
     try {
-        const raw = String(localStorage.getItem(MARTY_THREAD_STORAGE_KEY) || '').trim();
+        const raw = String(localStorage.getItem(MARCUS_THREAD_STORAGE_KEY) || '').trim();
         return raw || 'default';
     } catch {
         return 'default';
     }
 }
 
-function getStoredMartyFocusNudgeLastTs() {
+function getStoredMarcusFocusNudgeLastTs() {
     try {
-        const raw = String(localStorage.getItem(MARTY_FOCUS_NUDGE_LAST_TS_KEY) || '').trim();
+        const raw = String(localStorage.getItem(MARCUS_FOCUS_NUDGE_LAST_TS_KEY) || '').trim();
         const n = Number(raw);
         return Number.isFinite(n) ? n : 0;
     } catch {
@@ -338,10 +338,10 @@ function getStoredMartyFocusNudgeLastTs() {
     }
 }
 
-function setStoredMartyFocusNudgeLastTs(ts) {
+function setStoredMarcusFocusNudgeLastTs(ts) {
     try {
         const n = Number(ts) || 0;
-        localStorage.setItem(MARTY_FOCUS_NUDGE_LAST_TS_KEY, String(n));
+        localStorage.setItem(MARCUS_FOCUS_NUDGE_LAST_TS_KEY, String(n));
     } catch {
         // ignore
     }
@@ -437,33 +437,33 @@ async function setActiveBusinessKey(key, { persistServer = true } = {}) {
     renderNav();
     renderMain();
     renderChat();
-    broadcastMartyContext();
+    broadcastMarcusContext();
 }
 
-function getStoredMartyDetached() {
+function getStoredMarcusDetached() {
     try {
-        const raw = String(localStorage.getItem(MARTY_DETACHED_STORAGE_KEY) || '').trim().toLowerCase();
+        const raw = String(localStorage.getItem(MARCUS_DETACHED_STORAGE_KEY) || '').trim().toLowerCase();
         return raw === '1' || raw === 'true' || raw === 'yes';
     } catch {
         return false;
     }
 }
 
-function setStoredMartyDetached(detached) {
+function setStoredMarcusDetached(detached) {
     try {
-        localStorage.setItem(MARTY_DETACHED_STORAGE_KEY, detached ? '1' : '0');
+        localStorage.setItem(MARCUS_DETACHED_STORAGE_KEY, detached ? '1' : '0');
     } catch {
         // ignore
     }
 }
 
-function syncMartyDetachedIndicator() {
-    const el = document.getElementById('marty-detached-indicator');
+function syncMarcusDetachedIndicator() {
+    const el = document.getElementById('marcus-detached-indicator');
     if (!el) return;
-    el.classList.toggle('hidden', !getStoredMartyDetached());
+    el.classList.toggle('hidden', !getStoredMarcusDetached());
 }
 
-function applyMartyOpenState(open) {
+function applyMarcusOpenState(open) {
     const drawer = document.getElementById('neural-drawer');
     if (!drawer) return;
     const isOpen = Boolean(open);
@@ -472,22 +472,22 @@ function applyMartyOpenState(open) {
     state.isChatOpen = isOpen;
 }
 
-function makeMartySyncEvent(type, payload = {}) {
+function makeMarcusSyncEvent(type, payload = {}) {
     return {
         type: String(type || '').trim(),
         payload: (payload && typeof payload === 'object') ? payload : {},
-        source: MARTY_INSTANCE_ID,
+        source: MARCUS_INSTANCE_ID,
         ts: Date.now(),
     };
 }
 
-function publishMartySync(type, payload = {}) {
-    const ev = makeMartySyncEvent(type, payload);
-    if (martySyncChannel) {
-        try { martySyncChannel.postMessage(ev); } catch {}
+function publishMarcusSync(type, payload = {}) {
+    const ev = makeMarcusSyncEvent(type, payload);
+    if (marcusSyncChannel) {
+        try { marcusSyncChannel.postMessage(ev); } catch {}
     }
     try {
-        localStorage.setItem(MARTY_SYNC_STORAGE_KEY, JSON.stringify(ev));
+        localStorage.setItem(MARCUS_SYNC_STORAGE_KEY, JSON.stringify(ev));
     } catch {}
 }
 
@@ -495,7 +495,7 @@ function sameChatEntry(a, b) {
     return safeText(a?.role) === safeText(b?.role) && safeText(a?.content) === safeText(b?.content);
 }
 
-async function applyMartyRemoteContext(payload) {
+async function applyMarcusRemoteContext(payload) {
     const p = (payload && typeof payload === 'object') ? payload : {};
     const nextProjectId = safeText(p.currentProjectId || '');
     const nextView = safeText(p.currentView || 'dashboard') || 'dashboard';
@@ -508,7 +508,7 @@ async function applyMartyRemoteContext(payload) {
     renderChat();
 }
 
-function applyMartyRemoteChat(payload) {
+function applyMarcusRemoteChat(payload) {
     const p = (payload && typeof payload === 'object') ? payload : {};
     const entry = p.entry && typeof p.entry === 'object' ? p.entry : null;
     if (!entry) return;
@@ -543,21 +543,21 @@ function applyMartyRemoteChat(payload) {
     renderChat();
 }
 
-async function handleMartySyncEvent(ev) {
+async function handleMarcusSyncEvent(ev) {
     const e = (ev && typeof ev === 'object') ? ev : null;
-    if (!e || safeText(e.source) === MARTY_INSTANCE_ID) return;
+    if (!e || safeText(e.source) === MARCUS_INSTANCE_ID) return;
     const type = safeText(e.type);
 
     if (type === 'context') {
-        await applyMartyRemoteContext(e.payload);
+        await applyMarcusRemoteContext(e.payload);
         return;
     }
     if (type === 'chat-entry') {
-        applyMartyRemoteChat(e.payload);
+        applyMarcusRemoteChat(e.payload);
         return;
     }
     if (type === 'request-sync') {
-        publishMartySync('sync-state', {
+        publishMarcusSync('sync-state', {
             currentProjectId: safeText(state.currentProjectId || ''),
             currentView: safeText(state.currentView || 'dashboard'),
             globalChatHistory: Array.isArray(state.globalChatHistory) ? state.globalChatHistory.slice(-30) : [],
@@ -567,7 +567,7 @@ async function handleMartySyncEvent(ev) {
     if (type === 'sync-state') {
         const payload = e.payload && typeof e.payload === 'object' ? e.payload : {};
         if (!safeText(state.currentProjectId) && safeText(payload.currentProjectId)) {
-            await applyMartyRemoteContext(payload);
+            await applyMarcusRemoteContext(payload);
         }
         if (!state.globalChatHistory.length && Array.isArray(payload.globalChatHistory) && payload.globalChatHistory.length) {
             state.globalChatHistory = payload.globalChatHistory
@@ -579,55 +579,55 @@ async function handleMartySyncEvent(ev) {
         return;
     }
     if (type === 'popout-closed') {
-        if (!IS_MARTY_POPOUT) {
-            setStoredMartyDetached(false);
-            syncMartyDetachedIndicator();
-            applyMartyOpenState(true);
-            setStoredMartyOpen(true);
+        if (!IS_MARCUS_POPOUT) {
+            setStoredMarcusDetached(false);
+            syncMarcusDetachedIndicator();
+            applyMarcusOpenState(true);
+            setStoredMarcusOpen(true);
         }
         return;
     }
 }
 
-function initMartySync() {
+function initMarcusSync() {
     try {
         if (typeof BroadcastChannel === 'function') {
-            martySyncChannel = new BroadcastChannel(MARTY_SYNC_CHANNEL);
-            martySyncChannel.onmessage = (msg) => {
-                handleMartySyncEvent(msg?.data).catch(() => {});
+            marcusSyncChannel = new BroadcastChannel(MARCUS_SYNC_CHANNEL);
+            marcusSyncChannel.onmessage = (msg) => {
+                handleMarcusSyncEvent(msg?.data).catch(() => {});
             };
         }
     } catch {
-        martySyncChannel = null;
+        marcusSyncChannel = null;
     }
 
     window.addEventListener('storage', (evt) => {
-        if (evt.key !== MARTY_SYNC_STORAGE_KEY || !evt.newValue) return;
+        if (evt.key !== MARCUS_SYNC_STORAGE_KEY || !evt.newValue) return;
         try {
             const parsed = JSON.parse(evt.newValue);
-            handleMartySyncEvent(parsed).catch(() => {});
+            handleMarcusSyncEvent(parsed).catch(() => {});
         } catch {}
     });
 
-    if (IS_MARTY_POPOUT) {
+    if (IS_MARCUS_POPOUT) {
         window.addEventListener('beforeunload', () => {
-            publishMartySync('popout-closed', {});
+            publishMarcusSync('popout-closed', {});
         });
     }
 
-    publishMartySync('request-sync', {});
+    publishMarcusSync('request-sync', {});
 }
 
-function broadcastMartyContext() {
-    publishMartySync('context', {
+function broadcastMarcusContext() {
+    publishMarcusSync('context', {
         currentProjectId: safeText(state.currentProjectId || ''),
         currentView: safeText(state.currentView || 'dashboard'),
     });
 }
 
-function getDefaultMartyPanelLayout() {
-    const width = Math.min(420, Math.max(MARTY_PANEL_MIN_WIDTH, Math.floor(window.innerWidth * 0.33)));
-    const height = Math.min(640, Math.max(MARTY_PANEL_MIN_HEIGHT, Math.floor(window.innerHeight * 0.58)));
+function getDefaultMarcusPanelLayout() {
+    const width = Math.min(420, Math.max(MARCUS_PANEL_MIN_WIDTH, Math.floor(window.innerWidth * 0.33)));
+    const height = Math.min(640, Math.max(MARCUS_PANEL_MIN_HEIGHT, Math.floor(window.innerHeight * 0.58)));
     return {
         x: Math.max(8, window.innerWidth - width - 24),
         y: Math.max(8, window.innerHeight - height - 24),
@@ -636,10 +636,10 @@ function getDefaultMartyPanelLayout() {
     };
 }
 
-function clampMartyPanelLayout(layout) {
+function clampMarcusPanelLayout(layout) {
     const l = (layout && typeof layout === 'object') ? layout : {};
-    const width = Math.min(window.innerWidth - 8, Math.max(MARTY_PANEL_MIN_WIDTH, Number(l.width) || MARTY_PANEL_MIN_WIDTH));
-    const height = Math.min(window.innerHeight - 8, Math.max(MARTY_PANEL_MIN_HEIGHT, Number(l.height) || MARTY_PANEL_MIN_HEIGHT));
+    const width = Math.min(window.innerWidth - 8, Math.max(MARCUS_PANEL_MIN_WIDTH, Number(l.width) || MARCUS_PANEL_MIN_WIDTH));
+    const height = Math.min(window.innerHeight - 8, Math.max(MARCUS_PANEL_MIN_HEIGHT, Number(l.height) || MARCUS_PANEL_MIN_HEIGHT));
     const maxX = Math.max(0, window.innerWidth - width - 8);
     const maxY = Math.max(0, window.innerHeight - height - 8);
     const x = Math.min(maxX, Math.max(0, Number(l.x) || 0));
@@ -647,30 +647,30 @@ function clampMartyPanelLayout(layout) {
     return { x, y, width, height };
 }
 
-function getStoredMartyPanelLayout() {
+function getStoredMarcusPanelLayout() {
     try {
-        const raw = String(localStorage.getItem(MARTY_PANEL_STORAGE_KEY) || '').trim();
-        if (!raw) return getDefaultMartyPanelLayout();
+        const raw = String(localStorage.getItem(MARCUS_PANEL_STORAGE_KEY) || '').trim();
+        if (!raw) return getDefaultMarcusPanelLayout();
         const parsed = JSON.parse(raw);
-        return clampMartyPanelLayout(parsed);
+        return clampMarcusPanelLayout(parsed);
     } catch {
-        return getDefaultMartyPanelLayout();
+        return getDefaultMarcusPanelLayout();
     }
 }
 
-function setStoredMartyPanelLayout(layout) {
+function setStoredMarcusPanelLayout(layout) {
     try {
-        localStorage.setItem(MARTY_PANEL_STORAGE_KEY, JSON.stringify(clampMartyPanelLayout(layout)));
+        localStorage.setItem(MARCUS_PANEL_STORAGE_KEY, JSON.stringify(clampMarcusPanelLayout(layout)));
     } catch {
         // ignore
     }
 }
 
-function applyMartyPanelLayout(layout) {
+function applyMarcusPanelLayout(layout) {
     const drawer = document.getElementById('neural-drawer');
     if (!drawer) return;
-    if (drawer.dataset?.martyDocked === '1') return;
-    const next = clampMartyPanelLayout(layout);
+    if (drawer.dataset?.marcusDocked === '1') return;
+    const next = clampMarcusPanelLayout(layout);
     drawer.style.left = `${next.x}px`;
     drawer.style.top = `${next.y}px`;
     drawer.style.width = `${next.width}px`;
@@ -679,18 +679,18 @@ function applyMartyPanelLayout(layout) {
     drawer.style.bottom = 'auto';
 }
 
-function dockMartyToDashboardSlot(slotEl) {
+function dockMarcusToDashboardSlot(slotEl) {
     const slot = slotEl && typeof slotEl === 'object' ? slotEl : null;
     const drawer = document.getElementById('neural-drawer');
     if (!slot || !drawer) return;
-    if (drawer.dataset?.martyDocked === '1' && drawer.parentElement === slot) return;
+    if (drawer.dataset?.marcusDocked === '1' && drawer.parentElement === slot) return;
 
     const parent = drawer.parentElement;
     if (!parent) return;
 
     // Only capture restore info when docking from a floating state.
-    if (drawer.dataset?.martyDocked !== '1') {
-        martyDockRestore = {
+    if (drawer.dataset?.marcusDocked !== '1') {
+        marcusDockRestore = {
             parent,
             nextSibling: drawer.nextSibling,
             className: drawer.className,
@@ -698,7 +698,7 @@ function dockMartyToDashboardSlot(slotEl) {
         };
     }
 
-    drawer.dataset.martyDocked = '1';
+    drawer.dataset.marcusDocked = '1';
     drawer.className = drawer.className
         .replace(/\bfixed\b/g, '')
         .replace(/\bright-\S+\b/g, '')
@@ -709,23 +709,23 @@ function dockMartyToDashboardSlot(slotEl) {
     drawer.style.right = 'auto';
     drawer.style.bottom = 'auto';
 
-    const resizeHandle = document.getElementById('marty-resize-handle');
+    const resizeHandle = document.getElementById('marcus-resize-handle');
     if (resizeHandle) resizeHandle.classList.add('hidden');
 
-    const dragHandle = document.getElementById('marty-drag-handle');
+    const dragHandle = document.getElementById('marcus-drag-handle');
     if (dragHandle) dragHandle.classList.remove('cursor-move');
 
     slot.appendChild(drawer);
 }
 
-function ensurePersistentMartyLayout() {
+function ensurePersistentMarcusLayout() {
     const main = document.getElementById('main-port');
     if (!main) return null;
 
     let viewPort = document.getElementById('view-port');
-    let martyPort = document.getElementById('marty-port');
+    let marcusPort = document.getElementById('marcus-port');
 
-    const needsRebuild = !viewPort || !martyPort || viewPort.parentElement !== main || martyPort.parentElement !== main;
+    const needsRebuild = !viewPort || !marcusPort || viewPort.parentElement !== main || marcusPort.parentElement !== main;
     if (needsRebuild) {
         main.innerHTML = '';
         // Use inline styles for the grid so Tailwind CDN doesn't need to JIT-compile arbitrary values.
@@ -739,44 +739,44 @@ function ensurePersistentMartyLayout() {
         viewPort.id = 'view-port';
         viewPort.className = 'min-h-0 overflow-y-auto';
 
-        martyPort = document.createElement('div');
-        martyPort.id = 'marty-port';
-        martyPort.className = 'min-h-0 overflow-hidden border-l border-ops-border';
+        marcusPort = document.createElement('div');
+        marcusPort.id = 'marcus-port';
+        marcusPort.className = 'min-h-0 overflow-hidden border-l border-ops-border';
 
         main.appendChild(viewPort);
-        main.appendChild(martyPort);
+        main.appendChild(marcusPort);
     }
 
-    return { main, viewPort, martyPort };
+    return { main, viewPort, marcusPort };
 }
 
-function dockMartyToPersistentSlot() {
-    const ports = ensurePersistentMartyLayout();
+function dockMarcusToPersistentSlot() {
+    const ports = ensurePersistentMarcusLayout();
     if (!ports) return;
 
     const drawer = document.getElementById('neural-drawer');
     if (!drawer) return;
 
-    const slot = ports.martyPort;
+    const slot = ports.marcusPort;
     if (!slot) return;
 
     // Always force docked & open.
-    setStoredMartyDetached(false);
-    syncMartyDetachedIndicator();
-    applyMartyOpenState(true);
-    setStoredMartyOpen(true);
+    setStoredMarcusDetached(false);
+    syncMarcusDetachedIndicator();
+    applyMarcusOpenState(true);
+    setStoredMarcusOpen(true);
 
     // Strip all floating / absolute positioning and fill the right column completely.
-    drawer.dataset.martyDocked = '1';
+    drawer.dataset.marcusDocked = '1';
     drawer.className = 'flex flex-col overflow-hidden';
-    // Force drawer to fill the marty-port slot exactly.
+    // Force drawer to fill the marcus-port slot exactly.
     drawer.style.cssText = 'position:relative; width:100%; height:100%; min-width:0; min-height:0; border:none; border-radius:0; box-shadow:none;';
 
-    const resizeHandle = document.getElementById('marty-resize-handle');
+    const resizeHandle = document.getElementById('marcus-resize-handle');
     if (resizeHandle) resizeHandle.classList.add('hidden');
-    const dragHandle = document.getElementById('marty-drag-handle');
+    const dragHandle = document.getElementById('marcus-drag-handle');
     if (dragHandle) dragHandle.classList.remove('cursor-move');
-    const popoutToggle = document.getElementById('marty-popout-toggle');
+    const popoutToggle = document.getElementById('marcus-popout-toggle');
     if (popoutToggle) popoutToggle.classList.add('hidden');
 
     if (drawer.parentElement !== slot) {
@@ -785,33 +785,33 @@ function dockMartyToPersistentSlot() {
     }
 }
 
-function undockMartyFromDashboard() {
+function undockMarcusFromDashboard() {
     const drawer = document.getElementById('neural-drawer');
     if (!drawer) return;
-    if (drawer.dataset?.martyDocked !== '1') return;
-    if (!martyDockRestore || !martyDockRestore.parent) return;
+    if (drawer.dataset?.marcusDocked !== '1') return;
+    if (!marcusDockRestore || !marcusDockRestore.parent) return;
 
-    drawer.dataset.martyDocked = '0';
+    drawer.dataset.marcusDocked = '0';
 
-    const resizeHandle = document.getElementById('marty-resize-handle');
+    const resizeHandle = document.getElementById('marcus-resize-handle');
     if (resizeHandle) resizeHandle.classList.remove('hidden');
 
-    const dragHandle = document.getElementById('marty-drag-handle');
+    const dragHandle = document.getElementById('marcus-drag-handle');
     if (dragHandle) dragHandle.classList.add('cursor-move');
 
-    if (martyDockRestore.nextSibling && martyDockRestore.nextSibling.parentNode === martyDockRestore.parent) {
-        martyDockRestore.parent.insertBefore(drawer, martyDockRestore.nextSibling);
+    if (marcusDockRestore.nextSibling && marcusDockRestore.nextSibling.parentNode === marcusDockRestore.parent) {
+        marcusDockRestore.parent.insertBefore(drawer, marcusDockRestore.nextSibling);
     } else {
-        martyDockRestore.parent.appendChild(drawer);
+        marcusDockRestore.parent.appendChild(drawer);
     }
 
-    drawer.className = martyDockRestore.className;
-    drawer.setAttribute('style', martyDockRestore.style);
-    martyDockRestore = null;
+    drawer.className = marcusDockRestore.className;
+    drawer.setAttribute('style', marcusDockRestore.style);
+    marcusDockRestore = null;
 
-    const next = clampMartyPanelLayout(getStoredMartyPanelLayout());
-    applyMartyPanelLayout(next);
-    setStoredMartyPanelLayout(next);
+    const next = clampMarcusPanelLayout(getStoredMarcusPanelLayout());
+    applyMarcusPanelLayout(next);
+    setStoredMarcusPanelLayout(next);
 }
 
 function normalizeModelLabel(model) {
@@ -825,10 +825,10 @@ function normalizeModelLabel(model) {
     return raw;
 }
 
-function syncMartyModelUi() {
+function syncMarcusModelUi() {
     const model = String(state.settings?.openaiModel || '').trim();
     const badge = document.getElementById('ai-model-badge');
-    const select = document.getElementById('marty-model-select');
+    const select = document.getElementById('marcus-model-select');
     if (badge) badge.innerText = normalizeModelLabel(model || 'AI');
     if (select) {
         const options = Array.from(select.options).map((o) => String(o.value || '').trim());
@@ -889,18 +889,18 @@ function isPortraitCompactMode() {
     }
 }
 
-function setMartyPresence(mode = 'idle') {
+function setMarcusPresence(mode = 'idle') {
     const panel = document.getElementById('neural-drawer');
-    const orb = document.getElementById('marty-orb');
-    const statusText = document.getElementById('marty-state');
+    const orb = document.getElementById('marcus-orb');
+    const statusText = document.getElementById('marcus-state');
     const normalized = String(mode || '').toLowerCase();
     const busy = normalized === 'busy';
     const responding = normalized === 'responding';
 
     if (panel) {
-        panel.classList.remove('marty-thinking', 'marty-responding');
-        if (busy) panel.classList.add('marty-thinking');
-        if (responding) panel.classList.add('marty-responding');
+        panel.classList.remove('marcus-thinking', 'marcus-responding');
+        if (busy) panel.classList.add('marcus-thinking');
+        if (responding) panel.classList.add('marcus-responding');
     }
 
     if (orb) {
@@ -912,10 +912,10 @@ function setMartyPresence(mode = 'idle') {
 
     if (statusText) {
         if (busy) {
-            const line = MARTY_THINKING_LINES[Math.floor(Math.random() * MARTY_THINKING_LINES.length)];
+            const line = MARCUS_THINKING_LINES[Math.floor(Math.random() * MARCUS_THINKING_LINES.length)];
             statusText.textContent = `M.A.R.C.U.S. THINKING • ${line}`;
         } else if (responding) {
-            const line = MARTY_RESPONDING_LINES[Math.floor(Math.random() * MARTY_RESPONDING_LINES.length)];
+            const line = MARCUS_RESPONDING_LINES[Math.floor(Math.random() * MARCUS_RESPONDING_LINES.length)];
             statusText.textContent = `M.A.R.C.U.S. RESPONDING • ${line}`;
         } else {
             statusText.textContent = 'M.A.R.C.U.S. IDLE • READY FOR ORDERS';
@@ -923,24 +923,24 @@ function setMartyPresence(mode = 'idle') {
     }
 }
 
-function removeMartyTypingIndicator() {
+function removeMarcusTypingIndicator() {
     const stream = document.getElementById('chat-stream');
     if (!stream) return;
-    const existing = stream.querySelector(`#${MARTY_TYPING_ID}`);
+    const existing = stream.querySelector(`#${MARCUS_TYPING_ID}`);
     if (existing) existing.remove();
 }
 
-function showMartyTypingIndicator() {
+function showMarcusTypingIndicator() {
     const stream = document.getElementById('chat-stream');
     if (!stream) return;
-    removeMartyTypingIndicator();
+    removeMarcusTypingIndicator();
 
-    const line = MARTY_THINKING_LINES[Math.floor(Math.random() * MARTY_THINKING_LINES.length)];
+    const line = MARCUS_THINKING_LINES[Math.floor(Math.random() * MARCUS_THINKING_LINES.length)];
     const wrap = document.createElement('div');
-    wrap.id = MARTY_TYPING_ID;
+    wrap.id = MARCUS_TYPING_ID;
     wrap.className = 'flex flex-col gap-1 mb-4 animate-fade-in';
     wrap.innerHTML = `
-        <span class="text-[10px] uppercase font-bold tracking-wider text-blue-400">MARTY</span>
+        <span class="text-[10px] uppercase font-bold tracking-wider text-blue-400">M.A.R.C.U.S.</span>
         <div class="p-2 rounded text-xs bg-zinc-800/60 text-zinc-200 border-l-2 border-blue-500 max-w-[90%] break-words shadow-sm">
             <div class="flex items-center gap-2">
                 <span>${escapeHtml(line)}</span>
@@ -957,43 +957,43 @@ function showMartyTypingIndicator() {
     stream.scrollTop = stream.scrollHeight;
 }
 
-function initializeMartyWidget() {
+function initializeMarcusWidget() {
     const drawer = document.getElementById('neural-drawer');
-    const dragHandle = document.getElementById('marty-drag-handle');
-    const resizeHandle = document.getElementById('marty-resize-handle');
-    const popoutToggle = document.getElementById('marty-popout-toggle');
+    const dragHandle = document.getElementById('marcus-drag-handle');
+    const resizeHandle = document.getElementById('marcus-resize-handle');
+    const popoutToggle = document.getElementById('marcus-popout-toggle');
     if (!drawer) return;
 
-    if (IS_MARTY_POPOUT) {
-        document.body.classList.add('marty-popout-mode');
-        setStoredMartyDetached(true);
+    if (IS_MARCUS_POPOUT) {
+        document.body.classList.add('marcus-popout-mode');
+        setStoredMarcusDetached(true);
     }
-    syncMartyDetachedIndicator();
+    syncMarcusDetachedIndicator();
 
-    applyMartyPanelLayout(getStoredMartyPanelLayout());
-    applyMartyOpenState(getStoredMartyOpen());
-    syncMartyModelUi();
-    setMartyPresence('idle');
+    applyMarcusPanelLayout(getStoredMarcusPanelLayout());
+    applyMarcusOpenState(getStoredMarcusOpen());
+    syncMarcusModelUi();
+    setMarcusPresence('idle');
 
-    state.martyVoiceIn = getStoredMartyVoiceIn();
-    state.martyVoiceOut = getStoredMartyVoiceOut();
-    state.martyVoiceListening = false;
-    syncMartyVoiceUi();
+    state.marcusVoiceIn = getStoredMarcusVoiceIn();
+    state.marcusVoiceOut = getStoredMarcusVoiceOut();
+    state.marcusVoiceListening = false;
+    syncMarcusVoiceUi();
 
-    if (IS_MARTY_POPOUT) {
-        applyMartyOpenState(true);
+    if (IS_MARCUS_POPOUT) {
+        applyMarcusOpenState(true);
     }
 
     if (popoutToggle) {
         const icon = popoutToggle.querySelector('i');
-        if (IS_MARTY_POPOUT) {
+        if (IS_MARCUS_POPOUT) {
             popoutToggle.title = 'Return to app window';
             if (icon) icon.className = 'fa-solid fa-down-left-and-up-right-to-center';
         }
         popoutToggle.addEventListener('click', () => {
             const baseUrl = `${window.location.origin}${window.location.pathname}`;
-            if (IS_MARTY_POPOUT) {
-                setStoredMartyDetached(false);
+            if (IS_MARCUS_POPOUT) {
+                setStoredMarcusDetached(false);
                 const main = window.open(baseUrl, '_blank');
                 if (main) main.focus();
                 window.close();
@@ -1005,27 +1005,27 @@ function initializeMartyWidget() {
             const height = Math.max(420, Math.floor(rect.height));
             const left = Math.max(0, Math.floor(window.screenX + rect.left));
             const top = Math.max(0, Math.floor(window.screenY + rect.top));
-            const target = `${baseUrl}?martyPopout=1`;
+            const target = `${baseUrl}?marcusPopout=1`;
             const features = `popup=yes,width=${width},height=${height},left=${left},top=${top},resizable=yes,scrollbars=no`;
-            const w = window.open(target, `marty-popout-${Date.now()}`, features);
+            const w = window.open(target, `marcus-popout-${Date.now()}`, features);
             if (w) {
                 w.focus();
-                setStoredMartyDetached(true);
-                syncMartyDetachedIndicator();
-                applyMartyOpenState(false);
-                setStoredMartyOpen(false);
+                setStoredMarcusDetached(true);
+                syncMarcusDetachedIndicator();
+                applyMarcusOpenState(false);
+                setStoredMarcusOpen(false);
             }
         });
     }
 
-    if (IS_MARTY_POPOUT) return;
+    if (IS_MARCUS_POPOUT) return;
 
     let drag = null;
     let resize = null;
 
     if (dragHandle) {
         dragHandle.addEventListener('pointerdown', (e) => {
-            if (drawer.dataset?.martyDocked === '1') return;
+            if (drawer.dataset?.marcusDocked === '1') return;
             if (e.target && e.target.closest('button,select,input,textarea')) return;
             const rect = drawer.getBoundingClientRect();
             drag = {
@@ -1042,19 +1042,19 @@ function initializeMartyWidget() {
         dragHandle.addEventListener('pointermove', (e) => {
             if (!drag || drag.pointerId !== e.pointerId) return;
             const next = {
-                ...getStoredMartyPanelLayout(),
+                ...getStoredMarcusPanelLayout(),
                 x: drag.originX + (e.clientX - drag.startX),
                 y: drag.originY + (e.clientY - drag.startY),
                 width: drawer.getBoundingClientRect().width,
                 height: drawer.getBoundingClientRect().height,
             };
-            applyMartyPanelLayout(next);
+            applyMarcusPanelLayout(next);
         });
 
         const stopDrag = (e) => {
             if (!drag || drag.pointerId !== e.pointerId) return;
             const rect = drawer.getBoundingClientRect();
-            setStoredMartyPanelLayout({
+            setStoredMarcusPanelLayout({
                 x: rect.left,
                 y: rect.top,
                 width: rect.width,
@@ -1070,7 +1070,7 @@ function initializeMartyWidget() {
 
     if (resizeHandle) {
         resizeHandle.addEventListener('pointerdown', (e) => {
-            if (drawer.dataset?.martyDocked === '1') return;
+            if (drawer.dataset?.marcusDocked === '1') return;
             const rect = drawer.getBoundingClientRect();
             resize = {
                 pointerId: e.pointerId,
@@ -1093,13 +1093,13 @@ function initializeMartyWidget() {
                 width: resize.originW + (e.clientX - resize.startX),
                 height: resize.originH + (e.clientY - resize.startY),
             };
-            applyMartyPanelLayout(next);
+            applyMarcusPanelLayout(next);
         });
 
         const stopResize = (e) => {
             if (!resize || resize.pointerId !== e.pointerId) return;
             const rect = drawer.getBoundingClientRect();
-            setStoredMartyPanelLayout({
+            setStoredMarcusPanelLayout({
                 x: rect.left,
                 y: rect.top,
                 width: rect.width,
@@ -1114,10 +1114,10 @@ function initializeMartyWidget() {
     }
 
     window.addEventListener('resize', () => {
-        if (drawer.dataset?.martyDocked === '1') return;
-        const next = clampMartyPanelLayout(getStoredMartyPanelLayout());
-        applyMartyPanelLayout(next);
-        setStoredMartyPanelLayout(next);
+        if (drawer.dataset?.marcusDocked === '1') return;
+        const next = clampMarcusPanelLayout(getStoredMarcusPanelLayout());
+        applyMarcusPanelLayout(next);
+        setStoredMarcusPanelLayout(next);
     });
 }
 
@@ -1216,7 +1216,7 @@ function getPageElementsPreferences(settings) {
         },
         godview: {
             businessesRadar: boolDefaultTrue(godRaw.businessesRadar),
-            martyBrief: boolDefaultTrue(godRaw.martyBrief),
+            marcusBrief: boolDefaultTrue(godRaw.marcusBrief),
             upcoming: boolDefaultTrue(godRaw.upcoming),
             teamComms: boolDefaultTrue(godRaw.teamComms),
             globalFocus: boolDefaultTrue(godRaw.globalFocus),
@@ -1272,10 +1272,10 @@ function getCommandPaletteItems() {
         },
         {
 
-        // MARTY voice
-        martyVoiceIn: false,
-        martyVoiceOut: false,
-        martyVoiceListening: false,
+        // M.A.R.C.U.S. voice
+        marcusVoiceIn: false,
+        marcusVoiceOut: false,
+        marcusVoiceListening: false,
             id: 'new-inbox-item',
             label: 'Capture Inbox Item',
             hint: 'Action',
@@ -1470,7 +1470,7 @@ function setPageMeta(text) {
 }
 
 function snapshotViewUiState() {
-    const ports = ensurePersistentMartyLayout();
+    const ports = ensurePersistentMarcusLayout();
     const viewPort = ports?.viewPort;
     if (!viewPort) return null;
 
@@ -1502,7 +1502,7 @@ function snapshotViewUiState() {
 
 function restoreViewUiState(snap) {
     if (!snap || snap.view !== safeText(state.currentView)) return;
-    const ports = ensurePersistentMartyLayout();
+    const ports = ensurePersistentMarcusLayout();
     const viewPort = ports?.viewPort;
     if (!viewPort) return;
 
@@ -1543,7 +1543,7 @@ function flushDeferredRerenderIfSafe() {
     rerenderMainPreservingUi();
 }
 
-let martySpeechRecognition = null;
+let marcusSpeechRecognition = null;
 
 function getSpeechRecognitionCtor() {
     try {
@@ -1553,54 +1553,54 @@ function getSpeechRecognitionCtor() {
     }
 }
 
-function syncMartyVoiceUi() {
+function syncMarcusVoiceUi() {
     const mic = document.getElementById('cmd-mic');
     const speak = document.getElementById('cmd-speak');
     if (mic) {
-        mic.classList.toggle('text-blue-400', !!state.martyVoiceIn);
-        mic.classList.toggle('text-emerald-300', !!state.martyVoiceListening);
-        mic.title = state.martyVoiceListening ? 'Listening… (click to stop)' : 'Voice input';
+        mic.classList.toggle('text-blue-400', !!state.marcusVoiceIn);
+        mic.classList.toggle('text-emerald-300', !!state.marcusVoiceListening);
+        mic.title = state.marcusVoiceListening ? 'Listening… (click to stop)' : 'Voice input';
     }
     if (speak) {
-        speak.classList.toggle('text-blue-400', !!state.martyVoiceOut);
-        speak.title = state.martyVoiceOut ? 'Voice output on' : 'Voice output off';
+        speak.classList.toggle('text-blue-400', !!state.marcusVoiceOut);
+        speak.title = state.marcusVoiceOut ? 'Voice output on' : 'Voice output off';
     }
 }
 
-function stopMartyListening() {
-    state.martyVoiceListening = false;
+function stopMarcusListening() {
+    state.marcusVoiceListening = false;
     try {
-        martySpeechRecognition?.stop?.();
+        marcusSpeechRecognition?.stop?.();
     } catch {
         // ignore
     }
-    syncMartyVoiceUi();
+    syncMarcusVoiceUi();
 }
 
-function startMartyListening() {
+function startMarcusListening() {
     const Ctor = getSpeechRecognitionCtor();
     if (!Ctor) {
         alert('Voice input is not supported in this browser. Try Chrome/Edge on desktop.');
-        state.martyVoiceIn = false;
-        setStoredMartyVoiceIn(false);
-        syncMartyVoiceUi();
+        state.marcusVoiceIn = false;
+        setStoredMarcusVoiceIn(false);
+        syncMarcusVoiceUi();
         return;
     }
 
-    if (!martySpeechRecognition) {
-        martySpeechRecognition = new Ctor();
-        martySpeechRecognition.lang = 'en-US';
-        martySpeechRecognition.interimResults = true;
-        martySpeechRecognition.continuous = false;
+    if (!marcusSpeechRecognition) {
+        marcusSpeechRecognition = new Ctor();
+        marcusSpeechRecognition.lang = 'en-US';
+        marcusSpeechRecognition.interimResults = true;
+        marcusSpeechRecognition.continuous = false;
     }
 
     const input = document.getElementById('cmd-input');
     let finalTranscript = '';
 
-    state.martyVoiceListening = true;
-    syncMartyVoiceUi();
+    state.marcusVoiceListening = true;
+    syncMarcusVoiceUi();
 
-    martySpeechRecognition.onresult = (e) => {
+    marcusSpeechRecognition.onresult = (e) => {
         try {
             let interim = '';
             for (let i = e.resultIndex; i < e.results.length; i++) {
@@ -1616,10 +1616,10 @@ function startMartyListening() {
         }
     };
 
-    martySpeechRecognition.onerror = (e) => {
+    marcusSpeechRecognition.onerror = (e) => {
         const code = safeText(e?.error).trim().toLowerCase();
-        state.martyVoiceListening = false;
-        syncMartyVoiceUi();
+        state.marcusVoiceListening = false;
+        syncMarcusVoiceUi();
         if (code === 'not-allowed' || code === 'service-not-allowed') {
             alert('Microphone permission is blocked. Allow mic access in your browser/site settings and try again.');
         } else if (code === 'no-speech') {
@@ -1627,9 +1627,9 @@ function startMartyListening() {
         }
     };
 
-    martySpeechRecognition.onend = () => {
-        state.martyVoiceListening = false;
-        syncMartyVoiceUi();
+    marcusSpeechRecognition.onend = () => {
+        state.marcusVoiceListening = false;
+        syncMarcusVoiceUi();
         const final = String(finalTranscript || '').trim();
         if (final) {
             try {
@@ -1642,11 +1642,11 @@ function startMartyListening() {
     };
 
     try {
-        martySpeechRecognition.start();
+        marcusSpeechRecognition.start();
         if (input) input.focus?.();
     } catch {
-        state.martyVoiceListening = false;
-        syncMartyVoiceUi();
+        state.marcusVoiceListening = false;
+        syncMarcusVoiceUi();
     }
 }
 
@@ -1654,7 +1654,7 @@ function ensureAiTeamMember() {
     const list = Array.isArray(state.team) ? state.team : [];
     const hasAi = list.some((m) => safeText(m?.id) === 'ai');
     if (hasAi) return;
-    state.team = [...list, { id: 'ai', name: 'Marty', role: 'ai', avatar: 'AI' }];
+    state.team = [...list, { id: 'ai', name: 'Marcus', role: 'ai', avatar: 'AI' }];
 }
 
 function normalizeCsvList(text) {
@@ -2052,7 +2052,7 @@ async function init() {
     };
 
     try {
-        console.log("Initializing Marty...");
+        console.log("Initializing Marcus...");
         state.lastInteractionAt = Date.now();
         applyTheme(getStoredTheme() || 'dark');
         applyLayout(getStoredLayout() || 'standard');
@@ -2079,8 +2079,8 @@ async function init() {
         
         // Setup UI
         await step('setupEventListeners', async () => { setupEventListeners(); });
-        await step('initializeMartyWidget', async () => { initializeMartyWidget(); });
-        await step('initMartySync', async () => { initMartySync(); });
+        await step('initializeMarcusWidget', async () => { initializeMarcusWidget(); });
+        await step('initMarcusSync', async () => { initMarcusSync(); });
         await step('loadChatHistory', async () => { await loadChatHistory(); });
         await step('renderNav', async () => { renderNav(); });
         await step('renderMain', async () => { renderMain(); });
@@ -2537,8 +2537,8 @@ function setupEventListeners() {
     // Chat Input
     const input = document.getElementById("cmd-input");
     const send = document.getElementById("cmd-send");
-    const modelSelect = document.getElementById('marty-model-select');
-    const threadSelect = document.getElementById('marty-thread-select');
+    const modelSelect = document.getElementById('marcus-model-select');
+    const threadSelect = document.getElementById('marcus-thread-select');
 
     // Submit behavior (robust across browsers):
     // - Enter submits, Shift+Enter inserts newline
@@ -2577,25 +2577,25 @@ function setupEventListeners() {
         const btn = e.target?.closest?.('#cmd-mic');
         if (!btn) return;
         e.preventDefault();
-        const next = !state.martyVoiceIn;
-        state.martyVoiceIn = next;
-        setStoredMartyVoiceIn(next);
-        if (next) startMartyListening();
-        else stopMartyListening();
-        syncMartyVoiceUi();
+        const next = !state.marcusVoiceIn;
+        state.marcusVoiceIn = next;
+        setStoredMarcusVoiceIn(next);
+        if (next) startMarcusListening();
+        else stopMarcusListening();
+        syncMarcusVoiceUi();
     });
 
     document.addEventListener('click', (e) => {
         const btn = e.target?.closest?.('#cmd-speak');
         if (!btn) return;
         e.preventDefault();
-        const next = !state.martyVoiceOut;
-        state.martyVoiceOut = next;
-        setStoredMartyVoiceOut(next);
+        const next = !state.marcusVoiceOut;
+        state.marcusVoiceOut = next;
+        setStoredMarcusVoiceOut(next);
         if (!next) {
             try { window.speechSynthesis?.cancel?.(); } catch {}
         }
-        syncMartyVoiceUi();
+        syncMarcusVoiceUi();
     });
 
     if (modelSelect) {
@@ -2604,7 +2604,7 @@ function setupEventListeners() {
             if (!model) return;
             try {
                 await saveSettingsPatch({ openaiModel: model });
-                syncMartyModelUi();
+                syncMarcusModelUi();
             } catch (e) {
                 alert(e?.message || 'Failed to save model');
             }
@@ -2613,7 +2613,7 @@ function setupEventListeners() {
 
     if (threadSelect) {
         // Initialize from storage.
-        const stored = getStoredMartyThread();
+        const stored = getStoredMarcusThread();
         threadSelect.value = stored;
         state.chatThreadId = stored;
 
@@ -2623,7 +2623,7 @@ function setupEventListeners() {
             if (state.currentProjectId) {
                 threadSelect.value = 'default';
                 state.chatThreadId = 'default';
-                setStoredMartyThread('default');
+                setStoredMarcusThread('default');
                 alert('Bio thread is only available when no project is selected.');
                 await loadChatHistory();
                 renderChat();
@@ -2631,7 +2631,7 @@ function setupEventListeners() {
             }
 
             state.chatThreadId = next;
-            setStoredMartyThread(next);
+            setStoredMarcusThread(next);
             await loadChatHistory();
             renderChat();
         });
@@ -2765,7 +2765,7 @@ function showLoading() {
     const container = document.getElementById("view-port") || document.getElementById("main-port");
     if(container) container.innerHTML = `<div class="flex h-full items-center justify-center text-blue-500">
         <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500 mr-3"></div>
-        <span class="font-mono text-xs tracking-widest">CONNECTING TO MARTY...</span>
+        <span class="font-mono text-xs tracking-widest">CONNECTING TO M.A.R.C.U.S....</span>
     </div>`;
 }
 
@@ -2898,7 +2898,7 @@ async function fetchSettings() {
                 state.showCompleted = state.uiPrefs.defaultShowCompleted;
             }
 
-            syncMartyModelUi();
+            syncMarcusModelUi();
         } else {
             updateSystemStatus(false);
         }
@@ -2981,7 +2981,7 @@ async function openDashboard() {
     renderNav();
     renderMain();
     renderChat();
-    broadcastMartyContext();
+    broadcastMarcusContext();
 
     presencePromise.then(() => {
         if (state.currentView === 'dashboard') rerenderMainPreservingUi();
@@ -2996,7 +2996,7 @@ async function openInbox() {
     renderNav();
     renderMain();
     renderChat();
-    broadcastMartyContext();
+    broadcastMarcusContext();
 }
 
 async function openRevisions() {
@@ -3007,7 +3007,7 @@ async function openRevisions() {
     renderNav();
     renderMain();
     renderChat();
-    broadcastMartyContext();
+    broadcastMarcusContext();
 }
 
 async function openClients() {
@@ -3018,7 +3018,7 @@ async function openClients() {
     renderNav();
     renderMain();
     renderChat();
-    broadcastMartyContext();
+    broadcastMarcusContext();
 }
 
 async function openClient(clientName) {
@@ -3029,7 +3029,7 @@ async function openClient(clientName) {
     renderNav();
     renderMain();
     renderChat();
-    broadcastMartyContext();
+    broadcastMarcusContext();
 }
 
 async function openProjects() {
@@ -3040,7 +3040,7 @@ async function openProjects() {
     renderNav();
     renderMain();
     renderChat();
-    broadcastMartyContext();
+    broadcastMarcusContext();
 }
 
 async function openProject(projectId) {
@@ -3051,7 +3051,7 @@ async function openProject(projectId) {
     renderNav();
     renderMain();
     renderChat();
-    broadcastMartyContext();
+    broadcastMarcusContext();
 }
 
 async function openSettings() {
@@ -3064,7 +3064,7 @@ async function openSettings() {
     renderNav();
     renderMain();
     renderChat();
-    broadcastMartyContext();
+    broadcastMarcusContext();
 }
 
 async function openCalendar() {
@@ -3077,7 +3077,7 @@ async function openCalendar() {
     renderNav();
     renderMain();
     renderChat();
-    broadcastMartyContext();
+    broadcastMarcusContext();
 }
 
 async function openTeam() {
@@ -3090,7 +3090,7 @@ async function openTeam() {
     renderNav();
     renderMain();
     renderChat();
-    broadcastMartyContext();
+    broadcastMarcusContext();
 }
 
 function createNavIcon(iconClass, tooltip, onClick, active, textLabel) {
@@ -3120,15 +3120,15 @@ function createNavIcon(iconClass, tooltip, onClick, active, textLabel) {
 /* --- Rendering: Main Views --- */
 
 function renderMain() {
-    const ports = ensurePersistentMartyLayout();
+    const ports = ensurePersistentMarcusLayout();
     if (!ports) return;
 
     const container = ports.viewPort;
     if (!container) return;
 
-    const side = ports.martyPort;
+    const side = ports.marcusPort;
 
-    preserveMartyDrawerDuringRerender();
+    preserveMarcusDrawerDuringRerender();
 
     container.innerHTML = "";
     if (side) side.innerHTML = '';
@@ -3142,7 +3142,7 @@ function renderMain() {
         wrap.innerHTML = `
             <div class="border border-ops-border rounded-xl bg-ops-surface/40 p-6">
                 <div class="text-white font-semibold">Access Required</div>
-                <div class="text-xs text-ops-light mt-1">This server is protected by an admin token. Paste it once in Settings → Access to unlock projects, inbox, and MARTY.</div>
+                <div class="text-xs text-ops-light mt-1">This server is protected by an admin token. Paste it once in Settings → Access to unlock projects, inbox, and M.A.R.C.U.S..</div>
                 <div class="mt-4 flex flex-wrap gap-2">
                     <button id="btn-open-access" class="px-3 py-2 rounded bg-blue-600 text-white text-xs hover:bg-blue-500">Open Settings</button>
                     <button id="btn-recheck-auth" class="px-3 py-2 rounded bg-ops-bg border border-ops-border text-ops-light text-xs hover:text-white">Re-check</button>
@@ -3176,12 +3176,12 @@ function renderMain() {
     }
 
     if (state.currentView === "godview") {
-        dockMartyToPersistentSlot();
+        dockMarcusToPersistentSlot();
         container.className = 'min-h-0 overflow-y-auto';
         renderGodView(container);
     } else if (state.currentView === "dashboard") {
-        // Restore the classic layout: Dashboard in the main pane, MARTY on the right.
-        dockMartyToPersistentSlot();
+        // Restore the classic layout: Dashboard in the main pane, M.A.R.C.U.S. on the right.
+        dockMarcusToPersistentSlot();
         container.className = 'min-h-0 overflow-y-auto';
         try {
             renderDashboard(container, null);
@@ -3193,40 +3193,40 @@ function renderMain() {
             showError(detail.slice(0, 4000));
         }
     } else if (state.currentView === "inbox") {
-        // All other views keep MARTY docked on the right.
-        dockMartyToPersistentSlot();
+        // All other views keep M.A.R.C.U.S. docked on the right.
+        dockMarcusToPersistentSlot();
         container.className = 'min-h-0 overflow-y-auto';
         renderInbox(container);
     } else if (state.currentView === "revisions") {
-        dockMartyToPersistentSlot();
+        dockMarcusToPersistentSlot();
         container.className = 'min-h-0 overflow-y-auto';
         renderRevisions(container);
     } else if (state.currentView === "clients") {
-        dockMartyToPersistentSlot();
+        dockMarcusToPersistentSlot();
         container.className = 'min-h-0 overflow-y-auto';
         renderClients(container);
     } else if (state.currentView === "client") {
-        dockMartyToPersistentSlot();
+        dockMarcusToPersistentSlot();
         container.className = 'min-h-0 overflow-y-auto';
         renderClientView(container);
     } else if (state.currentView === "projects") {
-        dockMartyToPersistentSlot();
+        dockMarcusToPersistentSlot();
         container.className = 'min-h-0 overflow-y-auto';
         renderProjects(container);
     } else if (state.currentView === "project") {
-        dockMartyToPersistentSlot();
+        dockMarcusToPersistentSlot();
         container.className = 'min-h-0 overflow-y-auto';
         renderProjectView(container);
     } else if (state.currentView === "calendar") {
-        dockMartyToPersistentSlot();
+        dockMarcusToPersistentSlot();
         container.className = 'min-h-0 overflow-y-auto';
         renderCalendar(container);
     } else if (state.currentView === "team") {
-        dockMartyToPersistentSlot();
+        dockMarcusToPersistentSlot();
         container.className = 'min-h-0 overflow-y-auto';
         renderTeam(container);
     } else if (state.currentView === "settings") {
-        dockMartyToPersistentSlot();
+        dockMarcusToPersistentSlot();
         container.className = 'min-h-0 overflow-y-auto';
         renderSettings(container);
     }
@@ -3720,7 +3720,7 @@ function isLowSignalAcknowledgementTextClient(text, levelRaw = 'medium') {
 function shouldHideInboxItemByNoiseFilter(item) {
     const source = normalizeInboxSourceKey(item?.source);
     const sourceRaw = safeText(item?.source).trim().toLowerCase();
-    if (sourceRaw === 'marty') return true;
+    if (sourceRaw === 'marcus') return true;
 
     const body = safeText(item?.text) || safeText(item?.content) || safeText(item?.body) || safeText(item?.message);
 
@@ -3846,7 +3846,7 @@ function renderInbox(container) {
     const digestStale = !Number(digestState.loadedAt) || (Date.now() - Number(digestState.loadedAt) > 20000);
     if (!digestState.loading && digestStale) {
         state.inboxAutomationDigest = { ...digestState, loading: true, error: '' };
-        fetchMartyAutomationDigest()
+        fetchMarcusAutomationDigest()
             .then(() => {
                 if (state.currentView === 'inbox') renderMain();
             })
@@ -3855,7 +3855,7 @@ function renderInbox(container) {
                     ...(state.inboxAutomationDigest || {}),
                     loading: false,
                     loadedAt: Date.now(),
-                    error: err?.message || 'Failed to load Marty digest',
+                    error: err?.message || 'Failed to load Marcus digest',
                 };
                 if (state.currentView === 'inbox') renderMain();
             });
@@ -3868,7 +3868,7 @@ function renderInbox(container) {
         <div class="mt-4 rounded-xl border border-emerald-700/30 bg-emerald-950/15 p-3">
             <div class="flex items-center justify-between gap-3">
                 <div>
-                    <div class="text-[11px] font-mono uppercase tracking-wide text-emerald-200">Marty Daily Digest</div>
+                    <div class="text-[11px] font-mono uppercase tracking-wide text-emerald-200">Marcus Daily Digest</div>
                     <div class="text-xs text-zinc-400">Accept or reject each part (project and task list).</div>
                 </div>
                 <div class="text-[11px] font-mono ${digestItems.length ? 'text-emerald-200' : 'text-zinc-500'}">${digestItems.length} pending</div>
@@ -3922,10 +3922,10 @@ function renderInbox(container) {
                 <div class="text-xs text-zinc-500 mt-1">${newCount} new • ${visible.length} shown • rev ${state.revision}</div>
             </div>
             <div class="flex items-center gap-2">
-                <button id="btn-inbox-marty-filter" class="px-3 py-1.5 rounded border border-amber-600/40 bg-amber-600/15 text-[11px] font-mono text-amber-200 hover:bg-amber-600/25 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Run Marty Filter</button>
-                <button id="btn-inbox-marty-triage" class="px-3 py-1.5 rounded border border-blue-600/40 bg-blue-600/15 text-[11px] font-mono text-blue-200 hover:bg-blue-600/25 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Run Marty Triage</button>
-                <button id="btn-inbox-marty-auto" class="px-3 py-1.5 rounded border border-emerald-600/40 bg-emerald-600/15 text-[11px] font-mono text-emerald-200 hover:bg-emerald-600/25 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Run Marty Auto</button>
-                <button id="btn-inbox-marty-coach" class="px-3 py-1.5 rounded border border-purple-600/40 bg-purple-600/15 text-[11px] font-mono text-purple-200 hover:bg-purple-600/25 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Marty Coach</button>
+                <button id="btn-inbox-marcus-filter" class="px-3 py-1.5 rounded border border-amber-600/40 bg-amber-600/15 text-[11px] font-mono text-amber-200 hover:bg-amber-600/25 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Run Marcus Filter</button>
+                <button id="btn-inbox-marcus-triage" class="px-3 py-1.5 rounded border border-blue-600/40 bg-blue-600/15 text-[11px] font-mono text-blue-200 hover:bg-blue-600/25 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Run Marcus Triage</button>
+                <button id="btn-inbox-marcus-auto" class="px-3 py-1.5 rounded border border-emerald-600/40 bg-emerald-600/15 text-[11px] font-mono text-emerald-200 hover:bg-emerald-600/25 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Run Marcus Auto</button>
+                <button id="btn-inbox-marcus-coach" class="px-3 py-1.5 rounded border border-purple-600/40 bg-purple-600/15 text-[11px] font-mono text-purple-200 hover:bg-purple-600/25 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Marcus Coach</button>
                 <label class="flex items-center gap-2 text-xs text-zinc-400 select-none">
                     <input id="inbox-show-archived" type="checkbox" class="accent-blue-500" ${state.inboxShowArchived ? 'checked' : ''} />
                     Show archived
@@ -3977,7 +3977,7 @@ function renderInbox(container) {
                 const status = safeText(item?.status) || 'New';
                 const createdAt = safeText(item?.createdAt);
                 const updatedAt = safeText(item?.updatedAt);
-                const recommendation = getMartyInboxRecommendation(id);
+                const recommendation = getMarcusInboxRecommendation(id);
                 const projectId = safeText((state.inboxConvertProjectById && state.inboxConvertProjectById[id]) || item?.projectId);
                 const allContacts = Array.isArray(state.clients) ? state.clients : [];
                 const contactByName = allContacts.find((c) => safeText(c?.name).trim().toLowerCase() === safeText(item?.contactName).trim().toLowerCase());
@@ -4002,14 +4002,14 @@ function renderInbox(container) {
                 const recPanel = recommendation
                     ? `
                     <div class="mt-3 rounded-lg border border-blue-600/30 bg-blue-950/20 p-3 space-y-2">
-                        <div class="text-[11px] font-mono uppercase tracking-wide text-blue-200">Marty Recommendation</div>
+                        <div class="text-[11px] font-mono uppercase tracking-wide text-blue-200">Marcus Recommendation</div>
                         <div class="text-[12px] text-zinc-200">
                             <span class="text-zinc-400">Who:</span> ${escapeHtml(recWho || 'Unknown')}
-                            ${recommendation?.who?.confidence != null ? `<span class="text-zinc-500"> (${escapeHtml(formatMartyConfidence(recommendation?.who?.confidence))})</span>` : ''}
+                            ${recommendation?.who?.confidence != null ? `<span class="text-zinc-500"> (${escapeHtml(formatMarcusConfidence(recommendation?.who?.confidence))})</span>` : ''}
                         </div>
                         <div class="text-[12px] text-zinc-200">
                             <span class="text-zinc-400">Project:</span> ${escapeHtml(recProjectName || 'Create new project')}
-                            ${recommendation?.project?.confidence != null ? `<span class="text-zinc-500"> (${escapeHtml(formatMartyConfidence(recommendation?.project?.confidence))})</span>` : ''}
+                            ${recommendation?.project?.confidence != null ? `<span class="text-zinc-500"> (${escapeHtml(formatMarcusConfidence(recommendation?.project?.confidence))})</span>` : ''}
                         </div>
                         <div class="text-[12px] text-zinc-300">
                             <span class="text-zinc-400">Task ideas:</span>
@@ -4018,9 +4018,9 @@ function renderInbox(container) {
                                 : '<span> none</span>'}
                         </div>
                         <div class="flex flex-wrap gap-2 pt-1">
-                            ${recProjectId ? `<button data-marty-apply-link="${escapeHtml(id)}" class="px-2 py-1 rounded border border-blue-600/40 bg-blue-600/20 text-[10px] font-mono text-blue-100 hover:bg-blue-600/30">Apply Link</button>` : ''}
-                            ${recTasks.length ? `<button data-marty-create-task="${escapeHtml(id)}" class="px-2 py-1 rounded border border-emerald-600/40 bg-emerald-600/20 text-[10px] font-mono text-emerald-100 hover:bg-emerald-600/30">Create Top Task</button>` : ''}
-                            ${recTasks.length > 1 ? `<button data-marty-create-all-tasks="${escapeHtml(id)}" class="px-2 py-1 rounded border border-emerald-600/40 bg-emerald-600/10 text-[10px] font-mono text-emerald-200 hover:bg-emerald-600/20">Create All (${recTasks.length})</button>` : ''}
+                            ${recProjectId ? `<button data-marcus-apply-link="${escapeHtml(id)}" class="px-2 py-1 rounded border border-blue-600/40 bg-blue-600/20 text-[10px] font-mono text-blue-100 hover:bg-blue-600/30">Apply Link</button>` : ''}
+                            ${recTasks.length ? `<button data-marcus-create-task="${escapeHtml(id)}" class="px-2 py-1 rounded border border-emerald-600/40 bg-emerald-600/20 text-[10px] font-mono text-emerald-100 hover:bg-emerald-600/30">Create Top Task</button>` : ''}
+                            ${recTasks.length > 1 ? `<button data-marcus-create-all-tasks="${escapeHtml(id)}" class="px-2 py-1 rounded border border-emerald-600/40 bg-emerald-600/10 text-[10px] font-mono text-emerald-200 hover:bg-emerald-600/20">Create All (${recTasks.length})</button>` : ''}
                         </div>
                     </div>`
                     : '';
@@ -4070,7 +4070,7 @@ function renderInbox(container) {
                             </div>
                         </div>
                         <div class="shrink-0 flex flex-col gap-2">
-                            <button data-inbox-marty-recommend="${escapeHtml(id)}" class="px-3 py-1.5 rounded border border-blue-600/40 bg-blue-600/15 text-[11px] font-mono text-blue-200 hover:bg-blue-600/25 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Marty Recommend</button>
+                            <button data-inbox-marcus-recommend="${escapeHtml(id)}" class="px-3 py-1.5 rounded border border-blue-600/40 bg-blue-600/15 text-[11px] font-mono text-blue-200 hover:bg-blue-600/25 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Marcus Recommend</button>
                             <button data-inbox-triage="${escapeHtml(id)}" class="px-3 py-1.5 rounded border border-zinc-800 text-[11px] font-mono text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Triage</button>
                             <button data-inbox-done="${escapeHtml(id)}" class="px-3 py-1.5 rounded bg-emerald-600/20 border border-emerald-600/40 text-[11px] font-mono text-emerald-200 hover:bg-emerald-600/30 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Done</button>
                             ${isAssigned
@@ -4124,22 +4124,22 @@ function renderInbox(container) {
         };
     }
 
-    const filterBtn = header.querySelector('#btn-inbox-marty-filter');
+    const filterBtn = header.querySelector('#btn-inbox-marcus-filter');
     if (filterBtn) {
         filterBtn.onclick = async () => {
             filterBtn.disabled = true;
             const prev = filterBtn.textContent;
             filterBtn.textContent = 'Filtering…';
             try {
-                const result = await runMartyInboxFilter();
+                const result = await runMarcusInboxFilter();
                 const archived = Number(result?.archived || 0);
                 const matched = Number(result?.matched || 0);
                 const collapsedThreads = Number(result?.collapsedThreads || 0);
                 const mergedMessages = Number(result?.mergedMessages || 0);
-                alert(`Marty filter complete. Archived: ${archived}. Matched: ${matched}. Thread groups collapsed: ${collapsedThreads}. Messages merged: ${mergedMessages}.`);
+                alert(`Marcus filter complete. Archived: ${archived}. Matched: ${matched}. Thread groups collapsed: ${collapsedThreads}. Messages merged: ${mergedMessages}.`);
                 renderMain();
             } catch (e) {
-                alert(e?.message || 'Marty filter failed');
+                alert(e?.message || 'Marcus filter failed');
             } finally {
                 filterBtn.disabled = false;
                 filterBtn.textContent = prev;
@@ -4147,18 +4147,18 @@ function renderInbox(container) {
         };
     }
 
-    const triageBtn = header.querySelector('#btn-inbox-marty-triage');
+    const triageBtn = header.querySelector('#btn-inbox-marcus-triage');
     if (triageBtn) {
         triageBtn.onclick = async () => {
             triageBtn.disabled = true;
             const prev = triageBtn.textContent;
             triageBtn.textContent = 'Triaging...';
             try {
-                const result = await runMartyInboxTriage({ onlyNew: true, includeArchived: false, limit: 120 });
-                alert(`Marty triage complete. Recommendations: ${Number(result?.count || 0)}.`);
+                const result = await runMarcusInboxTriage({ onlyNew: true, includeArchived: false, limit: 120 });
+                alert(`Marcus triage complete. Recommendations: ${Number(result?.count || 0)}.`);
                 renderMain();
             } catch (e) {
-                alert(e?.message || 'Marty triage failed');
+                alert(e?.message || 'Marcus triage failed');
             } finally {
                 triageBtn.disabled = false;
                 triageBtn.textContent = prev;
@@ -4166,24 +4166,24 @@ function renderInbox(container) {
         };
     }
 
-    const autoBtn = header.querySelector('#btn-inbox-marty-auto');
+    const autoBtn = header.querySelector('#btn-inbox-marcus-auto');
     if (autoBtn) {
         autoBtn.onclick = async () => {
             autoBtn.disabled = true;
             const prev = autoBtn.textContent;
             autoBtn.textContent = 'Running...';
             try {
-                const result = await runMartyInboxAutomation();
+                const result = await runMarcusInboxAutomation();
                 const scanned = Number(result?.scanned || 0);
                 const proposed = Number(result?.proposed || 0);
                 const applied = Number(result?.applied || 0);
                 const pending = Number(result?.digestPending || 0);
                 const mode = safeText(result?.approvalMode).trim() || 'dailyDigest';
-                alert(`Marty automation complete. Mode: ${mode}. Scanned: ${scanned}. Proposed: ${proposed}. Auto-applied: ${applied}. Digest pending: ${pending}.`);
-                await fetchMartyAutomationDigest().catch(() => {});
+                alert(`Marcus automation complete. Mode: ${mode}. Scanned: ${scanned}. Proposed: ${proposed}. Auto-applied: ${applied}. Digest pending: ${pending}.`);
+                await fetchMarcusAutomationDigest().catch(() => {});
                 renderMain();
             } catch (e) {
-                alert(e?.message || 'Marty automation run failed');
+                alert(e?.message || 'Marcus automation run failed');
             } finally {
                 autoBtn.disabled = false;
                 autoBtn.textContent = prev;
@@ -4191,7 +4191,7 @@ function renderInbox(container) {
         };
     }
 
-    const coachBtn = header.querySelector('#btn-inbox-marty-coach');
+    const coachBtn = header.querySelector('#btn-inbox-marcus-coach');
     if (coachBtn) {
         coachBtn.onclick = async () => {
             coachBtn.disabled = true;
@@ -4200,13 +4200,13 @@ function renderInbox(container) {
             try {
                 const result = await coachNextInboxStep();
                 if (result?.applied) {
-                    const msg = `Marty coach applied. Linked: ${result.linked ? 'yes' : 'no'}. Tasks created: ${Number(result.tasksCreated || 0)}.`;
-                    speakMarty(msg);
+                    const msg = `Marcus coach applied. Linked: ${result.linked ? 'yes' : 'no'}. Tasks created: ${Number(result.tasksCreated || 0)}.`;
+                    speakMarcus(msg);
                     alert(msg);
                 }
                 renderMain();
             } catch (e) {
-                alert(e?.message || 'Marty coach failed');
+                alert(e?.message || 'Marcus coach failed');
             } finally {
                 coachBtn.disabled = false;
                 coachBtn.textContent = prev;
@@ -4254,7 +4254,7 @@ function renderInbox(container) {
                 .filter((idx) => idx >= 0);
             btn.disabled = true;
             try {
-                const result = await decideMartyAutomationDigest(digestId, {
+                const result = await decideMarcusAutomationDigest(digestId, {
                     acceptProjectLink: !!sel.acceptProjectLink,
                     acceptTaskIndexes,
                     reject: false,
@@ -4275,7 +4275,7 @@ function renderInbox(container) {
             if (!digestId) return;
             btn.disabled = true;
             try {
-                await decideMartyAutomationDigest(digestId, { reject: true });
+                await decideMarcusAutomationDigest(digestId, { reject: true });
                 alert('Digest recommendation rejected.');
                 renderMain();
             } catch (e) {
@@ -4395,18 +4395,18 @@ function renderInbox(container) {
         });
     });
 
-    container.querySelectorAll('button[data-inbox-marty-recommend]').forEach((btn) => {
+    container.querySelectorAll('button[data-inbox-marcus-recommend]').forEach((btn) => {
         btn.addEventListener('click', async () => {
-            const inboxId = safeText(btn.getAttribute('data-inbox-marty-recommend')).trim();
+            const inboxId = safeText(btn.getAttribute('data-inbox-marcus-recommend')).trim();
             if (!inboxId) return;
             btn.disabled = true;
             const prev = btn.textContent;
             btn.textContent = 'Thinking...';
             try {
-                await runMartyInboxTriage({ onlyNew: false, includeArchived: false, limit: 200 });
+                await runMarcusInboxTriage({ onlyNew: false, includeArchived: false, limit: 200 });
                 renderMain();
             } catch (e) {
-                alert(e?.message || 'Marty recommendation failed');
+                alert(e?.message || 'Marcus recommendation failed');
             } finally {
                 btn.disabled = false;
                 btn.textContent = prev;
@@ -4414,11 +4414,11 @@ function renderInbox(container) {
         });
     });
 
-    container.querySelectorAll('button[data-marty-apply-link]').forEach((btn) => {
+    container.querySelectorAll('button[data-marcus-apply-link]').forEach((btn) => {
         btn.addEventListener('click', async () => {
-            const inboxId = safeText(btn.getAttribute('data-marty-apply-link')).trim();
+            const inboxId = safeText(btn.getAttribute('data-marcus-apply-link')).trim();
             if (!inboxId) return;
-            const rec = getMartyInboxRecommendation(inboxId);
+            const rec = getMarcusInboxRecommendation(inboxId);
             const projectId = safeText(rec?.project?.projectId).trim();
             if (!projectId) {
                 alert('No project recommendation to apply');
@@ -4436,16 +4436,16 @@ function renderInbox(container) {
         });
     });
 
-    container.querySelectorAll('button[data-marty-create-task]').forEach((btn) => {
+    container.querySelectorAll('button[data-marcus-create-task]').forEach((btn) => {
         btn.addEventListener('click', async () => {
-            const inboxId = safeText(btn.getAttribute('data-marty-create-task')).trim();
+            const inboxId = safeText(btn.getAttribute('data-marcus-create-task')).trim();
             if (!inboxId) return;
-            const rec = getMartyInboxRecommendation(inboxId);
+            const rec = getMarcusInboxRecommendation(inboxId);
             btn.disabled = true;
             try {
-                const result = await createTaskFromMartyRecommendation(inboxId, rec);
+                const result = await createTaskFromMarcusRecommendation(inboxId, rec);
                 if (Number(result?.created || 0) > 0) {
-                    alert(`Created ${Number(result.created)} task from Marty recommendation.`);
+                    alert(`Created ${Number(result.created)} task from Marcus recommendation.`);
                 }
                 renderMain();
             } catch (e) {
@@ -4456,15 +4456,15 @@ function renderInbox(container) {
         });
     });
 
-    container.querySelectorAll('button[data-marty-create-all-tasks]').forEach((btn) => {
+    container.querySelectorAll('button[data-marcus-create-all-tasks]').forEach((btn) => {
         btn.addEventListener('click', async () => {
-            const inboxId = safeText(btn.getAttribute('data-marty-create-all-tasks')).trim();
+            const inboxId = safeText(btn.getAttribute('data-marcus-create-all-tasks')).trim();
             if (!inboxId) return;
-            const rec = getMartyInboxRecommendation(inboxId);
+            const rec = getMarcusInboxRecommendation(inboxId);
             btn.disabled = true;
             try {
-                const result = await createAllTasksFromMartyRecommendation(inboxId, rec);
-                alert(`Created ${Number(result?.created || 0)} tasks from Marty recommendation.`);
+                const result = await createAllTasksFromMarcusRecommendation(inboxId, rec);
+                alert(`Created ${Number(result?.created || 0)} tasks from Marcus recommendation.`);
                 renderMain();
             } catch (e) {
                 alert(e?.message || 'Failed to create tasks from recommendation');
@@ -4612,7 +4612,7 @@ async function saveSettingsPatch(patch) {
 }
 
 async function runMarcusInboxFilter() {
-    pulseMartyAmbient('busy', 1200);
+    pulseMarcusAmbient('busy', 1200);
     const res = await apiFetch('/api/inbox/marcus-filter', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -4625,7 +4625,7 @@ async function runMarcusInboxFilter() {
     return data;
 }
 
-async function runMartyInboxFilter() {
+async function runMarcusInboxFilter() {
     return runMarcusInboxFilter();
 }
 
@@ -4635,7 +4635,7 @@ function formatMarcusConfidence(value) {
     return `${Math.round(Math.max(0, Math.min(1, n)) * 100)}%`;
 }
 
-function formatMartyConfidence(value) {
+function formatMarcusConfidence(value) {
     return formatMarcusConfidence(value);
 }
 
@@ -4644,19 +4644,19 @@ function getMarcusInboxRecommendation(inboxId) {
     if (!id) return null;
     const map = state.inboxMarcusRecommendationsById && typeof state.inboxMarcusRecommendationsById === 'object'
         ? state.inboxMarcusRecommendationsById
-        : (state.inboxMartyRecommendationsById && typeof state.inboxMartyRecommendationsById === 'object'
-            ? state.inboxMartyRecommendationsById
+        : (state.inboxMarcusRecommendationsById && typeof state.inboxMarcusRecommendationsById === 'object'
+            ? state.inboxMarcusRecommendationsById
             : {});
     const rec = map[id];
     return rec && typeof rec === 'object' ? rec : null;
 }
 
-function getMartyInboxRecommendation(inboxId) {
+function getMarcusInboxRecommendation(inboxId) {
     return getMarcusInboxRecommendation(inboxId);
 }
 
 async function runMarcusInboxTriage(options = {}) {
-    pulseMartyAmbient('busy', 1200);
+    pulseMarcusAmbient('busy', 1200);
     const onlyNew = options.onlyNew !== false;
     const includeArchived = options.includeArchived === true;
     const limit = Number.isFinite(Number(options.limit)) ? Math.max(1, Math.min(200, Math.floor(Number(options.limit)))) : 80;
@@ -4670,23 +4670,23 @@ async function runMarcusInboxTriage(options = {}) {
     if (!res.ok || data?.ok === false) throw new Error(data?.error || 'M.A.R.C.U.S. triage failed');
 
     const list = Array.isArray(data?.recommendations) ? data.recommendations : [];
-    const next = { ...(state.inboxMarcusRecommendationsById || state.inboxMartyRecommendationsById || {}) };
+    const next = { ...(state.inboxMarcusRecommendationsById || state.inboxMarcusRecommendationsById || {}) };
     for (const rec of list) {
         const itemId = safeText(rec?.itemId).trim();
         if (!itemId) continue;
         next[itemId] = rec;
     }
     state.inboxMarcusRecommendationsById = next;
-    state.inboxMartyRecommendationsById = next;
+    state.inboxMarcusRecommendationsById = next;
     return { ...data, recommendations: list };
 }
 
-async function runMartyInboxTriage(options = {}) {
+async function runMarcusInboxTriage(options = {}) {
     return runMarcusInboxTriage(options);
 }
 
-async function runMartyInboxAutomation(options = {}) {
-    pulseMartyAmbient('busy', 1400);
+async function runMarcusInboxAutomation(options = {}) {
+    pulseMarcusAmbient('busy', 1400);
     const mode = safeText(options.approvalMode).trim();
     const payload = {};
     if (mode) payload.approvalMode = mode;
@@ -4696,7 +4696,7 @@ async function runMartyInboxAutomation(options = {}) {
         body: JSON.stringify(payload),
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok || data?.ok === false) throw new Error(data?.error || 'Marty automation run failed');
+    if (!res.ok || data?.ok === false) throw new Error(data?.error || 'Marcus automation run failed');
     if (data?.store && typeof data.store === 'object') applyStore(data.store);
     await fetchState({ background: false });
     return data;
@@ -4711,14 +4711,14 @@ async function coachNextInboxStep() {
     const inboxId = safeText(target?.id).trim();
     if (!inboxId) throw new Error('Missing inbox item for coaching');
 
-    await runMartyInboxTriage({ onlyNew: false, includeArchived: false, limit: 200 });
-    const rec = getMartyInboxRecommendation(inboxId);
+    await runMarcusInboxTriage({ onlyNew: false, includeArchived: false, limit: 200 });
+    const rec = getMarcusInboxRecommendation(inboxId);
     if (!rec) throw new Error('No recommendation available for next inbox item');
 
     const projectName = safeText(rec?.project?.projectName).trim() || 'no project recommendation';
     const topTask = safeText(rec?.tasks?.[0]?.title).trim() || '';
     const lines = [
-        'Marty Coach ready.',
+        'Marcus Coach ready.',
         `Inbox: ${previewText(safeText(target?.text), 100) || inboxId}`,
         `Project suggestion: ${projectName}`,
         `Top task: ${topTask || 'none'}`,
@@ -4736,22 +4736,22 @@ async function coachNextInboxStep() {
         linked = true;
     }
     if (topTask) {
-        const result = await createTaskFromMartyRecommendation(inboxId, rec);
+        const result = await createTaskFromMarcusRecommendation(inboxId, rec);
         tasksCreated = Number(result?.created || 0);
     }
     if (!linked && !tasksCreated) {
         await patchInboxItem(inboxId, { status: 'Triaged' });
     }
 
-    await fetchMartyAutomationDigest().catch(() => {});
+    await fetchMarcusAutomationDigest().catch(() => {});
     await fetchState({ background: false });
     return { applied: true, inboxId, linked, tasksCreated };
 }
 
-async function fetchMartyAutomationDigest() {
+async function fetchMarcusAutomationDigest() {
     const res = await apiFetch('/api/inbox/automation/digest');
     const data = await res.json().catch(() => ({}));
-    if (!res.ok || data?.ok === false) throw new Error(data?.error || 'Failed to load Marty digest');
+    if (!res.ok || data?.ok === false) throw new Error(data?.error || 'Failed to load Marcus digest');
     const items = Array.isArray(data?.items) ? data.items : [];
     state.inboxAutomationDigest = {
         items,
@@ -4773,7 +4773,7 @@ async function fetchMartyAutomationDigest() {
     return { ...data, items };
 }
 
-async function decideMartyAutomationDigest(digestId, decision) {
+async function decideMarcusAutomationDigest(digestId, decision) {
     const id = safeText(digestId).trim();
     if (!id) throw new Error('Missing digest id');
     const payload = (decision && typeof decision === 'object') ? decision : {};
@@ -4785,12 +4785,12 @@ async function decideMartyAutomationDigest(digestId, decision) {
     const data = await res.json().catch(() => ({}));
     if (!res.ok || data?.ok === false) throw new Error(data?.error || 'Failed to decide digest recommendation');
     if (data?.store && typeof data.store === 'object') applyStore(data.store);
-    await fetchMartyAutomationDigest();
+    await fetchMarcusAutomationDigest();
     await fetchState({ background: false });
     return data;
 }
 
-async function createTaskFromMartyRecommendation(inboxId, recommendation) {
+async function createTaskFromMarcusRecommendation(inboxId, recommendation) {
     const id = safeText(inboxId).trim();
     if (!id) throw new Error('Missing inbox id');
     const rec = recommendation && typeof recommendation === 'object' ? recommendation : {};
@@ -4807,7 +4807,7 @@ async function createTaskFromMartyRecommendation(inboxId, recommendation) {
     return { created: 1 };
 }
 
-async function createAllTasksFromMartyRecommendation(inboxId, recommendation) {
+async function createAllTasksFromMarcusRecommendation(inboxId, recommendation) {
     const id = safeText(inboxId).trim();
     if (!id) throw new Error('Missing inbox id');
     const rec = recommendation && typeof recommendation === 'object' ? recommendation : {};
@@ -5078,7 +5078,7 @@ function renderSettings(container) {
 
         const defaults = {
             dashboard: { missionControl: true, newProjectIntake: true, commsRadar: true, deliveryBoard: true },
-            godview: { businessesRadar: true, martyBrief: true, upcoming: true, teamComms: true, globalFocus: true },
+            godview: { businessesRadar: true, marcusBrief: true, upcoming: true, teamComms: true, globalFocus: true },
         };
 
         const prefs = getPageElementsPreferences(state.settings);
@@ -5095,7 +5095,7 @@ function renderSettings(container) {
 
         pagesBody.innerHTML = `
             <div class="flex items-center justify-between gap-3 flex-wrap">
-                <div class="text-xs text-ops-light">These settings affect what you see (and what Marty can reference visually) — they don’t delete data.</div>
+                <div class="text-xs text-ops-light">These settings affect what you see (and what Marcus can reference visually) — they don’t delete data.</div>
                 <a href="${escapeHtml(fullSettingsHref)}" class="px-3 py-2 rounded bg-ops-bg border border-ops-border text-ops-light text-xs hover:text-white">Back to Settings</a>
             </div>
 
@@ -5104,7 +5104,7 @@ function renderSettings(container) {
                     <div class="text-white text-sm font-semibold">Dashboard</div>
                     <div class="text-[11px] text-ops-light mt-1">Toggle major blocks to keep the dashboard focused.</div>
                     <div class="mt-3 space-y-2">
-                        ${ck('pe-dash-mission', 'Mission Control', prefs.dashboard.missionControl, 'Greeting, stats, Marty bar, and alerts.')}
+                        ${ck('pe-dash-mission', 'Mission Control', prefs.dashboard.missionControl, 'Greeting, stats, Marcus bar, and alerts.')}
                         ${ck('pe-dash-intake', 'New Project Intake', prefs.dashboard.newProjectIntake, 'Quick-add bar (new item + new project).')}
                         ${ck('pe-dash-comms', 'Comms Radar', prefs.dashboard.commsRadar, 'Inbox Radar + comms feed (Activity/Slack/Inbox/Team).')}
                         ${ck('pe-dash-delivery', 'Delivery Board', prefs.dashboard.deliveryBoard, 'Calendar + due date panels + focus + future projects.')}
@@ -5115,7 +5115,7 @@ function renderSettings(container) {
                     <div class="text-[11px] text-ops-light mt-1">Global cross-business overview sections.</div>
                     <div class="mt-3 space-y-2">
                         ${ck('pe-god-radar', 'Businesses Radar', prefs.godview.businessesRadar, 'The business cards radar grid.')}
-                        ${ck('pe-god-brief', 'Marty Brief', prefs.godview.martyBrief, 'Shows latest scheduled brief items.')}
+                        ${ck('pe-god-brief', 'Marcus Brief', prefs.godview.marcusBrief, 'Shows latest scheduled brief items.')}
                         ${ck('pe-god-upcoming', 'Upcoming', prefs.godview.upcoming, 'Google Calendar upcoming panel.')}
                         ${ck('pe-god-team', 'Team Comms', prefs.godview.teamComms, 'Slack/team section.')}
                         ${ck('pe-god-focus', 'Global Focus', prefs.godview.globalFocus, 'Urgent projects list.')}
@@ -5149,7 +5149,7 @@ function renderSettings(container) {
                         },
                         godview: {
                             businessesRadar: getBool('pe-god-radar', defaults.godview.businessesRadar),
-                            martyBrief: getBool('pe-god-brief', defaults.godview.martyBrief),
+                            marcusBrief: getBool('pe-god-brief', defaults.godview.marcusBrief),
                             upcoming: getBool('pe-god-upcoming', defaults.godview.upcoming),
                             teamComms: getBool('pe-god-team', defaults.godview.teamComms),
                             globalFocus: getBool('pe-god-focus', defaults.godview.globalFocus),
@@ -5520,11 +5520,11 @@ function renderSettings(container) {
     }
 
     // AI
-    const ai = section('AI', 'Configure the API key/model used by Marty.');
+    const ai = section('AI', 'Configure the API key/model used by Marcus.');
     const aiBody = ai.querySelector('[data-slot="body"]');
     const currentOpenAiModel = String(state.settings.openaiModel || '').trim() || 'gpt-4o-mini';
     const routeDefs = [
-        { key: 'martyChat', label: 'Marty Chat' },
+        { key: 'marcusChat', label: 'Marcus Chat' },
         { key: 'operatorBio', label: 'Operator Bio' },
         { key: 'projectAssistant', label: 'Project Assistant' },
         { key: 'dashboardPreview', label: 'Dashboard Preview' },
@@ -5619,8 +5619,8 @@ function renderSettings(container) {
         fetchOpenAiModelsCatalog({ force: false }).catch(() => {});
     }
 
-    // Marty agent settings
-    const agent = section('Marty', 'Configure what Marty knows, how it helps, and what it watches for.');
+    // Marcus agent settings
+    const agent = section('Marcus', 'Configure what Marcus knows, how it helps, and what it watches for.');
     const agentBody = agent.querySelector('[data-slot="body"]');
     const assistantOperatingDoctrine = typeof state.settings.assistantOperatingDoctrine === 'string'
         ? state.settings.assistantOperatingDoctrine
@@ -5633,7 +5633,7 @@ function renderSettings(container) {
             <div>
                 <label class="text-xs text-ops-light">Operator Bio (who you are)</label>
                 <textarea id="set-operator-bio" rows="8" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-xs font-mono" placeholder="Example: I am Mark. Roles: owner/operator, PM, closer. Needs: daily agenda + inbox triage + project next actions. Constraints: ...">${escapeHtml(String(state.settings.operatorBio || ''))}</textarea>
-                <div class="text-[11px] text-ops-light mt-1">Included in every Marty context. You can refine it in the Bio chat thread.</div>
+                <div class="text-[11px] text-ops-light mt-1">Included in every Marcus context. You can refine it in the Bio chat thread.</div>
             </div>
 
             <div>
@@ -5642,12 +5642,12 @@ function renderSettings(container) {
             </div>
 
             <div>
-                <label class="text-xs text-ops-light">Personality Layer (how MARTY behaves)</label>
+                <label class="text-xs text-ops-light">Personality Layer (how M.A.R.C.U.S. behaves)</label>
                 <textarea id="set-personality-layer" rows="6" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-xs font-mono" placeholder="Example: Direct, calm, slightly sarcastic. Push back when I drift. End every response with next actions.">${escapeHtml(String(personalityLayer || ''))}</textarea>
             </div>
 
             <div>
-                <label class="text-xs text-ops-light">Attention Radar (what MARTY watches for)</label>
+                <label class="text-xs text-ops-light">Attention Radar (what M.A.R.C.U.S. watches for)</label>
                 <textarea id="set-attention-radar" rows="6" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-xs font-mono" placeholder="Example: Missed deadlines, stalled projects, inbox buildup, repeated blockers, context switching, low follow-up cadence.">${escapeHtml(String(attentionRadar || ''))}</textarea>
             </div>
 
@@ -5658,7 +5658,7 @@ function renderSettings(container) {
             </div>
         </div>
         <div class="flex gap-2 mt-4">
-            <button id="btn-save-agent" class="px-3 py-2 rounded bg-blue-600 text-white text-xs hover:bg-blue-500">Save Marty Settings</button>
+            <button id="btn-save-agent" class="px-3 py-2 rounded bg-blue-600 text-white text-xs hover:bg-blue-500">Save Marcus Settings</button>
         </div>
     `;
     wrap.appendChild(agent);
@@ -6045,7 +6045,7 @@ function renderSettings(container) {
         </div>
         <div class="mt-4 border border-ops-border rounded-lg p-3 bg-ops-bg/20">
             <label class="text-xs text-white font-semibold">SMS acknowledgement noise filter</label>
-            <div class="text-[11px] text-ops-light mt-1">Choose how aggressively Marty suppresses non-actionable acknowledgements (ok/thanks/etc.) from Inbox/Radar.</div>
+            <div class="text-[11px] text-ops-light mt-1">Choose how aggressively Marcus suppresses non-actionable acknowledgements (ok/thanks/etc.) from Inbox/Radar.</div>
             <select id="set-sms-ack-filter-level" class="mt-2 w-full md:w-80 bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-xs">
                 <option value="off" ${smsAckFilterLevel === 'off' ? 'selected' : ''}>Off (show everything)</option>
                 <option value="low" ${smsAckFilterLevel === 'low' ? 'selected' : ''}>Low (only obvious filler)</option>
@@ -6105,7 +6105,7 @@ function renderSettings(container) {
     wrap.appendChild(ghl);
 
     // MCP
-    const m = section('MCP', 'Run MCP servers alongside this app (stdio) so Marty can call MCP tools (Render-friendly).');
+    const m = section('MCP', 'Run MCP servers alongside this app (stdio) so Marcus can call MCP tools (Render-friendly).');
     const mBody = m.querySelector('[data-slot="body"]');
     const mcp = (state.settings && state.settings.mcp && typeof state.settings.mcp === 'object') ? state.settings.mcp : {};
     const mcpEnabled = !!state.settings.mcpEnabled;
@@ -6581,7 +6581,7 @@ function renderSettings(container) {
                 const routes = (state.settings?.aiRoutes && typeof state.settings.aiRoutes === 'object')
                     ? { ...state.settings.aiRoutes }
                     : {};
-                const routeKeys = ['martyChat', 'operatorBio', 'projectAssistant', 'dashboardPreview'];
+                const routeKeys = ['marcusChat', 'operatorBio', 'projectAssistant', 'dashboardPreview'];
                 for (const rk of routeKeys) {
                     const existing = (routes[rk] && typeof routes[rk] === 'object') ? routes[rk] : {};
                     const provider = String(existing.provider || 'openai').trim().toLowerCase() || 'openai';
@@ -6596,7 +6596,7 @@ function renderSettings(container) {
                 const routes = (state.settings?.aiRoutes && typeof state.settings.aiRoutes === 'object')
                     ? { ...state.settings.aiRoutes }
                     : {};
-                const routeKeys = ['martyChat', 'operatorBio', 'projectAssistant', 'dashboardPreview'];
+                const routeKeys = ['marcusChat', 'operatorBio', 'projectAssistant', 'dashboardPreview'];
                 for (const rk of routeKeys) {
                     const existing = (routes[rk] && typeof routes[rk] === 'object') ? routes[rk] : {};
                     const provider = String(existing.provider || 'openai').trim().toLowerCase() || 'openai';
@@ -6634,7 +6634,7 @@ function renderSettings(container) {
                 dailyReportingStructure,
                 operatorHelpPrompt: assistantOperatingDoctrine,
             });
-            alert('Marty settings saved.');
+            alert('Marcus settings saved.');
             renderSettings(container);
         } catch (e) {
             alert(e?.message || 'Failed to save agent settings');
@@ -6872,7 +6872,7 @@ function renderSettings(container) {
                 slackTestOutput.textContent = 'Sending Slack test message...';
             }
             const payload = {
-                text: `Marty Slack test (${new Date().toISOString()})`,
+                text: `Marcus Slack test (${new Date().toISOString()})`,
             };
             payload.channel = target;
 
@@ -7184,7 +7184,7 @@ function renderProjects(container) {
                     </div>
                 </div>
                 <div class="md:col-span-2">
-                    <label class="text-[11px] text-zinc-400">Agent brief (saved to project Scratchpad for Marty)</label>
+                    <label class="text-[11px] text-zinc-400">Agent brief (saved to project Scratchpad for Marcus)</label>
                     <textarea id="np-brief" rows="4" class="mt-1 w-full bg-zinc-950/40 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white" placeholder="What is this project? Scope, constraints, stakeholders, success criteria...">${String(d.agentBrief || '')}</textarea>
                 </div>
             </div>
@@ -7698,7 +7698,7 @@ function renderDashboardLegacy(container) {
     banner.innerHTML = `
         <div class="flex items-end justify-between gap-4">
             <div>
-                <h2 class="text-2xl text-white font-light leading-tight">Marty Command Dashboard</h2>
+                <h2 class="text-2xl text-white font-light leading-tight">Marcus Command Dashboard</h2>
                 <div class="text-xs text-zinc-500 mt-1">${activeProjects.length} active projects • rev ${state.revision}</div>
             </div>
             <div class="flex items-center gap-2">
@@ -7947,7 +7947,7 @@ function renderDashboardLegacy(container) {
                     </div>
                 </div>
                 <div class="md:col-span-2">
-                    <label class="text-[11px] text-zinc-400">Agent brief (saved to project Scratchpad for Marty)</label>
+                    <label class="text-[11px] text-zinc-400">Agent brief (saved to project Scratchpad for Marcus)</label>
                     <textarea id="np-brief" rows="4" class="mt-1 w-full bg-zinc-950/40 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white" placeholder="What is this project? Scope, constraints, stakeholders, success criteria...">${String(d.agentBrief || '')}</textarea>
                 </div>
             </div>
@@ -8487,9 +8487,9 @@ function renderGodView(container) {
             </div>
     ` : '';
 
-    const sectionBrief = prefs.martyBrief ? `
+    const sectionBrief = prefs.marcusBrief ? `
             <div class="mt-10 mb-2 flex items-center gap-3">
-                <h2 class="text-xl font-bold tracking-tight text-white">Marty Brief</h2>
+                <h2 class="text-xl font-bold tracking-tight text-white">Marcus Brief</h2>
             </div>
             <div id="godview-brief-list" class="space-y-2"></div>
     ` : '';
@@ -8556,7 +8556,7 @@ function renderGodView(container) {
 
     const { businesses, focusProjects, slackItems, team, briefs } = state.godViewData;
 
-    // --- Marty Brief ---
+    // --- Marcus Brief ---
     const briefList = container.querySelector('#godview-brief-list');
     if (briefList) {
         const items = Array.isArray(briefs) ? briefs : [];
@@ -8782,7 +8782,7 @@ function renderDashboard(container, sidePort) {
 
     const dashboardInbox = inboxNew.filter((x) => {
         const source = safeText(x?.source).toLowerCase();
-        if (source === 'marty') return false;
+        if (source === 'marcus') return false;
         return hasMeaningfulInboxText(x) || !isBadDashText(safeText(x?.title) || safeText(x?.subject));
     });
 
@@ -8877,9 +8877,9 @@ function renderDashboard(container, sidePort) {
     }
     recentActivity.sort((a,b) => b.time - a.time);
 
-    // MARTY insights (multi-line, Jarvis-style)
-    const martyInsights = [];
-    if (totalOverdue > 0) martyInsights.push({ icon: 'fa-triangle-exclamation text-red-400', text: `${totalOverdue} overdue item${totalOverdue>1?'s':''}. I\u2019d recommend triaging those first.` });
+    // M.A.R.C.U.S. insights (multi-line, Jarvis-style)
+    const marcusInsights = [];
+    if (totalOverdue > 0) marcusInsights.push({ icon: 'fa-triangle-exclamation text-red-400', text: `${totalOverdue} overdue item${totalOverdue>1?'s':''}. I\u2019d recommend triaging those first.` });
     const topAction = nextActions[0] || null;
     if (topAction) {
         const pr = Number(topAction?.priority) || 3;
@@ -8887,13 +8887,13 @@ function renderDashboard(container, sidePort) {
         const ai = id ? aiTaskMap[id] : null;
         let title = safeText(ai?.title || topAction?.title).trim();
         if (isBadDashText(title)) title = safeText(topAction?.project).trim() ? `Follow up: ${safeText(topAction?.project).trim()}` : 'Top priority task';
-        martyInsights.push({ icon: 'fa-bullseye text-blue-400', text: `Top priority: "${title}" (P${pr}). Focus there next.` });
+        marcusInsights.push({ icon: 'fa-bullseye text-blue-400', text: `Top priority: "${title}" (P${pr}). Focus there next.` });
     }
-    if (dueThisWeek > 0) martyInsights.push({ icon: 'fa-clock text-amber-400', text: `${dueThisWeek} project${dueThisWeek>1?'s':''} due this week \u2014 stay ahead.` });
-    if (inboxNewCount > 3) martyInsights.push({ icon: 'fa-inbox text-purple-400', text: `${inboxNewCount} inbox items accumulating. Consider a quick triage pass.` });
-    if (totalDoneWeek > 0) martyInsights.push({ icon: 'fa-chart-line text-emerald-400', text: `${totalDoneWeek} tasks completed this week. ${totalDoneWeek >= 5 ? 'Strong momentum.' : 'Keep it going.'}` });
-    if (!martyInsights.length) martyInsights.push({ icon: 'fa-circle-check text-emerald-400', text: 'All clear. Review upcoming projects or set today\u2019s outcomes.' });
-    const martyCheckin = totalOverdue > 0
+    if (dueThisWeek > 0) marcusInsights.push({ icon: 'fa-clock text-amber-400', text: `${dueThisWeek} project${dueThisWeek>1?'s':''} due this week \u2014 stay ahead.` });
+    if (inboxNewCount > 3) marcusInsights.push({ icon: 'fa-inbox text-purple-400', text: `${inboxNewCount} inbox items accumulating. Consider a quick triage pass.` });
+    if (totalDoneWeek > 0) marcusInsights.push({ icon: 'fa-chart-line text-emerald-400', text: `${totalDoneWeek} tasks completed this week. ${totalDoneWeek >= 5 ? 'Strong momentum.' : 'Keep it going.'}` });
+    if (!marcusInsights.length) marcusInsights.push({ icon: 'fa-circle-check text-emerald-400', text: 'All clear. Review upcoming projects or set today\u2019s outcomes.' });
+    const marcusCheckin = totalOverdue > 0
         ? 'I can run a full cleanup sweep right now and queue only meaningful actions.'
         : (inboxUnassignedNewCount > 0
             ? `I found ${inboxUnassignedNewCount} inbox item${inboxUnassignedNewCount === 1 ? '' : 's'} without a project — want me to coach the next one?`
@@ -8952,38 +8952,38 @@ function renderDashboard(container, sidePort) {
     `;
     if (pagePrefs.missionControl) wrap.appendChild(headerEl);
 
-    // ═══ MARTY AMBIENT INTELLIGENCE BAR ══════════════════════════════
-    const martyBar = document.createElement('div');
-    martyBar.className = 'marty-ambient dash-card';
-    martyBar.dataset.cardId = 'marty';
-    const primaryInsight = martyInsights[0];
-    const extraInsights = martyInsights.slice(1);
-    martyBar.innerHTML = `
+    // ═══ M.A.R.C.U.S. AMBIENT INTELLIGENCE BAR ══════════════════════════════
+    const marcusBar = document.createElement('div');
+    marcusBar.className = 'marcus-ambient dash-card';
+    marcusBar.dataset.cardId = 'marcus';
+    const primaryInsight = marcusInsights[0];
+    const extraInsights = marcusInsights.slice(1);
+    marcusBar.innerHTML = `
         <div class="dash-card-head flex items-center gap-3 px-3 py-2.5">
-            <div class="marty-status-dot shrink-0"></div>
+            <div class="marcus-status-dot shrink-0"></div>
             <div class="flex items-center gap-2 min-w-0 flex-1">
-                <div class="marty-orb marty-dashboard-avatar idle shrink-0" aria-hidden="true"></div>
-                <span class="text-[10px] font-mono uppercase tracking-widest text-blue-300">MARTY</span>
+                <div class="marcus-orb marcus-dashboard-avatar idle shrink-0" aria-hidden="true"></div>
+                <span class="text-[10px] font-mono uppercase tracking-widest text-blue-300">M.A.R.C.U.S.</span>
                 <span class="text-[9px] font-mono text-blue-400/40">\u2014 monitoring ${activeProjects.length} projects, ${allTasks.filter(t=>!isDoneTask(t)).length} tasks</span>
             </div>
             <div class="flex items-center gap-1.5 shrink-0">
-                <button id="dash-ask-marty" class="px-2 py-1 rounded border border-blue-500/25 bg-blue-500/10 text-[9px] font-mono text-blue-300 hover:bg-blue-500/20 transition-colors">Ask</button>
-                <button id="dash-brief-marty" class="px-2 py-1 rounded border border-blue-500/25 bg-blue-500/10 text-[9px] font-mono text-blue-300 hover:bg-blue-500/20 transition-colors">Brief me</button>
-                <button id="dash-marty-sweep" class="px-2 py-1 rounded border border-emerald-500/25 bg-emerald-500/10 text-[9px] font-mono text-emerald-300 hover:bg-emerald-500/20 transition-colors">Sweep</button>
-                <button id="dash-marty-coach" class="px-2 py-1 rounded border border-purple-500/25 bg-purple-500/10 text-[9px] font-mono text-purple-300 hover:bg-purple-500/20 transition-colors">Coach</button>
+                <button id="dash-ask-marcus" class="px-2 py-1 rounded border border-blue-500/25 bg-blue-500/10 text-[9px] font-mono text-blue-300 hover:bg-blue-500/20 transition-colors">Ask</button>
+                <button id="dash-brief-marcus" class="px-2 py-1 rounded border border-blue-500/25 bg-blue-500/10 text-[9px] font-mono text-blue-300 hover:bg-blue-500/20 transition-colors">Brief me</button>
+                <button id="dash-marcus-sweep" class="px-2 py-1 rounded border border-emerald-500/25 bg-emerald-500/10 text-[9px] font-mono text-emerald-300 hover:bg-emerald-500/20 transition-colors">Sweep</button>
+                <button id="dash-marcus-coach" class="px-2 py-1 rounded border border-purple-500/25 bg-purple-500/10 text-[9px] font-mono text-purple-300 hover:bg-purple-500/20 transition-colors">Coach</button>
                 ${extraInsights.length ? '<i class="fa-solid fa-chevron-down expand-chevron"></i>' : ''}
             </div>
         </div>
         <div class="px-3 pb-2.5">
-            <div class="marty-insight flex items-start gap-2">
+            <div class="marcus-insight flex items-start gap-2">
                 <i class="fa-solid ${primaryInsight.icon} text-[10px] mt-0.5 shrink-0"></i>
                 <span class="text-[11px] leading-relaxed">${escapeHtml(primaryInsight.text)}</span>
             </div>
-            <div class="mt-1.5 text-[10px] font-mono text-blue-200/70">${escapeHtml(martyCheckin)}</div>
+            <div class="mt-1.5 text-[10px] font-mono text-blue-200/70">${escapeHtml(marcusCheckin)}</div>
         </div>
-        ${extraInsights.length ? `<div class="dash-card-body px-3 pb-3"><div class="space-y-1.5">${extraInsights.map(ins => `<div class="marty-insight flex items-start gap-2"><i class="fa-solid ${ins.icon} text-[10px] mt-0.5 shrink-0"></i><span class="text-[11px] leading-relaxed">${escapeHtml(ins.text)}</span></div>`).join('')}</div></div>` : ''}
+        ${extraInsights.length ? `<div class="dash-card-body px-3 pb-3"><div class="space-y-1.5">${extraInsights.map(ins => `<div class="marcus-insight flex items-start gap-2"><i class="fa-solid ${ins.icon} text-[10px] mt-0.5 shrink-0"></i><span class="text-[11px] leading-relaxed">${escapeHtml(ins.text)}</span></div>`).join('')}</div></div>` : ''}
     `;
-    if (pagePrefs.missionControl) wrap.appendChild(martyBar);
+    if (pagePrefs.missionControl) wrap.appendChild(marcusBar);
 
     const actionStrip = document.createElement('div');
     actionStrip.className = 'dash-card';
@@ -9264,7 +9264,7 @@ function renderDashboard(container, sidePort) {
                     </div>
                 </div>
                 <div class="flex items-center gap-1.5 shrink-0">
-                    <button type="button" data-run-marty-filter class="px-2.5 py-1 rounded border border-amber-600/40 bg-amber-600/15 text-[9px] font-mono text-amber-200 hover:bg-amber-600/25 transition-colors">Run Marty Filter</button>
+                    <button type="button" data-run-marcus-filter class="px-2.5 py-1 rounded border border-amber-600/40 bg-amber-600/15 text-[9px] font-mono text-amber-200 hover:bg-amber-600/25 transition-colors">Run Marcus Filter</button>
                     <button type="button" data-open-inbox class="px-2.5 py-1 rounded border border-ops-border text-[9px] font-mono text-ops-light hover:text-white hover:bg-ops-surface/60 transition-colors">Open Inbox</button>
                     ${showCount ? '<i class="fa-solid fa-chevron-down expand-chevron"></i>' : ''}
                 </div>
@@ -9286,13 +9286,13 @@ function renderDashboard(container, sidePort) {
 
                 // Re-wire events (innerHTML replacement removes listeners).
                 radarBanner.querySelector('button[data-open-inbox]')?.addEventListener('click', () => openInbox());
-                radarBanner.querySelector('button[data-run-marty-filter]')?.addEventListener('click', async () => {
+                radarBanner.querySelector('button[data-run-marcus-filter]')?.addEventListener('click', async () => {
                     try {
-                        const result = await runMartyInboxFilter();
-                        alert(`Marty filter complete. Archived: ${Number(result?.archived || 0)}. Matched: ${Number(result?.matched || 0)}.`);
+                        const result = await runMarcusInboxFilter();
+                        alert(`Marcus filter complete. Archived: ${Number(result?.archived || 0)}. Matched: ${Number(result?.matched || 0)}.`);
                         renderMain();
                     } catch (e) {
-                        alert(e?.message || 'Marty filter failed');
+                        alert(e?.message || 'Marcus filter failed');
                     }
                 });
                 const head = radarBanner.querySelector('.dash-card-head');
@@ -9929,16 +9929,16 @@ function renderDashboard(container, sidePort) {
             }
         });
     });
-    wrap.querySelectorAll('button[data-run-marty-filter]').forEach((b) => b.addEventListener('click', async () => {
+    wrap.querySelectorAll('button[data-run-marcus-filter]').forEach((b) => b.addEventListener('click', async () => {
         b.disabled = true;
         const prev = b.textContent;
         b.textContent = 'Filtering…';
         try {
-            const result = await runMartyInboxFilter();
-            alert(`Marty filter complete. Archived: ${Number(result?.archived || 0)}. Matched: ${Number(result?.matched || 0)}.`);
+            const result = await runMarcusInboxFilter();
+            alert(`Marcus filter complete. Archived: ${Number(result?.archived || 0)}. Matched: ${Number(result?.matched || 0)}.`);
             renderMain();
         } catch (e) {
-            alert(e?.message || 'Marty filter failed');
+            alert(e?.message || 'Marcus filter failed');
         } finally {
             b.disabled = false;
             b.textContent = prev;
@@ -10047,47 +10047,47 @@ function renderDashboard(container, sidePort) {
     if (timerToggle) { timerToggle.addEventListener('click', () => { if (state.focusTimer.running) { clearInterval(state.focusTimer.intervalId); state.focusTimer.running = false; state.focusTimer.intervalId = null; } else { state.focusTimer.running = true; state.focusTimer.intervalId = setInterval(() => { if (state.focusTimer.remaining <= 0) { clearInterval(state.focusTimer.intervalId); state.focusTimer.running = false; state.focusTimer.intervalId = null; try { new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdHmBgYF9eXl+gYaGg36Af4F/fn5+').play(); } catch(ignored) {} alert('Focus session complete!'); if (state.currentView==='dashboard') renderMain(); return; } state.focusTimer.remaining--; const disp = document.getElementById('dash-timer-display'); if (disp) { const mm = Math.floor(state.focusTimer.remaining/60); const ss = state.focusTimer.remaining%60; disp.textContent = `${String(mm).padStart(2,'0')}:${String(ss).padStart(2,'0')}`; } }, 1000); } if (state.currentView==='dashboard') renderMain(); }); }
     if (timerReset) { timerReset.addEventListener('click', () => { clearInterval(state.focusTimer.intervalId); state.focusTimer.running = false; state.focusTimer.intervalId = null; state.focusTimer.remaining = state.focusTimer.duration; if (state.currentView==='dashboard') renderMain(); }); }
 
-    // MARTY buttons
-    wrap.querySelector('#dash-ask-marty')?.addEventListener('click', () => {
+    // M.A.R.C.U.S. buttons
+    wrap.querySelector('#dash-ask-marcus')?.addEventListener('click', () => {
         const inp = document.getElementById('cmd-input');
         if (inp) {
             inp.focus();
             inp.value = 'What should I focus on right now?';
         }
-        speakMarty('I am ready. Ask me for your next best action.');
+        speakMarcus('I am ready. Ask me for your next best action.');
     });
-    wrap.querySelector('#dash-brief-marty')?.addEventListener('click', () => {
+    wrap.querySelector('#dash-brief-marcus')?.addEventListener('click', () => {
         const inp = document.getElementById('cmd-input');
         if (inp) {
             inp.focus();
             inp.value = 'Give me a brief status update on everything.';
         }
-        const briefLine = martyInsights.slice(0, 2).map((x) => safeText(x?.text)).filter(Boolean).join(' ');
-        if (briefLine) speakMarty(briefLine);
+        const briefLine = marcusInsights.slice(0, 2).map((x) => safeText(x?.text)).filter(Boolean).join(' ');
+        if (briefLine) speakMarcus(briefLine);
     });
-    wrap.querySelector('#dash-marty-sweep')?.addEventListener('click', async (e) => {
+    wrap.querySelector('#dash-marcus-sweep')?.addEventListener('click', async (e) => {
         const btn = e.currentTarget;
         if (!btn) return;
         btn.disabled = true;
         const prev = btn.textContent;
         btn.textContent = 'Sweeping...';
         try {
-            const filtered = await runMartyInboxFilter();
-            const triage = await runMartyInboxTriage({ onlyNew: true, includeArchived: false, limit: 120 });
-            const auto = await runMartyInboxAutomation();
-            await fetchMartyAutomationDigest().catch(() => {});
+            const filtered = await runMarcusInboxFilter();
+            const triage = await runMarcusInboxTriage({ onlyNew: true, includeArchived: false, limit: 120 });
+            const auto = await runMarcusInboxAutomation();
+            await fetchMarcusAutomationDigest().catch(() => {});
             const summary = `Sweep complete. Archived ${Number(filtered?.archived || 0)} noise items, triaged ${Number(triage?.count || 0)}, queued ${Number(auto?.proposed || 0)} approvals.`;
-            speakMarty(summary);
+            speakMarcus(summary);
             alert(summary);
             if (state.currentView === 'dashboard') renderMain();
         } catch (err) {
-            alert(err?.message || 'Marty sweep failed');
+            alert(err?.message || 'Marcus sweep failed');
         } finally {
             btn.disabled = false;
             btn.textContent = prev;
         }
     });
-    wrap.querySelector('#dash-marty-coach')?.addEventListener('click', async (e) => {
+    wrap.querySelector('#dash-marcus-coach')?.addEventListener('click', async (e) => {
         const btn = e.currentTarget;
         if (!btn) return;
         btn.disabled = true;
@@ -10098,11 +10098,11 @@ function renderDashboard(container, sidePort) {
             const result = await coachNextInboxStep();
             if (result?.applied) {
                 const msg = `Coaching applied. Linked: ${result.linked ? 'yes' : 'no'}. Tasks created: ${Number(result.tasksCreated || 0)}.`;
-                speakMarty(msg);
+                speakMarcus(msg);
                 alert(msg);
             }
         } catch (err) {
-            alert(err?.message || 'Marty coach failed');
+            alert(err?.message || 'Marcus coach failed');
         } finally {
             btn.disabled = false;
             btn.textContent = prev;
@@ -10231,27 +10231,27 @@ function renderDashboardCommandCenter(container, sidePort) {
     `;
     topRow.appendChild(urgent);
 
-    // Middle: MARTY
-    const martyCard = document.createElement('div');
-    martyCard.className = 'dash-card min-h-0 overflow-hidden';
-    martyCard.dataset.cardId = 'marty-center';
-    martyCard.style.display = 'flex';
-    martyCard.style.flexDirection = 'column';
-    martyCard.innerHTML = `
+    // Middle: M.A.R.C.U.S.
+    const marcusCard = document.createElement('div');
+    marcusCard.className = 'dash-card min-h-0 overflow-hidden';
+    marcusCard.dataset.cardId = 'marcus-center';
+    marcusCard.style.display = 'flex';
+    marcusCard.style.flexDirection = 'column';
+    marcusCard.innerHTML = `
         <div class="dash-card-head flex items-center justify-between gap-2 px-3 py-2.5">
             <div class="flex items-center gap-2 min-w-0">
-                <div class="marty-status-dot shrink-0"></div>
-                <div class="marty-orb marty-dashboard-avatar idle shrink-0" aria-hidden="true"></div>
-                <span class="text-[10px] font-mono uppercase tracking-widest text-blue-300">MARTY</span>
+                <div class="marcus-status-dot shrink-0"></div>
+                <div class="marcus-orb marcus-dashboard-avatar idle shrink-0" aria-hidden="true"></div>
+                <span class="text-[10px] font-mono uppercase tracking-widest text-blue-300">M.A.R.C.U.S.</span>
             </div>
             <div class="text-[9px] font-mono text-ops-light/50">Dashboard Console</div>
         </div>
-        <div id="dash-marty-slot" class="flex-1 min-h-0 overflow-hidden"></div>
+        <div id="dash-marcus-slot" class="flex-1 min-h-0 overflow-hidden"></div>
     `;
-    root.appendChild(martyCard);
+    root.appendChild(marcusCard);
 
-    const martySlot = martyCard.querySelector('#dash-marty-slot');
-    if (martySlot) dockMartyToDashboardSlot(martySlot);
+    const marcusSlot = marcusCard.querySelector('#dash-marcus-slot');
+    if (marcusSlot) dockMarcusToDashboardSlot(marcusSlot);
 
     // Bottom row: Due Today | This Week | Pending Meetings
     const bottomRow = document.createElement('div');
@@ -10488,7 +10488,7 @@ function renderDashboardCommandCenter(container, sidePort) {
                     </div>
                 </div>
                 <div class="flex items-center gap-1.5 shrink-0">
-                    <button type="button" data-run-marty-filter class="px-2.5 py-1 rounded border border-amber-600/40 bg-amber-600/15 text-[9px] font-mono text-amber-200 hover:bg-amber-600/25 transition-colors">Run Marty Filter</button>
+                    <button type="button" data-run-marcus-filter class="px-2.5 py-1 rounded border border-amber-600/40 bg-amber-600/15 text-[9px] font-mono text-amber-200 hover:bg-amber-600/25 transition-colors">Run Marcus Filter</button>
                     <button type="button" data-open-inbox class="px-2.5 py-1 rounded border border-ops-border text-[9px] font-mono text-ops-light hover:text-white hover:bg-ops-surface/60 transition-colors">Open Inbox</button>
                     ${showCount ? '<i class="fa-solid fa-chevron-down expand-chevron"></i>' : ''}
                 </div>
@@ -10510,13 +10510,13 @@ function renderDashboardCommandCenter(container, sidePort) {
             if (state.currentView !== 'dashboard') return;
             radarBanner.innerHTML = makeRadarHtml(data);
             radarBanner.querySelector('button[data-open-inbox]')?.addEventListener('click', () => openInbox());
-            radarBanner.querySelector('button[data-run-marty-filter]')?.addEventListener('click', async () => {
+            radarBanner.querySelector('button[data-run-marcus-filter]')?.addEventListener('click', async () => {
                 try {
-                    const result = await runMartyInboxFilter();
-                    alert(`Marty filter complete. Archived: ${Number(result?.archived || 0)}. Matched: ${Number(result?.matched || 0)}.`);
+                    const result = await runMarcusInboxFilter();
+                    alert(`Marcus filter complete. Archived: ${Number(result?.archived || 0)}. Matched: ${Number(result?.matched || 0)}.`);
                     renderMain();
                 } catch (e) {
-                    alert(e?.message || 'Marty filter failed');
+                    alert(e?.message || 'Marcus filter failed');
                 }
             });
         } catch {
@@ -10557,16 +10557,16 @@ function renderDashboardCommandCenter(container, sidePort) {
     sideWrap.appendChild(calCard);
 
     sideWrap.querySelectorAll('button[data-open-inbox]').forEach((b) => b.addEventListener('click', () => openInbox()));
-    sideWrap.querySelectorAll('button[data-run-marty-filter]').forEach((b) => b.addEventListener('click', async () => {
+    sideWrap.querySelectorAll('button[data-run-marcus-filter]').forEach((b) => b.addEventListener('click', async () => {
         b.disabled = true;
         const prev = b.textContent;
         b.textContent = 'Filtering…';
         try {
-            const result = await runMartyInboxFilter();
-            alert(`Marty filter complete. Archived: ${Number(result?.archived || 0)}. Matched: ${Number(result?.matched || 0)}.`);
+            const result = await runMarcusInboxFilter();
+            alert(`Marcus filter complete. Archived: ${Number(result?.archived || 0)}. Matched: ${Number(result?.matched || 0)}.`);
             renderMain();
         } catch (e) {
-            alert(e?.message || 'Marty filter failed');
+            alert(e?.message || 'Marcus filter failed');
         } finally {
             b.disabled = false;
             b.textContent = prev;
@@ -10574,16 +10574,16 @@ function renderDashboardCommandCenter(container, sidePort) {
     }));
     sideWrap.querySelectorAll('button[data-open-calendar]').forEach((b) => b.addEventListener('click', () => openCalendar()));
     root.querySelectorAll('button[data-open-inbox]').forEach((b) => b.addEventListener('click', () => openInbox()));
-    root.querySelectorAll('button[data-run-marty-filter]').forEach((b) => b.addEventListener('click', async () => {
+    root.querySelectorAll('button[data-run-marcus-filter]').forEach((b) => b.addEventListener('click', async () => {
         b.disabled = true;
         const prev = b.textContent;
         b.textContent = 'Filtering…';
         try {
-            const result = await runMartyInboxFilter();
-            alert(`Marty filter complete. Archived: ${Number(result?.archived || 0)}. Matched: ${Number(result?.matched || 0)}.`);
+            const result = await runMarcusInboxFilter();
+            alert(`Marcus filter complete. Archived: ${Number(result?.archived || 0)}. Matched: ${Number(result?.matched || 0)}.`);
             renderMain();
         } catch (e) {
-            alert(e?.message || 'Marty filter failed');
+            alert(e?.message || 'Marcus filter failed');
         } finally {
             b.disabled = false;
             b.textContent = prev;
@@ -12401,22 +12401,22 @@ async function autoDelegate(project) {
 
 function toggleChat() {
     const drawer = document.getElementById('neural-drawer');
-    const docked = drawer?.dataset?.martyDocked === '1';
+    const docked = drawer?.dataset?.marcusDocked === '1';
 
-    // When MARTY is persistently docked, keep it visible.
+    // When M.A.R.C.U.S. is persistently docked, keep it visible.
     if (docked) {
         state.isChatOpen = true;
-        dockMartyToPersistentSlot();
-        applyMartyOpenState(true);
-        setStoredMartyOpen(true);
+        dockMarcusToPersistentSlot();
+        applyMarcusOpenState(true);
+        setStoredMarcusOpen(true);
         const input = document.getElementById('cmd-input');
         input?.focus?.();
         return;
     }
 
     state.isChatOpen = !state.isChatOpen;
-    applyMartyOpenState(state.isChatOpen);
-    setStoredMartyOpen(state.isChatOpen);
+    applyMarcusOpenState(state.isChatOpen);
+    setStoredMarcusOpen(state.isChatOpen);
 }
 
 async function handleChatSubmit() {
@@ -12433,8 +12433,8 @@ async function handleChatSubmit() {
     // Show Thinking
     const status = document.getElementById("ai-status");
     if(status) status.style.opacity = "1";
-    setMartyPresence('busy');
-    showMartyTypingIndicator();
+    setMarcusPresence('busy');
+    showMarcusTypingIndicator();
     
     try {
         const threadId = state.currentProjectId ? 'default' : (state.chatThreadId || 'default');
@@ -12454,11 +12454,11 @@ async function handleChatSubmit() {
         }
 
         const reply = data.reply || data.text || "Command Processed.";
-        removeMartyTypingIndicator();
-        setMartyPresence('responding');
+        removeMarcusTypingIndicator();
+        setMarcusPresence('responding');
         recordChatMessage("ai", reply);
         addChatMessage("ai", reply, true);
-        speakMarty(reply);
+        speakMarcus(reply);
         
         // Refresh state in case AI changed things
         await fetchState();
@@ -12468,7 +12468,7 @@ async function handleChatSubmit() {
         renderMain();
         
     } catch (e) {
-        removeMartyTypingIndicator();
+        removeMarcusTypingIndicator();
         const raw = safeText(e?.message || '').trim();
         const lower = raw.toLowerCase();
         let friendly = raw || 'Connection severed.';
@@ -12479,7 +12479,7 @@ async function handleChatSubmit() {
         addChatMessage("ai", `Error: ${friendly}`);
     } finally {
         if(status) status.style.opacity = "0";
-        setMartyPresence('idle');
+        setMarcusPresence('idle');
     }
 }
 
@@ -12497,7 +12497,7 @@ function recordChatMessage(role, text) {
         }
     }
 
-    publishMartySync('chat-entry', {
+    publishMarcusSync('chat-entry', {
         projectId: safeText(state.currentProjectId || ''),
         threadId: safeText(state.currentProjectId ? 'default' : (state.chatThreadId || 'default')),
         entry,
@@ -12507,7 +12507,7 @@ function recordChatMessage(role, text) {
 function addChatMessage(role, text, animate = false) {
     const stream = document.getElementById("chat-stream");
     if(!stream) return;
-    if (role === 'ai') removeMartyTypingIndicator();
+    if (role === 'ai') removeMarcusTypingIndicator();
 
     const div = document.createElement("div");
     div.className = "flex flex-col gap-1.5 mb-5 animate-fade-in";
@@ -12522,7 +12522,7 @@ function addChatMessage(role, text, animate = false) {
     const threadLabel = state.currentProjectId
         ? 'DIRECT'
         : ((state.chatThreadId || 'default') === 'operator_bio' ? 'BIO' : 'DIRECT');
-    header.innerText = role === 'ai' ? `MARTY // ${threadLabel}` : 'Operator';
+    header.innerText = role === 'ai' ? `M.A.R.C.U.S. // ${threadLabel}` : 'Operator';
 
     const bubble = document.createElement("div");
     bubble.className = `text-[13px] leading-relaxed max-w-[85%] break-words ${bubbleClasses}`;
@@ -12591,7 +12591,7 @@ function renderChat() {
     } else {
         stream.innerHTML = `<div class="text-center mt-10 opacity-30">
             <i class="fa-solid fa-terminal text-2xl mb-2"></i>
-            <p>MARTY is online — sharp, curious, and ready to work.</p>
+            <p>M.A.R.C.U.S. is online — sharp, curious, and ready to work.</p>
         </div>`;
     }
 }
@@ -12673,19 +12673,19 @@ function shouldTriggerFocusNudge(snapshot) {
 
 async function sendProactiveFocusNudge(reason, snapshot) {
     // Only do this from the main app context; avoid popout duplicating nudges.
-    if (IS_MARTY_POPOUT) return;
+    if (IS_MARCUS_POPOUT) return;
 
     // Skip if operator is in the Bio thread (training mode).
     if (!state.currentProjectId && (state.chatThreadId || 'default') === 'operator_bio') return;
 
-    // Make sure Marty is visible so this actually initiates a conversation.
-    applyMartyOpenState(true);
-    setStoredMartyOpen(true);
+    // Make sure Marcus is visible so this actually initiates a conversation.
+    applyMarcusOpenState(true);
+    setStoredMarcusOpen(true);
 
     const status = document.getElementById('ai-status');
     if (status) status.style.opacity = '1';
-    setMartyPresence('busy');
-    showMartyTypingIndicator();
+    setMarcusPresence('busy');
+    showMarcusTypingIndicator();
 
     const top = Array.isArray(snapshot?.topTasks) ? snapshot.topTasks : [];
     const topLines = top.length
@@ -12721,19 +12721,19 @@ async function sendProactiveFocusNudge(reason, snapshot) {
         if (!res.ok) throw new Error(data?.error || `Request failed (${res.status})`);
 
         const reply = data.reply || data.text || '';
-        removeMartyTypingIndicator();
-        setMartyPresence('responding');
+        removeMarcusTypingIndicator();
+        setMarcusPresence('responding');
         if (reply) {
-            // Record only the AI message so it feels like Marty initiated it.
+            // Record only the AI message so it feels like Marcus initiated it.
             const prevThread = state.chatThreadId;
             state.chatThreadId = 'default';
             recordChatMessage('ai', reply);
             state.chatThreadId = prevThread;
             addChatMessage('ai', reply, true);
-            speakMarty(reply);
+            speakMarcus(reply);
         }
     } catch (e) {
-        removeMartyTypingIndicator();
+        removeMarcusTypingIndicator();
         const friendly = safeText(e?.message || '').trim() || 'Failed to send focus nudge.';
         const prevThread = state.chatThreadId;
         state.chatThreadId = 'default';
@@ -12742,7 +12742,7 @@ async function sendProactiveFocusNudge(reason, snapshot) {
         addChatMessage('ai', `Focus nudge failed: ${friendly}`);
     } finally {
         if (status) status.style.opacity = '0';
-        setMartyPresence('idle');
+        setMarcusPresence('idle');
     }
 }
 
@@ -12757,14 +12757,14 @@ function startProactiveFocusNudges() {
 
                 // Rate limit: at most once per 20 minutes.
                 const now = Date.now();
-                const last = getStoredMartyFocusNudgeLastTs();
+                const last = getStoredMarcusFocusNudgeLastTs();
                 if (last && (now - last) < (20 * 60 * 1000)) return;
 
                 const snapshot = computeFocusNudgeSnapshot();
                 const decision = shouldTriggerFocusNudge(snapshot);
                 if (!decision.ok) return;
 
-                setStoredMartyFocusNudgeLastTs(now);
+                setStoredMarcusFocusNudgeLastTs(now);
                 await sendProactiveFocusNudge(decision.reason, snapshot);
             } catch {
                 // ignore
