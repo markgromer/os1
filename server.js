@@ -1029,7 +1029,7 @@ async function qdrantUpsertDocuments(saved, docs, options = {}) {
       const sourceDoc = doc && typeof doc === 'object' ? doc : {};
       const payload = qdrantPointPayloadFromDocument(sourceDoc, businessKey);
       return {
-        id: typeof sourceDoc.id === 'string' && sourceDoc.id.trim() ? sourceDoc.id.trim() : makeId(),
+        id: normalizeQdrantPointId(typeof sourceDoc.id === 'string' && sourceDoc.id.trim() ? sourceDoc.id.trim() : makeId()),
         payload,
       };
     })
@@ -1089,6 +1089,34 @@ function buildQdrantSearchFilter(input) {
   }
   if (!must.length) return null;
   return { must };
+}
+
+function isQdrantCompatiblePointId(value) {
+  if (Number.isInteger(value) && value >= 0) return true;
+  const raw = typeof value === 'string' ? value.trim() : '';
+  if (!raw) return false;
+  if (/^\d+$/.test(raw)) return true;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(raw);
+}
+
+function toDeterministicUuid(value) {
+  const raw = typeof value === 'string' ? value.trim() : String(value ?? '').trim();
+  const seed = raw || crypto.randomUUID();
+  const hex = crypto.createHash('sha256').update(seed).digest('hex').slice(0, 32).split('');
+  hex[12] = '4';
+  const variant = parseInt(hex[16], 16);
+  hex[16] = ((variant & 0x3) | 0x8).toString(16);
+  const joined = hex.join('');
+  return `${joined.slice(0, 8)}-${joined.slice(8, 12)}-${joined.slice(12, 16)}-${joined.slice(16, 20)}-${joined.slice(20, 32)}`;
+}
+
+function normalizeQdrantPointId(value) {
+  if (isQdrantCompatiblePointId(value)) {
+    if (typeof value === 'number') return value;
+    const raw = String(value).trim();
+    return /^\d+$/.test(raw) ? Number(raw) : raw;
+  }
+  return toDeterministicUuid(value);
 }
 
 async function qdrantSearchKnowledge(saved, queryText, options = {}) {
