@@ -56,6 +56,10 @@ This repo now includes a Render blueprint file: `render.yaml`.
 - `TWILIO_AUTH_TOKEN` (if using Quo/Twilio signature verification)
 - `QUO_WEBHOOK_TOKEN` (non-Twilio shared-token webhook verification)
 - `OPENAI_API_KEY`, `OPENAI_MODEL`
+- `QDRANT_URL`, `QDRANT_COLLECTION`, `QDRANT_API_KEY` (Marcus knowledge base)
+- `QDRANT_EMBEDDING_MODEL` (optional, default `text-embedding-3-small`)
+- `QDRANT_VECTOR_SIZE` (optional, default matches embedding model)
+- `QDRANT_TOP_K` (optional, default `6`)
 
 ### Persistence on Render
 
@@ -71,6 +75,61 @@ The blueprint mounts a persistent disk at `/var/data/task-tracker` and stores:
 - Fireflies ingest: `https://<your-render-url>/api/integrations/fireflies/ingest`
 - Quo/Twilio SMS: `https://<your-render-url>/api/integrations/quo/sms`
 - Quo/Twilio calls: `https://<your-render-url>/api/integrations/quo/calls`
+
+## Qdrant knowledge base
+
+Marcus can use Qdrant as a retrieval-backed knowledge base. The backend supports both env-var configuration and saved settings, but env vars are the cleanest approach on Render.
+
+Recommended Render env vars:
+
+- `QDRANT_URL` = your cluster URL, for example `https://xxxxx.us-east.aws.cloud.qdrant.io`
+- `QDRANT_COLLECTION` = collection name, for example `marcus-knowledge`
+- `QDRANT_API_KEY` = API key if your cluster requires auth
+- `OPENAI_API_KEY` = used to generate embeddings for upsert/search
+
+Optional env vars:
+
+- `QDRANT_EMBEDDING_MODEL` = embedding model for document/query vectors
+- `QDRANT_VECTOR_SIZE` = vector width if you want to override the default
+- `QDRANT_DISTANCE` = `Cosine`, `Dot`, `Euclid`, or `Manhattan`
+- `QDRANT_TOP_K` = default retrieval count for Marcus chat context
+
+Backend endpoints:
+
+- `GET /api/integrations/qdrant/status`
+- `POST /api/integrations/qdrant/test`
+- `POST /api/integrations/qdrant/ensure-collection`
+- `POST /api/integrations/qdrant/upsert`
+- `POST /api/integrations/qdrant/search`
+
+Example upsert payload:
+
+```json
+{
+   "documents": [
+      {
+         "title": "Scoop Doggy Logs pricing",
+         "text": "Weekly residential yard service starts at $19 per visit.",
+         "source": "pricing-sheet",
+         "tags": ["pricing", "sales"],
+         "metadata": {
+            "owner": "Mark"
+         }
+      }
+   ]
+}
+```
+
+Example search payload:
+
+```json
+{
+   "query": "What is the starting weekly residential price?",
+   "limit": 5
+}
+```
+
+When Qdrant is configured and enabled, Marcus chat will automatically pull a small set of knowledge-base hits into its context for the active business.
 
 ## MCP on Render (Option 1: stdio servers in same container)
 

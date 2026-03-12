@@ -820,6 +820,339 @@ function getOpenRouterSecrets(saved) {
   return { apiKey, source, keyHint, model };
 }
 
+function guessEmbeddingVectorSize(model) {
+  const name = typeof model === 'string' ? model.trim().toLowerCase() : '';
+  if (name === 'text-embedding-3-large') return 3072;
+  if (name === 'text-embedding-ada-002') return 1536;
+  return 1536;
+}
+
+function normalizeBaseUrl(value) {
+  const raw = typeof value === 'string' ? value.trim() : '';
+  if (!raw) return '';
+  return raw.replace(/\/+$/g, '');
+}
+
+function maskSecretHint(value) {
+  const raw = typeof value === 'string' ? value.trim() : '';
+  if (!raw || raw.length < 4) return '';
+  return `••••${raw.slice(-4)}`;
+}
+
+function getQdrantConfig(saved) {
+  const envUrl = normalizeBaseUrl(process.env.QDRANT_URL || process.env.QDRANT_HOST || '');
+  const savedUrl = normalizeBaseUrl(saved?.qdrantUrl || '');
+  const url = envUrl || savedUrl;
+
+  const envApiKey = typeof process.env.QDRANT_API_KEY === 'string' ? process.env.QDRANT_API_KEY.trim() : '';
+  const savedApiKey = typeof saved?.qdrantApiKey === 'string' ? saved.qdrantApiKey.trim() : '';
+  const apiKey = envApiKey || savedApiKey;
+
+  const envCollection = typeof process.env.QDRANT_COLLECTION === 'string' ? process.env.QDRANT_COLLECTION.trim() : '';
+  const savedCollection = typeof saved?.qdrantCollection === 'string' ? saved.qdrantCollection.trim() : '';
+  const collection = envCollection || savedCollection || 'marcus-knowledge';
+
+  const envEmbeddingModel = typeof process.env.QDRANT_EMBEDDING_MODEL === 'string'
+    ? process.env.QDRANT_EMBEDDING_MODEL.trim()
+    : (typeof process.env.OPENAI_EMBEDDING_MODEL === 'string' ? process.env.OPENAI_EMBEDDING_MODEL.trim() : '');
+  const savedEmbeddingModel = typeof saved?.qdrantEmbeddingModel === 'string' ? saved.qdrantEmbeddingModel.trim() : '';
+  const embeddingModel = envEmbeddingModel || savedEmbeddingModel || 'text-embedding-3-small';
+
+  const vectorSizeRaw = Number(process.env.QDRANT_VECTOR_SIZE || saved?.qdrantVectorSize);
+  const vectorSize = Number.isFinite(vectorSizeRaw) && vectorSizeRaw > 0
+    ? Math.floor(vectorSizeRaw)
+    : guessEmbeddingVectorSize(embeddingModel);
+
+  const distanceRaw = typeof process.env.QDRANT_DISTANCE === 'string'
+    ? process.env.QDRANT_DISTANCE.trim()
+    : (typeof saved?.qdrantDistance === 'string' ? saved.qdrantDistance.trim() : '');
+  const distance = ['Cosine', 'Dot', 'Euclid', 'Manhattan'].includes(distanceRaw)
+    ? distanceRaw
+    : 'Cosine';
+
+  const timeoutRaw = Number(process.env.QDRANT_TIMEOUT_MS || saved?.qdrantTimeoutMs);
+  const timeoutMs = Number.isFinite(timeoutRaw) && timeoutRaw > 0 ? Math.floor(timeoutRaw) : 15_000;
+
+  const topKRaw = Number(process.env.QDRANT_TOP_K || saved?.qdrantTopK);
+  const topK = Number.isFinite(topKRaw) && topKRaw > 0 ? Math.max(1, Math.min(20, Math.floor(topKRaw))) : 6;
+
+  const enabled = saved?.qdrantEnabled !== false;
+  const useForMarcus = saved?.qdrantUseForMarcus !== false;
+  const configured = Boolean(url && collection);
+
+  return {
+    url,
+    apiKey,
+    apiKeyHint: maskSecretHint(apiKey),
+    collection,
+    embeddingModel,
+    vectorSize,
+    distance,
+    timeoutMs,
+    topK,
+    enabled,
+    useForMarcus,
+    configured,
+  };
+}
+
+function buildQdrantHeaders(apiKey) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (typeof apiKey === 'string' && apiKey.trim()) headers['api-key'] = apiKey.trim();
+  return headers;
+}
+
+async function qdrantRequest(cfg, endpoint, init = {}) {
+  if (!cfg?.url) throw new Error('Qdrant URL is not configured');
+  const base = cfg.url.replace(/\/+$/g, '');
+  const pathPart = String(endpoint || '').startsWith('/') ? String(endpoint || '') : `/${String(endpoint || '')}`;
+  const headers = { ...buildQdrantHeaders(cfg.apiKey), ...(init.headers || {}) };
+  return fetchJsonWithTimeout(`${base}${pathPart}`, {
+    timeoutMs: cfg.timeoutMs || 15_000,
+    ...init,
+    headers,
+  });
+}
+
+async function qdrantEnsureCollection(cfg) {
+  const describe = await qdrantRequest(cfg, `/collections/${encodeURIComponent(cfg.collection)}`, { method: 'GET' });
+  if (describe.resp.ok) {
+    return { ok: true, created: false, details: describe.data?.result || describe.data || {} };
+  }
+  if (describe.resp.status !== 404) {
+    const detail = typeof describe.data?.status?.error === 'string'
+      ? describe.data.status.error
+      : typeof describe.data?.error === 'string'
+        ? describe.data.error
+        : `status ${describe.resp.status}`;
+    return { ok: false, error: `Failed to inspect Qdrant collection: ${detail}` };
+  }
+
+  const body = {
+    vectors: {
+      size: cfg.vectorSize,
+      distance: cfg.distance,
+    },
+  };
+  const created = await qdrantRequest(cfg, `/collections/${encodeURIComponent(cfg.collection)}`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  });
+  if (!created.resp.ok) {
+    const detail = typeof created.data?.status?.error === 'string'
+      ? created.data.status.error
+      : typeof created.data?.error === 'string'
+        ? created.data.error
+        : `status ${created.resp.status}`;
+    return { ok: false, error: `Failed to create Qdrant collection: ${detail}` };
+  }
+
+  return { ok: true, created: true, details: created.data?.result || created.data || {} };
+}
+
+async function createOpenAiEmbeddings(saved, texts, options = {}) {
+  const input = Array.isArray(texts)
+    ? texts.map((item) => String(item || '').trim()).filter(Boolean)
+    : [String(texts || '').trim()].filter(Boolean);
+  if (!input.length) return { ok: true, embeddings: [] };
+
+  const openai = getOpenAiSecrets(saved);
+  if (!openai.apiKey) {
+    return { ok: false, error: 'OpenAI API key is required for Qdrant embeddings.' };
+  }
+
+  const model = typeof options?.model === 'string' && options.model.trim()
+    ? options.model.trim()
+    : 'text-embedding-3-small';
+  const dimensionsRaw = Number(options?.dimensions);
+  const body = {
+    model,
+    input,
+  };
+  if (Number.isFinite(dimensionsRaw) && dimensionsRaw > 0) body.dimensions = Math.floor(dimensionsRaw);
+
+  const { resp, data } = await fetchJsonWithTimeout('https://api.openai.com/v1/embeddings', {
+    timeoutMs: 30_000,
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${openai.apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!resp.ok) {
+    const detail = typeof data?.error?.message === 'string' ? data.error.message : `status ${resp.status}`;
+    return { ok: false, error: `OpenAI embeddings failed: ${detail}` };
+  }
+
+  const rows = Array.isArray(data?.data) ? data.data : [];
+  const embeddings = rows.map((row) => Array.isArray(row?.embedding) ? row.embedding : []).filter((row) => row.length);
+  if (embeddings.length !== input.length) {
+    return { ok: false, error: 'OpenAI embeddings response was incomplete.' };
+  }
+  return { ok: true, embeddings, model };
+}
+
+function qdrantPointPayloadFromDocument(doc, businessKey) {
+  const sourceDoc = doc && typeof doc === 'object' ? doc : {};
+  const text = typeof sourceDoc.text === 'string'
+    ? sourceDoc.text.trim()
+    : (typeof sourceDoc.content === 'string' ? sourceDoc.content.trim() : '');
+  const title = typeof sourceDoc.title === 'string' ? sourceDoc.title.trim() : '';
+  const source = typeof sourceDoc.source === 'string' ? sourceDoc.source.trim() : '';
+  const tags = Array.isArray(sourceDoc.tags) ? sourceDoc.tags.map((tag) => String(tag || '').trim()).filter(Boolean).slice(0, 20) : [];
+  const metadata = sourceDoc.metadata && typeof sourceDoc.metadata === 'object' && !Array.isArray(sourceDoc.metadata)
+    ? sourceDoc.metadata
+    : {};
+  return {
+    title,
+    text,
+    source,
+    tags,
+    businessKey: typeof sourceDoc.businessKey === 'string' && sourceDoc.businessKey.trim() ? sourceDoc.businessKey.trim() : businessKey,
+    metadata,
+    updatedAt: nowIso(),
+  };
+}
+
+async function qdrantUpsertDocuments(saved, docs, options = {}) {
+  const cfg = getQdrantConfig(saved);
+  if (!cfg.enabled || !cfg.configured) {
+    return { ok: false, error: 'Qdrant is not configured.' };
+  }
+
+  const list = Array.isArray(docs) ? docs : [docs];
+  const businessKey = typeof options?.businessKey === 'string' ? options.businessKey.trim() : getBusinessKeyFromContext();
+  const normalized = list
+    .map((doc) => {
+      const sourceDoc = doc && typeof doc === 'object' ? doc : {};
+      const payload = qdrantPointPayloadFromDocument(sourceDoc, businessKey);
+      return {
+        id: typeof sourceDoc.id === 'string' && sourceDoc.id.trim() ? sourceDoc.id.trim() : makeId(),
+        payload,
+      };
+    })
+    .filter((row) => row.payload.text);
+
+  if (!normalized.length) {
+    return { ok: false, error: 'No valid knowledge documents were provided.' };
+  }
+
+  const ensured = options?.ensureCollection === false ? { ok: true, created: false } : await qdrantEnsureCollection(cfg);
+  if (!ensured.ok) return ensured;
+
+  const embed = await createOpenAiEmbeddings(saved, normalized.map((row) => row.payload.text), {
+    model: cfg.embeddingModel,
+    dimensions: cfg.vectorSize,
+  });
+  if (!embed.ok) return embed;
+
+  const points = normalized.map((row, index) => ({
+    id: row.id,
+    vector: embed.embeddings[index],
+    payload: row.payload,
+  }));
+
+  const { resp, data } = await qdrantRequest(cfg, `/collections/${encodeURIComponent(cfg.collection)}/points?wait=true`, {
+    method: 'PUT',
+    body: JSON.stringify({ points }),
+  });
+  if (!resp.ok) {
+    const detail = typeof data?.status?.error === 'string'
+      ? data.status.error
+      : typeof data?.error === 'string'
+        ? data.error
+        : `status ${resp.status}`;
+    return { ok: false, error: `Qdrant upsert failed: ${detail}` };
+  }
+
+  return {
+    ok: true,
+    collection: cfg.collection,
+    count: points.length,
+    createdCollection: Boolean(ensured.created),
+    result: data?.result || {},
+  };
+}
+
+function buildQdrantSearchFilter(input) {
+  const filter = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
+  const must = [];
+  const businessKey = typeof filter.businessKey === 'string' ? filter.businessKey.trim() : '';
+  if (businessKey) {
+    must.push({ key: 'businessKey', match: { value: businessKey } });
+  }
+  const source = typeof filter.source === 'string' ? filter.source.trim() : '';
+  if (source) {
+    must.push({ key: 'source', match: { value: source } });
+  }
+  if (!must.length) return null;
+  return { must };
+}
+
+async function qdrantSearchKnowledge(saved, queryText, options = {}) {
+  const cfg = getQdrantConfig(saved);
+  if (!cfg.enabled || !cfg.configured) {
+    return { ok: false, error: 'Qdrant is not configured.' };
+  }
+
+  const text = typeof queryText === 'string' ? queryText.trim() : '';
+  if (!text) return { ok: false, error: 'Query text is required.' };
+
+  const embed = await createOpenAiEmbeddings(saved, [text], {
+    model: cfg.embeddingModel,
+    dimensions: cfg.vectorSize,
+  });
+  if (!embed.ok) return embed;
+
+  const limitRaw = Number(options?.limit);
+  const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.max(1, Math.min(20, Math.floor(limitRaw))) : cfg.topK;
+  const filter = buildQdrantSearchFilter(options?.filter);
+  const body = {
+    vector: embed.embeddings[0],
+    limit,
+    with_payload: true,
+    with_vector: false,
+  };
+  if (filter) body.filter = filter;
+
+  let out = await qdrantRequest(cfg, `/collections/${encodeURIComponent(cfg.collection)}/points/search`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+  if (out.resp.status === 404) {
+    out = await qdrantRequest(cfg, `/collections/${encodeURIComponent(cfg.collection)}/points/query`, {
+      method: 'POST',
+      body: JSON.stringify({
+        query: embed.embeddings[0],
+        limit,
+        with_payload: true,
+        with_vector: false,
+        ...(filter ? { filter } : {}),
+      }),
+    });
+  }
+  if (!out.resp.ok) {
+    const detail = typeof out.data?.status?.error === 'string'
+      ? out.data.status.error
+      : typeof out.data?.error === 'string'
+        ? out.data.error
+        : `status ${out.resp.status}`;
+    return { ok: false, error: `Qdrant search failed: ${detail}` };
+  }
+
+  const rawPoints = Array.isArray(out.data?.result?.points)
+    ? out.data.result.points
+    : (Array.isArray(out.data?.result) ? out.data.result : []);
+  const matches = rawPoints.map((point) => ({
+    id: point?.id,
+    score: Number(point?.score) || 0,
+    payload: point?.payload && typeof point.payload === 'object' ? point.payload : {},
+  }));
+  return { ok: true, collection: cfg.collection, matches };
+}
+
 function resolveAiRoute(saved, routeKey) {
   const openai = getOpenAiSecrets(saved);
   const openrouter = getOpenRouterSecrets(saved);
@@ -940,6 +1273,7 @@ function sanitizeSettingsForClient(settings) {
   delete clone.ghlApiKey;
   delete clone.airtableByBusinessKey;
   delete clone.airtablePat;
+  delete clone.qdrantApiKey;
   return clone;
 }
 
@@ -4932,6 +5266,11 @@ app.get('/api/settings', async (req, res) => {
   const ghlConfig = await getGhlConfig();
   const ghlConfigured = Boolean(ghlConfig.apiKey && ghlConfig.locationId);
 
+  const qdrant = getQdrantConfig(settings);
+  const qdrantEnabled = Boolean(qdrant.enabled);
+  const qdrantConfigured = Boolean(qdrant.configured);
+  const qdrantUseForMarcus = Boolean(qdrant.useForMarcus);
+
   const mcpEff = getMcpEffectiveSettings(settings);
   const mcpEnabled = Boolean(mcpEff.enabled);
   const mcpConfigured = Boolean(mcpEff.configured);
@@ -4956,6 +5295,9 @@ app.get('/api/settings', async (req, res) => {
     slackInstalled,
     quoConfigured,
     ghlConfigured,
+    qdrantEnabled,
+    qdrantConfigured,
+    qdrantUseForMarcus,
     mcpEnabled,
     mcpConfigured,
   });
@@ -5964,6 +6306,163 @@ app.get('/api/integrations/google/status', async (req, res) => {
     connected: Boolean(tokens && tokens.refresh_token),
     calendarId: calendarId || '',
   });
+});
+
+app.get('/api/integrations/qdrant/status', async (req, res) => {
+  try {
+    const settings = await readSettings();
+    const cfg = getQdrantConfig(settings);
+    res.json({
+      ok: true,
+      enabled: Boolean(cfg.enabled),
+      configured: Boolean(cfg.configured),
+      connected: false,
+      useForMarcus: Boolean(cfg.useForMarcus),
+      url: cfg.url,
+      collection: cfg.collection,
+      embeddingModel: cfg.embeddingModel,
+      vectorSize: cfg.vectorSize,
+      distance: cfg.distance,
+      apiKeyHint: cfg.apiKeyHint,
+      topK: cfg.topK,
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message || 'Failed to load Qdrant status' });
+  }
+});
+
+app.post('/api/integrations/qdrant/test', async (req, res) => {
+  try {
+    const settings = await readSettings();
+    const cfg = getQdrantConfig(settings);
+    if (!cfg.enabled || !cfg.configured) {
+      res.status(400).json({ ok: false, error: 'Qdrant is not configured. Add QDRANT_URL and QDRANT_COLLECTION (and QDRANT_API_KEY if required).' });
+      return;
+    }
+
+    const response = await qdrantRequest(cfg, `/collections/${encodeURIComponent(cfg.collection)}`, { method: 'GET' });
+    if (!response.resp.ok) {
+      const detail = typeof response.data?.status?.error === 'string'
+        ? response.data.status.error
+        : typeof response.data?.error === 'string'
+          ? response.data.error
+          : `status ${response.resp.status}`;
+      res.status(response.resp.status === 404 ? 404 : 502).json({ ok: false, error: `Qdrant test failed: ${detail}` });
+      return;
+    }
+
+    const pointsCount = Number(response.data?.result?.points_count);
+    res.json({
+      ok: true,
+      connected: true,
+      collection: cfg.collection,
+      url: cfg.url,
+      status: response.data?.status || 'ok',
+      pointsCount: Number.isFinite(pointsCount) ? pointsCount : null,
+      details: response.data?.result || {},
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message || 'Failed to test Qdrant connection' });
+  }
+});
+
+app.post('/api/integrations/qdrant/ensure-collection', async (req, res) => {
+  try {
+    const settings = await readSettings();
+    const cfg = getQdrantConfig(settings);
+    if (!cfg.enabled || !cfg.configured) {
+      res.status(400).json({ ok: false, error: 'Qdrant is not configured. Add QDRANT_URL and QDRANT_COLLECTION first.' });
+      return;
+    }
+
+    const out = await qdrantEnsureCollection(cfg);
+    if (!out.ok) {
+      res.status(502).json(out);
+      return;
+    }
+
+    res.json({
+      ok: true,
+      collection: cfg.collection,
+      created: Boolean(out.created),
+      vectorSize: cfg.vectorSize,
+      distance: cfg.distance,
+      details: out.details || {},
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message || 'Failed to ensure Qdrant collection' });
+  }
+});
+
+app.post('/api/integrations/qdrant/upsert', async (req, res) => {
+  try {
+    const docs = Array.isArray(req.body?.documents)
+      ? req.body.documents
+      : (req.body?.document && typeof req.body.document === 'object' ? [req.body.document] : []);
+    if (!docs.length) {
+      res.status(400).json({ ok: false, error: 'Provide documents: [{ title?, text|content, source?, tags?, metadata? }].' });
+      return;
+    }
+
+    const settings = await readSettings();
+    const businessKey = typeof req.body?.businessKey === 'string' && req.body.businessKey.trim()
+      ? req.body.businessKey.trim()
+      : getBusinessKeyFromContext();
+    const out = await qdrantUpsertDocuments(settings, docs, {
+      businessKey,
+      ensureCollection: req.body?.ensureCollection !== false,
+    });
+    if (!out.ok) {
+      const code = /not configured|required/i.test(String(out.error || '')) ? 400 : 502;
+      res.status(code).json(out);
+      return;
+    }
+
+    res.json({
+      ok: true,
+      collection: out.collection,
+      count: out.count,
+      businessKey,
+      createdCollection: Boolean(out.createdCollection),
+      result: out.result || {},
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message || 'Failed to upsert Qdrant documents' });
+  }
+});
+
+app.post('/api/integrations/qdrant/search', async (req, res) => {
+  try {
+    const query = typeof req.body?.query === 'string' ? req.body.query.trim() : '';
+    if (!query) {
+      res.status(400).json({ ok: false, error: 'query is required' });
+      return;
+    }
+
+    const settings = await readSettings();
+    const filter = req.body?.filter && typeof req.body.filter === 'object' && !Array.isArray(req.body.filter)
+      ? req.body.filter
+      : {};
+    if (!filter.businessKey && req.body?.businessKey !== '*') {
+      filter.businessKey = typeof req.body?.businessKey === 'string' && req.body.businessKey.trim()
+        ? req.body.businessKey.trim()
+        : getBusinessKeyFromContext();
+    }
+
+    const out = await qdrantSearchKnowledge(settings, query, {
+      limit: req.body?.limit,
+      filter,
+    });
+    if (!out.ok) {
+      const code = /not configured|required/i.test(String(out.error || '')) ? 400 : 502;
+      res.status(code).json(out);
+      return;
+    }
+
+    res.json({ ok: true, collection: out.collection, matches: out.matches });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message || 'Failed to search Qdrant knowledge base' });
+  }
 });
 
 app.get('/api/integrations/google/auth-url', async (req, res) => {
@@ -10096,6 +10595,33 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
           `- Keep it bluntly funny/sarcastic when appropriate, but still useful.\n`;
       }
       context += `\n`;
+    }
+
+    try {
+      const qdrant = getQdrantConfig(settings);
+      if (qdrant.enabled && qdrant.configured && qdrant.useForMarcus) {
+        const businessKey = getBusinessKeyFromContext();
+        const retrievalQuery = effectiveProject?.name
+          ? `${message}\n\nProject context: ${effectiveProject.name}`
+          : message;
+        const knowledge = await qdrantSearchKnowledge(settings, retrievalQuery, {
+          limit: Math.min(qdrant.topK, 5),
+          filter: { businessKey },
+        });
+        if (knowledge.ok && Array.isArray(knowledge.matches) && knowledge.matches.length) {
+          const knowledgeLines = knowledge.matches.slice(0, 5).map((match, index) => {
+            const payload = match.payload && typeof match.payload === 'object' ? match.payload : {};
+            const title = typeof payload.title === 'string' && payload.title.trim() ? payload.title.trim() : `Document ${index + 1}`;
+            const text = typeof payload.text === 'string' ? payload.text.replace(/\s+/g, ' ').trim() : '';
+            const source = typeof payload.source === 'string' ? payload.source.trim() : '';
+            const preview = text.length > 360 ? `${text.slice(0, 360)}…` : text;
+            return `- [score ${match.score.toFixed(3)}] ${title}${source ? ` (${source})` : ''}: ${preview}`;
+          });
+          context += `KNOWLEDGE BASE HITS (Qdrant; use as supporting memory, not ground truth if contradicted):\n${knowledgeLines.join('\n')}\n\n`;
+        }
+      }
+    } catch {
+      // Ignore Qdrant retrieval failures during chat assembly.
     }
 
     // Always include a compact operational snapshot so Marcus can be proactive.
