@@ -3790,12 +3790,13 @@ function renderInbox(container) {
                         <div class="text-[12px] text-zinc-300">
                             <span class="text-zinc-400">Task ideas:</span>
                             ${recTasks.length
-                                ? `<ul class="mt-1 space-y-1">${recTasks.slice(0, 2).map((t) => `<li>- ${escapeHtml(safeText(t?.title) || 'Follow up')}</li>`).join('')}</ul>`
+                                ? `<ul class="mt-1 space-y-1">${recTasks.slice(0, 3).map((t) => `<li>- ${escapeHtml(safeText(t?.title) || 'Follow up')}</li>`).join('')}</ul>`
                                 : '<span> none</span>'}
                         </div>
                         <div class="flex flex-wrap gap-2 pt-1">
                             ${recProjectId ? `<button data-marty-apply-link="${escapeHtml(id)}" class="px-2 py-1 rounded border border-blue-600/40 bg-blue-600/20 text-[10px] font-mono text-blue-100 hover:bg-blue-600/30">Apply Link</button>` : ''}
                             ${recTasks.length ? `<button data-marty-create-task="${escapeHtml(id)}" class="px-2 py-1 rounded border border-emerald-600/40 bg-emerald-600/20 text-[10px] font-mono text-emerald-100 hover:bg-emerald-600/30">Create Top Task</button>` : ''}
+                            ${recTasks.length > 1 ? `<button data-marty-create-all-tasks="${escapeHtml(id)}" class="px-2 py-1 rounded border border-emerald-600/40 bg-emerald-600/10 text-[10px] font-mono text-emerald-200 hover:bg-emerald-600/20">Create All (${recTasks.length})</button>` : ''}
                         </div>
                     </div>`
                     : '';
@@ -4078,10 +4079,31 @@ function renderInbox(container) {
             const rec = getMartyInboxRecommendation(inboxId);
             btn.disabled = true;
             try {
-                await createTaskFromMartyRecommendation(inboxId, rec);
+                const result = await createTaskFromMartyRecommendation(inboxId, rec);
+                if (Number(result?.created || 0) > 0) {
+                    alert(`Created ${Number(result.created)} task from Marty recommendation.`);
+                }
                 renderMain();
             } catch (e) {
                 alert(e?.message || 'Failed to create task from recommendation');
+            } finally {
+                btn.disabled = false;
+            }
+        });
+    });
+
+    container.querySelectorAll('button[data-marty-create-all-tasks]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+            const inboxId = safeText(btn.getAttribute('data-marty-create-all-tasks')).trim();
+            if (!inboxId) return;
+            const rec = getMartyInboxRecommendation(inboxId);
+            btn.disabled = true;
+            try {
+                const result = await createAllTasksFromMartyRecommendation(inboxId, rec);
+                alert(`Created ${Number(result?.created || 0)} tasks from Marty recommendation.`);
+                renderMain();
+            } catch (e) {
+                alert(e?.message || 'Failed to create tasks from recommendation');
             } finally {
                 btn.disabled = false;
             }
@@ -4274,7 +4296,33 @@ async function createTaskFromMartyRecommendation(inboxId, recommendation) {
     };
     const pid = safeText(rec?.project?.projectId).trim();
     if (pid) payload.projectId = pid;
-    return convertInboxItem(id, 'task', payload);
+    await convertInboxItem(id, 'task', payload);
+    return { created: 1 };
+}
+
+async function createAllTasksFromMartyRecommendation(inboxId, recommendation) {
+    const id = safeText(inboxId).trim();
+    if (!id) throw new Error('Missing inbox id');
+    const rec = recommendation && typeof recommendation === 'object' ? recommendation : {};
+    const tasks = Array.isArray(rec.tasks) ? rec.tasks.filter((t) => safeText(t?.title).trim()) : [];
+    if (!tasks.length) throw new Error('No suggested tasks available');
+
+    const pid = safeText(rec?.project?.projectId).trim();
+    const owner = safeText(rec?.delegate?.name).trim();
+    let created = 0;
+
+    for (const task of tasks) {
+        const payload = {
+            title: safeText(task?.title).trim() || 'Inbox follow-up',
+            owner,
+            priority: [1, 2, 3].includes(Number(task?.priority)) ? Number(task.priority) : 2,
+        };
+        if (pid) payload.projectId = pid;
+        await convertInboxItem(id, 'task', payload);
+        created += 1;
+    }
+
+    return { created };
 }
 
 async function openGoogleAuthWindow() {
