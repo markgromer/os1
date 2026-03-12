@@ -3121,7 +3121,15 @@ function renderMain() {
         // Restore the classic layout: Dashboard in the main pane, MARTY on the right.
         dockMartyToPersistentSlot();
         container.className = 'min-h-0 overflow-y-auto';
-        renderDashboard(container, null);
+        try {
+            renderDashboard(container, null);
+        } catch (e) {
+            console.error('Dashboard render failed', e);
+            const msg = safeText(e?.message || 'Unknown dashboard error').trim();
+            const stack = safeText(e?.stack).trim();
+            const detail = `Dashboard render failed: ${msg}${stack ? `\n\n${stack}` : ''}`;
+            showError(detail.slice(0, 4000));
+        }
     } else if (state.currentView === "inbox") {
         // All other views keep MARTY docked on the right.
         dockMartyToPersistentSlot();
