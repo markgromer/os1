@@ -246,7 +246,28 @@ function stripForSpeech(input) {
         .trim();
 }
 
+function pulseMartyAmbient(mode = 'active', durationMs = 1400) {
+    try {
+        const bars = document.querySelectorAll('.marty-ambient');
+        if (!bars || !bars.length) return;
+        bars.forEach((bar) => {
+            bar.classList.remove('marty-busy', 'marty-responding');
+            if (mode === 'busy') bar.classList.add('marty-busy');
+            else if (mode === 'responding') bar.classList.add('marty-responding');
+            bar.classList.add('marty-live');
+
+            const activeMs = Number.isFinite(Number(durationMs)) ? Math.max(250, Math.min(5000, Number(durationMs))) : 1400;
+            window.setTimeout(() => {
+                bar.classList.remove('marty-live', 'marty-busy', 'marty-responding');
+            }, activeMs);
+        });
+    } catch {
+        // ignore
+    }
+}
+
 function speakMarty(text) {
+    pulseMartyAmbient('responding', 1800);
     if (!state.martyVoiceOut) return;
     try {
         const spoken = stripForSpeech(text);
@@ -4421,6 +4442,7 @@ async function saveSettingsPatch(patch) {
 }
 
 async function runMartyInboxFilter() {
+    pulseMartyAmbient('busy', 1200);
     const res = await apiFetch('/api/inbox/marty-filter', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -4450,6 +4472,7 @@ function getMartyInboxRecommendation(inboxId) {
 }
 
 async function runMartyInboxTriage(options = {}) {
+    pulseMartyAmbient('busy', 1200);
     const onlyNew = options.onlyNew !== false;
     const includeArchived = options.includeArchived === true;
     const limit = Number.isFinite(Number(options.limit)) ? Math.max(1, Math.min(200, Math.floor(Number(options.limit)))) : 80;
@@ -4474,6 +4497,7 @@ async function runMartyInboxTriage(options = {}) {
 }
 
 async function runMartyInboxAutomation(options = {}) {
+    pulseMartyAmbient('busy', 1400);
     const mode = safeText(options.approvalMode).trim();
     const payload = {};
     if (mode) payload.approvalMode = mode;
