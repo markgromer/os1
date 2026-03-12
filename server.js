@@ -756,6 +756,15 @@ async function aiChatCompletion({ routeKey, messages, tools, tool_choice, timeou
     return { ok: false, error: `AI is not enabled (missing API key for ${route.provider})` };
   }
 
+  const modelLower = String(route.model || '').trim().toLowerCase();
+  const requestedTimeoutMs = Number.isFinite(Number(timeoutMs)) ? Math.max(5_000, Number(timeoutMs)) : 30_000;
+  let effectiveTimeoutMs = requestedTimeoutMs;
+  if (modelLower.startsWith('gpt-5')) {
+    effectiveTimeoutMs = Math.max(requestedTimeoutMs, 90_000);
+  } else if (modelLower.includes('gpt-4.1') || modelLower.includes('gpt-4o')) {
+    effectiveTimeoutMs = Math.max(requestedTimeoutMs, 45_000);
+  }
+
   const baseUrl = route.provider === 'openrouter' ? 'https://openrouter.ai/api/v1' : 'https://api.openai.com/v1';
   const headers = {
     Authorization: `Bearer ${route.apiKey}`,
@@ -775,12 +784,31 @@ async function aiChatCompletion({ routeKey, messages, tools, tool_choice, timeou
   if (Array.isArray(tools) && tools.length) body.tools = tools;
   if (tool_choice) body.tool_choice = tool_choice;
 
-  const { resp, data } = await fetchJsonWithTimeout(`${baseUrl}/chat/completions`, {
-    timeoutMs,
-    method: 'POST',
-    headers,
-    body: JSON.stringify(body),
-  });
+  let resp;
+  let data;
+  try {
+    const out = await fetchJsonWithTimeout(`${baseUrl}/chat/completions`, {
+      timeoutMs: effectiveTimeoutMs,
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+    });
+    resp = out.resp;
+    data = out.data;
+  } catch (err) {
+    const msg = String(err?.message || '').toLowerCase();
+    const timedOut = msg.includes('timeout') || msg.includes('aborted');
+    if (timedOut) {
+      return {
+        ok: false,
+        error: `AI request timed out after ${Math.round(effectiveTimeoutMs / 1000)}s. provider=${route.provider}. model=${route.model}. Try again or use a faster model for this route.`,
+      };
+    }
+    return {
+      ok: false,
+      error: `AI request failed before response. provider=${route.provider}. model=${route.model}. ${String(err?.message || 'unknown error')}`.slice(0, 700),
+    };
+  }
 
   if (!resp.ok) {
     const detail = typeof data?.error?.message === 'string' ? data.error.message : JSON.stringify(data);
