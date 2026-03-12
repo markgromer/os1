@@ -777,7 +777,10 @@ function dockMarcusToPersistentSlot() {
     const dragHandle = document.getElementById('marcus-drag-handle');
     if (dragHandle) dragHandle.classList.remove('cursor-move');
     const popoutToggle = document.getElementById('marcus-popout-toggle');
-    if (popoutToggle) popoutToggle.classList.add('hidden');
+    if (popoutToggle) {
+        popoutToggle.classList.remove('hidden');
+        popoutToggle.title = 'Detach M.A.R.C.U.S. into its own window';
+    }
 
     if (drawer.parentElement !== slot) {
         slot.innerHTML = '';
@@ -989,6 +992,9 @@ function initializeMarcusWidget() {
         if (IS_MARCUS_POPOUT) {
             popoutToggle.title = 'Return to app window';
             if (icon) icon.className = 'fa-solid fa-down-left-and-up-right-to-center';
+        } else {
+            popoutToggle.title = 'Detach M.A.R.C.U.S. into its own window';
+            if (icon) icon.className = 'fa-solid fa-up-right-from-square';
         }
         popoutToggle.addEventListener('click', () => {
             const baseUrl = `${window.location.origin}${window.location.pathname}`;

@@ -304,6 +304,11 @@
 
         body.marcus-popout-mode {
             overflow: hidden;
+            min-height: 100vh;
+            background:
+                radial-gradient(circle at top left, rgb(var(--ops-accent) / 0.16), transparent 32%),
+                radial-gradient(circle at bottom right, rgb(var(--ops-border) / 0.28), transparent 30%),
+                rgb(var(--ops-bg));
         }
 
         body.marcus-popout-mode #command-bar,
@@ -313,13 +318,17 @@
 
         body.marcus-popout-mode #neural-drawer {
             position: fixed !important;
-            inset: 0 !important;
-            width: 100vw !important;
-            height: 100vh !important;
+            inset: 12px !important;
+            width: auto !important;
+            height: auto !important;
             min-width: 0 !important;
             min-height: 0 !important;
-            border-radius: 0 !important;
-            border: 0 !important;
+            border-radius: 22px !important;
+            border: 1px solid rgb(var(--ops-border) / 0.72) !important;
+            box-shadow:
+                0 1px 0 rgb(var(--ops-text) / 0.06) inset,
+                0 24px 64px rgb(0 0 0 / 0.42),
+                0 0 0 1px rgb(var(--ops-text) / 0.03) !important;
         }
 
         body.marcus-popout-mode #marcus-drag-handle {

@@ -1012,6 +1012,7 @@ function buildEmailKnowledgeDocument(message, businessKey) {
 
 async function withImapClient(emailCfg, fn) {
   if (!emailCfg?.imapConfigured) throw new Error('IMAP is not configured. Add IMAP host, username, and password first.');
+  let emittedError = null;
   const client = new ImapFlow({
     host: emailCfg.imap.host,
     port: emailCfg.imap.port,
@@ -1021,9 +1022,21 @@ async function withImapClient(emailCfg, fn) {
       pass: emailCfg.imap.password,
     },
     logger: false,
+    connectionTimeout: 20_000,
+    greetingTimeout: 20_000,
+    socketTimeout: 20_000,
   });
 
-  await client.connect();
+  client.on('error', (err) => {
+    emittedError = err || emittedError;
+  });
+
+  try {
+    await client.connect();
+  } catch (err) {
+    const msg = String(err?.message || emittedError?.message || 'IMAP connection failed').trim();
+    throw new Error(msg || 'IMAP connection failed');
+  }
   try {
     return await fn(client);
   } finally {
@@ -1041,7 +1054,7 @@ async function withImapClient(emailCfg, fn) {
 
 function createSmtpTransport(emailCfg) {
   if (!emailCfg?.smtpConfigured) throw new Error('SMTP is not configured. Add SMTP host, username, and password first.');
-  return nodemailer.createTransport({
+  const transport = nodemailer.createTransport({
     host: emailCfg.smtp.host,
     port: emailCfg.smtp.port,
     secure: emailCfg.smtp.secure,
@@ -1049,7 +1062,14 @@ function createSmtpTransport(emailCfg) {
       user: emailCfg.smtp.username,
       pass: emailCfg.smtp.password,
     },
+    connectionTimeout: 20_000,
+    greetingTimeout: 20_000,
+    socketTimeout: 20_000,
   });
+  transport.on('error', () => {
+    // Prevent emitter-level transport errors from escaping the route handler.
+  });
+  return transport;
 }
 
 async function fetchImapMessages(saved, options = {}) {
