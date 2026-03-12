@@ -676,6 +676,7 @@ function normalizeAutomationDigestQueue(input) {
           ? String(e.status || '').trim().toLowerCase()
           : 'pending',
         createdAt: safeIsoMaybe(String(e.createdAt || '').trim()) || nowIso(),
+        decidedAt: safeIsoMaybe(String(e.decidedAt || '').trim()) || '',
         runId: String(e.runId || '').trim(),
         source: String(e.source || '').trim() || 'marty-automation',
         signalPreview: previewTextServer(String(e.signalPreview || '').trim(), 220),
@@ -684,6 +685,19 @@ function normalizeAutomationDigestQueue(input) {
         projectConfidence: clampUnit(e.projectConfidence, 0),
         delegateName: String(e.delegateName || '').trim(),
         delegateConfidence: clampUnit(e.delegateConfidence, 0),
+        appliedTaskIds: Array.isArray(e.appliedTaskIds)
+          ? e.appliedTaskIds.map((x) => String(x || '').trim()).filter(Boolean).slice(0, 20)
+          : [],
+        decision: {
+          acceptProjectLink: Boolean(e?.decision?.acceptProjectLink),
+          acceptDelegate: Boolean(e?.decision?.acceptDelegate),
+          acceptTaskIndexes: Array.isArray(e?.decision?.acceptTaskIndexes)
+            ? e.decision.acceptTaskIndexes
+              .map((x) => Number(x))
+              .filter((x) => Number.isInteger(x) && x >= 0 && x <= 20)
+              .slice(0, 20)
+            : [],
+        },
         tasks,
       };
     })
@@ -7107,6 +7121,146 @@ app.get('/api/inbox/automation/digest', async (req, res) => {
   } catch (err) {
     res.status(500).json({ ok: false, error: err?.message || 'Failed to load automation digest queue' });
   }
+});
+
+app.post('/api/inbox/automation/digest/:id/decision', async (req, res) => {
+  const digestId = String(req.params?.id || '').trim();
+  const body = req.body && typeof req.body === 'object' ? req.body : {};
+  const acceptProjectLink = body.acceptProjectLink === true;
+  const acceptDelegate = body.acceptDelegate === true;
+  const acceptTaskIndexes = Array.isArray(body.acceptTaskIndexes)
+    ? body.acceptTaskIndexes
+      .map((x) => Number(x))
+      .filter((x) => Number.isInteger(x) && x >= 0 && x <= 20)
+    : [];
+  const reject = body.reject === true;
+
+  if (!digestId) {
+    res.status(400).json({ ok: false, error: 'Missing digest id' });
+    return;
+  }
+
+  writeLock = writeLock.then(async () => {
+    const store = await readStore();
+    const settings = await readSettings();
+    const cfg = normalizeAutomationConfig(settings?.automationConfig);
+    const queue = normalizeAutomationDigestQueue(settings?.automationDigestQueue);
+    const idx = queue.findIndex((e) => e.id === digestId);
+    if (idx < 0) {
+      res.status(404).json({ ok: false, error: 'Digest item not found' });
+      return;
+    }
+
+    const entry = queue[idx];
+    if (entry.status !== 'pending') {
+      res.status(400).json({ ok: false, error: 'Digest item already decided' });
+      return;
+    }
+
+    const inboxId = String(entry.itemId || '').trim();
+    const itemIdx = (Array.isArray(store.inboxItems) ? store.inboxItems : []).findIndex((x) => String(x?.id || '') === inboxId);
+    if (itemIdx < 0) {
+      queue[idx] = {
+        ...entry,
+        status: 'rejected',
+        decidedAt: nowIso(),
+        decision: { acceptProjectLink: false, acceptDelegate: false, acceptTaskIndexes: [] },
+      };
+      await writeSettings({ ...settings, automationDigestQueue: normalizeAutomationDigestQueue(queue), updatedAt: nowIso() });
+      res.status(404).json({ ok: false, error: 'Inbox item for digest no longer exists' });
+      return;
+    }
+
+    const item = store.inboxItems[itemIdx] && typeof store.inboxItems[itemIdx] === 'object' ? store.inboxItems[itemIdx] : {};
+    const ts = nowIso();
+    const acceptedIndexSet = new Set(acceptTaskIndexes);
+    const selectedTasks = reject
+      ? []
+      : (Array.isArray(entry.tasks) ? entry.tasks.filter((_, taskIndex) => acceptedIndexSet.has(taskIndex)) : []);
+
+    const createdTaskIds = [];
+    const nextTasks = Array.isArray(store.tasks) ? [...store.tasks] : [];
+    const owner = acceptDelegate ? String(entry.delegateName || '').trim() : '';
+    const projectName = String(entry.projectName || item?.projectName || 'Other').trim() || 'Other';
+    for (const t of selectedTasks) {
+      const title = String(t?.title || '').trim();
+      if (!title) continue;
+      const priority = [1, 2, 3].includes(Number(t?.priority)) ? Number(t.priority) : 2;
+      const task = {
+        id: makeId(),
+        title,
+        project: projectName,
+        type: 'Other',
+        owner,
+        status: 'Next',
+        priority,
+        dueDate: '',
+        createdAt: ts,
+        updatedAt: ts,
+        createdBy: 'marty-automation',
+      };
+      nextTasks.unshift(task);
+      createdTaskIds.push(task.id);
+    }
+
+    const nextInboxItems = Array.isArray(store.inboxItems) ? [...store.inboxItems] : [];
+    nextInboxItems[itemIdx] = normalizeInboxItem({
+      ...item,
+      projectId: acceptProjectLink ? String(entry.projectId || '').trim() : item?.projectId,
+      projectName: acceptProjectLink
+        ? (String(entry.projectName || '').trim() || item?.projectName)
+        : item?.projectName,
+      status: createdTaskIds.length && cfg.inboxAutoConvert.markInboxDoneOnApply ? 'Done' : item?.status,
+      updatedAt: ts,
+      automation: {
+        mode: 'digest',
+        runId: String(entry.runId || '').trim(),
+        appliedAt: ts,
+        approvalMode: 'dailyDigest',
+        appliedTaskIds: createdTaskIds,
+        projectLinked: Boolean(acceptProjectLink && entry.projectId),
+        delegatedTo: owner,
+      },
+    });
+
+    queue[idx] = {
+      ...entry,
+      status: (createdTaskIds.length || acceptProjectLink || acceptDelegate) && !reject ? 'applied' : 'rejected',
+      decidedAt: ts,
+      appliedTaskIds: createdTaskIds,
+      decision: {
+        acceptProjectLink: Boolean(!reject && acceptProjectLink),
+        acceptDelegate: Boolean(!reject && acceptDelegate),
+        acceptTaskIndexes: reject ? [] : Array.from(acceptedIndexSet.values()).sort((a, b) => a - b),
+      },
+    };
+
+    const nextStore = {
+      ...store,
+      revision: store.revision + 1,
+      updatedAt: ts,
+      inboxItems: nextInboxItems,
+      tasks: nextTasks,
+    };
+
+    await writeStore(nextStore);
+    await writeSettings({
+      ...settings,
+      automationDigestQueue: normalizeAutomationDigestQueue(queue),
+      updatedAt: ts,
+    });
+
+    const pendingCount = queue.filter((e) => e.status === 'pending').length;
+    res.json({
+      ok: true,
+      createdTasks: createdTaskIds.length,
+      pendingCount,
+      digestItem: queue[idx],
+      store: applyInboxVisibilityToStore(nextStore, settings),
+    });
+  });
+
+  await writeLock;
 });
 
 app.post('/api/inbox/automation/run', async (req, res) => {

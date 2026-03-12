@@ -21,6 +21,8 @@ const state = {
     tasks: [],
     inboxItems: [],
     inboxMartyRecommendationsById: {},
+    inboxAutomationDigest: { items: [], loading: false, loadedAt: 0, error: '' },
+    inboxDigestSelectionsById: {},
 
     projectScratchpads: {},
     projectNoteEntries: {},
@@ -3687,6 +3689,80 @@ function renderInbox(container) {
     const visible = getInboxItems();
     const newCount = all.filter((x) => String(x?.status || '').toLowerCase() === 'new').length;
 
+    const digestState = state.inboxAutomationDigest && typeof state.inboxAutomationDigest === 'object'
+        ? state.inboxAutomationDigest
+        : { items: [], loading: false, loadedAt: 0, error: '' };
+    const digestStale = !Number(digestState.loadedAt) || (Date.now() - Number(digestState.loadedAt) > 20000);
+    if (!digestState.loading && digestStale) {
+        state.inboxAutomationDigest = { ...digestState, loading: true, error: '' };
+        fetchMartyAutomationDigest()
+            .then(() => {
+                if (state.currentView === 'inbox') renderMain();
+            })
+            .catch((err) => {
+                state.inboxAutomationDigest = {
+                    ...(state.inboxAutomationDigest || {}),
+                    loading: false,
+                    loadedAt: Date.now(),
+                    error: err?.message || 'Failed to load Marty digest',
+                };
+                if (state.currentView === 'inbox') renderMain();
+            });
+    }
+
+    const digestItems = Array.isArray((state.inboxAutomationDigest || {}).items) ? state.inboxAutomationDigest.items : [];
+    const digestError = safeText((state.inboxAutomationDigest || {}).error);
+    const digestLoading = Boolean((state.inboxAutomationDigest || {}).loading);
+    const digestHtml = `
+        <div class="mt-4 rounded-xl border border-emerald-700/30 bg-emerald-950/15 p-3">
+            <div class="flex items-center justify-between gap-3">
+                <div>
+                    <div class="text-[11px] font-mono uppercase tracking-wide text-emerald-200">Marty Daily Digest</div>
+                    <div class="text-xs text-zinc-400">Accept or reject each part (project, delegate, and task list).</div>
+                </div>
+                <div class="text-[11px] font-mono ${digestItems.length ? 'text-emerald-200' : 'text-zinc-500'}">${digestItems.length} pending</div>
+            </div>
+            ${digestLoading ? '<div class="mt-2 text-[11px] text-zinc-500">Loading digest…</div>' : ''}
+            ${digestError ? `<div class="mt-2 text-[11px] text-red-300">${escapeHtml(digestError)}</div>` : ''}
+            ${!digestLoading && !digestItems.length ? '<div class="mt-2 text-[11px] text-zinc-500">No pending recommendations.</div>' : ''}
+            ${digestItems.slice(0, 8).map((entry) => {
+                const did = safeText(entry?.id).trim();
+                const iid = safeText(entry?.itemId).trim();
+                const tasks = Array.isArray(entry?.tasks) ? entry.tasks : [];
+                const sel = state.inboxDigestSelectionsById?.[did] || {};
+                const checks = Array.isArray(sel.taskChecks) ? sel.taskChecks : tasks.map(() => true);
+                return `
+                    <div class="mt-3 rounded-lg border border-zinc-800 bg-zinc-900/35 p-3">
+                        <div class="text-[11px] text-zinc-400 font-mono">Inbox ${escapeHtml(iid)} • ${escapeHtml(safeText(entry?.projectName) || 'Unlinked')}</div>
+                        <div class="mt-1 text-xs text-zinc-300">${escapeHtml(safeText(entry?.signalPreview) || 'No preview')}</div>
+                        <div class="mt-2 flex flex-wrap gap-3 text-[11px] text-zinc-300">
+                            <label class="inline-flex items-center gap-2">
+                                <input type="checkbox" data-digest-check-project="${escapeHtml(did)}" ${sel.acceptProjectLink ? 'checked' : ''} ${safeText(entry?.projectId).trim() ? '' : 'disabled'} class="accent-emerald-500" />
+                                Link project
+                            </label>
+                            <label class="inline-flex items-center gap-2">
+                                <input type="checkbox" data-digest-check-delegate="${escapeHtml(did)}" ${sel.acceptDelegate ? 'checked' : ''} ${safeText(entry?.delegateName).trim() ? '' : 'disabled'} class="accent-emerald-500" />
+                                Delegate ${escapeHtml(safeText(entry?.delegateName) || 'n/a')}
+                            </label>
+                        </div>
+                        <div class="mt-2 space-y-1">
+                            ${tasks.map((task, taskIdx) => `
+                                <label class="flex items-center gap-2 text-[11px] text-zinc-200">
+                                    <input type="checkbox" data-digest-check-task="${escapeHtml(did)}" data-digest-task-index="${taskIdx}" ${(checks[taskIdx] ?? true) ? 'checked' : ''} class="accent-emerald-500" />
+                                    <span>${escapeHtml(safeText(task?.title) || 'Task')} <span class="text-zinc-500">(P${escapeHtml(String([1,2,3].includes(Number(task?.priority)) ? Number(task.priority) : 2))})</span></span>
+                                </label>
+                            `).join('')}
+                        </div>
+                        <div class="mt-3 flex flex-wrap gap-2">
+                            <button data-digest-apply="${escapeHtml(did)}" class="px-2 py-1 rounded border border-emerald-600/40 bg-emerald-600/20 text-[10px] font-mono text-emerald-100 hover:bg-emerald-600/30">Apply Selected</button>
+                            <button data-digest-reject="${escapeHtml(did)}" class="px-2 py-1 rounded border border-red-600/40 bg-red-600/15 text-[10px] font-mono text-red-100 hover:bg-red-600/25">Reject</button>
+                        </div>
+                    </div>
+                `;
+            }).join('')}
+        </div>
+    `;
+
     const wrap = document.createElement('div');
     wrap.className = 'h-full flex flex-col min-h-0';
 
@@ -3717,6 +3793,7 @@ function renderInbox(container) {
                 <button id="btn-inbox-add" class="w-full px-3 py-2 rounded-lg bg-blue-600/20 border border-blue-600/40 text-sm font-mono text-blue-200 hover:bg-blue-600/30 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Add</button>
             </div>
         </div>
+        ${digestHtml}
     `;
 
     const list = document.createElement('div');
@@ -3946,6 +4023,7 @@ function renderInbox(container) {
                 const pending = Number(result?.digestPending || 0);
                 const mode = safeText(result?.approvalMode).trim() || 'dailyDigest';
                 alert(`Marty automation complete. Mode: ${mode}. Scanned: ${scanned}. Proposed: ${proposed}. Auto-applied: ${applied}. Digest pending: ${pending}.`);
+                await fetchMartyAutomationDigest().catch(() => {});
                 renderMain();
             } catch (e) {
                 alert(e?.message || 'Marty automation run failed');
@@ -3955,6 +4033,91 @@ function renderInbox(container) {
             }
         };
     }
+
+    container.querySelectorAll('input[data-digest-check-project]').forEach((inp) => {
+        inp.addEventListener('change', () => {
+            const digestId = safeText(inp.getAttribute('data-digest-check-project')).trim();
+            if (!digestId) return;
+            const prev = state.inboxDigestSelectionsById?.[digestId] || { acceptProjectLink: false, acceptDelegate: false, taskChecks: [] };
+            state.inboxDigestSelectionsById = {
+                ...(state.inboxDigestSelectionsById || {}),
+                [digestId]: { ...prev, acceptProjectLink: !!inp.checked },
+            };
+        });
+    });
+
+    container.querySelectorAll('input[data-digest-check-delegate]').forEach((inp) => {
+        inp.addEventListener('change', () => {
+            const digestId = safeText(inp.getAttribute('data-digest-check-delegate')).trim();
+            if (!digestId) return;
+            const prev = state.inboxDigestSelectionsById?.[digestId] || { acceptProjectLink: false, acceptDelegate: false, taskChecks: [] };
+            state.inboxDigestSelectionsById = {
+                ...(state.inboxDigestSelectionsById || {}),
+                [digestId]: { ...prev, acceptDelegate: !!inp.checked },
+            };
+        });
+    });
+
+    container.querySelectorAll('input[data-digest-check-task]').forEach((inp) => {
+        inp.addEventListener('change', () => {
+            const digestId = safeText(inp.getAttribute('data-digest-check-task')).trim();
+            const idx = Number(inp.getAttribute('data-digest-task-index'));
+            if (!digestId || !Number.isInteger(idx) || idx < 0) return;
+            const entry = (Array.isArray(state.inboxAutomationDigest?.items) ? state.inboxAutomationDigest.items : []).find((x) => safeText(x?.id).trim() === digestId);
+            const len = Array.isArray(entry?.tasks) ? entry.tasks.length : 0;
+            const prev = state.inboxDigestSelectionsById?.[digestId] || { acceptProjectLink: false, acceptDelegate: false, taskChecks: Array.from({ length: len }, () => true) };
+            const checks = Array.isArray(prev.taskChecks) ? [...prev.taskChecks] : Array.from({ length: len }, () => true);
+            checks[idx] = !!inp.checked;
+            state.inboxDigestSelectionsById = {
+                ...(state.inboxDigestSelectionsById || {}),
+                [digestId]: { ...prev, taskChecks: checks },
+            };
+        });
+    });
+
+    container.querySelectorAll('button[data-digest-apply]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+            const digestId = safeText(btn.getAttribute('data-digest-apply')).trim();
+            if (!digestId) return;
+            const sel = state.inboxDigestSelectionsById?.[digestId] || {};
+            const taskChecks = Array.isArray(sel.taskChecks) ? sel.taskChecks : [];
+            const acceptTaskIndexes = taskChecks
+                .map((checked, idx) => checked ? idx : -1)
+                .filter((idx) => idx >= 0);
+            btn.disabled = true;
+            try {
+                const result = await decideMartyAutomationDigest(digestId, {
+                    acceptProjectLink: !!sel.acceptProjectLink,
+                    acceptDelegate: !!sel.acceptDelegate,
+                    acceptTaskIndexes,
+                    reject: false,
+                });
+                alert(`Applied selection. Created ${Number(result?.createdTasks || 0)} tasks.`);
+                renderMain();
+            } catch (e) {
+                alert(e?.message || 'Failed to apply digest recommendation');
+            } finally {
+                btn.disabled = false;
+            }
+        });
+    });
+
+    container.querySelectorAll('button[data-digest-reject]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+            const digestId = safeText(btn.getAttribute('data-digest-reject')).trim();
+            if (!digestId) return;
+            btn.disabled = true;
+            try {
+                await decideMartyAutomationDigest(digestId, { reject: true });
+                alert('Digest recommendation rejected.');
+                renderMain();
+            } catch (e) {
+                alert(e?.message || 'Failed to reject digest recommendation');
+            } finally {
+                btn.disabled = false;
+            }
+        });
+    });
 
     // Wire row actions
     const refreshProjectSelectForInput = (inp) => {
@@ -4320,6 +4483,49 @@ async function runMartyInboxAutomation(options = {}) {
     const data = await res.json().catch(() => ({}));
     if (!res.ok || data?.ok === false) throw new Error(data?.error || 'Marty automation run failed');
     if (data?.store && typeof data.store === 'object') applyStore(data.store);
+    await fetchState({ background: false });
+    return data;
+}
+
+async function fetchMartyAutomationDigest() {
+    const res = await apiFetch('/api/inbox/automation/digest');
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data?.ok === false) throw new Error(data?.error || 'Failed to load Marty digest');
+    const items = Array.isArray(data?.items) ? data.items : [];
+    state.inboxAutomationDigest = {
+        items,
+        loading: false,
+        loadedAt: Date.now(),
+        error: '',
+    };
+    const nextSel = { ...(state.inboxDigestSelectionsById || {}) };
+    for (const item of items) {
+        const id = safeText(item?.id).trim();
+        if (!id || nextSel[id]) continue;
+        const tasks = Array.isArray(item?.tasks) ? item.tasks : [];
+        nextSel[id] = {
+            acceptProjectLink: !!safeText(item?.projectId).trim(),
+            acceptDelegate: !!safeText(item?.delegateName).trim(),
+            taskChecks: tasks.map(() => true),
+        };
+    }
+    state.inboxDigestSelectionsById = nextSel;
+    return { ...data, items };
+}
+
+async function decideMartyAutomationDigest(digestId, decision) {
+    const id = safeText(digestId).trim();
+    if (!id) throw new Error('Missing digest id');
+    const payload = (decision && typeof decision === 'object') ? decision : {};
+    const res = await apiFetch(`/api/inbox/automation/digest/${encodeURIComponent(id)}/decision`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data?.ok === false) throw new Error(data?.error || 'Failed to decide digest recommendation');
+    if (data?.store && typeof data.store === 'object') applyStore(data.store);
+    await fetchMartyAutomationDigest();
     await fetchState({ background: false });
     return data;
 }
