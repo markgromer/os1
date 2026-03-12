@@ -9,6 +9,7 @@ import express from 'express';
 import { google } from 'googleapis';
 
 import { mcpCallTool, mcpListTools } from './mcpClient.js';
+import { buildMarcusSystemPrompt } from './marcus/core/build_system_prompt.js';
 
 const app = express();
 // When running behind SiteGround / reverse proxies, trust forwarded headers.
@@ -10045,38 +10046,35 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
     const operatorTone = typeof settings.operatorTone === 'string' ? settings.operatorTone.trim() : '';
     const operatorVoice = typeof settings.operatorVoice === 'string' ? settings.operatorVoice.trim() : '';
 
-    let context = '';
-    const baseSystemPrompt =
-      "You are M.A.R.C.U.S. — Modular Autonomous Routing & Coordination Utility System. Stay concise and action-oriented. You DO have access to the user's project data provided in context. Never claim you can't access tasks/notes; if something isn't present in context, ask for it.\n\nDefault behavior (unless the user explicitly asks otherwise):\n- Be proactive: infer what matters now from OPS SNAPSHOT + CROSS-BUSINESS ROLLUP and propose next actions.\n- Output structure: (1) Situation (1-2 lines), (2) Next actions (3-7 bullets), (3) Questions (0-2) only if needed to unblock.\n- If the user message is vague (e.g., \"hi\", \"what now\"), treat it as a request for a prioritized plan from the snapshot.";
-    let systemPrompt = userSystemPrompt ? `${userSystemPrompt}\n\n---\n${baseSystemPrompt}` : baseSystemPrompt;
+    const coreUiOverrides = {
+      operatorBio,
+      assistantOperatingDoctrine,
+      operatorHelpPrompt: legacyHelpPrompt,
+      personalityLayer,
+      attentionRadar,
+      dailyReportingStructure,
+    };
+
+    let systemPrompt = await buildMarcusSystemPrompt({
+      uiOverrides: coreUiOverrides,
+      customSystemPrompt: userSystemPrompt,
+    });
 
     if (effectiveThreadId === 'operator_bio') {
-      systemPrompt =
-        "You are M.A.R.C.U.S. — Modular Autonomous Routing & Coordination Utility System. This is the OPERATOR BIO thread. Your job is to help the operator define and refine their bio, roles, responsibilities, preferences, needs, constraints, and operating principles.\n\nYou MUST keep the Operator Bio up to date by calling the tool set_operator_bio whenever the operator provides new or corrected information.\n\nGuidelines:\n- Ask 1-3 clarifying questions when needed.\n- Produce a short summary + recommended next action.\n- Keep the bio factual and actionable; avoid fluff.\n- Do not modify projects/tasks in this thread.";
+      systemPrompt +=
+        "\n\n## Operator Bio Thread Directives\n" +
+        "This thread is dedicated to defining and refining the operator bio, responsibilities, preferences, constraints, and working principles.\n\n" +
+        "Rules:\n" +
+        "- Update the operator bio whenever the operator provides new or corrected information.\n" +
+        "- Ask only the clarifying questions needed to improve accuracy.\n" +
+        "- Produce a short summary and a recommended next step.\n" +
+        "- Do not modify projects or tasks from this thread unless the operator explicitly asks.\n";
     }
+
+    let context = '';
 
     if (userMemory) {
       context += `GLOBAL MEMORY (user-provided; treat as true unless contradicted):\n${String(userMemory).slice(0, 12000)}\n\n`;
-    }
-
-    if (operatorBio) {
-      context += `OPERATOR BIO (user-provided; treat as true unless contradicted):\n${String(operatorBio).slice(0, 12000)}\n\n`;
-    }
-
-    if (assistantOperatingDoctrine) {
-      context += `ASSISTANT OPERATING DOCTRINE (how to help the operator):\n${String(assistantOperatingDoctrine).slice(0, 12000)}\n\n`;
-    }
-
-    if (personalityLayer) {
-      context += `PERSONALITY LAYER (how M.A.R.C.U.S. behaves):\n${String(personalityLayer).slice(0, 12000)}\n\n`;
-    }
-
-    if (attentionRadar) {
-      context += `ATTENTION RADAR (what M.A.R.C.U.S. watches for):\n${String(attentionRadar).slice(0, 12000)}\n\n`;
-    }
-
-    if (dailyReportingStructure) {
-      context += `DAILY REPORTING STRUCTURE (preferred summary cadence/format):\n${String(dailyReportingStructure).slice(0, 12000)}\n\n`;
     }
 
     if (operatorTone || operatorVoice) {
