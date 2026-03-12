@@ -8840,15 +8840,37 @@ function renderDashboard(container, sidePort) {
     const actionStrip = document.createElement('div');
     actionStrip.className = 'dash-card';
     actionStrip.dataset.cardId = 'action-strip';
+    const laneProjectNameById = new Map((Array.isArray(state.projects) ? state.projects : []).map((p) => [safeText(p?.id), safeText(p?.name)]));
+    const toSourceLabel = (src) => {
+        const key = normalizeInboxSourceKey(src);
+        if (key === 'slack') return 'Slack';
+        if (key === 'email') return 'Email';
+        if (key === 'sms') return 'SMS';
+        return key ? key.toUpperCase() : 'Inbox';
+    };
+    const cleanActionPreview = (raw) => {
+        const text = safeText(raw).replace(/\s+/g, ' ').trim();
+        if (!text) return 'Inbox item';
+        const withoutBracketDate = text.replace(/^\[(?:19|20)\d{2}-\d{2}-\d{2}[^\]]*\]\s*/i, '');
+        const withoutIso = withoutBracketDate.replace(/^(?:19|20)\d{2}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s*[-–—:]?\s*/i, '');
+        const finalText = withoutIso.trim();
+        return finalText || text;
+    };
     const renderInboxActionRow = (item) => {
         const id = safeText(item?.id).trim();
         const text = safeText(item?.text || item?.subject || item?.title);
-        const preview = text.replace(/\s+/g, ' ').trim().slice(0, 88) || 'Inbox item';
+        const preview = cleanActionPreview(text).slice(0, 104) || 'Inbox item';
+        const projectId = safeText(item?.projectId).trim();
+        const projectName = projectId ? (safeText(laneProjectNameById.get(projectId)).trim() || 'Linked project') : 'No project linked';
+        const sourceLabel = toSourceLabel(item?.source);
         return `
             <div class="border border-ops-border rounded bg-ops-bg/40 px-2 py-1.5 flex items-center justify-between gap-2">
-                <div class="text-[10px] text-white truncate">${escapeHtml(preview)}</div>
+                <div class="min-w-0">
+                    <div class="text-[10px] text-white truncate">${escapeHtml(preview)}</div>
+                    <div class="text-[9px] text-ops-light/70 truncate">${escapeHtml(sourceLabel)} • ${escapeHtml(projectName)}</div>
+                </div>
                 <div class="flex items-center gap-1 shrink-0">
-                    <button data-action-open-inbox="${escapeHtml(id)}" class="px-1.5 py-0.5 rounded border border-ops-border text-[9px] font-mono text-ops-light hover:text-white">Open</button>
+                    <button data-action-open-inbox="${escapeHtml(id)}" class="px-1.5 py-0.5 rounded border border-ops-border text-[9px] font-mono text-ops-light hover:text-white">Review</button>
                     <button data-action-done-inbox="${escapeHtml(id)}" class="px-1.5 py-0.5 rounded border border-emerald-600/40 text-[9px] font-mono text-emerald-200 hover:bg-emerald-600/20">Done</button>
                 </div>
             </div>
@@ -8858,25 +8880,34 @@ function renderDashboard(container, sidePort) {
         <div class="dash-card-head flex items-center justify-between gap-2 px-3 py-2.5">
             <div class="flex items-center gap-2 min-w-0">
                 <i class="fa-solid fa-bolt text-amber-400 text-[10px] shrink-0"></i>
-                <span class="text-[10px] font-mono uppercase tracking-widest text-ops-light truncate">Action Lanes</span>
+                <span class="text-[10px] font-mono uppercase tracking-widest text-ops-light truncate">Priority Queue</span>
             </div>
-            <button data-open-inbox class="px-2 py-0.5 rounded border border-ops-border text-[9px] font-mono text-ops-light hover:text-white">Inbox</button>
+            <button data-open-inbox class="px-2 py-0.5 rounded border border-ops-border text-[9px] font-mono text-ops-light hover:text-white">Open Inbox</button>
         </div>
         <div class="px-3 pb-3 grid grid-cols-1 md:grid-cols-3 gap-2">
             <div class="border border-red-500/25 rounded-lg bg-red-500/5 p-2">
-                <div class="text-[9px] font-mono uppercase tracking-widest text-red-300 mb-1.5">Do Today</div>
+                <div class="flex items-center justify-between gap-2 mb-1.5">
+                    <div class="text-[9px] font-mono uppercase tracking-widest text-red-300">Do First</div>
+                    <div class="text-[9px] text-red-200/80">${doTodayLane.length}</div>
+                </div>
                 <div class="space-y-1">
                     ${doTodayLane.length ? doTodayLane.map((x) => `<div class="border border-red-500/20 rounded bg-ops-bg/40 px-2 py-1.5"><div class="text-[10px] text-white truncate">${escapeHtml(x.title)}</div><div class="text-[9px] font-mono text-red-300/70 truncate">${escapeHtml(x.sub)}</div></div>`).join('') : '<div class="text-[10px] text-ops-light/50">No immediate tasks.</div>'}
                 </div>
             </div>
             <div class="border border-amber-500/25 rounded-lg bg-amber-500/5 p-2">
-                <div class="text-[9px] font-mono uppercase tracking-widest text-amber-300 mb-1.5">Needs Linking</div>
+                <div class="flex items-center justify-between gap-2 mb-1.5">
+                    <div class="text-[9px] font-mono uppercase tracking-widest text-amber-300">Unsorted Inbox</div>
+                    <div class="text-[9px] text-amber-200/80">${needsLinkLane.length}</div>
+                </div>
                 <div class="space-y-1">
                     ${needsLinkLane.length ? needsLinkLane.map(renderInboxActionRow).join('') : '<div class="text-[10px] text-ops-light/50">Nothing unlinked.</div>'}
                 </div>
             </div>
             <div class="border border-blue-500/25 rounded-lg bg-blue-500/5 p-2">
-                <div class="text-[9px] font-mono uppercase tracking-widest text-blue-300 mb-1.5">Waiting / Follow-up</div>
+                <div class="flex items-center justify-between gap-2 mb-1.5">
+                    <div class="text-[9px] font-mono uppercase tracking-widest text-blue-300">Waiting / Follow-up</div>
+                    <div class="text-[9px] text-blue-200/80">${waitingLane.length}</div>
+                </div>
                 <div class="space-y-1">
                     ${waitingLane.length ? waitingLane.map(renderInboxActionRow).join('') : '<div class="text-[10px] text-ops-light/50">No follow-ups queued.</div>'}
                 </div>
