@@ -3718,7 +3718,7 @@ function renderInbox(container) {
             <div class="flex items-center justify-between gap-3">
                 <div>
                     <div class="text-[11px] font-mono uppercase tracking-wide text-emerald-200">Marty Daily Digest</div>
-                    <div class="text-xs text-zinc-400">Accept or reject each part (project, delegate, and task list).</div>
+                    <div class="text-xs text-zinc-400">Accept or reject each part (project and task list).</div>
                 </div>
                 <div class="text-[11px] font-mono ${digestItems.length ? 'text-emerald-200' : 'text-zinc-500'}">${digestItems.length} pending</div>
             </div>
@@ -3739,10 +3739,6 @@ function renderInbox(container) {
                             <label class="inline-flex items-center gap-2">
                                 <input type="checkbox" data-digest-check-project="${escapeHtml(did)}" ${sel.acceptProjectLink ? 'checked' : ''} ${safeText(entry?.projectId).trim() ? '' : 'disabled'} class="accent-emerald-500" />
                                 Link project
-                            </label>
-                            <label class="inline-flex items-center gap-2">
-                                <input type="checkbox" data-digest-check-delegate="${escapeHtml(did)}" ${sel.acceptDelegate ? 'checked' : ''} ${safeText(entry?.delegateName).trim() ? '' : 'disabled'} class="accent-emerald-500" />
-                                Delegate ${escapeHtml(safeText(entry?.delegateName) || 'n/a')}
                             </label>
                         </div>
                         <div class="mt-2 space-y-1">
@@ -3845,7 +3841,6 @@ function renderInbox(container) {
                 const recWho = safeText(recommendation?.who?.name).trim();
                 const recProjectName = safeText(recommendation?.project?.projectName).trim();
                 const recProjectId = safeText(recommendation?.project?.projectId).trim();
-                const recDelegate = safeText(recommendation?.delegate?.name).trim();
                 const recTasks = Array.isArray(recommendation?.tasks) ? recommendation.tasks : [];
                 const senderLabel = safeText(item?.contactName || item?.fromName || item?.sender || item?.fromNumber).trim();
                 const msgCount = Number(item?.messageCount || 1);
@@ -3860,10 +3855,6 @@ function renderInbox(container) {
                         <div class="text-[12px] text-zinc-200">
                             <span class="text-zinc-400">Project:</span> ${escapeHtml(recProjectName || 'Create new project')}
                             ${recommendation?.project?.confidence != null ? `<span class="text-zinc-500"> (${escapeHtml(formatMartyConfidence(recommendation?.project?.confidence))})</span>` : ''}
-                        </div>
-                        <div class="text-[12px] text-zinc-200">
-                            <span class="text-zinc-400">Delegate:</span> ${escapeHtml(recDelegate || 'Unassigned')}
-                            ${recommendation?.delegate?.confidence != null ? `<span class="text-zinc-500"> (${escapeHtml(formatMartyConfidence(recommendation?.delegate?.confidence))})</span>` : ''}
                         </div>
                         <div class="text-[12px] text-zinc-300">
                             <span class="text-zinc-400">Task ideas:</span>
@@ -4038,22 +4029,10 @@ function renderInbox(container) {
         inp.addEventListener('change', () => {
             const digestId = safeText(inp.getAttribute('data-digest-check-project')).trim();
             if (!digestId) return;
-            const prev = state.inboxDigestSelectionsById?.[digestId] || { acceptProjectLink: false, acceptDelegate: false, taskChecks: [] };
+            const prev = state.inboxDigestSelectionsById?.[digestId] || { acceptProjectLink: false, taskChecks: [] };
             state.inboxDigestSelectionsById = {
                 ...(state.inboxDigestSelectionsById || {}),
                 [digestId]: { ...prev, acceptProjectLink: !!inp.checked },
-            };
-        });
-    });
-
-    container.querySelectorAll('input[data-digest-check-delegate]').forEach((inp) => {
-        inp.addEventListener('change', () => {
-            const digestId = safeText(inp.getAttribute('data-digest-check-delegate')).trim();
-            if (!digestId) return;
-            const prev = state.inboxDigestSelectionsById?.[digestId] || { acceptProjectLink: false, acceptDelegate: false, taskChecks: [] };
-            state.inboxDigestSelectionsById = {
-                ...(state.inboxDigestSelectionsById || {}),
-                [digestId]: { ...prev, acceptDelegate: !!inp.checked },
             };
         });
     });
@@ -4065,7 +4044,7 @@ function renderInbox(container) {
             if (!digestId || !Number.isInteger(idx) || idx < 0) return;
             const entry = (Array.isArray(state.inboxAutomationDigest?.items) ? state.inboxAutomationDigest.items : []).find((x) => safeText(x?.id).trim() === digestId);
             const len = Array.isArray(entry?.tasks) ? entry.tasks.length : 0;
-            const prev = state.inboxDigestSelectionsById?.[digestId] || { acceptProjectLink: false, acceptDelegate: false, taskChecks: Array.from({ length: len }, () => true) };
+            const prev = state.inboxDigestSelectionsById?.[digestId] || { acceptProjectLink: false, taskChecks: Array.from({ length: len }, () => true) };
             const checks = Array.isArray(prev.taskChecks) ? [...prev.taskChecks] : Array.from({ length: len }, () => true);
             checks[idx] = !!inp.checked;
             state.inboxDigestSelectionsById = {
@@ -4088,7 +4067,6 @@ function renderInbox(container) {
             try {
                 const result = await decideMartyAutomationDigest(digestId, {
                     acceptProjectLink: !!sel.acceptProjectLink,
-                    acceptDelegate: !!sel.acceptDelegate,
                     acceptTaskIndexes,
                     reject: false,
                 });
@@ -4505,7 +4483,6 @@ async function fetchMartyAutomationDigest() {
         const tasks = Array.isArray(item?.tasks) ? item.tasks : [];
         nextSel[id] = {
             acceptProjectLink: !!safeText(item?.projectId).trim(),
-            acceptDelegate: !!safeText(item?.delegateName).trim(),
             taskChecks: tasks.map(() => true),
         };
     }
@@ -4538,7 +4515,7 @@ async function createTaskFromMartyRecommendation(inboxId, recommendation) {
     if (!topTask) throw new Error('No suggested task available');
     const payload = {
         title: safeText(topTask.title).trim() || 'Inbox follow-up',
-        owner: safeText(rec?.delegate?.name).trim(),
+        owner: '',
         priority: [1, 2, 3].includes(Number(topTask.priority)) ? Number(topTask.priority) : 2,
     };
     const pid = safeText(rec?.project?.projectId).trim();
@@ -4555,13 +4532,12 @@ async function createAllTasksFromMartyRecommendation(inboxId, recommendation) {
     if (!tasks.length) throw new Error('No suggested tasks available');
 
     const pid = safeText(rec?.project?.projectId).trim();
-    const owner = safeText(rec?.delegate?.name).trim();
     let created = 0;
 
     for (const task of tasks) {
         const payload = {
             title: safeText(task?.title).trim() || 'Inbox follow-up',
-            owner,
+            owner: '',
             priority: [1, 2, 3].includes(Number(task?.priority)) ? Number(task.priority) : 2,
         };
         if (pid) payload.projectId = pid;

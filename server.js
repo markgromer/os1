@@ -3179,7 +3179,6 @@ function buildMartyInboxRecommendation(store, item) {
   const project = inferProjectRecommendationForInboxItem(store, it, signalText);
   const who = guessWhoForInboxItem(store, it, project);
   const tasks = suggestTasksFromInboxText(signalText, project?.projectName || it?.projectName || '').slice(0, 3);
-  const delegate = suggestDelegateForInboxItem(store, signalText, project);
 
   return {
     itemId: String(it?.id || '').trim(),
@@ -3187,7 +3186,7 @@ function buildMartyInboxRecommendation(store, item) {
     who,
     project,
     tasks,
-    delegate,
+    delegate: null,
     signalPreview: previewTextServer(signalText, 140),
     generatedAt: nowIso(),
   };
@@ -7127,7 +7126,6 @@ app.post('/api/inbox/automation/digest/:id/decision', async (req, res) => {
   const digestId = String(req.params?.id || '').trim();
   const body = req.body && typeof req.body === 'object' ? req.body : {};
   const acceptProjectLink = body.acceptProjectLink === true;
-  const acceptDelegate = body.acceptDelegate === true;
   const acceptTaskIndexes = Array.isArray(body.acceptTaskIndexes)
     ? body.acceptTaskIndexes
       .map((x) => Number(x))
@@ -7180,7 +7178,6 @@ app.post('/api/inbox/automation/digest/:id/decision', async (req, res) => {
 
     const createdTaskIds = [];
     const nextTasks = Array.isArray(store.tasks) ? [...store.tasks] : [];
-    const owner = acceptDelegate ? String(entry.delegateName || '').trim() : '';
     const projectName = String(entry.projectName || item?.projectName || 'Other').trim() || 'Other';
     for (const t of selectedTasks) {
       const title = String(t?.title || '').trim();
@@ -7191,7 +7188,7 @@ app.post('/api/inbox/automation/digest/:id/decision', async (req, res) => {
         title,
         project: projectName,
         type: 'Other',
-        owner,
+        owner: '',
         status: 'Next',
         priority,
         dueDate: '',
@@ -7219,18 +7216,18 @@ app.post('/api/inbox/automation/digest/:id/decision', async (req, res) => {
         approvalMode: 'dailyDigest',
         appliedTaskIds: createdTaskIds,
         projectLinked: Boolean(acceptProjectLink && entry.projectId),
-        delegatedTo: owner,
+        delegatedTo: '',
       },
     });
 
     queue[idx] = {
       ...entry,
-      status: (createdTaskIds.length || acceptProjectLink || acceptDelegate) && !reject ? 'applied' : 'rejected',
+      status: (createdTaskIds.length || acceptProjectLink) && !reject ? 'applied' : 'rejected',
       decidedAt: ts,
       appliedTaskIds: createdTaskIds,
       decision: {
         acceptProjectLink: Boolean(!reject && acceptProjectLink),
-        acceptDelegate: Boolean(!reject && acceptDelegate),
+        acceptDelegate: false,
         acceptTaskIndexes: reject ? [] : Array.from(acceptedIndexSet.values()).sort((a, b) => a - b),
       },
     };
@@ -7346,10 +7343,6 @@ app.post('/api/inbox/automation/run', async (req, res) => {
       const recProjectConfidence = clampUnit(recommendation?.project?.confidence, 0);
       const canAutoLinkProject = Boolean(recProjectId && recProjectConfidence >= inboxCfg.minProjectConfidence);
 
-      const recDelegateName = String(recommendation?.delegate?.name || '').trim();
-      const recDelegateConfidence = clampUnit(recommendation?.delegate?.confidence, 0);
-      const canAutoDelegate = Boolean(inboxCfg.autoDelegate && recDelegateName && recDelegateConfidence >= inboxCfg.minDelegateConfidence);
-
       const resolvedProjectId = canAutoLinkProject ? recProjectId : String(current?.projectId || '').trim();
       const resolvedProject = resolvedProjectId
         ? (Array.isArray(store.projects) ? store.projects : []).find((p) => String(p?.id || '').trim() === resolvedProjectId)
@@ -7375,8 +7368,8 @@ app.post('/api/inbox/automation/run', async (req, res) => {
             projectId: canAutoLinkProject ? recProjectId : '',
             projectName: resolvedProjectName,
             projectConfidence: recProjectConfidence,
-            delegateName: canAutoDelegate ? recDelegateName : '',
-            delegateConfidence: recDelegateConfidence,
+            delegateName: '',
+            delegateConfidence: 0,
             tasks: recTasks,
           });
           queueByItem.add(itemId);
@@ -7394,7 +7387,7 @@ app.post('/api/inbox/automation/run', async (req, res) => {
           title: t.title,
           project: resolvedProjectName,
           type: 'Other',
-          owner: canAutoDelegate ? recDelegateName : '',
+          owner: '',
           status: 'Next',
           priority: t.priority,
           dueDate: '',
@@ -7421,7 +7414,7 @@ app.post('/api/inbox/automation/run', async (req, res) => {
             approvalMode: effectiveApprovalMode,
             appliedTaskIds: createdTaskIds,
             projectLinked: Boolean(inboxCfg.autoLinkProject && canAutoLinkProject),
-            delegatedTo: canAutoDelegate ? recDelegateName : '',
+            delegatedTo: '',
             recommendation,
           },
         });
