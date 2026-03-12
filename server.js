@@ -513,6 +513,22 @@ const EMPTY_STORE = {
 
 let writeLock = Promise.resolve();
 
+const OPENAI_MODEL_FALLBACKS = [
+  'gpt-5',
+  'gpt-5-mini',
+  'gpt-5-nano',
+  'gpt-4.1',
+  'gpt-4.1-mini',
+  'gpt-4o',
+  'gpt-4o-mini',
+];
+const OPENAI_MODELS_CACHE_TTL_MS = 5 * 60 * 1000;
+let openAiModelsCache = {
+  fetchedAt: 0,
+  keyHint: '',
+  models: OPENAI_MODEL_FALLBACKS.slice(),
+};
+
 async function readSettings() {
   try {
     await fs.mkdir(SETTINGS_DIR, { recursive: true });
@@ -716,6 +732,78 @@ function getOpenAiSecrets(saved) {
   const savedModel = typeof saved?.openaiModel === 'string' ? saved.openaiModel.trim() : '';
   const model = savedModel || envModel || 'gpt-4o-mini';
   return { apiKey, source, keyHint, model };
+}
+
+function normalizeOpenAiModelList(input) {
+  const rows = Array.isArray(input) ? input : [];
+  const ids = [];
+  for (const row of rows) {
+    const id = typeof row?.id === 'string' ? row.id.trim() : '';
+    if (!id) continue;
+    const lower = id.toLowerCase();
+    const looksLikeChatModel = lower.startsWith('gpt-') || lower.startsWith('o1') || lower.startsWith('o3') || lower.startsWith('o4');
+    if (!looksLikeChatModel) continue;
+    ids.push(id);
+  }
+  const uniq = Array.from(new Set(ids));
+  uniq.sort((a, b) => a.localeCompare(b));
+  return uniq;
+}
+
+async function fetchOpenAiModelsCatalog({ apiKey, force = false } = {}) {
+  const token = typeof apiKey === 'string' ? apiKey.trim() : '';
+  if (!token) {
+    return { ok: false, error: 'OpenAI API key is not configured.', models: OPENAI_MODEL_FALLBACKS.slice(), source: 'fallback' };
+  }
+
+  const keyHint = token.length >= 6 ? token.slice(-6) : token;
+  const now = Date.now();
+  const isFresh = Number(openAiModelsCache.fetchedAt) > 0 && (now - Number(openAiModelsCache.fetchedAt)) < OPENAI_MODELS_CACHE_TTL_MS;
+  if (!force && isFresh && openAiModelsCache.keyHint === keyHint && Array.isArray(openAiModelsCache.models) && openAiModelsCache.models.length) {
+    return {
+      ok: true,
+      models: openAiModelsCache.models.slice(),
+      source: 'cache',
+      fetchedAt: Number(openAiModelsCache.fetchedAt) || now,
+    };
+  }
+
+  const { resp, data } = await fetchJsonWithTimeout('https://api.openai.com/v1/models', {
+    timeoutMs: 20_000,
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+  });
+
+  if (!resp.ok) {
+    const detail = typeof data?.error?.message === 'string' ? data.error.message : '';
+    const msg = `OpenAI model discovery failed (${resp.status})${detail ? `: ${detail}` : ''}`;
+    return {
+      ok: false,
+      error: msg,
+      models: OPENAI_MODEL_FALLBACKS.slice(),
+      source: 'fallback',
+    };
+  }
+
+  const discovered = normalizeOpenAiModelList(data?.data);
+  const merged = Array.from(new Set([...discovered, ...OPENAI_MODEL_FALLBACKS]));
+  merged.sort((a, b) => a.localeCompare(b));
+
+  openAiModelsCache = {
+    fetchedAt: now,
+    keyHint,
+    models: merged,
+  };
+
+  return {
+    ok: true,
+    models: merged,
+    source: 'live',
+    fetchedAt: now,
+  };
 }
 
 function getOpenRouterSecrets(saved) {
@@ -4828,6 +4916,48 @@ app.put('/api/settings', async (req, res) => {
   });
   
   await writeLock;
+});
+
+app.get('/api/integrations/openai/models', async (req, res) => {
+  try {
+    const settings = await readSettings();
+    const openai = getOpenAiSecrets(settings);
+    const refresh = String(req.query?.refresh || '').trim().toLowerCase();
+    const force = refresh === '1' || refresh === 'true' || refresh === 'yes';
+
+    const out = await fetchOpenAiModelsCatalog({ apiKey: openai.apiKey, force });
+    if (!out.ok) {
+      const status = openai.apiKey ? 502 : 400;
+      res.status(status).json({
+        ok: false,
+        configured: Boolean(openai.apiKey),
+        source: out.source || 'fallback',
+        error: out.error || 'Failed to load model catalog',
+        models: Array.isArray(out.models) && out.models.length ? out.models : OPENAI_MODEL_FALLBACKS,
+        fetchedAt: Number(out.fetchedAt) || Date.now(),
+        selectedModel: openai.model,
+      });
+      return;
+    }
+
+    res.json({
+      ok: true,
+      configured: Boolean(openai.apiKey),
+      source: out.source || 'live',
+      models: out.models,
+      fetchedAt: Number(out.fetchedAt) || Date.now(),
+      selectedModel: openai.model,
+    });
+  } catch (err) {
+    res.status(500).json({
+      ok: false,
+      configured: false,
+      source: 'fallback',
+      error: err?.message || 'Failed to load OpenAI models',
+      models: OPENAI_MODEL_FALLBACKS,
+      fetchedAt: Date.now(),
+    });
+  }
 });
 
 // Businesses

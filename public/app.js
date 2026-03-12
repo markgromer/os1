@@ -44,6 +44,7 @@ const state = {
     settings: {
         openaiModel: "gpt-4o-mini",
     },
+    openAiModelsCatalog: { items: [], loading: false, error: '', fetchedAt: 0, source: 'fallback' },
 
     businesses: [],
     activeBusinessKey: 'personal',
@@ -2233,6 +2234,77 @@ async function apiJson(url, options) {
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data?.error || `Request failed (${res.status})`);
     return data;
+}
+
+const DEFAULT_OPENAI_MODELS = [
+    'gpt-5',
+    'gpt-5-mini',
+    'gpt-5-nano',
+    'gpt-4.1',
+    'gpt-4.1-mini',
+    'gpt-4o',
+    'gpt-4o-mini',
+];
+
+function normalizeModelList(items) {
+    const rows = Array.isArray(items) ? items : [];
+    return Array.from(new Set(rows.map((x) => safeText(x).trim()).filter(Boolean)));
+}
+
+function buildOpenAiModelOptions(extra = []) {
+    const catalog = state.openAiModelsCatalog && typeof state.openAiModelsCatalog === 'object'
+        ? state.openAiModelsCatalog
+        : { items: [] };
+    const combined = normalizeModelList([
+        ...(Array.isArray(catalog.items) ? catalog.items : []),
+        ...DEFAULT_OPENAI_MODELS,
+        ...(Array.isArray(extra) ? extra : []),
+    ]);
+    const order = new Map(DEFAULT_OPENAI_MODELS.map((id, idx) => [id, idx]));
+    combined.sort((a, b) => {
+        const ai = order.has(a) ? Number(order.get(a)) : Number.MAX_SAFE_INTEGER;
+        const bi = order.has(b) ? Number(order.get(b)) : Number.MAX_SAFE_INTEGER;
+        if (ai !== bi) return ai - bi;
+        return a.localeCompare(b);
+    });
+    return combined;
+}
+
+async function fetchOpenAiModelsCatalog({ force = false } = {}) {
+    const current = state.openAiModelsCatalog && typeof state.openAiModelsCatalog === 'object'
+        ? state.openAiModelsCatalog
+        : { items: [], loading: false, error: '', fetchedAt: 0, source: 'fallback' };
+    if (current.loading) return;
+
+    const now = Date.now();
+    const fresh = Number(current.fetchedAt) > 0 && (now - Number(current.fetchedAt)) < (5 * 60 * 1000);
+    if (!force && fresh && Array.isArray(current.items) && current.items.length) return;
+
+    state.openAiModelsCatalog = { ...current, loading: true, error: '' };
+    if (state.currentView === 'settings') rerenderMainPreservingUi();
+
+    try {
+        const query = force ? '?refresh=1' : '';
+        const data = await apiJson(`/api/integrations/openai/models${query}`);
+        const items = normalizeModelList(data?.models);
+        state.openAiModelsCatalog = {
+            items,
+            loading: false,
+            error: '',
+            fetchedAt: Number(data?.fetchedAt) || Date.now(),
+            source: safeText(data?.source).trim() || 'live',
+        };
+    } catch (e) {
+        state.openAiModelsCatalog = {
+            items: normalizeModelList(DEFAULT_OPENAI_MODELS),
+            loading: false,
+            error: safeText(e?.message).trim() || 'Model discovery unavailable',
+            fetchedAt: Date.now(),
+            source: 'fallback',
+        };
+    }
+
+    if (state.currentView === 'settings') rerenderMainPreservingUi();
 }
 
 function isRevisionMismatchError(err) {
@@ -5347,24 +5419,38 @@ function renderSettings(container) {
     const ai = section('AI', 'Configure the API key/model used by Marty.');
     const aiBody = ai.querySelector('[data-slot="body"]');
     const currentOpenAiModel = String(state.settings.openaiModel || '').trim() || 'gpt-4o-mini';
-    const openAiModelOptions = [
-        'gpt-5',
-        'gpt-5-mini',
-        'gpt-5-nano',
-        'gpt-4.1',
-        'gpt-4.1-mini',
-        'gpt-4o',
-        'gpt-4o-mini',
-    ];
-    const modelOptionHtml = openAiModelOptions
-        .map((m) => `<option value="${escapeHtml(m)}" ${m === currentOpenAiModel ? 'selected' : ''}>${escapeHtml(m)}</option>`)
-        .join('');
     const routeDefs = [
         { key: 'martyChat', label: 'Marty Chat' },
         { key: 'operatorBio', label: 'Operator Bio' },
         { key: 'projectAssistant', label: 'Project Assistant' },
         { key: 'dashboardPreview', label: 'Dashboard Preview' },
     ];
+    const routeOpenAiModels = routeDefs
+        .map((r) => {
+            const entry = (state.settings?.aiRoutes && typeof state.settings.aiRoutes === 'object' && state.settings.aiRoutes[r.key] && typeof state.settings.aiRoutes[r.key] === 'object')
+                ? state.settings.aiRoutes[r.key]
+                : {};
+            const provider = String(entry.provider || 'openai').trim().toLowerCase() || 'openai';
+            return provider === 'openai' ? String(entry.model || '').trim() : '';
+        })
+        .filter(Boolean);
+
+    const openAiModelOptions = buildOpenAiModelOptions([currentOpenAiModel, ...routeOpenAiModels]);
+    const modelOptionHtml = openAiModelOptions
+        .map((m) => `<option value="${escapeHtml(m)}" ${m === currentOpenAiModel ? 'selected' : ''}>${escapeHtml(m)}</option>`)
+        .join('');
+
+    const catalogState = state.openAiModelsCatalog && typeof state.openAiModelsCatalog === 'object'
+        ? state.openAiModelsCatalog
+        : { items: [], loading: false, error: '', fetchedAt: 0, source: 'fallback' };
+    const fetchedTime = Number(catalogState.fetchedAt) > 0
+        ? new Date(Number(catalogState.fetchedAt)).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+        : '';
+    const modelCatalogStatus = catalogState.loading
+        ? 'Model catalog: refreshing…'
+        : catalogState.error
+            ? `Model catalog: ${catalogState.error}`
+            : `Model catalog: ${openAiModelOptions.length} models (${catalogState.source || 'fallback'}${fetchedTime ? ` • ${fetchedTime}` : ''})`;
     const routeRowsHtml = routeDefs.map((r) => {
         const entry = (state.settings?.aiRoutes && typeof state.settings.aiRoutes === 'object' && state.settings.aiRoutes[r.key] && typeof state.settings.aiRoutes[r.key] === 'object')
             ? state.settings.aiRoutes[r.key]
@@ -5397,6 +5483,10 @@ function renderSettings(container) {
                     ${modelOptionHtml}
                 </select>
                 <input id="set-openai-model" type="text" placeholder="Custom model ID" value="${escapeHtml(currentOpenAiModel)}" class="mt-2 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-sm" />
+                <div class="mt-2 flex items-center justify-between gap-2">
+                    <div class="text-[11px] text-ops-light">${escapeHtml(modelCatalogStatus)}</div>
+                    <button id="btn-refresh-openai-models" class="px-2.5 py-1 rounded bg-ops-bg border border-ops-border text-ops-light text-[11px] hover:text-white" ${catalogState.loading ? 'disabled' : ''}>Refresh list</button>
+                </div>
                 <label class="mt-2 inline-flex items-center gap-2 text-[11px] text-ops-light">
                     <input id="set-openai-apply-routes" type="checkbox" class="accent-blue-500" checked />
                     Apply model to all OpenAI routes
@@ -5416,6 +5506,14 @@ function renderSettings(container) {
         </div>
     `;
     wrap.appendChild(ai);
+
+    const needsModelCatalogRefresh = !catalogState.loading && (
+        !Number(catalogState.fetchedAt) ||
+        (Date.now() - Number(catalogState.fetchedAt)) > (15 * 60 * 1000)
+    );
+    if (needsModelCatalogRefresh) {
+        fetchOpenAiModelsCatalog({ force: false }).catch(() => {});
+    }
 
     // Marty agent settings
     const agent = section('Marty', 'Configure what Marty knows, how it helps, and what it watches for.');
@@ -6003,6 +6101,7 @@ function renderSettings(container) {
     const btnClearAuth = document.getElementById('btn-clear-auth');
     const btnSaveAi = document.getElementById('btn-save-ai');
     const btnClearAi = document.getElementById('btn-clear-ai');
+    const btnRefreshOpenAiModels = document.getElementById('btn-refresh-openai-models');
     const openAiModelSelect = document.getElementById('set-openai-model-select');
     const openAiModelInput = document.getElementById('set-openai-model');
     const btnSaveGoogle = document.getElementById('btn-save-google');
@@ -6050,6 +6149,19 @@ function renderSettings(container) {
             const selected = String(openAiModelSelect.value || '').trim();
             if (selected) openAiModelInput.value = selected;
         });
+    }
+
+    if (btnRefreshOpenAiModels) {
+        btnRefreshOpenAiModels.onclick = async () => {
+            btnRefreshOpenAiModels.disabled = true;
+            try {
+                await fetchOpenAiModelsCatalog({ force: true });
+            } catch {
+                // handled inside fetchOpenAiModelsCatalog
+            } finally {
+                renderSettings(container);
+            }
+        };
     }
 
     const refreshAuthStatus = async () => {
