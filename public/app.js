@@ -1636,6 +1636,113 @@ function flushDeferredRerenderIfSafe() {
     rerenderMainPreservingUi();
 }
 
+let martySpeechRecognition = null;
+
+function getSpeechRecognitionCtor() {
+    try {
+        return window.SpeechRecognition || window.webkitSpeechRecognition || null;
+    } catch {
+        return null;
+    }
+}
+
+function syncMartyVoiceUi() {
+    const mic = document.getElementById('cmd-mic');
+    const speak = document.getElementById('cmd-speak');
+    if (mic) {
+        mic.classList.toggle('text-blue-400', !!state.martyVoiceIn);
+        mic.classList.toggle('text-emerald-300', !!state.martyVoiceListening);
+        mic.title = state.martyVoiceListening ? 'Listening… (click to stop)' : 'Voice input';
+    }
+    if (speak) {
+        speak.classList.toggle('text-blue-400', !!state.martyVoiceOut);
+        speak.title = state.martyVoiceOut ? 'Voice output on' : 'Voice output off';
+    }
+}
+
+function stopMartyListening() {
+    state.martyVoiceListening = false;
+    try {
+        martySpeechRecognition?.stop?.();
+    } catch {
+        // ignore
+    }
+    syncMartyVoiceUi();
+}
+
+function startMartyListening() {
+    const Ctor = getSpeechRecognitionCtor();
+    if (!Ctor) {
+        alert('Voice input is not supported in this browser. Try Chrome/Edge on desktop.');
+        state.martyVoiceIn = false;
+        setStoredMartyVoiceIn(false);
+        syncMartyVoiceUi();
+        return;
+    }
+
+    if (!martySpeechRecognition) {
+        martySpeechRecognition = new Ctor();
+        martySpeechRecognition.lang = 'en-US';
+        martySpeechRecognition.interimResults = true;
+        martySpeechRecognition.continuous = false;
+    }
+
+    const input = document.getElementById('cmd-input');
+    let finalTranscript = '';
+
+    state.martyVoiceListening = true;
+    syncMartyVoiceUi();
+
+    martySpeechRecognition.onresult = (e) => {
+        try {
+            let interim = '';
+            for (let i = e.resultIndex; i < e.results.length; i++) {
+                const r = e.results[i];
+                const t = r && r[0] && r[0].transcript ? String(r[0].transcript) : '';
+                if (r.isFinal) finalTranscript += t;
+                else interim += t;
+            }
+            const combined = (finalTranscript + interim).trim();
+            if (input && combined) input.value = combined;
+        } catch {
+            // ignore
+        }
+    };
+
+    martySpeechRecognition.onerror = (e) => {
+        const code = safeText(e?.error).trim().toLowerCase();
+        state.martyVoiceListening = false;
+        syncMartyVoiceUi();
+        if (code === 'not-allowed' || code === 'service-not-allowed') {
+            alert('Microphone permission is blocked. Allow mic access in your browser/site settings and try again.');
+        } else if (code === 'no-speech') {
+            // no-op; silent so quick retry feels natural
+        }
+    };
+
+    martySpeechRecognition.onend = () => {
+        state.martyVoiceListening = false;
+        syncMartyVoiceUi();
+        const final = String(finalTranscript || '').trim();
+        if (final) {
+            try {
+                if (input) input.value = final;
+                handleChatSubmit();
+            } catch {
+                // ignore
+            }
+        }
+    };
+
+    try {
+        martySpeechRecognition.start();
+        if (input) input.focus?.();
+    } catch {
+        state.martyVoiceListening = false;
+        syncMartyVoiceUi();
+    }
+}
+
 function ensureAiTeamMember() {
     const list = Array.isArray(state.team) ? state.team : [];
     const hasAi = list.some((m) => safeText(m?.id) === 'ai');
@@ -1688,66 +1795,6 @@ async function refreshSlackTeamPresence({ force = false } = {}) {
     } finally {
         state.teamPresenceLoading = false;
     }
-}
-
-function isArchivedProject(project) {
-    const s = safeText(project?.status).trim().toLowerCase();
-    return s === 'done' || s === 'completed' || s === 'complete' || s === 'archived' || s === 'archive';
-}
-
-function isContactOnlyProject(project) {
-    if (project && typeof project === 'object' && project.isContactRecord === true) return true;
-    const brief = safeText(project?.agentBrief).toLowerCase();
-    if (brief.includes('imported from airtable (clients)')) return true;
-    return false;
-}
-
-function isRevisionRequestProject(project) {
-    const p = (project && typeof project === 'object') ? project : {};
-    if (safeText(p?.airtableSource).trim() === 'revision-requests') return true;
-    if (safeText(p?.airtableRequestsKey).trim()) return true;
-    const brief = safeText(p?.agentBrief).toLowerCase();
-    if (brief.includes('imported from airtable (revision requests)')) return true;
-    return false;
-}
-
-function getCurrentUserName() {
-    const teamMembers = Array.isArray(state.team) ? state.team : [];
-    const adminName = safeText(teamMembers.find((m) => safeText(m?.role).toLowerCase() === 'admin')?.name).trim();
-    if (adminName) return adminName;
-    const firstHuman = safeText(teamMembers.find((m) => safeText(m?.id) && safeText(m?.id) !== 'ai' && safeText(m?.name))?.name).trim();
-    return firstHuman || 'Operator';
-}
-
-function getAssignableOwnerNames() {
-    const humanNames = getHumanTeamMembers()
-        .map((m) => safeText(m?.name).trim())
-        .filter(Boolean);
-    const me = safeText(getCurrentUserName()).trim();
-    const merged = me ? [me, ...humanNames] : humanNames;
-    return Array.from(new Set(merged));
-}
-
-function getProjectOwnerName(project) {
-    const owner = safeText(project?.owner).trim();
-    return owner;
-}
-
-function shouldShowProjectInMyProjects(project) {
-    if (!isRevisionRequestProject(project)) return true;
-    const owner = getProjectOwnerName(project);
-    if (!owner) return false;
-    return owner === getCurrentUserName();
-}
-
-function getActiveProjects() {
-    const list = Array.isArray(state.projects) ? state.projects : [];
-    return list.filter((p) => !isArchivedProject(p) && !isContactOnlyProject(p) && shouldShowProjectInMyProjects(p));
-}
-
-function getArchivedProjects() {
-    const list = Array.isArray(state.projects) ? state.projects : [];
-    return list.filter((p) => isArchivedProject(p) && !isContactOnlyProject(p) && shouldShowProjectInMyProjects(p));
 }
 
 function getOpenTaskCountByOwner() {
