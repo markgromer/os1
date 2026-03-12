@@ -1668,6 +1668,66 @@ function getHumanTeamMembers() {
     return list.filter((m) => safeText(m?.id) && safeText(m?.id) !== 'ai' && safeText(m?.name));
 }
 
+function isArchivedProject(project) {
+    const s = safeText(project?.status).trim().toLowerCase();
+    return s === 'done' || s === 'completed' || s === 'complete' || s === 'archived' || s === 'archive';
+}
+
+function isContactOnlyProject(project) {
+    if (project && typeof project === 'object' && project.isContactRecord === true) return true;
+    const brief = safeText(project?.agentBrief).toLowerCase();
+    if (brief.includes('imported from airtable (clients)')) return true;
+    return false;
+}
+
+function isRevisionRequestProject(project) {
+    const p = (project && typeof project === 'object') ? project : {};
+    if (safeText(p?.airtableSource).trim() === 'revision-requests') return true;
+    if (safeText(p?.airtableRequestsKey).trim()) return true;
+    const brief = safeText(p?.agentBrief).toLowerCase();
+    if (brief.includes('imported from airtable (revision requests)')) return true;
+    return false;
+}
+
+function getCurrentUserName() {
+    const teamMembers = Array.isArray(state.team) ? state.team : [];
+    const adminName = safeText(teamMembers.find((m) => safeText(m?.role).toLowerCase() === 'admin')?.name).trim();
+    if (adminName) return adminName;
+    const firstHuman = safeText(teamMembers.find((m) => safeText(m?.id) && safeText(m?.id) !== 'ai' && safeText(m?.name))?.name).trim();
+    return firstHuman || 'Operator';
+}
+
+function getProjectOwnerName(project) {
+    const owner = safeText(project?.owner).trim();
+    return owner;
+}
+
+function shouldShowProjectInMyProjects(project) {
+    if (!isRevisionRequestProject(project)) return true;
+    const owner = getProjectOwnerName(project);
+    if (!owner) return false;
+    return owner === getCurrentUserName();
+}
+
+function getActiveProjects() {
+    const list = Array.isArray(state.projects) ? state.projects : [];
+    return list.filter((p) => !isArchivedProject(p) && !isContactOnlyProject(p) && shouldShowProjectInMyProjects(p));
+}
+
+function getArchivedProjects() {
+    const list = Array.isArray(state.projects) ? state.projects : [];
+    return list.filter((p) => isArchivedProject(p) && !isContactOnlyProject(p) && shouldShowProjectInMyProjects(p));
+}
+
+function getAssignableOwnerNames() {
+    const humanNames = getHumanTeamMembers()
+        .map((m) => safeText(m?.name).trim())
+        .filter(Boolean);
+    const me = safeText(getCurrentUserName()).trim();
+    const merged = me ? [me, ...humanNames] : humanNames;
+    return Array.from(new Set(merged));
+}
+
 async function refreshSlackTeamPresence({ force = false } = {}) {
     if (!state.settings?.slackInstalled) {
         state.teamPresenceByMemberId = {};
