@@ -55,6 +55,8 @@ This repo now includes a Render blueprint file: `render.yaml`.
 - `SLACK_BOT_TOKEN` (if not using OAuth install in-app)
 - `TWILIO_AUTH_TOKEN` (if using Quo/Twilio signature verification)
 - `QUO_WEBHOOK_TOKEN` (non-Twilio shared-token webhook verification)
+- `IMAP_HOST`, `IMAP_PORT`, `IMAP_SECURE`, `IMAP_USERNAME`, `IMAP_PASSWORD`
+- `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM_ADDRESS`
 - `OPENAI_API_KEY`, `OPENAI_MODEL`
 - `QDRANT_URL`, `QDRANT_COLLECTION`, `QDRANT_API_KEY` (Marcus knowledge base)
 - `QDRANT_EMBEDDING_MODEL` (optional, default `text-embedding-3-small`)
@@ -130,6 +132,60 @@ Example search payload:
 ```
 
 When Qdrant is configured and enabled, Marcus chat will automatically pull a small set of knowledge-base hits into its context for the active business.
+
+## Email integration (IMAP / SMTP)
+
+Marcus now supports IMAP inbox sync, SMTP outbound mail, and archive ingestion into Qdrant.
+
+Recommended env vars:
+
+- `IMAP_HOST`, `IMAP_PORT`, `IMAP_SECURE`, `IMAP_USERNAME`, `IMAP_PASSWORD`
+- `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USERNAME`, `SMTP_PASSWORD`
+- `SMTP_FROM_ADDRESS` (optional sender identity for SMTP)
+
+You can also save these in Settings instead of env vars.
+
+Backend endpoints:
+
+- `GET /api/integrations/email/status`
+- `POST /api/integrations/email/test`
+- `POST /api/integrations/email/send`
+- `POST /api/integrations/email/sync`
+- `POST /api/integrations/email/archive-to-qdrant`
+
+Typical flows:
+
+- Use `POST /api/integrations/email/test` to verify IMAP and SMTP connectivity.
+- Use `POST /api/integrations/email/sync` to pull recent messages from configured IMAP folders into Inbox as `source: email` items.
+- Use `POST /api/integrations/email/archive-to-qdrant` to ingest archived mail into Qdrant for Marcus retrieval.
+
+Example sync payload:
+
+```json
+{
+   "limitPerFolder": 25,
+   "sinceDays": 30,
+   "unseenOnly": false
+}
+```
+
+Example archive-to-Qdrant payloads:
+
+```json
+{
+   "source": "imap",
+   "limitPerFolder": 50,
+   "sinceDays": 3650
+}
+```
+
+```json
+{
+   "source": "local"
+}
+```
+
+The `imap` mode pulls from configured archive folders such as `Archive` or `All Mail`. The `local` mode pushes already-archived Inbox email items into Qdrant instead.
 
 ## MCP on Render (Option 1: stdio servers in same container)
 

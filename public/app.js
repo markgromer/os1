@@ -5892,6 +5892,93 @@ function renderSettings(container) {
     `;
     wrap.appendChild(g);
 
+    // Email (IMAP / SMTP)
+    const emailSection = section('Email (IMAP / SMTP)', 'Sync email into Inbox, send mail over SMTP, and ingest archived email into Qdrant.');
+    const emailBody = emailSection.querySelector('[data-slot="body"]');
+    emailBody.innerHTML = `
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+                <label class="text-xs text-ops-light">IMAP Host</label>
+                <input id="set-imap-host" type="text" autocomplete="off" value="${escapeHtml(String(state.settings.imapHost || ''))}" placeholder="imap.gmail.com" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-sm" />
+            </div>
+            <div>
+                <label class="text-xs text-ops-light">IMAP Port</label>
+                <input id="set-imap-port" type="number" min="1" max="65535" value="${Number(state.settings.imapPort) || 993}" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-sm" />
+            </div>
+            <div>
+                <label class="text-xs text-ops-light">IMAP Username</label>
+                <input id="set-imap-username" type="text" autocomplete="off" value="${escapeHtml(String(state.settings.imapUsername || ''))}" placeholder="you@example.com" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-sm" />
+            </div>
+            <div>
+                <label class="text-xs text-ops-light">IMAP Password</label>
+                <input id="set-imap-password" type="password" autocomplete="off" placeholder="(leave blank to keep existing)" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-sm" />
+                <label class="mt-2 inline-flex items-center gap-2 text-[11px] text-ops-light">
+                    <input id="set-imap-secure" type="checkbox" class="accent-blue-500" ${(state.settings.imapSecure !== false) ? 'checked' : ''} />
+                    Use TLS / secure IMAP
+                </label>
+            </div>
+            <div>
+                <label class="text-xs text-ops-light">IMAP Sync Folders</label>
+                <textarea id="set-imap-sync-folders" rows="3" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-xs font-mono" placeholder="INBOX">${escapeHtml((Array.isArray(state.settings.imapSyncFolders) ? state.settings.imapSyncFolders : ['INBOX']).join('\n'))}</textarea>
+                <div class="text-[11px] text-ops-light mt-1">One folder per line for inbox sync.</div>
+            </div>
+            <div>
+                <label class="text-xs text-ops-light">Archive Folders</label>
+                <textarea id="set-imap-archive-folders" rows="3" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-xs font-mono" placeholder="Archive\nAll Mail">${escapeHtml((Array.isArray(state.settings.imapArchiveFolders) ? state.settings.imapArchiveFolders : ['Archive', 'All Mail']).join('\n'))}</textarea>
+                <div class="text-[11px] text-ops-light mt-1">Used for archive knowledge ingestion.</div>
+            </div>
+            <div>
+                <label class="text-xs text-ops-light">SMTP Host</label>
+                <input id="set-smtp-host" type="text" autocomplete="off" value="${escapeHtml(String(state.settings.smtpHost || ''))}" placeholder="smtp.gmail.com" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-sm" />
+            </div>
+            <div>
+                <label class="text-xs text-ops-light">SMTP Port</label>
+                <input id="set-smtp-port" type="number" min="1" max="65535" value="${Number(state.settings.smtpPort) || 465}" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-sm" />
+            </div>
+            <div>
+                <label class="text-xs text-ops-light">SMTP Username</label>
+                <input id="set-smtp-username" type="text" autocomplete="off" value="${escapeHtml(String(state.settings.smtpUsername || ''))}" placeholder="you@example.com" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-sm" />
+            </div>
+            <div>
+                <label class="text-xs text-ops-light">SMTP Password</label>
+                <input id="set-smtp-password" type="password" autocomplete="off" placeholder="(leave blank to keep existing)" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-sm" />
+                <label class="mt-2 inline-flex items-center gap-2 text-[11px] text-ops-light">
+                    <input id="set-smtp-secure" type="checkbox" class="accent-blue-500" ${(state.settings.smtpSecure !== false) ? 'checked' : ''} />
+                    Use TLS / secure SMTP
+                </label>
+            </div>
+            <div>
+                <label class="text-xs text-ops-light">From Address</label>
+                <input id="set-smtp-from-address" type="text" autocomplete="off" value="${escapeHtml(String(state.settings.smtpFromAddress || ''))}" placeholder="Marcus <you@example.com>" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-sm" />
+            </div>
+            <div>
+                <label class="text-xs text-ops-light">Test Recipient</label>
+                <input id="set-email-test-recipient" type="text" autocomplete="off" placeholder="recipient@example.com" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-sm" />
+            </div>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+            <label class="inline-flex items-center gap-2 text-[11px] text-ops-light">
+                <input id="set-email-sync-enabled" type="checkbox" class="accent-blue-500" ${state.settings.emailSyncEnabled !== false ? 'checked' : ''} />
+                Enable email inbox sync
+            </label>
+            <label class="inline-flex items-center gap-2 text-[11px] text-ops-light">
+                <input id="set-email-archive-knowledge-enabled" type="checkbox" class="accent-blue-500" ${state.settings.emailArchiveKnowledgeEnabled !== false ? 'checked' : ''} />
+                Enable archive knowledge ingestion
+            </label>
+        </div>
+        <div class="text-[11px] text-ops-light mt-2" id="email-status-line">Status: checking...</div>
+        <div class="flex flex-wrap gap-2 mt-4">
+            <button id="btn-save-email" class="px-3 py-2 rounded bg-blue-600 text-white text-xs hover:bg-blue-500">Save Email</button>
+            <button id="btn-test-email" class="px-3 py-2 rounded bg-ops-bg border border-ops-border text-ops-light text-xs hover:text-white">Test Connections</button>
+            <button id="btn-sync-email" class="px-3 py-2 rounded bg-emerald-600 text-white text-xs hover:bg-emerald-500">Sync Inbox</button>
+            <button id="btn-send-test-email" class="px-3 py-2 rounded bg-ops-bg border border-ops-border text-ops-light text-xs hover:text-white">Send Test Email</button>
+            <button id="btn-email-archive-qdrant" class="px-3 py-2 rounded bg-emerald-600 text-white text-xs hover:bg-emerald-500">Ingest IMAP Archives → Qdrant</button>
+            <button id="btn-email-local-archive-qdrant" class="px-3 py-2 rounded bg-ops-bg border border-ops-border text-ops-light text-xs hover:text-white">Ingest Local Archived Inbox → Qdrant</button>
+        </div>
+        <div id="email-output" class="mt-3 hidden bg-ops-bg border border-ops-border rounded px-3 py-2 text-xs text-ops-light font-mono whitespace-pre-wrap"></div>
+    `;
+    wrap.appendChild(emailSection);
+
     // Fireflies
     const f = section('Fireflies', 'Ingest meeting summaries into project notes via a secure webhook.');
     const fBody = f.querySelector('[data-slot="body"]');
@@ -6201,6 +6288,10 @@ function renderSettings(container) {
     delete safeSettings.quoConfigured;
     delete safeSettings.ghlConfigured;
     delete safeSettings.ga4Configured;
+    delete safeSettings.imapConfigured;
+    delete safeSettings.smtpConfigured;
+    delete safeSettings.emailSyncEnabled;
+    delete safeSettings.emailArchiveKnowledgeEnabled;
     advBody.innerHTML = `
         <label class="text-xs text-ops-light">Settings JSON</label>
         <textarea id="set-advanced-json" rows="10" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-xs font-mono">${JSON.stringify(safeSettings, null, 2)}</textarea>
@@ -6229,6 +6320,14 @@ function renderSettings(container) {
     const btnUpcomingGoogle = document.getElementById('btn-upcoming-google');
     const googleStatusLine = document.getElementById('google-status-line');
     const googleUpcomingOutput = document.getElementById('google-upcoming-output');
+    const btnSaveEmail = document.getElementById('btn-save-email');
+    const btnTestEmail = document.getElementById('btn-test-email');
+    const btnSyncEmail = document.getElementById('btn-sync-email');
+    const btnSendTestEmail = document.getElementById('btn-send-test-email');
+    const btnEmailArchiveQdrant = document.getElementById('btn-email-archive-qdrant');
+    const btnEmailLocalArchiveQdrant = document.getElementById('btn-email-local-archive-qdrant');
+    const emailStatusLine = document.getElementById('email-status-line');
+    const emailOutput = document.getElementById('email-output');
     const btnGenFireflies = document.getElementById('btn-generate-fireflies');
     const btnSaveFireflies = document.getElementById('btn-save-fireflies');
     const btnGenCrm = document.getElementById('btn-generate-crm');
@@ -6366,6 +6465,33 @@ function renderSettings(container) {
     };
 
     refreshGoogleStatus();
+
+    const splitTextareaList = (value) => String(value || '')
+        .split(/[\n,;]+/g)
+        .map((s) => safeText(s).trim())
+        .filter(Boolean);
+
+    const setEmailOutput = (txt) => {
+        if (!emailOutput) return;
+        const msg = safeText(txt);
+        emailOutput.textContent = msg;
+        emailOutput.classList.toggle('hidden', !msg);
+    };
+
+    const refreshEmailStatus = async () => {
+        try {
+            const r = await apiFetch('/api/integrations/email/status');
+            const s = await r.json().catch(() => ({}));
+            if (!r.ok || s?.ok === false) throw new Error(s?.error || 'Failed to load email status');
+            if (emailStatusLine) {
+                emailStatusLine.textContent = `Status: IMAP ${s.imapConfigured ? 'Configured' : 'Not configured'} / SMTP ${s.smtpConfigured ? 'Configured' : 'Not configured'} / Sync ${s.emailSyncEnabled ? 'Enabled' : 'Disabled'} / Archive KB ${s.emailArchiveKnowledgeEnabled ? 'Enabled' : 'Disabled'}`;
+            }
+        } catch {
+            if (emailStatusLine) emailStatusLine.textContent = 'Status: unavailable';
+        }
+    };
+
+    refreshEmailStatus();
 
     const parseAirtableIdsFromUrl = (urlStr) => {
         const raw = safeText(urlStr).trim();
@@ -6683,6 +6809,154 @@ function renderSettings(container) {
             await refreshGoogleStatus();
         } catch (e) {
             alert(e?.message || 'Failed to save Google settings');
+        }
+    };
+
+    if (btnSaveEmail) btnSaveEmail.onclick = async () => {
+        try {
+            const patch = {
+                imapHost: String(document.getElementById('set-imap-host')?.value || '').trim(),
+                imapPort: Math.max(1, Number(document.getElementById('set-imap-port')?.value || 993) || 993),
+                imapSecure: !!document.getElementById('set-imap-secure')?.checked,
+                imapUsername: String(document.getElementById('set-imap-username')?.value || '').trim(),
+                imapSyncFolders: splitTextareaList(document.getElementById('set-imap-sync-folders')?.value || 'INBOX'),
+                imapArchiveFolders: splitTextareaList(document.getElementById('set-imap-archive-folders')?.value || 'Archive\nAll Mail'),
+                smtpHost: String(document.getElementById('set-smtp-host')?.value || '').trim(),
+                smtpPort: Math.max(1, Number(document.getElementById('set-smtp-port')?.value || 465) || 465),
+                smtpSecure: !!document.getElementById('set-smtp-secure')?.checked,
+                smtpUsername: String(document.getElementById('set-smtp-username')?.value || '').trim(),
+                smtpFromAddress: String(document.getElementById('set-smtp-from-address')?.value || '').trim(),
+                emailSyncEnabled: !!document.getElementById('set-email-sync-enabled')?.checked,
+                emailArchiveKnowledgeEnabled: !!document.getElementById('set-email-archive-knowledge-enabled')?.checked,
+            };
+            const imapPassword = String(document.getElementById('set-imap-password')?.value || '').trim();
+            const smtpPassword = String(document.getElementById('set-smtp-password')?.value || '').trim();
+            if (imapPassword) patch.imapPassword = imapPassword;
+            if (smtpPassword) patch.smtpPassword = smtpPassword;
+            await saveSettingsPatch(patch);
+            const imapPassEl = document.getElementById('set-imap-password');
+            const smtpPassEl = document.getElementById('set-smtp-password');
+            if (imapPassEl) imapPassEl.value = '';
+            if (smtpPassEl) smtpPassEl.value = '';
+            alert('Email settings saved.');
+            await refreshEmailStatus();
+        } catch (e) {
+            alert(e?.message || 'Failed to save email settings');
+        }
+    };
+
+    if (btnTestEmail) btnTestEmail.onclick = async () => {
+        const prev = btnTestEmail.textContent;
+        btnTestEmail.disabled = true;
+        btnTestEmail.textContent = 'Testing…';
+        try {
+            setEmailOutput('Testing IMAP / SMTP...');
+            const data = await apiJson('/api/integrations/email/test', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+            setEmailOutput(JSON.stringify(data, null, 2));
+            await refreshEmailStatus();
+        } catch (e) {
+            const msg = safeText(e?.message || '').trim() || 'Email test failed';
+            setEmailOutput(`Error: ${msg}`);
+            alert(msg);
+        } finally {
+            btnTestEmail.disabled = false;
+            btnTestEmail.textContent = prev;
+        }
+    };
+
+    if (btnSyncEmail) btnSyncEmail.onclick = async () => {
+        const prev = btnSyncEmail.textContent;
+        btnSyncEmail.disabled = true;
+        btnSyncEmail.textContent = 'Syncing…';
+        try {
+            setEmailOutput('Syncing email inbox...');
+            const data = await apiJson('/api/integrations/email/sync', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ limitPerFolder: 25, sinceDays: 30, unseenOnly: false }),
+            });
+            setEmailOutput(JSON.stringify(data, null, 2));
+            await fetchState();
+            renderNav();
+        } catch (e) {
+            const msg = safeText(e?.message || '').trim() || 'Email sync failed';
+            setEmailOutput(`Error: ${msg}`);
+            alert(msg);
+        } finally {
+            btnSyncEmail.disabled = false;
+            btnSyncEmail.textContent = prev;
+        }
+    };
+
+    if (btnSendTestEmail) btnSendTestEmail.onclick = async () => {
+        const prev = btnSendTestEmail.textContent;
+        btnSendTestEmail.disabled = true;
+        btnSendTestEmail.textContent = 'Sending…';
+        try {
+            const to = String(document.getElementById('set-email-test-recipient')?.value || '').trim();
+            if (!to) throw new Error('Test recipient is required');
+            setEmailOutput('Sending SMTP test email...');
+            const data = await apiJson('/api/integrations/email/send', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    to,
+                    subject: `Marcus email test ${new Date().toISOString()}`,
+                    text: 'This is a test message from the Marcus IMAP/SMTP integration.',
+                }),
+            });
+            setEmailOutput(JSON.stringify(data, null, 2));
+        } catch (e) {
+            const msg = safeText(e?.message || '').trim() || 'Failed to send test email';
+            setEmailOutput(`Error: ${msg}`);
+            alert(msg);
+        } finally {
+            btnSendTestEmail.disabled = false;
+            btnSendTestEmail.textContent = prev;
+        }
+    };
+
+    if (btnEmailArchiveQdrant) btnEmailArchiveQdrant.onclick = async () => {
+        const prev = btnEmailArchiveQdrant.textContent;
+        btnEmailArchiveQdrant.disabled = true;
+        btnEmailArchiveQdrant.textContent = 'Ingesting…';
+        try {
+            setEmailOutput('Pulling archived IMAP messages into Qdrant...');
+            const data = await apiJson('/api/integrations/email/archive-to-qdrant', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ source: 'imap', limitPerFolder: 50, sinceDays: 3650 }),
+            });
+            setEmailOutput(JSON.stringify(data, null, 2));
+        } catch (e) {
+            const msg = safeText(e?.message || '').trim() || 'Archive ingestion failed';
+            setEmailOutput(`Error: ${msg}`);
+            alert(msg);
+        } finally {
+            btnEmailArchiveQdrant.disabled = false;
+            btnEmailArchiveQdrant.textContent = prev;
+        }
+    };
+
+    if (btnEmailLocalArchiveQdrant) btnEmailLocalArchiveQdrant.onclick = async () => {
+        const prev = btnEmailLocalArchiveQdrant.textContent;
+        btnEmailLocalArchiveQdrant.disabled = true;
+        btnEmailLocalArchiveQdrant.textContent = 'Ingesting…';
+        try {
+            setEmailOutput('Pushing locally archived inbox email into Qdrant...');
+            const data = await apiJson('/api/integrations/email/archive-to-qdrant', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ source: 'local' }),
+            });
+            setEmailOutput(JSON.stringify(data, null, 2));
+        } catch (e) {
+            const msg = safeText(e?.message || '').trim() || 'Local archive ingestion failed';
+            setEmailOutput(`Error: ${msg}`);
+            alert(msg);
+        } finally {
+            btnEmailLocalArchiveQdrant.disabled = false;
+            btnEmailLocalArchiveQdrant.textContent = prev;
         }
     };
 
@@ -7104,6 +7378,10 @@ function renderSettings(container) {
             delete parsed.slackInstalled;
             delete parsed.quoConfigured;
             delete parsed.ghlConfigured;
+            delete parsed.imapConfigured;
+            delete parsed.smtpConfigured;
+            delete parsed.emailSyncEnabled;
+            delete parsed.emailArchiveKnowledgeEnabled;
 
             await saveSettingsPatch(parsed);
             alert('Advanced settings saved.');

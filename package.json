@@ -12,6 +12,9 @@
   },
   "dependencies": {
     "express": "^4.19.2",
-    "googleapis": "^140.0.0"
+    "googleapis": "^140.0.0",
+    "imapflow": "^1.2.13",
+    "mailparser": "^3.9.4",
+    "nodemailer": "^8.0.2"
   }
 }

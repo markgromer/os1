@@ -7,6 +7,9 @@ import path from 'node:path';
 
 import express from 'express';
 import { google } from 'googleapis';
+import { ImapFlow } from 'imapflow';
+import { simpleParser } from 'mailparser';
+import nodemailer from 'nodemailer';
 
 import { mcpCallTool, mcpListTools } from './mcpClient.js';
 import { buildMarcusSystemPrompt } from './marcus/core/build_system_prompt.js';
@@ -839,6 +842,320 @@ function maskSecretHint(value) {
   return `••••${raw.slice(-4)}`;
 }
 
+function normalizeNetworkPort(value, fallback) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(1, Math.min(65535, Math.floor(n)));
+}
+
+function normalizeBooleanFlag(value, fallback = false) {
+  if (typeof value === 'boolean') return value;
+  const s = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  if (s === '1' || s === 'true' || s === 'yes' || s === 'on') return true;
+  if (s === '0' || s === 'false' || s === 'no' || s === 'off') return false;
+  return fallback;
+}
+
+function normalizeEmailFolderList(input, fallback = []) {
+  const raw = Array.isArray(input)
+    ? input
+    : (typeof input === 'string' ? input.split(/[\n,;]+/g) : []);
+  const folders = raw
+    .map((item) => String(item || '').trim())
+    .filter(Boolean)
+    .slice(0, 20);
+  if (folders.length) return Array.from(new Set(folders));
+  return Array.isArray(fallback) ? Array.from(new Set(fallback.map((item) => String(item || '').trim()).filter(Boolean))).slice(0, 20) : [];
+}
+
+function normalizeEmailAddress(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function getEmailConfig(saved) {
+  const envImapHost = typeof process.env.IMAP_HOST === 'string' ? process.env.IMAP_HOST.trim() : '';
+  const savedImapHost = typeof saved?.imapHost === 'string' ? saved.imapHost.trim() : '';
+  const imapHost = envImapHost || savedImapHost;
+
+  const envImapPort = process.env.IMAP_PORT;
+  const imapPort = normalizeNetworkPort(envImapPort || saved?.imapPort, 993);
+  const imapSecure = normalizeBooleanFlag(process.env.IMAP_SECURE, normalizeBooleanFlag(saved?.imapSecure, imapPort === 993));
+  const envImapUser = typeof process.env.IMAP_USERNAME === 'string' ? process.env.IMAP_USERNAME.trim() : '';
+  const savedImapUser = typeof saved?.imapUsername === 'string' ? saved.imapUsername.trim() : '';
+  const imapUsername = envImapUser || savedImapUser;
+  const envImapPass = typeof process.env.IMAP_PASSWORD === 'string' ? process.env.IMAP_PASSWORD.trim() : '';
+  const savedImapPass = typeof saved?.imapPassword === 'string' ? saved.imapPassword.trim() : '';
+  const imapPassword = envImapPass || savedImapPass;
+
+  const envSmtpHost = typeof process.env.SMTP_HOST === 'string' ? process.env.SMTP_HOST.trim() : '';
+  const savedSmtpHost = typeof saved?.smtpHost === 'string' ? saved.smtpHost.trim() : '';
+  const smtpHost = envSmtpHost || savedSmtpHost;
+  const envSmtpPort = process.env.SMTP_PORT;
+  const smtpPort = normalizeNetworkPort(envSmtpPort || saved?.smtpPort, 465);
+  const smtpSecure = normalizeBooleanFlag(process.env.SMTP_SECURE, normalizeBooleanFlag(saved?.smtpSecure, smtpPort === 465));
+  const envSmtpUser = typeof process.env.SMTP_USERNAME === 'string' ? process.env.SMTP_USERNAME.trim() : '';
+  const savedSmtpUser = typeof saved?.smtpUsername === 'string' ? saved.smtpUsername.trim() : '';
+  const smtpUsername = envSmtpUser || savedSmtpUser;
+  const envSmtpPass = typeof process.env.SMTP_PASSWORD === 'string' ? process.env.SMTP_PASSWORD.trim() : '';
+  const savedSmtpPass = typeof saved?.smtpPassword === 'string' ? saved.smtpPassword.trim() : '';
+  const smtpPassword = envSmtpPass || savedSmtpPass;
+  const envFrom = typeof process.env.SMTP_FROM_ADDRESS === 'string' ? process.env.SMTP_FROM_ADDRESS.trim() : '';
+  const savedFrom = typeof saved?.smtpFromAddress === 'string' ? saved.smtpFromAddress.trim() : '';
+  const fromAddress = envFrom || savedFrom || smtpUsername;
+
+  const syncFolders = normalizeEmailFolderList(saved?.imapSyncFolders, ['INBOX']);
+  const archiveFolders = normalizeEmailFolderList(saved?.imapArchiveFolders, ['Archive', 'All Mail']);
+  const syncEnabled = saved?.emailSyncEnabled !== false;
+  const archiveKnowledgeEnabled = saved?.emailArchiveKnowledgeEnabled !== false;
+
+  return {
+    imap: {
+      host: imapHost,
+      port: imapPort,
+      secure: imapSecure,
+      username: imapUsername,
+      password: imapPassword,
+    },
+    smtp: {
+      host: smtpHost,
+      port: smtpPort,
+      secure: smtpSecure,
+      username: smtpUsername,
+      password: smtpPassword,
+    },
+    fromAddress,
+    syncFolders,
+    archiveFolders,
+    syncEnabled,
+    archiveKnowledgeEnabled,
+    imapConfigured: Boolean(imapHost && imapUsername && imapPassword),
+    smtpConfigured: Boolean(smtpHost && smtpUsername && smtpPassword),
+  };
+}
+
+function getParsedAddressRows(field) {
+  const rows = Array.isArray(field?.value) ? field.value : [];
+  return rows
+    .map((row) => ({
+      name: typeof row?.name === 'string' ? row.name.trim() : '',
+      address: normalizeEmailAddress(row?.address || ''),
+    }))
+    .filter((row) => row.address);
+}
+
+function getFirstParsedAddress(field) {
+  const rows = getParsedAddressRows(field);
+  return rows[0] || { name: '', address: '' };
+}
+
+function getAddressListText(field) {
+  return getParsedAddressRows(field).map((row) => row.address).join(', ');
+}
+
+function normalizeEmailBodyText(parsed) {
+  const raw = typeof parsed?.text === 'string'
+    ? parsed.text
+    : (typeof parsed?.htmlAsText === 'string' ? parsed.htmlAsText : '');
+  const text = normalizeInboxText(raw);
+  if (!text) return '';
+  return text.length > 20_000 ? `${text.slice(0, 20_000)}\n\n[truncated]` : text;
+}
+
+function deriveEmailThreadKey({ subject, parsed, folder, uid }) {
+  const msgId = typeof parsed?.messageId === 'string' ? parsed.messageId.trim() : '';
+  if (msgId) return msgId.slice(0, 140);
+  const inReplyTo = typeof parsed?.inReplyTo === 'string' ? parsed.inReplyTo.trim() : '';
+  if (inReplyTo) return inReplyTo.slice(0, 140);
+  const refs = Array.isArray(parsed?.references) ? parsed.references.map((x) => String(x || '').trim()).filter(Boolean) : [];
+  if (refs.length) return refs[0].slice(0, 140);
+  const cleanSubject = String(subject || '').trim().toLowerCase();
+  if (cleanSubject) return cleanSubject.slice(0, 140);
+  return `${String(folder || '').trim()}:${String(uid || '').trim()}`.slice(0, 140);
+}
+
+function makeEmailExternalId({ folder, uid, messageId }) {
+  const basis = String(messageId || `${folder}:${uid}` || '').trim();
+  return crypto.createHash('sha1').update(basis || makeId()).digest('hex').slice(0, 24);
+}
+
+function buildEmailKnowledgeDocument(message, businessKey) {
+  const m = message && typeof message === 'object' ? message : {};
+  const title = String(m.subject || '').trim() || `Email ${String(m.dateIso || '').trim() || 'message'}`;
+  const parts = [
+    title ? `Subject: ${title}` : '',
+    m.fromAddress ? `From: ${m.fromName ? `${m.fromName} <${m.fromAddress}>` : m.fromAddress}` : '',
+    m.toAddresses ? `To: ${m.toAddresses}` : '',
+    m.dateIso ? `Date: ${m.dateIso}` : '',
+    m.folder ? `Folder: ${m.folder}` : '',
+    '',
+    String(m.body || '').trim(),
+  ].filter(Boolean);
+  const folderTag = String(m.folder || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  return {
+    id: `email-${String(m.externalId || '').trim()}`,
+    title,
+    text: parts.join('\n'),
+    source: 'email-archive',
+    businessKey,
+    tags: ['email', 'archive'].concat(folderTag ? [folderTag] : []),
+    metadata: {
+      folder: String(m.folder || '').trim(),
+      messageId: String(m.messageId || '').trim(),
+      fromAddress: String(m.fromAddress || '').trim(),
+      toAddresses: String(m.toAddresses || '').trim(),
+      subject: title,
+      sentAt: String(m.dateIso || '').trim(),
+      externalId: String(m.externalId || '').trim(),
+    },
+  };
+}
+
+async function withImapClient(emailCfg, fn) {
+  if (!emailCfg?.imapConfigured) throw new Error('IMAP is not configured. Add IMAP host, username, and password first.');
+  const client = new ImapFlow({
+    host: emailCfg.imap.host,
+    port: emailCfg.imap.port,
+    secure: emailCfg.imap.secure,
+    auth: {
+      user: emailCfg.imap.username,
+      pass: emailCfg.imap.password,
+    },
+    logger: false,
+  });
+
+  await client.connect();
+  try {
+    return await fn(client);
+  } finally {
+    try {
+      await client.logout();
+    } catch {
+      try {
+        client.close();
+      } catch {
+        // ignore close failures
+      }
+    }
+  }
+}
+
+function createSmtpTransport(emailCfg) {
+  if (!emailCfg?.smtpConfigured) throw new Error('SMTP is not configured. Add SMTP host, username, and password first.');
+  return nodemailer.createTransport({
+    host: emailCfg.smtp.host,
+    port: emailCfg.smtp.port,
+    secure: emailCfg.smtp.secure,
+    auth: {
+      user: emailCfg.smtp.username,
+      pass: emailCfg.smtp.password,
+    },
+  });
+}
+
+async function fetchImapMessages(saved, options = {}) {
+  const emailCfg = getEmailConfig(saved);
+  const mode = options?.mode === 'archive' ? 'archive' : 'sync';
+  const folders = normalizeEmailFolderList(
+    options?.folders,
+    mode === 'archive' ? emailCfg.archiveFolders : emailCfg.syncFolders,
+  );
+  if (!folders.length) {
+    return { ok: false, error: `No ${mode === 'archive' ? 'archive' : 'sync'} folders are configured.` };
+  }
+
+  const limitPerFolderRaw = Number(options?.limitPerFolder);
+  const limitPerFolder = Number.isFinite(limitPerFolderRaw)
+    ? Math.max(1, Math.min(200, Math.floor(limitPerFolderRaw)))
+    : (mode === 'archive' ? 40 : 25);
+  const sinceDaysRaw = Number(options?.sinceDays);
+  const sinceDays = Number.isFinite(sinceDaysRaw)
+    ? Math.max(0, Math.min(3650, Math.floor(sinceDaysRaw)))
+    : (mode === 'archive' ? 365 : 30);
+  const unseenOnly = options?.unseenOnly === true;
+  const sinceCutoffMs = sinceDays > 0 ? (Date.now() - (sinceDays * 24 * 60 * 60 * 1000)) : 0;
+
+  const messages = [];
+  const folderErrors = [];
+
+  await withImapClient(emailCfg, async (client) => {
+    for (const folder of folders) {
+      try {
+        const mailbox = await client.mailboxOpen(folder, { readOnly: true });
+        const total = Number(mailbox?.exists || 0);
+        if (!total) continue;
+
+        const fetchWindow = Math.max(limitPerFolder, Math.min(total, Math.max(limitPerFolder * (unseenOnly ? 8 : 4), limitPerFolder)));
+        const seqStart = Math.max(1, total - fetchWindow + 1);
+        const folderMessages = [];
+
+        for await (const msg of client.fetch(`${seqStart}:*`, {
+          uid: true,
+          envelope: true,
+          source: true,
+          internalDate: true,
+          flags: true,
+        })) {
+          const date = msg?.internalDate instanceof Date ? msg.internalDate : new Date(msg?.internalDate || 0);
+          if (sinceCutoffMs && Number.isFinite(date.getTime()) && date.getTime() < sinceCutoffMs) continue;
+
+          const flagList = Array.isArray(msg?.flags)
+            ? msg.flags.map((flag) => String(flag || ''))
+            : (msg?.flags && typeof msg.flags[Symbol.iterator] === 'function'
+              ? Array.from(msg.flags, (flag) => String(flag || ''))
+              : []);
+          if (unseenOnly && flagList.includes('\\Seen')) continue;
+          if (!msg?.source) continue;
+
+          const parsed = await simpleParser(msg.source);
+          const subject = String(parsed?.subject || msg?.envelope?.subject || '').trim();
+          const body = normalizeEmailBodyText(parsed);
+          if (!subject && !body) continue;
+
+          const from = getFirstParsedAddress(parsed?.from);
+          const toAddresses = getAddressListText(parsed?.to);
+          const messageId = typeof parsed?.messageId === 'string' ? parsed.messageId.trim() : '';
+          const dateIso = Number.isFinite(date.getTime()) ? date.toISOString() : nowIso();
+          folderMessages.push({
+            folder,
+            uid: Number(msg?.uid) || 0,
+            subject,
+            body,
+            fromName: from.name,
+            fromAddress: from.address,
+            toAddresses,
+            messageId,
+            dateIso,
+            externalId: makeEmailExternalId({ folder, uid: msg?.uid, messageId }),
+            threadKey: deriveEmailThreadKey({ subject, parsed, folder, uid: msg?.uid }),
+          });
+        }
+
+        folderMessages.sort((a, b) => String(b.dateIso || '').localeCompare(String(a.dateIso || '')));
+        messages.push(...folderMessages.slice(0, limitPerFolder));
+      } catch (err) {
+        folderErrors.push({ folder, error: String(err?.message || 'Failed to fetch folder') });
+      }
+    }
+  });
+
+  return {
+    ok: true,
+    mode,
+    folders,
+    limitPerFolder,
+    sinceDays,
+    messages,
+    folderErrors,
+  };
+}
+
+function buildInboxTextFromEmailMessage(message) {
+  const subject = String(message?.subject || '').trim();
+  const body = String(message?.body || '').trim();
+  const parts = [subject ? `Subject: ${subject}` : '', body].filter(Boolean);
+  return parts.join('\n\n').trim();
+}
+
 function getQdrantConfig(saved) {
   const envUrl = normalizeBaseUrl(process.env.QDRANT_URL || process.env.QDRANT_HOST || '');
   const savedUrl = normalizeBaseUrl(saved?.qdrantUrl || '');
@@ -1302,6 +1619,8 @@ function sanitizeSettingsForClient(settings) {
   delete clone.airtableByBusinessKey;
   delete clone.airtablePat;
   delete clone.qdrantApiKey;
+  delete clone.imapPassword;
+  delete clone.smtpPassword;
   return clone;
 }
 
@@ -5299,6 +5618,12 @@ app.get('/api/settings', async (req, res) => {
   const qdrantConfigured = Boolean(qdrant.configured);
   const qdrantUseForMarcus = Boolean(qdrant.useForMarcus);
 
+  const email = getEmailConfig(settings);
+  const imapConfigured = Boolean(email.imapConfigured);
+  const smtpConfigured = Boolean(email.smtpConfigured);
+  const emailSyncEnabled = Boolean(email.syncEnabled);
+  const emailArchiveKnowledgeEnabled = Boolean(email.archiveKnowledgeEnabled);
+
   const mcpEff = getMcpEffectiveSettings(settings);
   const mcpEnabled = Boolean(mcpEff.enabled);
   const mcpConfigured = Boolean(mcpEff.configured);
@@ -5326,6 +5651,10 @@ app.get('/api/settings', async (req, res) => {
     qdrantEnabled,
     qdrantConfigured,
     qdrantUseForMarcus,
+    imapConfigured,
+    smtpConfigured,
+    emailSyncEnabled,
+    emailArchiveKnowledgeEnabled,
     mcpEnabled,
     mcpConfigured,
   });
@@ -6490,6 +6819,281 @@ app.post('/api/integrations/qdrant/search', async (req, res) => {
     res.json({ ok: true, collection: out.collection, matches: out.matches });
   } catch (err) {
     res.status(500).json({ ok: false, error: err?.message || 'Failed to search Qdrant knowledge base' });
+  }
+});
+
+app.get('/api/integrations/email/status', async (req, res) => {
+  try {
+    const settings = await readSettings();
+    const email = getEmailConfig(settings);
+    res.json({
+      ok: true,
+      imapConfigured: Boolean(email.imapConfigured),
+      smtpConfigured: Boolean(email.smtpConfigured),
+      emailSyncEnabled: Boolean(email.syncEnabled),
+      emailArchiveKnowledgeEnabled: Boolean(email.archiveKnowledgeEnabled),
+      syncFolders: email.syncFolders,
+      archiveFolders: email.archiveFolders,
+      fromAddress: email.fromAddress,
+      imapHost: email.imap.host,
+      smtpHost: email.smtp.host,
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message || 'Failed to load email integration status' });
+  }
+});
+
+app.post('/api/integrations/email/test', async (req, res) => {
+  try {
+    const settings = await readSettings();
+    const email = getEmailConfig(settings);
+    const result = {
+      ok: true,
+      imapConfigured: Boolean(email.imapConfigured),
+      smtpConfigured: Boolean(email.smtpConfigured),
+      imap: { ok: false, skipped: !email.imapConfigured },
+      smtp: { ok: false, skipped: !email.smtpConfigured },
+    };
+
+    if (email.imapConfigured) {
+      try {
+        await withImapClient(email, async (client) => {
+          const folder = email.syncFolders[0] || 'INBOX';
+          const mailbox = await client.mailboxOpen(folder, { readOnly: true });
+          result.imap = { ok: true, folder, exists: Number(mailbox?.exists || 0) };
+        });
+      } catch (err) {
+        result.ok = false;
+        result.imap = { ok: false, error: err?.message || 'IMAP connection failed' };
+      }
+    }
+
+    if (email.smtpConfigured) {
+      try {
+        const transport = createSmtpTransport(email);
+        await transport.verify();
+        result.smtp = { ok: true, fromAddress: email.fromAddress };
+      } catch (err) {
+        result.ok = false;
+        result.smtp = { ok: false, error: err?.message || 'SMTP verification failed' };
+      }
+    }
+
+    const status = result.ok ? 200 : 502;
+    res.status(status).json(result);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message || 'Failed to test email integration' });
+  }
+});
+
+app.post('/api/integrations/email/send', async (req, res) => {
+  try {
+    const settings = await readSettings();
+    const email = getEmailConfig(settings);
+    if (!email.smtpConfigured) {
+      res.status(400).json({ ok: false, error: 'SMTP is not configured.' });
+      return;
+    }
+
+    const to = typeof req.body?.to === 'string' ? req.body.to.trim() : '';
+    const cc = typeof req.body?.cc === 'string' ? req.body.cc.trim() : '';
+    const bcc = typeof req.body?.bcc === 'string' ? req.body.bcc.trim() : '';
+    const subject = typeof req.body?.subject === 'string' ? req.body.subject.trim() : '';
+    const text = typeof req.body?.text === 'string' ? req.body.text.trim() : '';
+    const html = typeof req.body?.html === 'string' ? req.body.html.trim() : '';
+    const from = typeof req.body?.from === 'string' && req.body.from.trim() ? req.body.from.trim() : email.fromAddress;
+    const replyTo = typeof req.body?.replyTo === 'string' ? req.body.replyTo.trim() : '';
+    if (!to) {
+      res.status(400).json({ ok: false, error: 'to is required' });
+      return;
+    }
+    if (!subject) {
+      res.status(400).json({ ok: false, error: 'subject is required' });
+      return;
+    }
+    if (!text && !html) {
+      res.status(400).json({ ok: false, error: 'text or html is required' });
+      return;
+    }
+
+    const transport = createSmtpTransport(email);
+    const info = await transport.sendMail({
+      from,
+      to,
+      ...(cc ? { cc } : {}),
+      ...(bcc ? { bcc } : {}),
+      ...(replyTo ? { replyTo } : {}),
+      subject,
+      ...(text ? { text } : {}),
+      ...(html ? { html } : {}),
+    });
+
+    res.json({
+      ok: true,
+      messageId: info?.messageId || '',
+      accepted: Array.isArray(info?.accepted) ? info.accepted : [],
+      rejected: Array.isArray(info?.rejected) ? info.rejected : [],
+      response: String(info?.response || ''),
+    });
+  } catch (err) {
+    res.status(502).json({ ok: false, error: err?.message || 'Failed to send email' });
+  }
+});
+
+app.post('/api/integrations/email/sync', async (req, res) => {
+  try {
+    const settings = await readSettings();
+    const email = getEmailConfig(settings);
+    if (!email.imapConfigured) {
+      res.status(400).json({ ok: false, error: 'IMAP is not configured.' });
+      return;
+    }
+
+    const businessKey = typeof req.body?.businessKey === 'string' && req.body.businessKey.trim()
+      ? req.body.businessKey.trim()
+      : getBusinessKeyFromContext();
+    const out = await fetchImapMessages(settings, {
+      mode: 'sync',
+      folders: req.body?.folders,
+      limitPerFolder: req.body?.limitPerFolder,
+      sinceDays: req.body?.sinceDays,
+      unseenOnly: req.body?.unseenOnly === true,
+    });
+    if (!out.ok) {
+      res.status(400).json(out);
+      return;
+    }
+
+    let created = 0;
+    let deduped = 0;
+    const docs = [];
+    for (const message of out.messages) {
+      const result = await addInboxIntegrationItem({
+        source: 'email',
+        externalId: message.externalId,
+        text: buildInboxTextFromEmailMessage(message),
+        businessKey,
+        toNumber: message.toAddresses,
+        fromNumber: message.fromAddress,
+        fromName: message.fromName,
+        contactName: message.fromName,
+        threadKey: message.threadKey,
+        channel: 'imap',
+      });
+      if (result?.created) created += 1;
+      else deduped += 1;
+      if (req.body?.upsertKnowledge === true) docs.push(buildEmailKnowledgeDocument(message, businessKey));
+    }
+
+    let knowledge = null;
+    if (docs.length) {
+      const upsert = await qdrantUpsertDocuments(settings, docs, {
+        businessKey,
+        ensureCollection: req.body?.ensureCollection !== false,
+      });
+      if (!upsert.ok) {
+        res.status(502).json({ ok: false, error: upsert.error || 'Failed to upsert synced email knowledge' });
+        return;
+      }
+      knowledge = { collection: upsert.collection, count: upsert.count };
+    }
+
+    res.json({
+      ok: true,
+      businessKey,
+      fetched: out.messages.length,
+      created,
+      deduped,
+      folders: out.folders,
+      folderErrors: out.folderErrors,
+      knowledge,
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message || 'Failed to sync email inbox' });
+  }
+});
+
+app.post('/api/integrations/email/archive-to-qdrant', async (req, res) => {
+  try {
+    const settings = await readSettings();
+    const businessKey = typeof req.body?.businessKey === 'string' && req.body.businessKey.trim()
+      ? req.body.businessKey.trim()
+      : getBusinessKeyFromContext();
+    const mode = typeof req.body?.source === 'string' && req.body.source.trim().toLowerCase() === 'local'
+      ? 'local'
+      : 'imap';
+
+    let docs = [];
+    let fetched = 0;
+    let folders = [];
+    let folderErrors = [];
+
+    if (mode === 'local') {
+      const store = await readStore();
+      const archivedItems = (Array.isArray(store.inboxItems) ? store.inboxItems : [])
+        .filter((item) => String(item?.source || '').trim().toLowerCase() === 'email')
+        .filter((item) => String(item?.status || '').trim().toLowerCase() === 'archived')
+        .filter((item) => !businessKey || String(item?.businessKey || '').trim() === businessKey)
+        .slice(0, 500);
+      fetched = archivedItems.length;
+      docs = archivedItems.map((item) => buildEmailKnowledgeDocument({
+        externalId: String(item?.id || '').trim(),
+        subject: String(item?.text || '').split('\n')[0].replace(/^Subject:\s*/i, '').trim(),
+        body: String(item?.text || '').trim(),
+        fromName: String(item?.fromName || item?.contactName || '').trim(),
+        fromAddress: String(item?.fromNumber || '').trim(),
+        toAddresses: String(item?.toNumber || '').trim(),
+        dateIso: String(item?.lastMessageAt || item?.updatedAt || item?.createdAt || '').trim(),
+        folder: 'local-archived-inbox',
+        messageId: String(item?.threadKey || item?.id || '').trim(),
+      }, businessKey));
+      folders = ['local-archived-inbox'];
+    } else {
+      const out = await fetchImapMessages(settings, {
+        mode: 'archive',
+        folders: req.body?.folders,
+        limitPerFolder: req.body?.limitPerFolder,
+        sinceDays: req.body?.sinceDays,
+        unseenOnly: false,
+      });
+      if (!out.ok) {
+        res.status(400).json(out);
+        return;
+      }
+      fetched = out.messages.length;
+      folders = out.folders;
+      folderErrors = out.folderErrors;
+      docs = out.messages.map((message) => buildEmailKnowledgeDocument(message, businessKey));
+    }
+
+    if (!docs.length) {
+      res.json({ ok: true, source: mode, fetched, folders, folderErrors, upserted: 0, collection: '' });
+      return;
+    }
+
+    const upsert = await qdrantUpsertDocuments(settings, docs, {
+      businessKey,
+      ensureCollection: req.body?.ensureCollection !== false,
+    });
+    if (!upsert.ok) {
+      const code = /not configured|required/i.test(String(upsert.error || '')) ? 400 : 502;
+      res.status(code).json(upsert);
+      return;
+    }
+
+    res.json({
+      ok: true,
+      source: mode,
+      businessKey,
+      fetched,
+      folders,
+      folderErrors,
+      upserted: upsert.count,
+      collection: upsert.collection,
+      createdCollection: Boolean(upsert.createdCollection),
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message || 'Failed to ingest archived email knowledge' });
   }
 });
 
