@@ -3774,6 +3774,7 @@ function renderInbox(container) {
                 <button id="btn-inbox-marty-filter" class="px-3 py-1.5 rounded border border-amber-600/40 bg-amber-600/15 text-[11px] font-mono text-amber-200 hover:bg-amber-600/25 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Run Marty Filter</button>
                 <button id="btn-inbox-marty-triage" class="px-3 py-1.5 rounded border border-blue-600/40 bg-blue-600/15 text-[11px] font-mono text-blue-200 hover:bg-blue-600/25 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Run Marty Triage</button>
                 <button id="btn-inbox-marty-auto" class="px-3 py-1.5 rounded border border-emerald-600/40 bg-emerald-600/15 text-[11px] font-mono text-emerald-200 hover:bg-emerald-600/25 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Run Marty Auto</button>
+                <button id="btn-inbox-marty-coach" class="px-3 py-1.5 rounded border border-purple-600/40 bg-purple-600/15 text-[11px] font-mono text-purple-200 hover:bg-purple-600/25 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Marty Coach</button>
                 <label class="flex items-center gap-2 text-xs text-zinc-400 select-none">
                     <input id="inbox-show-archived" type="checkbox" class="accent-blue-500" ${state.inboxShowArchived ? 'checked' : ''} />
                     Show archived
@@ -4021,6 +4022,29 @@ function renderInbox(container) {
             } finally {
                 autoBtn.disabled = false;
                 autoBtn.textContent = prev;
+            }
+        };
+    }
+
+    const coachBtn = header.querySelector('#btn-inbox-marty-coach');
+    if (coachBtn) {
+        coachBtn.onclick = async () => {
+            coachBtn.disabled = true;
+            const prev = coachBtn.textContent;
+            coachBtn.textContent = 'Coaching...';
+            try {
+                const result = await coachNextInboxStep();
+                if (result?.applied) {
+                    const msg = `Marty coach applied. Linked: ${result.linked ? 'yes' : 'no'}. Tasks created: ${Number(result.tasksCreated || 0)}.`;
+                    speakMarty(msg);
+                    alert(msg);
+                }
+                renderMain();
+            } catch (e) {
+                alert(e?.message || 'Marty coach failed');
+            } finally {
+                coachBtn.disabled = false;
+                coachBtn.textContent = prev;
             }
         };
     }
@@ -4463,6 +4487,52 @@ async function runMartyInboxAutomation(options = {}) {
     if (data?.store && typeof data.store === 'object') applyStore(data.store);
     await fetchState({ background: false });
     return data;
+}
+
+async function coachNextInboxStep() {
+    const visible = getInboxItems();
+    const candidates = visible.filter((x) => String(x?.status || '').trim().toLowerCase() === 'new');
+    if (!candidates.length) throw new Error('No new inbox items to coach right now');
+
+    const target = candidates.find((x) => !safeText(x?.projectId).trim()) || candidates[0];
+    const inboxId = safeText(target?.id).trim();
+    if (!inboxId) throw new Error('Missing inbox item for coaching');
+
+    await runMartyInboxTriage({ onlyNew: false, includeArchived: false, limit: 200 });
+    const rec = getMartyInboxRecommendation(inboxId);
+    if (!rec) throw new Error('No recommendation available for next inbox item');
+
+    const projectName = safeText(rec?.project?.projectName).trim() || 'no project recommendation';
+    const topTask = safeText(rec?.tasks?.[0]?.title).trim() || '';
+    const lines = [
+        'Marty Coach ready.',
+        `Inbox: ${previewText(safeText(target?.text), 100) || inboxId}`,
+        `Project suggestion: ${projectName}`,
+        `Top task: ${topTask || 'none'}`,
+        '',
+        'Apply this now? (link project + create top task)',
+    ];
+    const ok = window.confirm(lines.join('\n'));
+    if (!ok) return { applied: false, inboxId };
+
+    let linked = false;
+    let tasksCreated = 0;
+    const recProjectId = safeText(rec?.project?.projectId).trim();
+    if (recProjectId && !safeText(target?.projectId).trim()) {
+        await linkInboxItemToProject(inboxId, recProjectId);
+        linked = true;
+    }
+    if (topTask) {
+        const result = await createTaskFromMartyRecommendation(inboxId, rec);
+        tasksCreated = Number(result?.created || 0);
+    }
+    if (!linked && !tasksCreated) {
+        await patchInboxItem(inboxId, { status: 'Triaged' });
+    }
+
+    await fetchMartyAutomationDigest().catch(() => {});
+    await fetchState({ background: false });
+    return { applied: true, inboxId, linked, tasksCreated };
 }
 
 async function fetchMartyAutomationDigest() {
@@ -8429,6 +8499,11 @@ function renderDashboard(container, sidePort) {
     if (inboxNewCount > 3) martyInsights.push({ icon: 'fa-inbox text-purple-400', text: `${inboxNewCount} inbox items accumulating. Consider a quick triage pass.` });
     if (totalDoneWeek > 0) martyInsights.push({ icon: 'fa-chart-line text-emerald-400', text: `${totalDoneWeek} tasks completed this week. ${totalDoneWeek >= 5 ? 'Strong momentum.' : 'Keep it going.'}` });
     if (!martyInsights.length) martyInsights.push({ icon: 'fa-circle-check text-emerald-400', text: 'All clear. Review upcoming projects or set today\u2019s outcomes.' });
+    const martyCheckin = totalOverdue > 0
+        ? 'I can run a full cleanup sweep right now and queue only meaningful actions.'
+        : (inboxUnassignedNewCount > 0
+            ? `I found ${inboxUnassignedNewCount} inbox item${inboxUnassignedNewCount === 1 ? '' : 's'} without a project — want me to coach the next one?`
+            : 'I can proactively brief, triage, and queue approvals while you stay in flow.');
 
     /* ── Helper: expandable card wrapper ─────────────────────────── */
     function makeCard(id, icon, iconColor, label, rightHtml, previewHtml, bodyHtml, opts) {
@@ -8499,6 +8574,8 @@ function renderDashboard(container, sidePort) {
             <div class="flex items-center gap-1.5 shrink-0">
                 <button id="dash-ask-marty" class="px-2 py-1 rounded border border-blue-500/25 bg-blue-500/10 text-[9px] font-mono text-blue-300 hover:bg-blue-500/20 transition-colors">Ask</button>
                 <button id="dash-brief-marty" class="px-2 py-1 rounded border border-blue-500/25 bg-blue-500/10 text-[9px] font-mono text-blue-300 hover:bg-blue-500/20 transition-colors">Brief me</button>
+                <button id="dash-marty-sweep" class="px-2 py-1 rounded border border-emerald-500/25 bg-emerald-500/10 text-[9px] font-mono text-emerald-300 hover:bg-emerald-500/20 transition-colors">Sweep</button>
+                <button id="dash-marty-coach" class="px-2 py-1 rounded border border-purple-500/25 bg-purple-500/10 text-[9px] font-mono text-purple-300 hover:bg-purple-500/20 transition-colors">Coach</button>
                 ${extraInsights.length ? '<i class="fa-solid fa-chevron-down expand-chevron"></i>' : ''}
             </div>
         </div>
@@ -8507,6 +8584,7 @@ function renderDashboard(container, sidePort) {
                 <i class="fa-solid ${primaryInsight.icon} text-[10px] mt-0.5 shrink-0"></i>
                 <span class="text-[11px] leading-relaxed">${escapeHtml(primaryInsight.text)}</span>
             </div>
+            <div class="mt-1.5 text-[10px] font-mono text-blue-200/70">${escapeHtml(martyCheckin)}</div>
         </div>
         ${extraInsights.length ? `<div class="dash-card-body px-3 pb-3"><div class="space-y-1.5">${extraInsights.map(ins => `<div class="marty-insight flex items-start gap-2"><i class="fa-solid ${ins.icon} text-[10px] mt-0.5 shrink-0"></i><span class="text-[11px] leading-relaxed">${escapeHtml(ins.text)}</span></div>`).join('')}</div></div>` : ''}
     `;
@@ -9544,8 +9622,66 @@ function renderDashboard(container, sidePort) {
     if (timerReset) { timerReset.addEventListener('click', () => { clearInterval(state.focusTimer.intervalId); state.focusTimer.running = false; state.focusTimer.intervalId = null; state.focusTimer.remaining = state.focusTimer.duration; if (state.currentView==='dashboard') renderMain(); }); }
 
     // MARTY buttons
-    wrap.querySelector('#dash-ask-marty')?.addEventListener('click', () => { const inp = document.getElementById('cmd-input'); if (inp) { inp.focus(); inp.value = 'What should I focus on right now?'; } });
-    wrap.querySelector('#dash-brief-marty')?.addEventListener('click', () => { const inp = document.getElementById('cmd-input'); if (inp) { inp.focus(); inp.value = 'Give me a brief status update on everything.'; } });
+    wrap.querySelector('#dash-ask-marty')?.addEventListener('click', () => {
+        const inp = document.getElementById('cmd-input');
+        if (inp) {
+            inp.focus();
+            inp.value = 'What should I focus on right now?';
+        }
+        speakMarty('I am ready. Ask me for your next best action.');
+    });
+    wrap.querySelector('#dash-brief-marty')?.addEventListener('click', () => {
+        const inp = document.getElementById('cmd-input');
+        if (inp) {
+            inp.focus();
+            inp.value = 'Give me a brief status update on everything.';
+        }
+        const briefLine = martyInsights.slice(0, 2).map((x) => safeText(x?.text)).filter(Boolean).join(' ');
+        if (briefLine) speakMarty(briefLine);
+    });
+    wrap.querySelector('#dash-marty-sweep')?.addEventListener('click', async (e) => {
+        const btn = e.currentTarget;
+        if (!btn) return;
+        btn.disabled = true;
+        const prev = btn.textContent;
+        btn.textContent = 'Sweeping...';
+        try {
+            const filtered = await runMartyInboxFilter();
+            const triage = await runMartyInboxTriage({ onlyNew: true, includeArchived: false, limit: 120 });
+            const auto = await runMartyInboxAutomation();
+            await fetchMartyAutomationDigest().catch(() => {});
+            const summary = `Sweep complete. Archived ${Number(filtered?.archived || 0)} noise items, triaged ${Number(triage?.count || 0)}, queued ${Number(auto?.proposed || 0)} approvals.`;
+            speakMarty(summary);
+            alert(summary);
+            if (state.currentView === 'dashboard') renderMain();
+        } catch (err) {
+            alert(err?.message || 'Marty sweep failed');
+        } finally {
+            btn.disabled = false;
+            btn.textContent = prev;
+        }
+    });
+    wrap.querySelector('#dash-marty-coach')?.addEventListener('click', async (e) => {
+        const btn = e.currentTarget;
+        if (!btn) return;
+        btn.disabled = true;
+        const prev = btn.textContent;
+        btn.textContent = 'Coaching...';
+        try {
+            await openInbox();
+            const result = await coachNextInboxStep();
+            if (result?.applied) {
+                const msg = `Coaching applied. Linked: ${result.linked ? 'yes' : 'no'}. Tasks created: ${Number(result.tasksCreated || 0)}.`;
+                speakMarty(msg);
+                alert(msg);
+            }
+        } catch (err) {
+            alert(err?.message || 'Marty coach failed');
+        } finally {
+            btn.disabled = false;
+            btn.textContent = prev;
+        }
+    });
 
     // Shortcuts
     const shortcutsBtn = wrap.querySelector('#dash-shortcuts-btn');
