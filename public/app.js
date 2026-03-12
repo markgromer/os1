@@ -249,7 +249,8 @@ function stripForSpeech(input) {
 function pulseMartyAmbient(mode = 'active', durationMs = 1400) {
     try {
         const bars = document.querySelectorAll('.marty-ambient');
-        if (!bars || !bars.length) return;
+        const avatars = document.querySelectorAll('.marty-dashboard-avatar');
+        if ((!bars || !bars.length) && (!avatars || !avatars.length)) return;
         bars.forEach((bar) => {
             bar.classList.remove('marty-busy', 'marty-responding');
             if (mode === 'busy') bar.classList.add('marty-busy');
@@ -259,6 +260,18 @@ function pulseMartyAmbient(mode = 'active', durationMs = 1400) {
             const activeMs = Number.isFinite(Number(durationMs)) ? Math.max(250, Math.min(5000, Number(durationMs))) : 1400;
             window.setTimeout(() => {
                 bar.classList.remove('marty-live', 'marty-busy', 'marty-responding');
+            }, activeMs);
+        });
+        avatars.forEach((avatar) => {
+            avatar.classList.remove('idle', 'busy', 'responding');
+            if (mode === 'busy') avatar.classList.add('busy');
+            else if (mode === 'responding') avatar.classList.add('responding');
+            else avatar.classList.add('idle');
+
+            const activeMs = Number.isFinite(Number(durationMs)) ? Math.max(250, Math.min(5000, Number(durationMs))) : 1400;
+            window.setTimeout(() => {
+                avatar.classList.remove('busy', 'responding');
+                avatar.classList.add('idle');
             }, activeMs);
         });
     } catch {
@@ -8689,6 +8702,7 @@ function renderDashboard(container, sidePort) {
         <div class="dash-card-head flex items-center gap-3 px-3 py-2.5">
             <div class="marty-status-dot shrink-0"></div>
             <div class="flex items-center gap-2 min-w-0 flex-1">
+                <div class="marty-orb marty-dashboard-avatar idle shrink-0" aria-hidden="true"></div>
                 <span class="text-[10px] font-mono uppercase tracking-widest text-blue-300">MARTY</span>
                 <span class="text-[9px] font-mono text-blue-400/40">\u2014 monitoring ${activeProjects.length} projects, ${allTasks.filter(t=>!isDoneTask(t)).length} tasks</span>
             </div>
@@ -9936,6 +9950,7 @@ function renderDashboardCommandCenter(container, sidePort) {
         <div class="dash-card-head flex items-center justify-between gap-2 px-3 py-2.5">
             <div class="flex items-center gap-2 min-w-0">
                 <div class="marty-status-dot shrink-0"></div>
+                <div class="marty-orb marty-dashboard-avatar idle shrink-0" aria-hidden="true"></div>
                 <span class="text-[10px] font-mono uppercase tracking-widest text-blue-300">MARTY</span>
             </div>
             <div class="text-[9px] font-mono text-ops-light/50">Dashboard Console</div>
