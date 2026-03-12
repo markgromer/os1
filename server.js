@@ -3345,7 +3345,7 @@ function suggestDelegateForInboxItem(store, signalText, projectRecommendation) {
   };
 }
 
-function buildMartyInboxRecommendation(store, item) {
+function buildMarcusInboxRecommendation(store, item) {
   const it = item && typeof item === 'object' ? item : {};
   const signalText = extractInboxSignalText(it);
   const project = inferProjectRecommendationForInboxItem(store, it, signalText);
@@ -3363,6 +3363,8 @@ function buildMartyInboxRecommendation(store, item) {
     generatedAt: nowIso(),
   };
 }
+
+const buildMartyInboxRecommendation = buildMarcusInboxRecommendation;
 
 function hasActionCueInText(text) {
   const s = String(text || '').toLowerCase().replace(/\s+/g, ' ').trim();
@@ -3393,7 +3395,7 @@ function shouldSuppressInboxRadarItem(item, settings) {
   const signal = extractInboxSignalText(it);
   const level = normalizeSmsAckFilterLevel(settings?.smsAckFilterLevel);
 
-  if (src === 'marty') return true;
+  if (src === 'marty' || src === 'marcus') return true;
   if (isLowSignalAcknowledgementText(signal, level)) return true;
 
   const isSystemLike = src.includes('system') || src.includes('notification') || src.includes('alert');
@@ -7230,7 +7232,7 @@ app.get('/api/inbox', async (req, res) => {
   res.json({ revision: store.revision, updatedAt: store.updatedAt, items });
 });
 
-app.post('/api/inbox/marty-filter', async (req, res) => {
+app.post(['/api/inbox/marcus-filter', '/api/inbox/marty-filter'], async (req, res) => {
   writeLock = writeLock.then(async () => {
     const store = await readStore();
     const collapsed = collapseSmsInboxThreads(store);
@@ -7251,7 +7253,7 @@ app.post('/api/inbox/marty-filter', async (req, res) => {
 
       const src = String(it?.source || '').trim().toLowerCase();
       const signalText = extractInboxSignalText(it);
-      const sourceIsSystemNoise = src === 'marty';
+      const sourceIsSystemNoise = src === 'marty' || src === 'marcus';
       const isAckNoise = isLowSignalAcknowledgementText(signalText, level);
       if (!sourceIsSystemNoise && !isAckNoise) return item;
 
@@ -7291,7 +7293,7 @@ app.post('/api/inbox/marty-filter', async (req, res) => {
   await writeLock;
 });
 
-app.get('/api/inbox/marty-triage', async (req, res) => {
+app.get(['/api/inbox/marcus-triage', '/api/inbox/marty-triage'], async (req, res) => {
   try {
     const store = await readStore();
     const settings = await readSettings();
@@ -7311,7 +7313,7 @@ app.get('/api/inbox/marty-triage', async (req, res) => {
 
     const recommendations = list
       .slice(0, limit)
-      .map((item) => buildMartyInboxRecommendation(store, item));
+      .map((item) => buildMarcusInboxRecommendation(store, item));
 
     res.json({
       ok: true,
@@ -7542,7 +7544,7 @@ app.post('/api/inbox/automation/run', async (req, res) => {
         continue;
       }
 
-      const recommendation = buildMartyInboxRecommendation(store, current);
+      const recommendation = buildMarcusInboxRecommendation(store, current);
       const recTasks = Array.isArray(recommendation?.tasks)
         ? recommendation.tasks.map((t) => ({
           title: String(t?.title || '').trim(),
@@ -7707,11 +7709,11 @@ app.get('/api/me/dashboard', async (req, res) => {
 
       const items = getVisibleInboxItemsFromSettings(store?.inboxItems, settings);
 
-      // Latest Marty brief (if any) for this business.
+      // Latest M.A.R.C.U.S. brief (if any) for this business.
       let latestBrief = null;
       for (const item of items) {
         const src = String(item?.source || '').trim().toLowerCase();
-        if (src !== 'marty') continue;
+        if (src !== 'marty' && src !== 'marcus') continue;
         const ts = String(item?.updatedAt || item?.createdAt || '').trim();
         const bestTs = String(latestBrief?.updatedAt || latestBrief?.createdAt || '').trim();
         if (!latestBrief || ts > bestTs) latestBrief = item;
@@ -10134,7 +10136,10 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
         })
         .slice(0, 18);
 
-      const inboxNew = inbox.filter((it) => String(it?.status || '').trim().toLowerCase() === 'new' && String(it?.source || '').trim().toLowerCase() !== 'marty');
+      const inboxNew = inbox.filter((it) => {
+        const src = String(it?.source || '').trim().toLowerCase();
+        return String(it?.status || '').trim().toLowerCase() === 'new' && src !== 'marty' && src !== 'marcus';
+      });
       const inboxLines = inboxNew
         .slice()
         .sort((a, b) => String(b?.updatedAt || b?.createdAt || '').localeCompare(String(a?.updatedAt || a?.createdAt || '')))
@@ -10221,7 +10226,10 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
               return /^\d{4}-\d{2}-\d{2}$/.test(due) && due < today;
             });
             const dueToday = openTasks.filter((t) => String(t?.dueDate || '').trim() === today);
-            const newInbox = inbox.filter((it) => String(it?.status || '').trim().toLowerCase() === 'new' && String(it?.source || '').trim().toLowerCase() !== 'marty');
+            const newInbox = inbox.filter((it) => {
+              const src = String(it?.source || '').trim().toLowerCase();
+              return String(it?.status || '').trim().toLowerCase() === 'new' && src !== 'marty' && src !== 'marcus';
+            });
             byBiz.push({ key: bKey, name: bName, open: openTasks.length, overdue: overdue.length, dueToday: dueToday.length, inboxNew: newInbox.length });
 
             for (const p of projects) {
@@ -10401,7 +10409,10 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
         })
         .slice(0, 10);
 
-      const newInbox = inbox.filter((it) => String(it?.status || '').trim().toLowerCase() === 'new' && String(it?.source || '').trim().toLowerCase() !== 'marty');
+      const newInbox = inbox.filter((it) => {
+        const src = String(it?.source || '').trim().toLowerCase();
+        return String(it?.status || '').trim().toLowerCase() === 'new' && src !== 'marty' && src !== 'marcus';
+      });
 
       const lines = [];
       lines.push('AI is not enabled for this area (missing API key), but I can still guide you using the tracker data.');
@@ -10962,7 +10973,10 @@ function buildDeterministicBrief({ kind, store, businessName, settings }) {
     return Boolean(due) && due < today;
   });
   const dueToday = openTasks.filter((t) => normalizeDue(t?.dueDate) === today);
-  const inboxNew = inbox.filter((it) => String(it?.status || '').trim().toLowerCase() === 'new' && String(it?.source || '').trim().toLowerCase() !== 'marty');
+  const inboxNew = inbox.filter((it) => {
+    const src = String(it?.source || '').trim().toLowerCase();
+    return String(it?.status || '').trim().toLowerCase() === 'new' && src !== 'marty' && src !== 'marcus';
+  });
 
   const nextTasks = openTasks
     .slice()
@@ -11018,7 +11032,7 @@ function buildDeterministicBrief({ kind, store, businessName, settings }) {
   return lines.join('\n');
 }
 
-async function sendMartyBriefsForAllBusinesses(kind, settings) {
+async function sendMarcusBriefsForAllBusinesses(kind, settings) {
   const cfg = getBusinessConfigFromSettings(settings);
   const bizList = Array.isArray(cfg.businesses) ? cfg.businesses : [{ key: DEFAULT_BUSINESS_KEY, name: 'Personal' }];
   const today = new Date().toISOString().slice(0, 10);
@@ -11029,7 +11043,7 @@ async function sendMartyBriefsForAllBusinesses(kind, settings) {
     const store = await withBusinessKey(bKey, async () => readStore());
     const text = buildDeterministicBrief({ kind, store, businessName: bName, settings });
     await addInboxIntegrationItem({
-      source: 'marty',
+      source: 'marcus',
       externalId: `brief:${String(kind || 'brief').toLowerCase()}:${today}`,
       text,
       businessKey: bKey,
@@ -11070,7 +11084,7 @@ async function markBriefSent(kind, today) {
   await writeSettings(next);
 }
 
-function startMartyBriefScheduler() {
+function startMarcusBriefScheduler() {
   let running = false;
   const tick = async () => {
     if (running) return;
@@ -11098,7 +11112,7 @@ function startMartyBriefScheduler() {
       }
 
       if (candidate) {
-        await sendMartyBriefsForAllBusinesses(candidate.kind, settings);
+        await sendMarcusBriefsForAllBusinesses(candidate.kind, settings);
         await markBriefSent(candidate.kind, today);
       }
     } catch (e) {
@@ -11139,7 +11153,7 @@ app.listen(PORT, async () => {
   startBackupScheduler();
   startGa4Scheduler();
   startAirtableRequestsAutoSyncScheduler();
-  startMartyBriefScheduler();
+  startMarcusBriefScheduler();
   // eslint-disable-next-line no-console
   console.log(`M.A.R.C.U.S. running on http://localhost:${PORT}`);
 });

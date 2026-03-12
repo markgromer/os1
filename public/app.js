@@ -21,6 +21,7 @@ const state = {
     tasks: [],
     inboxItems: [],
     inboxConvertContactById: {},
+    inboxMarcusRecommendationsById: {},
     inboxMartyRecommendationsById: {},
     inboxAutomationDigest: { items: [], loading: false, loadedAt: 0, error: '' },
     inboxDigestSelectionsById: {},
@@ -4610,37 +4611,51 @@ async function saveSettingsPatch(patch) {
     return data;
 }
 
-async function runMartyInboxFilter() {
+async function runMarcusInboxFilter() {
     pulseMartyAmbient('busy', 1200);
-    const res = await apiFetch('/api/inbox/marty-filter', {
+    const res = await apiFetch('/api/inbox/marcus-filter', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ baseRevision: state.revision }),
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok || data?.ok === false) throw new Error(data?.error || 'Marty filter failed');
+    if (!res.ok || data?.ok === false) throw new Error(data?.error || 'M.A.R.C.U.S. filter failed');
     if (data?.store && typeof data.store === 'object') applyStore(data.store);
     await fetchState({ background: false });
     return data;
 }
 
-function formatMartyConfidence(value) {
+async function runMartyInboxFilter() {
+    return runMarcusInboxFilter();
+}
+
+function formatMarcusConfidence(value) {
     const n = Number(value);
     if (!Number.isFinite(n)) return '';
     return `${Math.round(Math.max(0, Math.min(1, n)) * 100)}%`;
 }
 
-function getMartyInboxRecommendation(inboxId) {
+function formatMartyConfidence(value) {
+    return formatMarcusConfidence(value);
+}
+
+function getMarcusInboxRecommendation(inboxId) {
     const id = safeText(inboxId).trim();
     if (!id) return null;
-    const map = state.inboxMartyRecommendationsById && typeof state.inboxMartyRecommendationsById === 'object'
-        ? state.inboxMartyRecommendationsById
-        : {};
+    const map = state.inboxMarcusRecommendationsById && typeof state.inboxMarcusRecommendationsById === 'object'
+        ? state.inboxMarcusRecommendationsById
+        : (state.inboxMartyRecommendationsById && typeof state.inboxMartyRecommendationsById === 'object'
+            ? state.inboxMartyRecommendationsById
+            : {});
     const rec = map[id];
     return rec && typeof rec === 'object' ? rec : null;
 }
 
-async function runMartyInboxTriage(options = {}) {
+function getMartyInboxRecommendation(inboxId) {
+    return getMarcusInboxRecommendation(inboxId);
+}
+
+async function runMarcusInboxTriage(options = {}) {
     pulseMartyAmbient('busy', 1200);
     const onlyNew = options.onlyNew !== false;
     const includeArchived = options.includeArchived === true;
@@ -4650,19 +4665,24 @@ async function runMartyInboxTriage(options = {}) {
     qs.set('includeArchived', includeArchived ? '1' : '0');
     qs.set('limit', String(limit));
 
-    const res = await apiFetch(`/api/inbox/marty-triage?${qs.toString()}`);
+    const res = await apiFetch(`/api/inbox/marcus-triage?${qs.toString()}`);
     const data = await res.json().catch(() => ({}));
-    if (!res.ok || data?.ok === false) throw new Error(data?.error || 'Marty triage failed');
+    if (!res.ok || data?.ok === false) throw new Error(data?.error || 'M.A.R.C.U.S. triage failed');
 
     const list = Array.isArray(data?.recommendations) ? data.recommendations : [];
-    const next = { ...(state.inboxMartyRecommendationsById || {}) };
+    const next = { ...(state.inboxMarcusRecommendationsById || state.inboxMartyRecommendationsById || {}) };
     for (const rec of list) {
         const itemId = safeText(rec?.itemId).trim();
         if (!itemId) continue;
         next[itemId] = rec;
     }
+    state.inboxMarcusRecommendationsById = next;
     state.inboxMartyRecommendationsById = next;
     return { ...data, recommendations: list };
+}
+
+async function runMartyInboxTriage(options = {}) {
+    return runMarcusInboxTriage(options);
 }
 
 async function runMartyInboxAutomation(options = {}) {
