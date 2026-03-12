@@ -10041,6 +10041,9 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
 
     const personalityLayer = typeof settings.personalityLayer === 'string' ? settings.personalityLayer.trimEnd() : '';
     const attentionRadar = typeof settings.attentionRadar === 'string' ? settings.attentionRadar.trimEnd() : '';
+    const strategicForecasting = typeof settings.strategicForecasting === 'string' ? settings.strategicForecasting.trimEnd() : '';
+    const executionAuthority = typeof settings.executionAuthority === 'string' ? settings.executionAuthority.trimEnd() : '';
+    const knowledgeArchive = typeof settings.knowledgeArchive === 'string' ? settings.knowledgeArchive.trimEnd() : '';
     const dailyReportingStructure = typeof settings.dailyReportingStructure === 'string' ? settings.dailyReportingStructure.trimEnd() : '';
 
     const operatorTone = typeof settings.operatorTone === 'string' ? settings.operatorTone.trim() : '';
@@ -10052,6 +10055,9 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
       operatorHelpPrompt: legacyHelpPrompt,
       personalityLayer,
       attentionRadar,
+      strategicForecasting,
+      executionAuthority,
+      knowledgeArchive,
       dailyReportingStructure,
     };
 

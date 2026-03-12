@@ -42,9 +42,9 @@ export const DEFAULT_MARCUS_MODULES: MarcusPromptModule[] = [
   { id: 'operational_doctrine', title: 'Operational Doctrine', fileName: 'operational_doctrine.md', overrideKeys: ['operational_doctrine', 'assistantOperatingDoctrine', 'operatorHelpPrompt'] },
   { id: 'personality_layer', title: 'Personality Layer', fileName: 'personality_layer.md', overrideKeys: ['personality_layer', 'personalityLayer'] },
   { id: 'attention_radar', title: 'Attention Radar', fileName: 'attention_radar.md', overrideKeys: ['attention_radar', 'attentionRadar'] },
-  { id: 'strategic_forecasting', title: 'Strategic Forecasting', fileName: 'strategic_forecasting.md', overrideKeys: ['strategic_forecasting'] },
-  { id: 'execution_authority', title: 'Execution Authority', fileName: 'execution_authority.md', overrideKeys: ['execution_authority'] },
-  { id: 'knowledge_archive', title: 'Knowledge Archive', fileName: 'knowledge_archive.md', overrideKeys: ['knowledge_archive'] },
+  { id: 'strategic_forecasting', title: 'Strategic Forecasting', fileName: 'strategic_forecasting.md', overrideKeys: ['strategic_forecasting', 'strategicForecasting'] },
+  { id: 'execution_authority', title: 'Execution Authority', fileName: 'execution_authority.md', overrideKeys: ['execution_authority', 'executionAuthority'] },
+  { id: 'knowledge_archive', title: 'Knowledge Archive', fileName: 'knowledge_archive.md', overrideKeys: ['knowledge_archive', 'knowledgeArchive'] },
   { id: 'daily_operations_rhythm', title: 'Daily Operations Rhythm', fileName: 'daily_operations_rhythm.md', overrideKeys: ['daily_operations_rhythm', 'dailyReportingStructure'] },
 ];
 

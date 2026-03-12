@@ -5627,6 +5627,9 @@ function renderSettings(container) {
         : (typeof state.settings.operatorHelpPrompt === 'string' ? state.settings.operatorHelpPrompt : '');
     const personalityLayer = typeof state.settings.personalityLayer === 'string' ? state.settings.personalityLayer : '';
     const attentionRadar = typeof state.settings.attentionRadar === 'string' ? state.settings.attentionRadar : '';
+    const strategicForecasting = typeof state.settings.strategicForecasting === 'string' ? state.settings.strategicForecasting : '';
+    const executionAuthority = typeof state.settings.executionAuthority === 'string' ? state.settings.executionAuthority : '';
+    const knowledgeArchive = typeof state.settings.knowledgeArchive === 'string' ? state.settings.knowledgeArchive : '';
     const dailyReportingStructure = typeof state.settings.dailyReportingStructure === 'string' ? state.settings.dailyReportingStructure : '';
     agentBody.innerHTML = `
         <div class="grid grid-cols-1 gap-4">
@@ -5649,6 +5652,21 @@ function renderSettings(container) {
             <div>
                 <label class="text-xs text-ops-light">Attention Radar (what M.A.R.C.U.S. watches for)</label>
                 <textarea id="set-attention-radar" rows="6" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-xs font-mono" placeholder="Example: Missed deadlines, stalled projects, inbox buildup, repeated blockers, context switching, low follow-up cadence.">${escapeHtml(String(attentionRadar || ''))}</textarea>
+            </div>
+
+            <div>
+                <label class="text-xs text-ops-light">Strategic Forecasting</label>
+                <textarea id="set-strategic-forecasting" rows="6" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-xs font-mono" placeholder="Example: Anticipate downstream client risk, identify likely bottlenecks, and recommend compounding moves that improve resilience.">${escapeHtml(String(strategicForecasting || ''))}</textarea>
+            </div>
+
+            <div>
+                <label class="text-xs text-ops-light">Execution Authority</label>
+                <textarea id="set-execution-authority" rows="6" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-xs font-mono" placeholder="Example: Default to direct recommendations, draft operational plans, and state the missing fact only when it changes the decision.">${escapeHtml(String(executionAuthority || ''))}</textarea>
+            </div>
+
+            <div>
+                <label class="text-xs text-ops-light">Knowledge Archive</label>
+                <textarea id="set-knowledge-archive" rows="6" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-xs font-mono" placeholder="Example: Reuse prior decisions, preserve continuity across business contexts, and prefer verified facts over loose inference.">${escapeHtml(String(knowledgeArchive || ''))}</textarea>
             </div>
 
             <div>
@@ -6623,6 +6641,9 @@ function renderSettings(container) {
             const assistantOperatingDoctrine = String(document.getElementById('set-assistant-operating-doctrine')?.value || '').trimEnd();
             const personalityLayer = String(document.getElementById('set-personality-layer')?.value || '').trimEnd();
             const attentionRadar = String(document.getElementById('set-attention-radar')?.value || '').trimEnd();
+            const strategicForecasting = String(document.getElementById('set-strategic-forecasting')?.value || '').trimEnd();
+            const executionAuthority = String(document.getElementById('set-execution-authority')?.value || '').trimEnd();
+            const knowledgeArchive = String(document.getElementById('set-knowledge-archive')?.value || '').trimEnd();
             const dailyReportingStructure = String(document.getElementById('set-daily-reporting-structure')?.value || '').trimEnd();
 
             // Keep legacy key in sync so older server builds still pick it up.
@@ -6631,6 +6652,9 @@ function renderSettings(container) {
                 assistantOperatingDoctrine,
                 personalityLayer,
                 attentionRadar,
+                strategicForecasting,
+                executionAuthority,
+                knowledgeArchive,
                 dailyReportingStructure,
                 operatorHelpPrompt: assistantOperatingDoctrine,
             });
