@@ -1165,6 +1165,24 @@ function getEmailConfig(saved) {
   };
 }
 
+function getFirefliesConfig(saved, req = null) {
+  const envSecret =
+    (typeof process.env.FIREFLIES_SECRET === 'string' ? process.env.FIREFLIES_SECRET.trim() : '') ||
+    (typeof process.env.FIREFLIES_WEBHOOK_SECRET === 'string' ? process.env.FIREFLIES_WEBHOOK_SECRET.trim() : '');
+  const savedSecret = typeof saved?.firefliesSecret === 'string' ? saved.firefliesSecret.trim() : '';
+  const secret = envSecret || savedSecret;
+  const secretSource = envSecret ? 'env' : savedSecret ? 'settings' : '';
+  const baseUrl = req ? getBaseUrl(req) : getDefaultBaseUrl();
+
+  return {
+    configured: Boolean(secret),
+    secret,
+    secretSource,
+    webhookPath: '/api/integrations/fireflies/ingest',
+    webhookUrl: `${baseUrl}/api/integrations/fireflies/ingest`,
+  };
+}
+
 function getParsedAddressRows(field) {
   const rows = Array.isArray(field?.value) ? field.value : [];
   return rows
@@ -7780,15 +7798,105 @@ app.post('/api/integrations/sync', async (req, res) => {
   res.json({ ok: true, results });
 });
 
+app.get('/api/integrations/fireflies/status', async (req, res) => {
+  try {
+    const saved = await readSettings();
+    const cfg = getFirefliesConfig(saved, req);
+    const store = await readStore();
+    const inboxItems = Array.isArray(store?.inboxItems) ? store.inboxItems : [];
+    const firefliesItems = inboxItems.filter((item) => String(item?.source || '').trim().toLowerCase() === 'fireflies');
+    const latestItem = firefliesItems
+      .slice()
+      .sort((a, b) => String(b?.updatedAt || b?.createdAt || '').localeCompare(String(a?.updatedAt || a?.createdAt || '')))[0] || null;
+
+    res.json({
+      ok: true,
+      configured: Boolean(cfg.configured),
+      secretSource: cfg.secretSource,
+      webhookPath: cfg.webhookPath,
+      webhookUrl: cfg.webhookUrl,
+      inboxItemCount: firefliesItems.length,
+      lastReceivedAt: latestItem ? String(latestItem.updatedAt || latestItem.createdAt || '') : '',
+      lastLinkedProjectName: latestItem ? String(latestItem.projectName || '') : '',
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message || 'Failed to load Fireflies status' });
+  }
+});
+
+app.post('/api/integrations/fireflies/test', async (req, res) => {
+  try {
+    const saved = await readSettings();
+    const cfg = getFirefliesConfig(saved, req);
+    if (!cfg.configured) {
+      res.status(400).json({ ok: false, error: 'Fireflies is not configured. Save a shared secret first.' });
+      return;
+    }
+
+    const title = typeof req.body?.title === 'string' ? req.body.title.trim() : 'Fireflies smoke test';
+    const summary = normalizeNotes(req.body?.summary || 'Smoke test summary from the Fireflies integration panel.');
+    const projectId = typeof req.body?.projectId === 'string' ? req.body.projectId.trim() : '';
+    const projectName = typeof req.body?.projectName === 'string' ? req.body.projectName.trim() : '';
+    const transcriptUrl = typeof req.body?.transcriptUrl === 'string' ? req.body.transcriptUrl.trim() : '';
+    const date = safeYmd(req.body?.date) || safeYmd(new Date().toISOString().slice(0, 10));
+
+    if (!summary) {
+      res.status(400).json({ ok: false, error: 'summary is required' });
+      return;
+    }
+
+    const store = await readStore();
+    const projects = Array.isArray(store?.projects) ? store.projects : [];
+
+    let project = null;
+    if (projectId) {
+      project = projects.find((p) => String(p?.id || '') === projectId) || null;
+    }
+    if (!project && projectName) {
+      project = projects.find((p) => String(p?.name || '').trim().toLowerCase() === projectName.toLowerCase()) || null;
+    }
+    if (!project) {
+      project = matchProjectFromText(store, `${title}\n${summary}`) || null;
+    }
+
+    const externalId = `test:${crypto.createHash('sha1').update(`${title}|${summary}|${transcriptUrl}|${date}`).digest('hex')}`;
+    const inboxItemId = `fireflies:${externalId}`;
+
+    res.json({
+      ok: true,
+      mode: 'dry-run',
+      configured: true,
+      secretSource: cfg.secretSource,
+      webhookUrl: cfg.webhookUrl,
+      normalizedPayload: {
+        title,
+        date,
+        summary,
+        transcriptUrl,
+        projectId,
+        projectName,
+      },
+      wouldCreateInboxItemId: inboxItemId,
+      wouldLinkProjectId: project ? String(project.id || '') : '',
+      wouldLinkProjectName: project ? String(project.name || '') : '',
+      notePreview: {
+        kind: 'Summary',
+        date,
+        title: title || 'Fireflies summary',
+        content: transcriptUrl ? `${summary}\n\nTranscript: ${transcriptUrl}` : summary,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message || 'Failed to test Fireflies integration' });
+  }
+});
+
 // Integrations: Fireflies ingestion (meeting summaries into inbox; optional project note linkage)
 // Expected payload: { projectId?, projectName?, date?: 'YYYY-MM-DD', title?: string, summary: string, transcriptUrl?: string, meetingId?: string }
 app.post('/api/integrations/fireflies/ingest', async (req, res) => {
   const secret = typeof req.headers['x-fireflies-secret'] === 'string' ? req.headers['x-fireflies-secret'].trim() : '';
   const saved = await readSettings();
-  const expected =
-    (typeof process.env.FIREFLIES_SECRET === 'string' ? process.env.FIREFLIES_SECRET.trim() : '') ||
-    (typeof process.env.FIREFLIES_WEBHOOK_SECRET === 'string' ? process.env.FIREFLIES_WEBHOOK_SECRET.trim() : '') ||
-    (typeof saved.firefliesSecret === 'string' ? saved.firefliesSecret.trim() : '');
+  const expected = getFirefliesConfig(saved, req).secret;
   if (!expected || secret !== expected) {
     res.status(401).json({ error: 'Unauthorized' });
     return;

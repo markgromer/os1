@@ -6003,10 +6003,23 @@ function renderSettings(container) {
                 <div class="text-[11px] text-ops-light mt-1">Header: <span class="font-mono">x-fireflies-secret</span></div>
             </div>
         </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+            <div>
+                <label class="text-xs text-ops-light">Test Project Hint</label>
+                <input id="set-fireflies-test-project" type="text" autocomplete="off" placeholder="Optional project name for dry-run matching" class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-sm" />
+            </div>
+            <div>
+                <label class="text-xs text-ops-light">Test Summary</label>
+                <input id="set-fireflies-test-summary" type="text" autocomplete="off" value="Smoke test summary from the Fireflies integration panel." class="mt-1 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-sm" />
+            </div>
+        </div>
+        <div class="text-[11px] text-ops-light mt-2" id="fireflies-status-line">Status: checking...</div>
         <div class="flex flex-wrap gap-2 mt-4">
             <button id="btn-generate-fireflies" class="px-3 py-2 rounded bg-ops-bg border border-ops-border text-ops-light text-xs hover:text-white">Generate secret</button>
             <button id="btn-save-fireflies" class="px-3 py-2 rounded bg-blue-600 text-white text-xs hover:bg-blue-500">Save Fireflies</button>
+            <button id="btn-test-fireflies" class="px-3 py-2 rounded bg-ops-bg border border-ops-border text-ops-light text-xs hover:text-white">Run Smoke Test</button>
         </div>
+        <div id="fireflies-output" class="mt-3 hidden bg-ops-bg border border-ops-border rounded px-3 py-2 text-xs text-ops-light font-mono whitespace-pre-wrap"></div>
     `;
     wrap.appendChild(f);
 
@@ -6338,6 +6351,9 @@ function renderSettings(container) {
     const emailOutput = document.getElementById('email-output');
     const btnGenFireflies = document.getElementById('btn-generate-fireflies');
     const btnSaveFireflies = document.getElementById('btn-save-fireflies');
+    const btnTestFireflies = document.getElementById('btn-test-fireflies');
+    const firefliesStatusLine = document.getElementById('fireflies-status-line');
+    const firefliesOutput = document.getElementById('fireflies-output');
     const btnGenCrm = document.getElementById('btn-generate-crm');
     const btnSaveCrm = document.getElementById('btn-save-crm');
     const btnSaveGa4 = document.getElementById('btn-save-ga4');
@@ -6500,6 +6516,31 @@ function renderSettings(container) {
     };
 
     refreshEmailStatus();
+
+    const setFirefliesOutput = (txt) => {
+        if (!firefliesOutput) return;
+        const msg = safeText(txt);
+        firefliesOutput.textContent = msg;
+        firefliesOutput.classList.toggle('hidden', !msg);
+    };
+
+    const refreshFirefliesStatus = async () => {
+        try {
+            const r = await apiFetch('/api/integrations/fireflies/status');
+            const s = await r.json().catch(() => ({}));
+            if (!r.ok || s?.ok === false) throw new Error(s?.error || 'Failed to load Fireflies status');
+            if (firefliesStatusLine) {
+                const source = safeText(s.secretSource).trim() || 'none';
+                const last = safeText(s.lastReceivedAt).trim();
+                const linked = safeText(s.lastLinkedProjectName).trim();
+                firefliesStatusLine.textContent = `Status: ${s.configured ? 'Configured' : 'Not configured'} / Secret ${source} / Inbox items ${Number(s.inboxItemCount) || 0}${last ? ` / Last received ${last}` : ''}${linked ? ` / Last linked ${linked}` : ''}`;
+            }
+        } catch {
+            if (firefliesStatusLine) firefliesStatusLine.textContent = 'Status: unavailable';
+        }
+    };
+
+    refreshFirefliesStatus();
 
     const parseAirtableIdsFromUrl = (urlStr) => {
         const raw = safeText(urlStr).trim();
@@ -7044,6 +7085,35 @@ function renderSettings(container) {
             renderSettings(container);
         } catch (e) {
             alert(e?.message || 'Failed to save Fireflies settings');
+        }
+    };
+
+    if (btnTestFireflies) btnTestFireflies.onclick = async () => {
+        const prev = btnTestFireflies.textContent;
+        btnTestFireflies.disabled = true;
+        btnTestFireflies.textContent = 'Testing…';
+        try {
+            setFirefliesOutput('Running Fireflies smoke test...');
+            const projectName = String(document.getElementById('set-fireflies-test-project')?.value || '').trim();
+            const summary = String(document.getElementById('set-fireflies-test-summary')?.value || '').trim();
+            const data = await apiJson('/api/integrations/fireflies/test', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    title: 'Fireflies smoke test',
+                    projectName,
+                    summary,
+                }),
+            });
+            setFirefliesOutput(JSON.stringify(data, null, 2));
+            await refreshFirefliesStatus();
+        } catch (e) {
+            const msg = safeText(e?.message || '').trim() || 'Fireflies test failed';
+            setFirefliesOutput(`Error: ${msg}`);
+            alert(msg);
+        } finally {
+            btnTestFireflies.disabled = false;
+            btnTestFireflies.textContent = prev;
         }
     };
 
