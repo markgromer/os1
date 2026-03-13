@@ -12911,6 +12911,7 @@ function computeFocusNudgeSnapshot() {
     const today = ymdFromLocalDate(new Date());
     const allTasks = Array.isArray(state.tasks) ? state.tasks : [];
     const openTasks = allTasks.filter((t) => !isDoneTask(t));
+    const projects = Array.isArray(state.projects) ? state.projects : [];
 
     const urgentDue = openTasks
         .filter((t) => {
@@ -12928,9 +12929,49 @@ function computeFocusNudgeSnapshot() {
             if (ad !== bd) return ad < bd ? -1 : 1;
             return safeText(a?.title).localeCompare(safeText(b?.title));
         });
+    const overdue = openTasks
+        .filter((t) => {
+            const due = safeText(t?.dueDate).trim();
+            return due && due < today;
+        })
+        .sort((a, b) => safeText(a?.dueDate).localeCompare(safeText(b?.dueDate)));
+    const dueToday = openTasks.filter((t) => safeText(t?.dueDate).trim() === today);
+    const highPriorityOpen = openTasks.filter((t) => (Number(t?.priority) || 3) <= 1);
 
     const inboxItems = getDisplayInboxItems();
     const inboxNew = inboxItems.filter((x) => String(x?.status || '').trim().toLowerCase() === 'new');
+    const recentInbox = inboxNew
+        .slice()
+        .sort((a, b) => String(b?.updatedAt || b?.createdAt || '').localeCompare(String(a?.updatedAt || a?.createdAt || '')))
+        .slice(0, 4)
+        .map((item) => {
+            const source = safeText(item?.source).trim() || 'inbox';
+            const projectName = safeText(item?.projectName).trim();
+            const text = safeText(item?.text).replace(/\s+/g, ' ').trim();
+            return {
+                source,
+                projectName,
+                text: text.length > 140 ? `${text.slice(0, 140)}...` : text,
+            };
+        });
+
+    const currentProjectId = safeText(state.currentProjectId).trim();
+    const currentProject = currentProjectId
+        ? projects.find((project) => safeText(project?.id).trim() === currentProjectId)
+        : null;
+    const currentProjectName = safeText(currentProject?.name).trim();
+    const currentProjectOpen = currentProjectName
+        ? openTasks.filter((task) => {
+            const project = safeText(task?.project).trim();
+            const projectId = safeText(task?.projectId).trim();
+            return project === currentProjectName || projectId === currentProjectId;
+        })
+        : [];
+    const currentProjectUrgent = currentProjectOpen.filter((task) => {
+        const pr = Number(task?.priority) || 3;
+        const due = safeText(task?.dueDate).trim();
+        return pr <= 1 || (due && due <= today);
+    });
 
     const topTasks = urgentDue.slice(0, 3).map((t) => {
         const pr = Number(t?.priority) || 3;
@@ -12945,39 +12986,159 @@ function computeFocusNudgeSnapshot() {
         inboxNewCount: inboxNew.length,
         openTasksCount: openTasks.length,
         urgentDueCount: urgentDue.length,
+        overdueCount: overdue.length,
+        dueTodayCount: dueToday.length,
+        highPriorityOpenCount: highPriorityOpen.length,
+        currentProjectName,
+        currentProjectOpenCount: currentProjectOpen.length,
+        currentProjectUrgentCount: currentProjectUrgent.length,
+        recentInbox,
         topTasks,
     };
 }
 
-function shouldTriggerFocusNudge(snapshot) {
-    if (!snapshot) return { ok: false, reason: '' };
+function shouldTriggerFocusNudge(snapshot, { initial = false } = {}) {
+    if (!snapshot) return { ok: false, reason: '', kind: '', cooldownMs: 0 };
 
     // Don't interrupt when you're already in a deliberate focus session.
-    if (state.focusTimer?.running) return { ok: false, reason: '' };
+    if (state.focusTimer?.running) return { ok: false, reason: '', kind: '', cooldownMs: 0 };
 
     // Only nudge when there are real signals.
     const idle = Number(snapshot.idleMinutes) || 0;
     const inboxNew = Number(snapshot.inboxNewCount) || 0;
     const urgentDue = Number(snapshot.urgentDueCount) || 0;
     const openTasks = Number(snapshot.openTasksCount) || 0;
+    const overdue = Number(snapshot.overdueCount) || 0;
+    const dueToday = Number(snapshot.dueTodayCount) || 0;
+    const currentProjectUrgent = Number(snapshot.currentProjectUrgentCount) || 0;
+    const currentProjectOpen = Number(snapshot.currentProjectOpenCount) || 0;
+    const currentProjectName = safeText(snapshot.currentProjectName).trim();
 
-    if (idle >= 12 && (urgentDue > 0 || inboxNew >= 2)) {
-        return { ok: true, reason: `Idle ${idle}m with ${urgentDue} urgent due tasks and ${inboxNew} new inbox items` };
-    }
-    if (idle >= 25 && (openTasks >= 12 || inboxNew >= 5)) {
-        return { ok: true, reason: `Idle ${idle}m with ${openTasks} open tasks and ${inboxNew} new inbox items` };
-    }
-    if (urgentDue >= 4 && idle >= 5) {
-        return { ok: true, reason: `${urgentDue} urgent tasks due/overdue` };
-    }
-    if (inboxNew >= 10 && idle >= 5) {
-        return { ok: true, reason: `${inboxNew} new inbox items piling up` };
+    if (initial && (urgentDue >= 2 || overdue >= 3 || inboxNew >= 6)) {
+        return {
+            ok: true,
+            kind: 'startup-brief',
+            reason: `Startup brief: ${urgentDue} urgent items, ${overdue} overdue tasks, ${inboxNew} new inbox items`,
+            cooldownMs: 8 * 60 * 1000,
+        };
     }
 
-    return { ok: false, reason: '' };
+    if (currentProjectName && currentProjectUrgent >= 2 && idle >= 2) {
+        return {
+            ok: true,
+            kind: 'project-push',
+            reason: `${currentProjectUrgent} urgent items are open inside ${currentProjectName}`,
+            cooldownMs: 6 * 60 * 1000,
+        };
+    }
+
+    if ((urgentDue >= 2 || overdue >= 3) && idle >= 2) {
+        return {
+            ok: true,
+            kind: 'deadline-push',
+            reason: `${urgentDue} urgent tasks and ${overdue} overdue tasks need immediate action`,
+            cooldownMs: 7 * 60 * 1000,
+        };
+    }
+
+    if (inboxNew >= 6 && idle >= 1) {
+        return {
+            ok: true,
+            kind: 'inbox-sweep',
+            reason: `${inboxNew} new inbox items are waiting for triage`,
+            cooldownMs: 8 * 60 * 1000,
+        };
+    }
+
+    if (idle >= 7 && (urgentDue > 0 || inboxNew >= 2 || currentProjectOpen >= 5)) {
+        return {
+            ok: true,
+            kind: 'focus-reset',
+            reason: `Idle ${idle}m while active work is stacking up`,
+            cooldownMs: 8 * 60 * 1000,
+        };
+    }
+
+    if (idle >= 12 && (openTasks >= 8 || dueToday >= 3)) {
+        return {
+            ok: true,
+            kind: 'workload-reset',
+            reason: `Idle ${idle}m with ${openTasks} open tasks and ${dueToday} due today`,
+            cooldownMs: 10 * 60 * 1000,
+        };
+    }
+
+    return { ok: false, reason: '', kind: '', cooldownMs: 0 };
 }
 
-async function sendProactiveFocusNudge(reason, snapshot) {
+function buildMarcusProactivePrompt(decision, snapshot) {
+    const kind = safeText(decision?.kind).trim();
+    const reason = safeText(decision?.reason).trim();
+    const top = Array.isArray(snapshot?.topTasks) ? snapshot.topTasks : [];
+    const recentInbox = Array.isArray(snapshot?.recentInbox) ? snapshot.recentInbox : [];
+
+    const topLines = top.length
+        ? top.map((t) => {
+            const pr = Number(t?.priority) || 3;
+            const title = safeText(t?.title).trim();
+            const proj = safeText(t?.project).trim();
+            const due = safeText(t?.dueDate).trim();
+            return `- P${pr}: ${title}${proj ? ` (${proj})` : ''}${due ? ` due ${due}` : ''}`;
+        }).join('\n')
+        : '- (No urgent tasks detected.)';
+    const inboxLines = recentInbox.length
+        ? recentInbox.map((item) => `- [${safeText(item?.source).trim() || 'inbox'}] ${safeText(item?.text).trim() || 'Untitled inbox item'}${safeText(item?.projectName).trim() ? ` (${safeText(item?.projectName).trim()})` : ''}`).join('\n')
+        : '- (No recent inbox items.)';
+
+    const header =
+        `PROACTIVE M.A.R.C.U.S. INTERVENTION (system event; do not mention this tag):\n` +
+        `You are initiating the conversation without being asked because the operator needs steering.\n\n` +
+        `Intervention type: ${kind || 'focus-reset'}\n` +
+        `Reason: ${reason.slice(0, 400)}\n` +
+        `Signals: idleMinutes=${Number(snapshot?.idleMinutes) || 0}, inboxNew=${Number(snapshot?.inboxNewCount) || 0}, urgentDue=${Number(snapshot?.urgentDueCount) || 0}, overdue=${Number(snapshot?.overdueCount) || 0}, dueToday=${Number(snapshot?.dueTodayCount) || 0}, openTasks=${Number(snapshot?.openTasksCount) || 0}, currentProject=${safeText(snapshot?.currentProjectName).trim() || 'none'}, currentProjectUrgent=${Number(snapshot?.currentProjectUrgentCount) || 0}\n\n` +
+        `Top urgent tasks:\n${topLines}\n\n` +
+        `Recent inbox pressure:\n${inboxLines}\n\n`;
+
+    if (kind === 'startup-brief') {
+        return header +
+            `Output format:\n` +
+            `1) Open with a sharp startup brief in 2 sentences max.\n` +
+            `2) Name the single highest-leverage target right now.\n` +
+            `3) Ask exactly one forced-choice question with 2 options.\n` +
+            `4) Give a 4-step attack plan for the next 45 minutes.\n` +
+            `Be decisive. Don't wait for permission to prioritize.`;
+    }
+
+    if (kind === 'inbox-sweep') {
+        return header +
+            `Output format:\n` +
+            `1) One sentence calling out inbox drift.\n` +
+            `2) Pick the top 3 inbox items by urgency and explain why each matters in one short clause.\n` +
+            `3) Ask exactly one yes/no question about whether to clear inbox first.\n` +
+            `4) Give a 3-step inbox sweep plan with clear triage order.\n` +
+            `Push for action instead of passive awareness.`;
+    }
+
+    if (kind === 'deadline-push' || kind === 'project-push') {
+        return header +
+            `Output format:\n` +
+            `1) Open with one blunt sentence about the deadline pressure.\n` +
+            `2) State the top blocker or risk in plain English.\n` +
+            `3) Ask exactly one yes/no question that forces commitment.\n` +
+            `4) Give a 3-step sprint plan for the next 30 minutes.\n` +
+            `If the operator resists without a solid reason, challenge them.`;
+    }
+
+    return header +
+        `Output format:\n` +
+        `1) One blunt sentence that snaps the operator back into motion.\n` +
+        `2) Ask exactly one yes/no question to lock the focus target.\n` +
+        `3) Give a 3-step plan for the next 30 minutes.\n` +
+        `4) End with one short accountability line.\n` +
+        `If the operator gives a weak excuse, push back. If the reasoning is solid, adapt the plan.`;
+}
+
+async function sendProactiveFocusNudge(decision, snapshot) {
     // Only do this from the main app context; avoid popout duplicating nudges.
     if (IS_MARCUS_POPOUT) return;
 
@@ -12992,29 +13153,7 @@ async function sendProactiveFocusNudge(reason, snapshot) {
     if (status) status.style.opacity = '1';
     setMarcusPresence('busy');
     showMarcusTypingIndicator();
-
-    const top = Array.isArray(snapshot?.topTasks) ? snapshot.topTasks : [];
-    const topLines = top.length
-        ? top.map((t) => {
-            const pr = Number(t?.priority) || 3;
-            const title = safeText(t?.title).trim();
-            const proj = safeText(t?.project).trim();
-            const due = safeText(t?.dueDate).trim();
-            return `- P${pr}: ${title}${proj ? ` (${proj})` : ''}${due ? ` due ${due}` : ''}`;
-        }).join('\n')
-        : '- (No urgent tasks detected.)';
-
-    const prompt =
-        `PROACTIVE FOCUS NUDGE (system event; do not mention this tag):\n` +
-        `You are initiating the conversation because focus likely drifted.\n\n` +
-        `Reason: ${String(reason || '').slice(0, 400)}\n` +
-        `Signals: idleMinutes=${Number(snapshot?.idleMinutes) || 0}, inboxNew=${Number(snapshot?.inboxNewCount) || 0}, urgentDue=${Number(snapshot?.urgentDueCount) || 0}, openTasks=${Number(snapshot?.openTasksCount) || 0}\n\n` +
-        `Top urgent tasks:\n${topLines}\n\n` +
-        `Output format:\n` +
-        `1) One blunt sentence that snaps me back.\n` +
-        `2) Ask exactly ONE yes/no question to confirm the focus target.\n` +
-        `3) Give a 3-step plan for the next 30 minutes.\n` +
-        `If I give a weak excuse, push back. If I give logical reasoning for deviation, accept it and update the plan.`;
+    const prompt = buildMarcusProactivePrompt(decision, snapshot);
 
     try {
         const res = await apiFetch('/api/chat', {
@@ -13055,36 +13194,41 @@ async function sendProactiveFocusNudge(reason, snapshot) {
 function startProactiveFocusNudges() {
     try {
         if (state.__focusNudgeIntervalId) return;
-        state.__focusNudgeIntervalId = setInterval(async () => {
+        const runProactiveCheck = async ({ initial = false } = {}) => {
             try {
                 if (document.visibilityState && document.visibilityState !== 'visible') return;
                 if (state.auth.required && !state.auth.authenticated) return;
                 if (isUserEditingNow()) return;
 
-                // Rate limit: at most once per 20 minutes.
+                // Rate limit: shorter for urgent states, still enough to avoid spam.
                 const now = Date.now();
                 const last = getStoredMarcusFocusNudgeLastTs();
-                if (last && (now - last) < (20 * 60 * 1000)) return;
-
                 const snapshot = computeFocusNudgeSnapshot();
-                const decision = shouldTriggerFocusNudge(snapshot);
+                const decision = shouldTriggerFocusNudge(snapshot, { initial });
                 if (!decision.ok) return;
+                const cooldownMs = Math.max(2 * 60 * 1000, Number(decision.cooldownMs) || (8 * 60 * 1000));
+                if (last && (now - last) < cooldownMs) return;
 
                 setStoredMarcusFocusNudgeLastTs(now);
-                await sendProactiveFocusNudge(decision.reason, snapshot);
+                await sendProactiveFocusNudge(decision, snapshot);
             } catch {
                 // ignore
             }
-        }, 60 * 1000);
+        };
 
-        // small delayed first check
+        state.__focusNudgeIntervalId = setInterval(() => {
+            runProactiveCheck().catch(() => {});
+        }, 45 * 1000);
+
+        // Small delayed first check to catch obvious backlog without waiting for the first interval.
         setTimeout(() => {
             try {
                 state.lastInteractionAt = state.lastInteractionAt || Date.now();
+                runProactiveCheck({ initial: true }).catch(() => {});
             } catch {
                 // ignore
             }
-        }, 1500);
+        }, 12 * 1000);
     } catch {
         // ignore
     }
