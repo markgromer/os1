@@ -872,6 +872,154 @@ function normalizeEmailAddress(value) {
   return String(value || '').trim().toLowerCase();
 }
 
+function makeEmailTransportAttemptKey(prefix, profile) {
+  const host = String(profile?.host || '').trim().toLowerCase();
+  const port = Number(profile?.port) || 0;
+  const secure = profile?.secure === true ? 'secure' : 'plain';
+  const starttls = profile?.doSTARTTLS === true
+    ? 'starttls-required'
+    : (profile?.doSTARTTLS === false ? 'starttls-disabled' : 'starttls-auto');
+  const smtpTls = profile?.requireTLS === true
+    ? 'requiretls'
+    : (profile?.ignoreTLS === true ? 'ignoretls' : 'tls-auto');
+  return [prefix, host, port, secure, starttls, smtpTls].join(':');
+}
+
+function pushUniqueEmailTransportProfile(list, seen, prefix, profile) {
+  const key = makeEmailTransportAttemptKey(prefix, profile);
+  if (seen.has(key)) return;
+  seen.add(key);
+  list.push(profile);
+}
+
+function describeImapProfile(profile) {
+  const parts = [`${profile.host}:${profile.port}`];
+  if (profile.secure) parts.push('direct TLS');
+  else if (profile.doSTARTTLS === true) parts.push('STARTTLS');
+  else if (profile.doSTARTTLS === false) parts.push('cleartext');
+  else parts.push('opportunistic STARTTLS');
+  return parts.join(' / ');
+}
+
+function describeSmtpProfile(profile) {
+  const parts = [`${profile.host}:${profile.port}`];
+  if (profile.secure) parts.push('direct TLS');
+  else if (profile.requireTLS === true) parts.push('STARTTLS required');
+  else if (profile.ignoreTLS === true) parts.push('cleartext');
+  else parts.push('STARTTLS if available');
+  return parts.join(' / ');
+}
+
+function buildImapConnectionProfiles(emailCfg) {
+  const profiles = [];
+  const seen = new Set();
+  const host = String(emailCfg?.imap?.host || '').trim();
+  const port = normalizeNetworkPort(emailCfg?.imap?.port, 993);
+  const secure = emailCfg?.imap?.secure === true;
+  const auth = {
+    user: String(emailCfg?.imap?.username || '').trim(),
+    pass: String(emailCfg?.imap?.password || ''),
+  };
+
+  pushUniqueEmailTransportProfile(profiles, seen, 'imap', {
+    host,
+    port,
+    secure,
+    ...(secure ? {} : { doSTARTTLS: port === 143 ? true : undefined }),
+    auth,
+    label: 'configured',
+  });
+
+  if (!(secure && port === 993)) {
+    pushUniqueEmailTransportProfile(profiles, seen, 'imap', {
+      host,
+      port: 993,
+      secure: true,
+      auth,
+      label: 'direct-tls-993',
+    });
+  }
+
+  if (!(port === 143 && secure === false)) {
+    pushUniqueEmailTransportProfile(profiles, seen, 'imap', {
+      host,
+      port: 143,
+      secure: false,
+      doSTARTTLS: true,
+      auth,
+      label: 'starttls-143',
+    });
+  }
+
+  if (secure === false || port === 143) {
+    pushUniqueEmailTransportProfile(profiles, seen, 'imap', {
+      host,
+      port: 143,
+      secure: false,
+      doSTARTTLS: false,
+      auth,
+      label: 'cleartext-143',
+    });
+  }
+
+  return profiles;
+}
+
+function buildSmtpConnectionProfiles(emailCfg) {
+  const profiles = [];
+  const seen = new Set();
+  const host = String(emailCfg?.smtp?.host || '').trim();
+  const port = normalizeNetworkPort(emailCfg?.smtp?.port, 465);
+  const secure = emailCfg?.smtp?.secure === true;
+  const auth = {
+    user: String(emailCfg?.smtp?.username || '').trim(),
+    pass: String(emailCfg?.smtp?.password || ''),
+  };
+
+  pushUniqueEmailTransportProfile(profiles, seen, 'smtp', {
+    host,
+    port,
+    secure,
+    ...(secure ? {} : { requireTLS: port === 587 }),
+    auth,
+    label: 'configured',
+  });
+
+  if (!(secure && port === 465)) {
+    pushUniqueEmailTransportProfile(profiles, seen, 'smtp', {
+      host,
+      port: 465,
+      secure: true,
+      auth,
+      label: 'direct-tls-465',
+    });
+  }
+
+  if (!(port === 587 && secure === false)) {
+    pushUniqueEmailTransportProfile(profiles, seen, 'smtp', {
+      host,
+      port: 587,
+      secure: false,
+      requireTLS: true,
+      auth,
+      label: 'starttls-587',
+    });
+  }
+
+  if (secure === false || port === 587) {
+    pushUniqueEmailTransportProfile(profiles, seen, 'smtp', {
+      host,
+      port: 587,
+      secure: false,
+      ignoreTLS: true,
+      auth,
+      label: 'cleartext-587',
+    });
+  }
+
+  return profiles;
+}
+
 function getEmailConfig(saved) {
   const envImapHost = typeof process.env.IMAP_HOST === 'string' ? process.env.IMAP_HOST.trim() : '';
   const savedImapHost = typeof saved?.imapHost === 'string' ? saved.imapHost.trim() : '';
@@ -1012,64 +1160,130 @@ function buildEmailKnowledgeDocument(message, businessKey) {
 
 async function withImapClient(emailCfg, fn) {
   if (!emailCfg?.imapConfigured) throw new Error('IMAP is not configured. Add IMAP host, username, and password first.');
-  let emittedError = null;
-  const client = new ImapFlow({
-    host: emailCfg.imap.host,
-    port: emailCfg.imap.port,
-    secure: emailCfg.imap.secure,
-    auth: {
-      user: emailCfg.imap.username,
-      pass: emailCfg.imap.password,
-    },
-    logger: false,
-    connectionTimeout: 20_000,
-    greetingTimeout: 20_000,
-    socketTimeout: 20_000,
-  });
+  const attempts = [];
+  let lastError = null;
 
-  client.on('error', (err) => {
-    emittedError = err || emittedError;
-  });
+  for (const profile of buildImapConnectionProfiles(emailCfg)) {
+    let emittedError = null;
+    const client = new ImapFlow({
+      host: profile.host,
+      port: profile.port,
+      secure: profile.secure,
+      ...(typeof profile.doSTARTTLS === 'boolean' ? { doSTARTTLS: profile.doSTARTTLS } : {}),
+      auth: profile.auth,
+      logger: false,
+      connectionTimeout: 20_000,
+      greetingTimeout: 20_000,
+      socketTimeout: 20_000,
+    });
 
-  try {
-    await client.connect();
-  } catch (err) {
-    const msg = String(err?.message || emittedError?.message || 'IMAP connection failed').trim();
-    throw new Error(msg || 'IMAP connection failed');
-  }
-  try {
-    return await fn(client);
-  } finally {
+    client.on('error', (err) => {
+      emittedError = err || emittedError;
+    });
+
     try {
-      await client.logout();
-    } catch {
+      await client.connect();
+    } catch (err) {
+      const msg = String(err?.message || emittedError?.message || 'IMAP connection failed').trim() || 'IMAP connection failed';
+      lastError = new Error(msg);
+      attempts.push({ ok: false, profile: describeImapProfile(profile), error: msg });
       try {
         client.close();
       } catch {
         // ignore close failures
       }
+      continue;
+    }
+
+    try {
+      const value = await fn(client, profile);
+      attempts.push({ ok: true, profile: describeImapProfile(profile) });
+      return { value, profile, attempts };
+    } catch (err) {
+      throw err;
+    } finally {
+      try {
+        await client.logout();
+      } catch {
+        try {
+          client.close();
+        } catch {
+          // ignore close failures
+        }
+      }
     }
   }
+
+  if (lastError) {
+    lastError.attempts = attempts;
+    throw lastError;
+  }
+
+  throw new Error('IMAP connection failed');
 }
 
-function createSmtpTransport(emailCfg) {
-  if (!emailCfg?.smtpConfigured) throw new Error('SMTP is not configured. Add SMTP host, username, and password first.');
-  const transport = nodemailer.createTransport({
-    host: emailCfg.smtp.host,
-    port: emailCfg.smtp.port,
-    secure: emailCfg.smtp.secure,
-    auth: {
-      user: emailCfg.smtp.username,
-      pass: emailCfg.smtp.password,
-    },
+function createSmtpTransport(profile) {
+  if (!profile?.host || !profile?.auth?.user || !profile?.auth?.pass) throw new Error('SMTP is not configured. Add SMTP host, username, and password first.');
+  const transportOptions = {
+    host: profile.host,
+    port: profile.port,
+    secure: profile.secure,
+    auth: profile.auth,
     connectionTimeout: 20_000,
     greetingTimeout: 20_000,
     socketTimeout: 20_000,
-  });
+    ...(profile.requireTLS === true ? { requireTLS: true } : {}),
+    ...(profile.ignoreTLS === true ? { ignoreTLS: true } : {}),
+  };
+  const transport = nodemailer.createTransport(transportOptions);
   transport.on('error', () => {
     // Prevent emitter-level transport errors from escaping the route handler.
   });
   return transport;
+}
+
+async function withSmtpTransport(emailCfg, fn) {
+  if (!emailCfg?.smtpConfigured) throw new Error('SMTP is not configured. Add SMTP host, username, and password first.');
+  const attempts = [];
+  let lastError = null;
+
+  for (const profile of buildSmtpConnectionProfiles(emailCfg)) {
+    const transport = createSmtpTransport(profile);
+    try {
+      await transport.verify();
+    } catch (err) {
+      const msg = String(err?.message || 'SMTP verification failed').trim() || 'SMTP verification failed';
+      lastError = new Error(msg);
+      attempts.push({ ok: false, profile: describeSmtpProfile(profile), error: msg });
+      try {
+        transport.close();
+      } catch {
+        // ignore close failures
+      }
+      continue;
+    }
+
+    try {
+      const value = await fn(transport, profile);
+      attempts.push({ ok: true, profile: describeSmtpProfile(profile) });
+      return { value, profile, attempts };
+    } catch (err) {
+      throw err;
+    } finally {
+      try {
+        transport.close();
+      } catch {
+        // ignore close failures
+      }
+    }
+  }
+
+  if (lastError) {
+    lastError.attempts = attempts;
+    throw lastError;
+  }
+
+  throw new Error('SMTP verification failed');
 }
 
 async function fetchImapMessages(saved, options = {}) {
@@ -6877,25 +7091,44 @@ app.post('/api/integrations/email/test', async (req, res) => {
 
     if (email.imapConfigured) {
       try {
-        await withImapClient(email, async (client) => {
+        const imapResult = await withImapClient(email, async (client) => {
           const folder = email.syncFolders[0] || 'INBOX';
           const mailbox = await client.mailboxOpen(folder, { readOnly: true });
-          result.imap = { ok: true, folder, exists: Number(mailbox?.exists || 0) };
+          return { folder, exists: Number(mailbox?.exists || 0) };
         });
+        result.imap = {
+          ok: true,
+          folder: imapResult.value.folder,
+          exists: imapResult.value.exists,
+          profile: describeImapProfile(imapResult.profile),
+          attempts: imapResult.attempts,
+        };
       } catch (err) {
         result.ok = false;
-        result.imap = { ok: false, error: err?.message || 'IMAP connection failed' };
+        result.imap = {
+          ok: false,
+          error: err?.message || 'IMAP connection failed',
+          attempts: Array.isArray(err?.attempts) ? err.attempts : [],
+        };
       }
     }
 
     if (email.smtpConfigured) {
       try {
-        const transport = createSmtpTransport(email);
-        await transport.verify();
-        result.smtp = { ok: true, fromAddress: email.fromAddress };
+        const smtpResult = await withSmtpTransport(email, async () => ({ fromAddress: email.fromAddress }));
+        result.smtp = {
+          ok: true,
+          fromAddress: smtpResult.value.fromAddress,
+          profile: describeSmtpProfile(smtpResult.profile),
+          attempts: smtpResult.attempts,
+        };
       } catch (err) {
         result.ok = false;
-        result.smtp = { ok: false, error: err?.message || 'SMTP verification failed' };
+        result.smtp = {
+          ok: false,
+          error: err?.message || 'SMTP verification failed',
+          attempts: Array.isArray(err?.attempts) ? err.attempts : [],
+        };
       }
     }
 
@@ -6936,8 +7169,7 @@ app.post('/api/integrations/email/send', async (req, res) => {
       return;
     }
 
-    const transport = createSmtpTransport(email);
-    const info = await transport.sendMail({
+    const smtpResult = await withSmtpTransport(email, async (transport) => transport.sendMail({
       from,
       to,
       ...(cc ? { cc } : {}),
@@ -6946,7 +7178,8 @@ app.post('/api/integrations/email/send', async (req, res) => {
       subject,
       ...(text ? { text } : {}),
       ...(html ? { html } : {}),
-    });
+    }));
+    const info = smtpResult.value;
 
     res.json({
       ok: true,
@@ -6954,9 +7187,14 @@ app.post('/api/integrations/email/send', async (req, res) => {
       accepted: Array.isArray(info?.accepted) ? info.accepted : [],
       rejected: Array.isArray(info?.rejected) ? info.rejected : [],
       response: String(info?.response || ''),
+      profile: describeSmtpProfile(smtpResult.profile),
     });
   } catch (err) {
-    res.status(502).json({ ok: false, error: err?.message || 'Failed to send email' });
+    res.status(502).json({
+      ok: false,
+      error: err?.message || 'Failed to send email',
+      attempts: Array.isArray(err?.attempts) ? err.attempts : [],
+    });
   }
 });
 
