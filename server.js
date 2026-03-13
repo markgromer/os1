@@ -2,8 +2,10 @@ import crypto from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import fs from 'node:fs/promises';
 import { exec } from 'node:child_process';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import tls from 'node:tls';
 
 import express from 'express';
 import { google } from 'googleapis';
@@ -877,6 +879,65 @@ async function withOperationTimeout(factory, timeoutMs, label) {
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+function probeEmailTransportProfile(profile, timeoutMs) {
+  const waitMs = normalizeTimeoutMs(timeoutMs, 2_500, 15_000);
+  const secure = profile?.secure === true;
+  const label = String(profile?.label || `${profile?.host || ''}:${profile?.port || ''}`).trim();
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (result) => {
+      if (settled) return;
+      settled = true;
+      try {
+        socket.destroy();
+      } catch {
+        // ignore destroy failures
+      }
+      resolve(result);
+    };
+
+    const socket = secure
+      ? tls.connect({
+        host: profile.host,
+        port: profile.port,
+        servername: profile.host,
+        rejectUnauthorized: false,
+      })
+      : net.connect({
+        host: profile.host,
+        port: profile.port,
+      });
+
+    socket.setTimeout(waitMs);
+    socket.once(secure ? 'secureConnect' : 'connect', () => {
+      done({ ok: true, profile: label });
+    });
+    socket.once('timeout', () => {
+      done({ ok: false, profile: label, error: `Timed out after ${waitMs}ms` });
+    });
+    socket.once('error', (err) => {
+      done({ ok: false, profile: label, error: String(err?.message || 'Connection failed') });
+    });
+  });
+}
+
+async function probeEmailTransportProfiles(protocol, profiles, timeoutMs) {
+  const attempts = [];
+  for (const profile of profiles) {
+    const label = protocol === 'imap' ? describeImapProfile(profile) : describeSmtpProfile(profile);
+    const result = await probeEmailTransportProfile({ ...profile, label }, timeoutMs);
+    attempts.push({
+      ok: result.ok,
+      profile: label,
+      ...(result.ok ? {} : { error: result.error || 'Connection failed' }),
+    });
+    if (result.ok) {
+      return { ok: true, profile: label, attempts };
+    }
+  }
+  return { ok: false, attempts };
 }
 
 function normalizeEmailFolderList(input, fallback = []) {
@@ -7111,9 +7172,10 @@ app.post('/api/integrations/email/test', async (req, res) => {
   try {
     const settings = await readSettings();
     const email = getEmailConfig(settings);
-    const testTimeoutMs = 6_000;
+    const testTimeoutMs = 2_500;
     const result = {
       ok: true,
+      mode: 'connectivity-probe',
       imapConfigured: Boolean(email.imapConfigured),
       smtpConfigured: Boolean(email.smtpConfigured),
       imap: { ok: false, skipped: !email.imapConfigured },
@@ -7125,22 +7187,15 @@ app.post('/api/integrations/email/test', async (req, res) => {
     if (email.imapConfigured) {
       checks.push((async () => {
         try {
-          const imapResult = await withOperationTimeout(
-            () => withImapClient(email, async (client) => {
-              const folder = email.syncFolders[0] || 'INBOX';
-              const mailbox = await client.mailboxOpen(folder, { readOnly: true });
-              return { folder, exists: Number(mailbox?.exists || 0) };
-            }, { timeoutMs: testTimeoutMs }),
-            testTimeoutMs * 2,
-            'IMAP probe',
-          );
+          const imapResult = await probeEmailTransportProfiles('imap', buildImapConnectionProfiles(email), testTimeoutMs);
           result.imap = {
-            ok: true,
-            folder: imapResult.value.folder,
-            exists: imapResult.value.exists,
-            profile: describeImapProfile(imapResult.profile),
+            ok: imapResult.ok,
+            reachable: imapResult.ok,
+            ...(imapResult.ok ? { profile: imapResult.profile } : { error: 'No IMAP profile accepted a TCP/TLS connection from Render.' }),
             attempts: imapResult.attempts,
+            note: 'Socket-level reachability probe only. Sync still requires valid IMAP auth and protocol support.',
           };
+          if (!imapResult.ok) result.ok = false;
         } catch (err) {
           result.ok = false;
           result.imap = {
@@ -7155,17 +7210,15 @@ app.post('/api/integrations/email/test', async (req, res) => {
     if (email.smtpConfigured) {
       checks.push((async () => {
         try {
-          const smtpResult = await withOperationTimeout(
-            () => withSmtpTransport(email, async () => ({ fromAddress: email.fromAddress }), { timeoutMs: testTimeoutMs }),
-            testTimeoutMs * 2,
-            'SMTP probe',
-          );
+          const smtpResult = await probeEmailTransportProfiles('smtp', buildSmtpConnectionProfiles(email), testTimeoutMs);
           result.smtp = {
-            ok: true,
-            fromAddress: smtpResult.value.fromAddress,
-            profile: describeSmtpProfile(smtpResult.profile),
+            ok: smtpResult.ok,
+            reachable: smtpResult.ok,
+            ...(smtpResult.ok ? { profile: smtpResult.profile, fromAddress: email.fromAddress } : { error: 'No SMTP profile accepted a TCP/TLS connection from Render.' }),
             attempts: smtpResult.attempts,
+            note: 'Socket-level reachability probe only. Sending still requires valid SMTP auth and protocol support.',
           };
+          if (!smtpResult.ok) result.ok = false;
         } catch (err) {
           result.ok = false;
           result.smtp = {
