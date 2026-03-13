@@ -856,6 +856,12 @@ function normalizeBooleanFlag(value, fallback = false) {
   return fallback;
 }
 
+function normalizeTimeoutMs(value, fallback, max = 60_000) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(1_000, Math.min(max, Math.floor(n)));
+}
+
 function normalizeEmailFolderList(input, fallback = []) {
   const raw = Array.isArray(input)
     ? input
@@ -1158,8 +1164,9 @@ function buildEmailKnowledgeDocument(message, businessKey) {
   };
 }
 
-async function withImapClient(emailCfg, fn) {
+async function withImapClient(emailCfg, fn, options = {}) {
   if (!emailCfg?.imapConfigured) throw new Error('IMAP is not configured. Add IMAP host, username, and password first.');
+  const timeoutMs = normalizeTimeoutMs(options?.timeoutMs, 20_000);
   const attempts = [];
   let lastError = null;
 
@@ -1172,9 +1179,9 @@ async function withImapClient(emailCfg, fn) {
       ...(typeof profile.doSTARTTLS === 'boolean' ? { doSTARTTLS: profile.doSTARTTLS } : {}),
       auth: profile.auth,
       logger: false,
-      connectionTimeout: 20_000,
-      greetingTimeout: 20_000,
-      socketTimeout: 20_000,
+      connectionTimeout: timeoutMs,
+      greetingTimeout: timeoutMs,
+      socketTimeout: timeoutMs,
     });
 
     client.on('error', (err) => {
@@ -1229,9 +1236,9 @@ function createSmtpTransport(profile) {
     port: profile.port,
     secure: profile.secure,
     auth: profile.auth,
-    connectionTimeout: 20_000,
-    greetingTimeout: 20_000,
-    socketTimeout: 20_000,
+    connectionTimeout: normalizeTimeoutMs(profile.connectionTimeout, 20_000),
+    greetingTimeout: normalizeTimeoutMs(profile.greetingTimeout, 20_000),
+    socketTimeout: normalizeTimeoutMs(profile.socketTimeout, 20_000),
     ...(profile.requireTLS === true ? { requireTLS: true } : {}),
     ...(profile.ignoreTLS === true ? { ignoreTLS: true } : {}),
   };
@@ -1242,13 +1249,19 @@ function createSmtpTransport(profile) {
   return transport;
 }
 
-async function withSmtpTransport(emailCfg, fn) {
+async function withSmtpTransport(emailCfg, fn, options = {}) {
   if (!emailCfg?.smtpConfigured) throw new Error('SMTP is not configured. Add SMTP host, username, and password first.');
+  const timeoutMs = normalizeTimeoutMs(options?.timeoutMs, 20_000);
   const attempts = [];
   let lastError = null;
 
   for (const profile of buildSmtpConnectionProfiles(emailCfg)) {
-    const transport = createSmtpTransport(profile);
+    const transport = createSmtpTransport({
+      ...profile,
+      connectionTimeout: timeoutMs,
+      greetingTimeout: timeoutMs,
+      socketTimeout: timeoutMs,
+    });
     try {
       await transport.verify();
     } catch (err) {
@@ -7081,6 +7094,7 @@ app.post('/api/integrations/email/test', async (req, res) => {
   try {
     const settings = await readSettings();
     const email = getEmailConfig(settings);
+    const testTimeoutMs = 6_000;
     const result = {
       ok: true,
       imapConfigured: Boolean(email.imapConfigured),
@@ -7089,48 +7103,56 @@ app.post('/api/integrations/email/test', async (req, res) => {
       smtp: { ok: false, skipped: !email.smtpConfigured },
     };
 
+    const checks = [];
+
     if (email.imapConfigured) {
-      try {
-        const imapResult = await withImapClient(email, async (client) => {
-          const folder = email.syncFolders[0] || 'INBOX';
-          const mailbox = await client.mailboxOpen(folder, { readOnly: true });
-          return { folder, exists: Number(mailbox?.exists || 0) };
-        });
-        result.imap = {
-          ok: true,
-          folder: imapResult.value.folder,
-          exists: imapResult.value.exists,
-          profile: describeImapProfile(imapResult.profile),
-          attempts: imapResult.attempts,
-        };
-      } catch (err) {
-        result.ok = false;
-        result.imap = {
-          ok: false,
-          error: err?.message || 'IMAP connection failed',
-          attempts: Array.isArray(err?.attempts) ? err.attempts : [],
-        };
-      }
+      checks.push((async () => {
+        try {
+          const imapResult = await withImapClient(email, async (client) => {
+            const folder = email.syncFolders[0] || 'INBOX';
+            const mailbox = await client.mailboxOpen(folder, { readOnly: true });
+            return { folder, exists: Number(mailbox?.exists || 0) };
+          }, { timeoutMs: testTimeoutMs });
+          result.imap = {
+            ok: true,
+            folder: imapResult.value.folder,
+            exists: imapResult.value.exists,
+            profile: describeImapProfile(imapResult.profile),
+            attempts: imapResult.attempts,
+          };
+        } catch (err) {
+          result.ok = false;
+          result.imap = {
+            ok: false,
+            error: err?.message || 'IMAP connection failed',
+            attempts: Array.isArray(err?.attempts) ? err.attempts : [],
+          };
+        }
+      })());
     }
 
     if (email.smtpConfigured) {
-      try {
-        const smtpResult = await withSmtpTransport(email, async () => ({ fromAddress: email.fromAddress }));
-        result.smtp = {
-          ok: true,
-          fromAddress: smtpResult.value.fromAddress,
-          profile: describeSmtpProfile(smtpResult.profile),
-          attempts: smtpResult.attempts,
-        };
-      } catch (err) {
-        result.ok = false;
-        result.smtp = {
-          ok: false,
-          error: err?.message || 'SMTP verification failed',
-          attempts: Array.isArray(err?.attempts) ? err.attempts : [],
-        };
-      }
+      checks.push((async () => {
+        try {
+          const smtpResult = await withSmtpTransport(email, async () => ({ fromAddress: email.fromAddress }), { timeoutMs: testTimeoutMs });
+          result.smtp = {
+            ok: true,
+            fromAddress: smtpResult.value.fromAddress,
+            profile: describeSmtpProfile(smtpResult.profile),
+            attempts: smtpResult.attempts,
+          };
+        } catch (err) {
+          result.ok = false;
+          result.smtp = {
+            ok: false,
+            error: err?.message || 'SMTP verification failed',
+            attempts: Array.isArray(err?.attempts) ? err.attempts : [],
+          };
+        }
+      })());
     }
+
+    await Promise.all(checks);
 
     const status = result.ok ? 200 : 502;
     res.status(status).json(result);
