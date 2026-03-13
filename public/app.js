@@ -22,7 +22,6 @@ const state = {
     inboxItems: [],
     inboxConvertContactById: {},
     inboxMarcusRecommendationsById: {},
-    inboxMarcusRecommendationsById: {},
     inboxAutomationDigest: { items: [], loading: false, loadedAt: 0, error: '' },
     inboxDigestSelectionsById: {},
 
@@ -4650,9 +4649,7 @@ function getMarcusInboxRecommendation(inboxId) {
     if (!id) return null;
     const map = state.inboxMarcusRecommendationsById && typeof state.inboxMarcusRecommendationsById === 'object'
         ? state.inboxMarcusRecommendationsById
-        : (state.inboxMarcusRecommendationsById && typeof state.inboxMarcusRecommendationsById === 'object'
-            ? state.inboxMarcusRecommendationsById
-            : {});
+        : {};
     const rec = map[id];
     return rec && typeof rec === 'object' ? rec : null;
 }
@@ -4672,19 +4669,14 @@ async function runMarcusInboxTriage(options = {}) {
     if (!res.ok || data?.ok === false) throw new Error(data?.error || 'M.A.R.C.U.S. triage failed');
 
     const list = Array.isArray(data?.recommendations) ? data.recommendations : [];
-    const next = { ...(state.inboxMarcusRecommendationsById || state.inboxMarcusRecommendationsById || {}) };
+    const next = { ...(state.inboxMarcusRecommendationsById || {}) };
     for (const rec of list) {
         const itemId = safeText(rec?.itemId).trim();
         if (!itemId) continue;
         next[itemId] = rec;
     }
     state.inboxMarcusRecommendationsById = next;
-    state.inboxMarcusRecommendationsById = next;
     return { ...data, recommendations: list };
-}
-
-async function runMarcusInboxTriage(options = {}) {
-    return runMarcusInboxTriage(options);
 }
 
 async function runMarcusInboxAutomation(options = {}) {
