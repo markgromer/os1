@@ -862,6 +862,23 @@ function normalizeTimeoutMs(value, fallback, max = 60_000) {
   return Math.max(1_000, Math.min(max, Math.floor(n)));
 }
 
+async function withOperationTimeout(factory, timeoutMs, label) {
+  const waitMs = normalizeTimeoutMs(timeoutMs, 5_000, 30_000);
+  let timer = null;
+  try {
+    return await Promise.race([
+      Promise.resolve().then(factory),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          reject(new Error(`${label} timed out after ${waitMs}ms`));
+        }, waitMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 function normalizeEmailFolderList(input, fallback = []) {
   const raw = Array.isArray(input)
     ? input
@@ -7108,11 +7125,15 @@ app.post('/api/integrations/email/test', async (req, res) => {
     if (email.imapConfigured) {
       checks.push((async () => {
         try {
-          const imapResult = await withImapClient(email, async (client) => {
-            const folder = email.syncFolders[0] || 'INBOX';
-            const mailbox = await client.mailboxOpen(folder, { readOnly: true });
-            return { folder, exists: Number(mailbox?.exists || 0) };
-          }, { timeoutMs: testTimeoutMs });
+          const imapResult = await withOperationTimeout(
+            () => withImapClient(email, async (client) => {
+              const folder = email.syncFolders[0] || 'INBOX';
+              const mailbox = await client.mailboxOpen(folder, { readOnly: true });
+              return { folder, exists: Number(mailbox?.exists || 0) };
+            }, { timeoutMs: testTimeoutMs }),
+            testTimeoutMs * 2,
+            'IMAP probe',
+          );
           result.imap = {
             ok: true,
             folder: imapResult.value.folder,
@@ -7134,7 +7155,11 @@ app.post('/api/integrations/email/test', async (req, res) => {
     if (email.smtpConfigured) {
       checks.push((async () => {
         try {
-          const smtpResult = await withSmtpTransport(email, async () => ({ fromAddress: email.fromAddress }), { timeoutMs: testTimeoutMs });
+          const smtpResult = await withOperationTimeout(
+            () => withSmtpTransport(email, async () => ({ fromAddress: email.fromAddress }), { timeoutMs: testTimeoutMs }),
+            testTimeoutMs * 2,
+            'SMTP probe',
+          );
           result.smtp = {
             ok: true,
             fromAddress: smtpResult.value.fromAddress,
