@@ -3125,6 +3125,16 @@ function createNavIcon(iconClass, tooltip, onClick, active, textLabel) {
 /* --- Rendering: Main Views --- */
 
 function renderMain() {
+    if (IS_MARCUS_POPOUT) {
+        preserveMarcusDrawerDuringRerender();
+        const drawer = document.getElementById('neural-drawer');
+        if (drawer) drawer.dataset.marcusDocked = '0';
+        applyMarcusOpenState(true);
+        setStoredMarcusOpen(true);
+        renderCommandPaletteOverlay();
+        return;
+    }
+
     const ports = ensurePersistentMarcusLayout();
     if (!ports) return;
 
