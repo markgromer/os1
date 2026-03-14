@@ -9859,7 +9859,7 @@ function renderDashboard(container, sidePort) {
             <div class="text-[10px] font-mono text-ops-light/60 mt-0.5">${escapeHtml(dateStr)}</div>
         </div>
         <div class="flex flex-wrap items-center gap-1.5">
-            ${totalOverdue ? `<span class="stat-pill stat-pill--danger"><i class="fa-solid fa-triangle-exclamation text-[8px]"></i>${totalOverdue} overdue</span>` : ''}
+            ${totalOverdue ? `<button type="button" data-open-overdue-primary="${escapeHtml(primaryOverdueProjectId)}" class="stat-pill stat-pill--danger ${primaryOverdueProjectId ? 'cursor-pointer hover:text-white' : 'opacity-70 cursor-default'}" ${primaryOverdueProjectId ? '' : 'disabled'}><i class="fa-solid fa-triangle-exclamation text-[8px]"></i>${totalOverdue} overdue</button>` : ''}
             ${inboxUnassignedNewCount ? `<span class="stat-pill stat-pill--danger"><i class="fa-solid fa-link-slash text-[8px]"></i>${inboxUnassignedNewCount} unassigned</span>` : ''}
             ${dueThisWeek ? `<span class="stat-pill stat-pill--warning"><i class="fa-solid fa-fire text-[8px]"></i>${dueThisWeek} this week</span>` : ''}
             ${calls.length ? `<span class="stat-pill"><i class="fa-solid fa-video text-[8px] text-blue-400"></i>${calls.length} call${calls.length>1?'s':''}</span>` : ''}
@@ -9987,12 +9987,33 @@ function renderDashboard(container, sidePort) {
     if (!actionOnlyMode && pagePrefs.missionControl && totalOverdue > 0) {
         const alertEl = document.createElement('div');
         alertEl.className = 'border border-red-500/30 rounded-xl bg-red-500/8 px-3 py-2.5 flex items-center gap-3';
-        const overdueNames = [...overdueTasks.slice(0,3).map(t=>safeText(t?.title)), ...overdueProjects.slice(0,2).map(p=>safeText(p?.name))];
+        const overdueItems = [
+            ...overdueTasks.slice(0, 3).map((task) => {
+                const project = resolveProjectForTask(task);
+                return {
+                    label: safeText(task?.title).trim() || 'Overdue task',
+                    meta: safeText(project?.name).trim() || safeText(task?.project).trim() || 'Task',
+                    projectId: safeText(project?.id).trim(),
+                };
+            }),
+            ...overdueProjects.slice(0, 3).map((project) => ({
+                label: safeText(project?.name).trim() || 'Overdue project',
+                meta: safeText(project?.dueDate).trim() ? `Due ${safeText(project?.dueDate).trim()}` : 'Project',
+                projectId: safeText(project?.id).trim(),
+            })),
+        ].filter((item) => item.label);
         alertEl.innerHTML = `
             <div class="w-7 h-7 rounded-lg flex items-center justify-center bg-red-500/15 text-red-400 shrink-0 text-xs"><i class="fa-solid fa-triangle-exclamation"></i></div>
             <div class="min-w-0 flex-1">
                 <div class="text-[11px] text-red-300 font-semibold">${totalOverdue} Overdue</div>
-                <div class="text-[10px] font-mono text-red-400/60 truncate">${overdueNames.map(n=>escapeHtml(n)).join(' \u00b7 ')}</div>
+                <div class="mt-1 space-y-1.5">
+                    ${overdueItems.map((item) => `
+                        <button type="button" data-open-overdue-project="${escapeHtml(item.projectId)}" class="w-full text-left border border-red-500/20 rounded-lg bg-black/10 px-2.5 py-1.5 hover:bg-red-500/10 transition-colors ${item.projectId ? '' : 'opacity-70 cursor-default'}" ${item.projectId ? '' : 'disabled'}>
+                            <div class="text-[10px] text-red-100 truncate">${escapeHtml(item.label)}</div>
+                            <div class="text-[9px] font-mono text-red-300/70 truncate">${escapeHtml(item.meta)}</div>
+                        </button>
+                    `).join('')}
+                </div>
             </div>
         `;
         wrap.appendChild(alertEl);
@@ -10868,6 +10889,22 @@ function renderDashboard(container, sidePort) {
     wrap.querySelector('button[data-open-calendar]')?.addEventListener('click', () => openCalendar());
     wrap.querySelectorAll('button[data-open-team]').forEach(b => b.addEventListener('click', () => openTeam()));
     wrap.querySelectorAll('button[data-open-projects]').forEach(b => b.addEventListener('click', () => openProjects()));
+    wrap.querySelectorAll('button[data-open-overdue-project]').forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const pid = safeText(btn.getAttribute('data-open-overdue-project')).trim();
+            if (pid) openProject(pid);
+        });
+    });
+    wrap.querySelectorAll('button[data-open-overdue-primary]').forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const pid = safeText(btn.getAttribute('data-open-overdue-primary')).trim();
+            if (pid) openProject(pid);
+        });
+    });
     calCard.querySelector('button[data-refresh-calls]')?.addEventListener('click', async () => { await refreshDashboardCalls({force:true}); renderMain(); });
     wrap.querySelectorAll('.dash-project-btn').forEach(btn => { btn.addEventListener('click', () => { const pid = btn.dataset.pid; if (pid) openProject(pid); }); });
 
@@ -11655,6 +11692,36 @@ function getProjectTasks(project) {
         if (state.showCompleted) return true;
         return !isDoneTask(t);
     });
+}
+
+function resolveProjectForTask(task) {
+    const projects = Array.isArray(state.projects) ? state.projects : [];
+    const taskProjectId = safeText(task?.projectId).trim();
+    const taskProjectName = safeText(task?.project).trim();
+    if (taskProjectId) {
+        const byId = projects.find((project) => safeText(project?.id).trim() === taskProjectId);
+        if (byId) return byId;
+    }
+    if (taskProjectName) {
+        const byName = projects.find((project) => safeText(project?.name).trim() === taskProjectName);
+        if (byName) return byName;
+    }
+    return null;
+}
+
+function getPrimaryOverdueProjectId(overdueTasks, overdueProjects) {
+    const tasks = Array.isArray(overdueTasks) ? overdueTasks : [];
+    const projects = Array.isArray(overdueProjects) ? overdueProjects : [];
+    for (const task of tasks) {
+        const project = resolveProjectForTask(task);
+        const projectId = safeText(project?.id).trim();
+        if (projectId) return projectId;
+    }
+    for (const project of projects) {
+        const projectId = safeText(project?.id).trim();
+        if (projectId) return projectId;
+    }
+    return '';
 }
 
 function getProjectLinkedInboxItems(project) {
