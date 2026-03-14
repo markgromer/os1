@@ -3167,6 +3167,50 @@ async function slackResolveChannelLabel({ token, channelId }) {
   return label;
 }
 
+async function slackListConversations({ token }) {
+  const t = String(token || '').trim();
+  if (!t) return [];
+
+  pruneSlackCaches();
+  const cacheKey = `conversations:${t.slice(-12)}`;
+  const cached = slackUsersListCache.get(cacheKey);
+  if (cached && Array.isArray(cached.channels)) return cached.channels;
+
+  let cursor = '';
+  const all = [];
+  for (let page = 0; page < 20; page += 1) {
+    const params = {
+      limit: 200,
+      exclude_archived: true,
+      types: 'public_channel,private_channel,mpim,im',
+    };
+    if (cursor) params.cursor = cursor;
+    const data = await slackApiGet({ token: t, method: 'conversations.list', params });
+    const channels = Array.isArray(data?.channels) ? data.channels : [];
+    all.push(...channels);
+    const next = typeof data?.response_metadata?.next_cursor === 'string' ? data.response_metadata.next_cursor.trim() : '';
+    if (!next) break;
+    cursor = next;
+  }
+
+  slackUsersListCache.set(cacheKey, { channels: all, expiresAt: Date.now() + 5 * 60 * 1000 });
+  return all;
+}
+
+function normalizeSlackChannelLookup(value) {
+  return String(value || '').trim().replace(/^#+/, '').toLowerCase();
+}
+
+async function slackResolveChannelTarget({ token, target }) {
+  const raw = String(target || '').trim();
+  if (!raw.startsWith('#')) return '';
+  const lookup = normalizeSlackChannelLookup(raw);
+  if (!lookup) return '';
+  const channels = await slackListConversations({ token });
+  const match = channels.find((channel) => normalizeSlackChannelLookup(channel?.name) === lookup);
+  return String(match?.id || '').trim();
+}
+
 async function formatSlackInboxText({ token, channelId, userId, text }) {
   const cleanText = String(text || '').trim();
   if (!cleanText) return '';
@@ -4790,6 +4834,17 @@ app.post('/api/integrations/slack/send-summary', async (req, res) => {
         });
         return;
       }
+    }
+
+    if (typeof targetChannel === 'string' && targetChannel.trim().startsWith('#')) {
+      const resolvedChannelId = await slackResolveChannelTarget({ token: botToken, target: targetChannel });
+      if (!resolvedChannelId) {
+        res.status(400).json({
+          error: `Could not resolve Slack channel ${targetChannel}. Make sure the bot is installed and has conversations:read scope.`,
+        });
+        return;
+      }
+      targetChannel = resolvedChannelId;
     }
 
     const result = await slackApiPost({
@@ -7274,6 +7329,11 @@ app.post('/api/integrations/email/send', async (req, res) => {
     const html = typeof req.body?.html === 'string' ? req.body.html.trim() : '';
     const from = typeof req.body?.from === 'string' && req.body.from.trim() ? req.body.from.trim() : email.fromAddress;
     const replyTo = typeof req.body?.replyTo === 'string' ? req.body.replyTo.trim() : '';
+    const inReplyTo = typeof req.body?.inReplyTo === 'string' ? req.body.inReplyTo.trim() : '';
+    const rawReferences = req.body?.references;
+    const references = Array.isArray(rawReferences)
+      ? rawReferences.map((value) => (typeof value === 'string' ? value.trim() : '')).filter(Boolean).slice(0, 20)
+      : (typeof rawReferences === 'string' && rawReferences.trim() ? rawReferences.trim() : '');
     if (!to) {
       res.status(400).json({ ok: false, error: 'to is required' });
       return;
@@ -7293,6 +7353,8 @@ app.post('/api/integrations/email/send', async (req, res) => {
       ...(cc ? { cc } : {}),
       ...(bcc ? { bcc } : {}),
       ...(replyTo ? { replyTo } : {}),
+      ...(inReplyTo ? { inReplyTo } : {}),
+      ...(Array.isArray(references) ? (references.length ? { references } : {}) : (references ? { references } : {})),
       subject,
       ...(text ? { text } : {}),
       ...(html ? { html } : {}),

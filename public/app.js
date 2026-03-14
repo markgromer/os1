@@ -3855,6 +3855,253 @@ async function createProjectFromInboxItem(inboxId, project) {
     return data;
 }
 
+function getInboxEmailSubject(item) {
+    const explicit = safeText(item?.subject || item?.emailSubject).trim();
+    if (explicit) return explicit;
+    const lines = safeText(item?.text).split(/\r?\n/);
+    const first = safeText(lines[0]).trim();
+    const match = first.match(/^Subject:\s*(.+)$/i);
+    return match ? safeText(match[1]).trim() : '';
+}
+
+function extractEmailAddress(value) {
+    const text = safeText(value).trim();
+    if (!text) return '';
+    const match = text.match(/<?([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})>?/i);
+    return match ? safeText(match[1]).trim() : '';
+}
+
+function isEmailInboxItem(item) {
+    return safeText(item?.source).trim().toLowerCase() === 'email';
+}
+
+function resolveInboxEmailRecipient(item) {
+    return extractEmailAddress(item?.fromNumber || item?.fromAddress || item?.sender || item?.contactName || item?.fromName);
+}
+
+function formatInboxReplySubject(subject) {
+    const clean = safeText(subject).trim();
+    if (!clean) return 'Re:';
+    return /^re\s*:/i.test(clean) ? clean : `Re: ${clean}`;
+}
+
+function getInboxReplyMessageId(item) {
+    const raw = safeText(item?.threadKey).trim();
+    if (!raw || /\s/.test(raw) || !raw.includes('@')) return '';
+    if (raw.startsWith('<') && raw.endsWith('>')) return raw;
+    return `<${raw.replace(/^<+|>+$/g, '')}>`;
+}
+
+function getInboxEmailReplyDraft(item) {
+    const inboxId = safeText(item?.id).trim();
+    const stored = (state.inboxEmailReplyById && state.inboxEmailReplyById[inboxId]) || {};
+    return {
+        open: Boolean(stored.open),
+        sending: Boolean(stored.sending),
+        to: Object.prototype.hasOwnProperty.call(stored, 'to') ? safeText(stored.to) : resolveInboxEmailRecipient(item),
+        cc: Object.prototype.hasOwnProperty.call(stored, 'cc') ? safeText(stored.cc) : '',
+        bcc: Object.prototype.hasOwnProperty.call(stored, 'bcc') ? safeText(stored.bcc) : '',
+        subject: Object.prototype.hasOwnProperty.call(stored, 'subject') ? safeText(stored.subject) : formatInboxReplySubject(getInboxEmailSubject(item)),
+        body: Object.prototype.hasOwnProperty.call(stored, 'body') ? safeText(stored.body) : '',
+    };
+}
+
+function setInboxEmailReplyDraft(inboxId, patch) {
+    const id = safeText(inboxId).trim();
+    if (!id) return null;
+    const existing = (state.inboxEmailReplyById && state.inboxEmailReplyById[id]) || {};
+    const next = { ...existing, ...(patch && typeof patch === 'object' ? patch : {}) };
+    state.inboxEmailReplyById = {
+        ...(state.inboxEmailReplyById || {}),
+        [id]: next,
+    };
+    return next;
+}
+
+function clearInboxEmailReplyDraft(inboxId) {
+    const id = safeText(inboxId).trim();
+    if (!id || !state.inboxEmailReplyById) return;
+    const next = { ...state.inboxEmailReplyById };
+    delete next[id];
+    state.inboxEmailReplyById = next;
+}
+
+function isSlackInboxItem(item) {
+    return safeText(item?.source).trim().toLowerCase() === 'slack';
+}
+
+function parseSlackInboxContext(item) {
+    const raw = safeText(item?.text || item?.title || item?.subject).trim();
+    const channel = (raw.match(/(?:^|\s)#([a-z0-9._-]{2,})\b/i) || [])[1] || '';
+    const at = (raw.match(/(?:^|\s)@([a-z0-9._-]{2,})\b/i) || [])[1] || '';
+    return {
+        channel,
+        at,
+        target: at ? `@${at}` : (channel ? `#${channel}` : ''),
+    };
+}
+
+function getInboxActionReceipt(inboxId) {
+    const id = safeText(inboxId).trim();
+    if (!id) return null;
+    const receipt = state.inboxActionReceiptById && state.inboxActionReceiptById[id];
+    return receipt && typeof receipt === 'object' ? receipt : null;
+}
+
+function setInboxActionReceipt(inboxId, receipt) {
+    const id = safeText(inboxId).trim();
+    if (!id) return null;
+    const next = {
+        kind: safeText(receipt?.kind).trim(),
+        target: safeText(receipt?.target).trim(),
+        sentAt: safeText(receipt?.sentAt).trim() || new Date().toISOString(),
+    };
+    state.inboxActionReceiptById = {
+        ...(state.inboxActionReceiptById || {}),
+        [id]: next,
+    };
+    return next;
+}
+
+function getInboxSlackReplyDraft(item) {
+    const inboxId = safeText(item?.id).trim();
+    const stored = (state.inboxSlackReplyById && state.inboxSlackReplyById[inboxId]) || {};
+    const context = parseSlackInboxContext(item);
+    return {
+        open: Boolean(stored.open),
+        sending: Boolean(stored.sending),
+        target: Object.prototype.hasOwnProperty.call(stored, 'target') ? safeText(stored.target) : context.target,
+        body: Object.prototype.hasOwnProperty.call(stored, 'body') ? safeText(stored.body) : '',
+    };
+}
+
+function setInboxSlackReplyDraft(inboxId, patch) {
+    const id = safeText(inboxId).trim();
+    if (!id) return null;
+    const existing = (state.inboxSlackReplyById && state.inboxSlackReplyById[id]) || {};
+    const next = { ...existing, ...(patch && typeof patch === 'object' ? patch : {}) };
+    state.inboxSlackReplyById = {
+        ...(state.inboxSlackReplyById || {}),
+        [id]: next,
+    };
+    return next;
+}
+
+function clearInboxSlackReplyDraft(inboxId) {
+    const id = safeText(inboxId).trim();
+    if (!id || !state.inboxSlackReplyById) return;
+    const next = { ...state.inboxSlackReplyById };
+    delete next[id];
+    state.inboxSlackReplyById = next;
+}
+
+async function sendInboxEmailReply(item) {
+    const inboxId = safeText(item?.id).trim();
+    if (!inboxId) throw new Error('Missing inbox id');
+
+    const draft = getInboxEmailReplyDraft(item);
+    const to = extractEmailAddress(draft.to);
+    const cc = safeText(draft.cc).trim();
+    const bcc = safeText(draft.bcc).trim();
+    const subject = safeText(draft.subject).trim();
+    const text = safeText(draft.body).trim();
+    if (!to) throw new Error('Reply recipient is required');
+    if (!subject) throw new Error('Reply subject is required');
+    if (!text) throw new Error('Reply body is required');
+
+    const messageId = getInboxReplyMessageId(item);
+    setInboxEmailReplyDraft(inboxId, { sending: true, to, cc, bcc, subject, body: text, open: true });
+
+    try {
+        await apiJson('/api/integrations/email/send', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                to,
+                ...(cc ? { cc } : {}),
+                ...(bcc ? { bcc } : {}),
+                subject,
+                text,
+                ...(messageId ? { inReplyTo: messageId, references: [messageId] } : {}),
+            }),
+        });
+
+        const warnings = [];
+        if (safeText(item?.projectId).trim()) {
+            try {
+                await addProjectCommunication(item.projectId, {
+                    type: 'email',
+                    direction: 'outbound',
+                    subject,
+                    body: `To: ${to}\n\n${text}`,
+                });
+            } catch (err) {
+                warnings.push(err?.message || 'Sent email but failed to log it to the project timeline');
+            }
+        }
+        if (safeText(item?.status).trim().toLowerCase() === 'new') {
+            try {
+                await patchInboxItem(inboxId, { status: 'Triaged' });
+            } catch (err) {
+                warnings.push(err?.message || 'Sent email but failed to update inbox status');
+            }
+        }
+        setInboxActionReceipt(inboxId, { kind: 'email', target: to, sentAt: new Date().toISOString() });
+        clearInboxEmailReplyDraft(inboxId);
+        return { ok: true, warnings };
+    } catch (err) {
+        setInboxEmailReplyDraft(inboxId, { sending: false, open: true });
+        throw err;
+    }
+}
+
+async function sendInboxSlackReply(item) {
+    const inboxId = safeText(item?.id).trim();
+    if (!inboxId) throw new Error('Missing inbox id');
+
+    const draft = getInboxSlackReplyDraft(item);
+    const target = safeText(draft.target).trim();
+    const text = safeText(draft.body).trim();
+    if (!target) throw new Error('Slack target is required');
+    if (!text) throw new Error('Slack message is required');
+
+    setInboxSlackReplyDraft(inboxId, { target, body: text, open: true, sending: true });
+    try {
+        await apiJson('/api/integrations/slack/send-summary', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text, channel: target }),
+        });
+
+        const warnings = [];
+        if (safeText(item?.projectId).trim()) {
+            try {
+                await addProjectCommunication(item.projectId, {
+                    type: 'other',
+                    direction: 'outbound',
+                    subject: `Slack: ${target}`,
+                    body: text,
+                });
+            } catch (err) {
+                warnings.push(err?.message || 'Sent Slack message but failed to log it to the project timeline');
+            }
+        }
+        if (safeText(item?.status).trim().toLowerCase() === 'new') {
+            try {
+                await patchInboxItem(inboxId, { status: 'Triaged' });
+            } catch (err) {
+                warnings.push(err?.message || 'Sent Slack message but failed to update inbox status');
+            }
+        }
+        setInboxActionReceipt(inboxId, { kind: 'slack', target, sentAt: new Date().toISOString() });
+        clearInboxSlackReplyDraft(inboxId);
+        return { ok: true, warnings };
+    } catch (err) {
+        setInboxSlackReplyDraft(inboxId, { sending: false, open: true });
+        throw err;
+    }
+}
+
 function renderInbox(container) {
     const titleEl = document.getElementById('page-title');
     if (titleEl) titleEl.innerText = 'Inbox';
@@ -4000,6 +4247,15 @@ function renderInbox(container) {
                 const status = safeText(item?.status) || 'New';
                 const createdAt = safeText(item?.createdAt);
                 const updatedAt = safeText(item?.updatedAt);
+                const emailItem = isEmailInboxItem(item);
+                const emailReplyDraft = emailItem ? getInboxEmailReplyDraft(item) : null;
+                const emailRecipient = emailItem ? resolveInboxEmailRecipient(item) : '';
+                const emailSubject = emailItem ? getInboxEmailSubject(item) : '';
+                const emailThreadMessageId = emailItem ? getInboxReplyMessageId(item) : '';
+                const slackItem = isSlackInboxItem(item);
+                const slackContext = slackItem ? parseSlackInboxContext(item) : null;
+                const slackReplyDraft = slackItem ? getInboxSlackReplyDraft(item) : null;
+                const actionReceipt = getInboxActionReceipt(id);
                 const recommendation = getMarcusInboxRecommendation(id);
                 const projectId = safeText((state.inboxConvertProjectById && state.inboxConvertProjectById[id]) || item?.projectId);
                 const allContacts = Array.isArray(state.clients) ? state.clients : [];
@@ -4062,6 +4318,61 @@ function renderInbox(container) {
                                 <div class="text-[11px] text-zinc-500 font-mono">${escapeHtml(createdAt ? formatTimeFromIso(createdAt) : '')}${updatedAt && updatedAt !== createdAt ? ` • upd ${escapeHtml(formatTimeFromIso(updatedAt))}` : ''}</div>
                             </div>
                             <div class="mt-2 text-sm text-zinc-200 whitespace-pre-wrap break-words">${escapeHtml(safeText(item?.text))}</div>
+                            ${actionReceipt ? `
+                            <div class="mt-3 inline-flex items-center gap-2 rounded border border-cyan-600/30 bg-cyan-950/15 px-2.5 py-1 text-[10px] font-mono text-cyan-100">
+                                <span class="uppercase tracking-wide">Last action</span>
+                                <span>${escapeHtml(actionReceipt.kind)} → ${escapeHtml(actionReceipt.target || 'sent')}</span>
+                                <span class="text-cyan-300/70">${escapeHtml(formatTimeFromIso(actionReceipt.sentAt))}</span>
+                            </div>` : ''}
+                            ${emailItem ? `
+                            <div class="mt-3 flex flex-wrap gap-2 text-[10px] font-mono text-zinc-400">
+                                ${emailRecipient ? `<span class="px-2 py-1 rounded border border-emerald-600/30 bg-emerald-950/20 text-emerald-200">Reply to ${escapeHtml(emailRecipient)}</span>` : `<span class="px-2 py-1 rounded border border-red-600/30 bg-red-950/20 text-red-200">No reply address found</span>`}
+                                ${emailSubject ? `<span class="px-2 py-1 rounded border border-zinc-700 bg-zinc-950/50">${escapeHtml(emailSubject)}</span>` : ''}
+                                ${emailThreadMessageId ? `<span class="px-2 py-1 rounded border border-blue-600/30 bg-blue-950/20 text-blue-200">threaded reply</span>` : ''}
+                            </div>` : ''}
+                            ${slackItem ? `
+                            <div class="mt-3 flex flex-wrap gap-2 text-[10px] font-mono text-zinc-400">
+                                ${slackContext?.target ? `<span class="px-2 py-1 rounded border border-sky-600/30 bg-sky-950/20 text-sky-200">Target ${escapeHtml(slackContext.target)}</span>` : `<span class="px-2 py-1 rounded border border-red-600/30 bg-red-950/20 text-red-200">No Slack target found</span>`}
+                                ${slackContext?.channel ? `<span class="px-2 py-1 rounded border border-zinc-700 bg-zinc-950/50">#${escapeHtml(slackContext.channel)}</span>` : ''}
+                                ${slackContext?.at ? `<span class="px-2 py-1 rounded border border-zinc-700 bg-zinc-950/50">@${escapeHtml(slackContext.at)}</span>` : ''}
+                            </div>` : ''}
+                            ${emailItem && emailReplyDraft?.open ? `
+                            <div class="mt-3 rounded-xl border border-emerald-700/30 bg-emerald-950/10 p-3 space-y-3">
+                                <div class="flex items-center justify-between gap-3">
+                                    <div>
+                                        <div class="text-[11px] font-mono uppercase tracking-wide text-emerald-200">Email Reply</div>
+                                        <div class="text-[11px] text-zinc-500">Send directly from Inbox${safeText(item?.projectId).trim() ? ' and log it to the linked project' : ''}.</div>
+                                    </div>
+                                    <div class="text-[10px] font-mono ${emailThreadMessageId ? 'text-blue-200' : 'text-zinc-500'}">${emailThreadMessageId ? 'Will stay in thread' : 'New outbound message'}</div>
+                                </div>
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                    <input data-inbox-email-to="${escapeHtml(id)}" value="${escapeHtml(emailReplyDraft.to)}" placeholder="recipient@example.com" class="bg-zinc-950/40 border border-zinc-800 rounded px-3 py-2 text-xs font-mono text-zinc-100" />
+                                    <input data-inbox-email-subject="${escapeHtml(id)}" value="${escapeHtml(emailReplyDraft.subject)}" placeholder="Subject" class="bg-zinc-950/40 border border-zinc-800 rounded px-3 py-2 text-xs font-mono text-zinc-100" />
+                                    <input data-inbox-email-cc="${escapeHtml(id)}" value="${escapeHtml(emailReplyDraft.cc)}" placeholder="CC (optional)" class="bg-zinc-950/40 border border-zinc-800 rounded px-3 py-2 text-xs font-mono text-zinc-100" />
+                                    <input data-inbox-email-bcc="${escapeHtml(id)}" value="${escapeHtml(emailReplyDraft.bcc)}" placeholder="BCC (optional)" class="bg-zinc-950/40 border border-zinc-800 rounded px-3 py-2 text-xs font-mono text-zinc-100" />
+                                </div>
+                                <textarea data-inbox-email-body="${escapeHtml(id)}" rows="5" placeholder="Write the reply..." class="w-full bg-zinc-950/40 border border-zinc-800 rounded px-3 py-2 text-sm text-zinc-100">${escapeHtml(emailReplyDraft.body)}</textarea>
+                                <div class="flex flex-wrap items-center gap-2">
+                                    <button data-inbox-email-send="${escapeHtml(id)}" class="px-3 py-1.5 rounded border border-emerald-600/40 bg-emerald-600/20 text-[11px] font-mono text-emerald-100 hover:bg-emerald-600/30 transition-colors transition-transform duration-150 ease-out active:translate-y-px">${emailReplyDraft.sending ? 'Sending…' : 'Send Reply'}</button>
+                                    <button data-inbox-email-close="${escapeHtml(id)}" class="px-3 py-1.5 rounded border border-zinc-800 text-[11px] font-mono text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Close</button>
+                                </div>
+                            </div>` : ''}
+                            ${slackItem && slackReplyDraft?.open ? `
+                            <div class="mt-3 rounded-xl border border-sky-700/30 bg-sky-950/10 p-3 space-y-3">
+                                <div class="flex items-center justify-between gap-3">
+                                    <div>
+                                        <div class="text-[11px] font-mono uppercase tracking-wide text-sky-200">Slack Reply</div>
+                                        <div class="text-[11px] text-zinc-500">DM a teammate with @name, or send to a channel with #channel.</div>
+                                    </div>
+                                    <div class="text-[10px] font-mono text-zinc-500">Uses the connected Slack bot</div>
+                                </div>
+                                <input data-inbox-slack-target="${escapeHtml(id)}" value="${escapeHtml(slackReplyDraft.target)}" placeholder="@username or #channel" class="w-full bg-zinc-950/40 border border-zinc-800 rounded px-3 py-2 text-xs font-mono text-zinc-100" />
+                                <textarea data-inbox-slack-body="${escapeHtml(id)}" rows="4" placeholder="Write the Slack message..." class="w-full bg-zinc-950/40 border border-zinc-800 rounded px-3 py-2 text-sm text-zinc-100">${escapeHtml(slackReplyDraft.body)}</textarea>
+                                <div class="flex flex-wrap items-center gap-2">
+                                    <button data-inbox-slack-send="${escapeHtml(id)}" class="px-3 py-1.5 rounded border border-sky-600/40 bg-sky-600/20 text-[11px] font-mono text-sky-100 hover:bg-sky-600/30 transition-colors transition-transform duration-150 ease-out active:translate-y-px">${slackReplyDraft.sending ? 'Sending…' : 'Send Slack'}</button>
+                                    <button data-inbox-slack-close="${escapeHtml(id)}" class="px-3 py-1.5 rounded border border-zinc-800 text-[11px] font-mono text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Close</button>
+                                </div>
+                            </div>` : ''}
                             ${recPanel}
                             <div class="mt-3 flex flex-wrap items-center gap-2">
                                 <input data-inbox-project-search="${escapeHtml(id)}" value="${escapeHtml(state.inboxProjectSearchById?.[id] || '')}" placeholder="Find project/client..." class="bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs text-zinc-100 placeholder-zinc-500 min-w-[180px]" />
@@ -4093,6 +4404,8 @@ function renderInbox(container) {
                             </div>
                         </div>
                         <div class="shrink-0 flex flex-col gap-2">
+                            ${emailItem ? `<button data-inbox-email-reply-toggle="${escapeHtml(id)}" class="px-3 py-1.5 rounded border border-emerald-600/40 bg-emerald-600/15 text-[11px] font-mono text-emerald-200 hover:bg-emerald-600/25 transition-colors transition-transform duration-150 ease-out active:translate-y-px">${emailReplyDraft?.open ? 'Hide Reply' : 'Reply Email'}</button>` : ''}
+                            ${slackItem ? `<button data-inbox-slack-reply-toggle="${escapeHtml(id)}" class="px-3 py-1.5 rounded border border-sky-600/40 bg-sky-600/15 text-[11px] font-mono text-sky-200 hover:bg-sky-600/25 transition-colors transition-transform duration-150 ease-out active:translate-y-px">${slackReplyDraft?.open ? 'Hide Slack' : 'Reply Slack'}</button>` : ''}
                             <button data-inbox-marcus-recommend="${escapeHtml(id)}" class="px-3 py-1.5 rounded border border-blue-600/40 bg-blue-600/15 text-[11px] font-mono text-blue-200 hover:bg-blue-600/25 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Marcus Recommend</button>
                             <button data-inbox-triage="${escapeHtml(id)}" class="px-3 py-1.5 rounded border border-zinc-800 text-[11px] font-mono text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Triage</button>
                             <button data-inbox-done="${escapeHtml(id)}" class="px-3 py-1.5 rounded bg-emerald-600/20 border border-emerald-600/40 text-[11px] font-mono text-emerald-200 hover:bg-emerald-600/30 transition-colors transition-transform duration-150 ease-out active:translate-y-px">Done</button>
@@ -4491,6 +4804,123 @@ function renderInbox(container) {
                 renderMain();
             } catch (e) {
                 alert(e?.message || 'Failed to create tasks from recommendation');
+            } finally {
+                btn.disabled = false;
+            }
+        });
+    });
+
+    container.querySelectorAll('button[data-inbox-email-reply-toggle]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            const inboxId = safeText(btn.getAttribute('data-inbox-email-reply-toggle')).trim();
+            const item = getDisplayInboxItems().find((x) => safeText(x?.id).trim() === inboxId);
+            if (!inboxId || !item) return;
+            const current = getInboxEmailReplyDraft(item);
+            setInboxEmailReplyDraft(inboxId, { ...current, open: !current.open, sending: false });
+            renderMain();
+        });
+    });
+
+    const wireInboxEmailDraftInput = (selector, attr, key) => {
+        container.querySelectorAll(selector).forEach((input) => {
+            input.addEventListener('input', (e) => {
+                const inboxId = safeText(input.getAttribute(attr)).trim();
+                if (!inboxId) return;
+                setInboxEmailReplyDraft(inboxId, { [key]: safeText(e.target.value), open: true });
+            });
+        });
+    };
+
+    wireInboxEmailDraftInput('input[data-inbox-email-to]', 'data-inbox-email-to', 'to');
+    wireInboxEmailDraftInput('input[data-inbox-email-subject]', 'data-inbox-email-subject', 'subject');
+    wireInboxEmailDraftInput('input[data-inbox-email-cc]', 'data-inbox-email-cc', 'cc');
+    wireInboxEmailDraftInput('input[data-inbox-email-bcc]', 'data-inbox-email-bcc', 'bcc');
+    container.querySelectorAll('textarea[data-inbox-email-body]').forEach((input) => {
+        input.addEventListener('input', (e) => {
+            const inboxId = safeText(input.getAttribute('data-inbox-email-body')).trim();
+            if (!inboxId) return;
+            setInboxEmailReplyDraft(inboxId, { body: safeText(e.target.value), open: true });
+        });
+    });
+
+    container.querySelectorAll('button[data-inbox-email-close]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            const inboxId = safeText(btn.getAttribute('data-inbox-email-close')).trim();
+            if (!inboxId) return;
+            setInboxEmailReplyDraft(inboxId, { open: false, sending: false });
+            renderMain();
+        });
+    });
+
+    container.querySelectorAll('button[data-inbox-slack-reply-toggle]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            const inboxId = safeText(btn.getAttribute('data-inbox-slack-reply-toggle')).trim();
+            const item = getDisplayInboxItems().find((x) => safeText(x?.id).trim() === inboxId);
+            if (!inboxId || !item) return;
+            const current = getInboxSlackReplyDraft(item);
+            setInboxSlackReplyDraft(inboxId, { ...current, open: !current.open, sending: false });
+            renderMain();
+        });
+    });
+
+    wireInboxEmailDraftInput('input[data-inbox-slack-target]', 'data-inbox-slack-target', 'target');
+    container.querySelectorAll('textarea[data-inbox-slack-body]').forEach((input) => {
+        input.addEventListener('input', (e) => {
+            const inboxId = safeText(input.getAttribute('data-inbox-slack-body')).trim();
+            if (!inboxId) return;
+            setInboxSlackReplyDraft(inboxId, { body: safeText(e.target.value), open: true });
+        });
+    });
+
+    container.querySelectorAll('button[data-inbox-slack-close]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            const inboxId = safeText(btn.getAttribute('data-inbox-slack-close')).trim();
+            if (!inboxId) return;
+            setInboxSlackReplyDraft(inboxId, { open: false, sending: false });
+            renderMain();
+        });
+    });
+
+    container.querySelectorAll('button[data-inbox-slack-send]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+            const inboxId = safeText(btn.getAttribute('data-inbox-slack-send')).trim();
+            const item = getDisplayInboxItems().find((x) => safeText(x?.id).trim() === inboxId);
+            if (!inboxId || !item) return;
+            btn.disabled = true;
+            try {
+                const result = await sendInboxSlackReply(item);
+                renderMain();
+                if (Array.isArray(result?.warnings) && result.warnings.length) {
+                    alert(`Slack message sent with warnings:\n- ${result.warnings.join('\n- ')}`);
+                } else {
+                    alert('Slack message sent.');
+                }
+            } catch (e) {
+                alert(e?.message || 'Failed to send Slack message');
+                renderMain();
+            } finally {
+                btn.disabled = false;
+            }
+        });
+    });
+
+    container.querySelectorAll('button[data-inbox-email-send]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+            const inboxId = safeText(btn.getAttribute('data-inbox-email-send')).trim();
+            const item = getDisplayInboxItems().find((x) => safeText(x?.id).trim() === inboxId);
+            if (!inboxId || !item) return;
+            btn.disabled = true;
+            try {
+                const result = await sendInboxEmailReply(item);
+                renderMain();
+                if (Array.isArray(result?.warnings) && result.warnings.length) {
+                    alert(`Email sent with warnings:\n- ${result.warnings.join('\n- ')}`);
+                } else {
+                    alert('Email reply sent.');
+                }
+            } catch (e) {
+                alert(e?.message || 'Failed to send email reply');
+                renderMain();
             } finally {
                 btn.disabled = false;
             }
