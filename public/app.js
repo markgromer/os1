@@ -9737,6 +9737,7 @@ function renderDashboard(container, sidePort) {
     const overdueTasks = allTasks.filter((t) => { if (isDoneTask(t)) return false; const d = safeText(t?.dueDate).trim(); return d && d < today; });
     const overdueProjects = activeProjects.filter((p) => { const d = safeText(p?.dueDate).trim(); return d && d < today; });
     const totalOverdue = overdueTasks.length + overdueProjects.length;
+    const primaryOverdueProjectId = getPrimaryOverdueProjectId(overdueTasks, overdueProjects);
 
     const doTodayLane = [
         ...overdueTasks.slice(0, 2).map((t) => ({
@@ -11219,7 +11220,10 @@ function renderDashboardCommandCenter(container, sidePort) {
     const mkMiniList = (rows, emptyText) => {
         const list = Array.isArray(rows) ? rows : [];
         if (!list.length) return `<div class="text-[10px] text-ops-light/50">${escapeHtml(emptyText || 'None')}</div>`;
-        return `<div class="space-y-1">${list.slice(0, 3).map((r) => `<div class="border border-ops-border rounded bg-ops-bg/40 px-2.5 py-1.5"><div class="text-[11px] text-white truncate">${escapeHtml(safeText(r?.name) || safeText(r?.title) || 'Untitled')}</div>${r?.dueDate ? `<div class="text-[9px] font-mono text-ops-light/50">${escapeHtml(safeText(r?.dueDate))}</div>` : ''}</div>`).join('')}</div>`;
+        return `<div class="space-y-1">${list.slice(0, 3).map((r) => {
+            const projectId = safeText(r?.id).trim();
+            return `<button type="button" data-open-mini-project="${escapeHtml(projectId)}" class="w-full text-left border border-ops-border rounded bg-ops-bg/40 px-2.5 py-1.5 hover:bg-ops-surface/60 transition-colors ${projectId ? '' : 'opacity-70 cursor-default'}" ${projectId ? '' : 'disabled'}><div class="text-[11px] text-white truncate">${escapeHtml(safeText(r?.name) || safeText(r?.title) || 'Untitled')}</div>${r?.dueDate ? `<div class="text-[9px] font-mono text-ops-light/50">${escapeHtml(safeText(r?.dueDate))}</div>` : ''}</button>`;
+        }).join('')}</div>`;
     };
 
     const dueTodayCard = document.createElement('div');
@@ -11546,6 +11550,14 @@ function renderDashboardCommandCenter(container, sidePort) {
         }
     }));
     root.querySelectorAll('button[data-open-calendar]').forEach((b) => b.addEventListener('click', () => openCalendar()));
+    root.querySelectorAll('button[data-open-mini-project]').forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const pid = safeText(btn.getAttribute('data-open-mini-project')).trim();
+            if (pid) openProject(pid);
+        });
+    });
 }
 
 function renderTodayPanel() {
