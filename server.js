@@ -4074,6 +4074,38 @@ function normalizeSmsAckFilterLevel(levelRaw) {
   return 'medium';
 }
 
+function getMarcusExcludedPhoneSet(settings) {
+  const raw = settings && typeof settings === 'object' ? settings.marcusExcludedPhoneNumbers : null;
+  const out = new Set();
+  const push = (value) => {
+    for (const key of phoneLookupKeys(value)) out.add(key);
+  };
+
+  if (Array.isArray(raw)) {
+    for (const value of raw) push(value);
+    return out;
+  }
+
+  if (typeof raw === 'string') {
+    for (const value of raw.split(/[\n,;]+/g)) push(value);
+  }
+
+  return out;
+}
+
+function isInboxItemExcludedFromMarcus(item, settings) {
+  const excluded = getMarcusExcludedPhoneSet(settings);
+  if (!excluded.size) return false;
+  const it = item && typeof item === 'object' ? item : {};
+  const candidates = [it?.sender, it?.fromNumber, it?.toNumber, it?.contactName];
+  for (const value of candidates) {
+    for (const key of phoneLookupKeys(value)) {
+      if (excluded.has(key)) return true;
+    }
+  }
+  return false;
+}
+
 function isLowSignalAcknowledgementText(text, levelRaw = 'medium') {
   const level = normalizeSmsAckFilterLevel(levelRaw);
   if (level === 'off') return false;
@@ -4463,6 +4495,7 @@ function shouldSuppressInboxRadarItem(item, settings) {
   const level = normalizeSmsAckFilterLevel(settings?.smsAckFilterLevel);
 
   if (src === 'marcus' || src === 'marcus') return true;
+  if (isInboxItemExcludedFromMarcus(it, settings)) return true;
   if (isLowSignalAcknowledgementText(signal, level)) return true;
 
   const isSystemLike = src.includes('system') || src.includes('notification') || src.includes('alert');
@@ -8911,9 +8944,10 @@ app.post('/api/inbox/marcus-filter', async (req, res) => {
 
       const src = String(it?.source || '').trim().toLowerCase();
       const signalText = extractInboxSignalText(it);
+      const isExcluded = isInboxItemExcludedFromMarcus(it, settings);
       const sourceIsSystemNoise = src === 'marcus';
       const isAckNoise = isLowSignalAcknowledgementText(signalText, level);
-      if (!sourceIsSystemNoise && !isAckNoise) return item;
+      if (!sourceIsSystemNoise && !isAckNoise && !isExcluded) return item;
 
       scanned += 1;
       matched += 1;
@@ -8926,7 +8960,7 @@ app.post('/api/inbox/marcus-filter', async (req, res) => {
         updatedAt: ts,
         marcusFilterLevel: level,
         marcusFilteredAt: ts,
-        marcusFilterReason: sourceIsSystemNoise ? 'system-radar-noise' : 'low-signal-ack',
+        marcusFilterReason: isExcluded ? 'excluded-phone-number' : (sourceIsSystemNoise ? 'system-radar-noise' : 'low-signal-ack'),
       });
     });
 
@@ -8962,6 +8996,7 @@ app.get('/api/inbox/marcus-triage', async (req, res) => {
 
     const visible = getVisibleInboxItemsFromSettings(store.inboxItems, settings);
     let list = visible;
+    list = list.filter((item) => !isInboxItemExcludedFromMarcus(item, settings));
     if (!includeArchived) {
       list = list.filter((x) => String(x?.status || '').trim().toLowerCase() !== 'archived');
     }
@@ -9168,7 +9203,7 @@ app.post('/api/inbox/automation/run', async (req, res) => {
     }
 
     const visible = getVisibleInboxItemsFromSettings(store.inboxItems, settings);
-    let list = visible;
+    let list = visible.filter((item) => !isInboxItemExcludedFromMarcus(item, settings));
     if (!inboxCfg.includeArchived) {
       list = list.filter((x) => String(x?.status || '').trim().toLowerCase() !== 'archived');
     }

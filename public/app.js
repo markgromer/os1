@@ -6566,6 +6566,11 @@ function renderSettings(container) {
     const quo = section('Quo (SMS/Calls)', 'Ingest inbound SMS and missed calls into Inbox (Twilio-style signature verified).');
     const quoBody = quo.querySelector('[data-slot="body"]');
     const smsAckFilterLevel = safeText(state.settings?.smsAckFilterLevel).trim().toLowerCase() || 'medium';
+    const marcusExcludedPhoneNumbers = Array.isArray(state.settings?.marcusExcludedPhoneNumbers)
+        ? state.settings.marcusExcludedPhoneNumbers.map((x) => safeText(x).trim()).filter(Boolean)
+        : (safeText(state.settings?.marcusExcludedPhoneNumbers).trim()
+            ? safeText(state.settings?.marcusExcludedPhoneNumbers).split(/[\n,;]+/g).map((x) => safeText(x).trim()).filter(Boolean)
+            : []);
     const quoMapRaw = (state.settings && typeof state.settings.phoneBusinessMap === 'object' && state.settings.phoneBusinessMap)
         ? state.settings.phoneBusinessMap
         : {};
@@ -6604,6 +6609,11 @@ function renderSettings(container) {
                 <option value="medium" ${smsAckFilterLevel === 'medium' ? 'selected' : ''}>Medium (recommended)</option>
                 <option value="high" ${smsAckFilterLevel === 'high' ? 'selected' : ''}>High (very strict)</option>
             </select>
+        </div>
+        <div class="mt-4 border border-ops-border rounded-lg p-3 bg-ops-bg/20">
+            <label class="text-xs text-white font-semibold">Marcus-excluded phone numbers</label>
+            <div class="text-[11px] text-ops-light mt-1">Messages from these numbers stay in Inbox, but Marcus will ignore them in filter, triage, automation, and radar.</div>
+            <textarea id="set-marcus-excluded-phones" rows="4" class="mt-2 w-full bg-ops-bg border border-ops-border rounded px-3 py-2 text-white text-xs font-mono" placeholder="+15551234567\n+15557654321">${escapeHtml(marcusExcludedPhoneNumbers.join('\n'))}</textarea>
         </div>
         <div class="mt-4 border border-ops-border rounded-lg p-3 bg-ops-bg/20">
             <div class="text-xs text-white font-semibold">Business Routing (by destination number)</div>
@@ -7727,6 +7737,10 @@ function renderSettings(container) {
             const smsAckFilterLevel = (rawLevel === 'off' || rawLevel === 'low' || rawLevel === 'medium' || rawLevel === 'high')
                 ? rawLevel
                 : 'medium';
+            const marcusExcludedPhoneNumbers = String(document.getElementById('set-marcus-excluded-phones')?.value || '')
+                .split(/[\n,;]+/g)
+                .map((s) => safeText(s).trim())
+                .filter(Boolean);
             const phoneInputs = Array.from(document.querySelectorAll('[data-quo-map-phone]'));
             const businessInputs = Array.from(document.querySelectorAll('[data-quo-map-business]'));
             const map = {};
@@ -7742,7 +7756,7 @@ function renderSettings(container) {
                 throw new Error('Add auth token and at least one phone mapping');
             }
 
-            const patch = { phoneBusinessMap: map, smsAckFilterLevel };
+            const patch = { phoneBusinessMap: map, smsAckFilterLevel, marcusExcludedPhoneNumbers };
             if (token) patch.quoAuthToken = token;
             await saveSettingsPatch(patch);
             await fetchState({ background: false });
