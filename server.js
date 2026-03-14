@@ -493,6 +493,7 @@ app.post('/api/auth/logout', (req, res) => {
  *   updatedAt: string,
  *   projects?: Array<Project>,
  *   tasks: Array<Task>
+ *   senderProjectMap?: Record<string, string | { projectId: string, projectName?: string }>,
  *   projectNotes?: Record<string, { notes: string, updatedAt: string } | string>, // legacy
  *   projectScratchpads?: Record<projectId, { text: string, updatedAt: string }>,
  *   projectNoteEntries?: Record<projectId, Array<NoteEntry>>,
@@ -507,6 +508,7 @@ const EMPTY_STORE = {
   projects: [],
   clients: [],
   tasks: [],
+  senderProjectMap: {},
   team: [],
   projectNotes: {},
   projectScratchpads: {},
@@ -2307,6 +2309,234 @@ function upsertSenderProjectMapForProject(senderProjectMap, senderValue, project
   return map;
 }
 
+function getSenderProjectIdFromMappingValue(value) {
+  if (typeof value === 'string') return value.trim();
+  if (value && typeof value === 'object') return String(value.projectId || '').trim();
+  return '';
+}
+
+function pickSenderProjectMapEntriesForProjectIds(senderProjectMap, projectIdsInput) {
+  const map = senderProjectMap && typeof senderProjectMap === 'object' ? senderProjectMap : {};
+  const ids = projectIdsInput instanceof Set ? projectIdsInput : new Set(Array.isArray(projectIdsInput) ? projectIdsInput : []);
+  const out = {};
+  for (const [key, value] of Object.entries(map)) {
+    if (ids.has(getSenderProjectIdFromMappingValue(value))) out[key] = value;
+  }
+  return out;
+}
+
+function omitSenderProjectMapEntriesForProjectIds(senderProjectMap, projectIdsInput) {
+  const map = senderProjectMap && typeof senderProjectMap === 'object' ? senderProjectMap : {};
+  const ids = projectIdsInput instanceof Set ? projectIdsInput : new Set(Array.isArray(projectIdsInput) ? projectIdsInput : []);
+  const out = {};
+  for (const [key, value] of Object.entries(map)) {
+    if (ids.has(getSenderProjectIdFromMappingValue(value))) continue;
+    out[key] = value;
+  }
+  return out;
+}
+
+async function moveProjectsBetweenBusinesses({ sourceBusinessKey, destinationBusinessKey, projectIds, baseRevision }) {
+  const sourceKey = normalizeBusinessKey(sourceBusinessKey) || DEFAULT_BUSINESS_KEY;
+  const destinationKey = normalizeBusinessKey(destinationBusinessKey) || '';
+  const ids = Array.from(new Set((Array.isArray(projectIds) ? projectIds : []).map((v) => String(v || '').trim()).filter(Boolean)));
+
+  if (!ids.length) {
+    const store = await readStoreForBusiness(sourceKey);
+    return { movedProjects: [], sourceStore: store, destinationStore: await readStoreForBusiness(destinationKey) };
+  }
+
+  const settings = await readSettings();
+  const cfg = getBusinessConfigFromSettings(settings);
+  const destinationBusiness = (Array.isArray(cfg.businesses) ? cfg.businesses : []).find((b) => normalizeBusinessKey(b?.key || '') === destinationKey);
+  if (!destinationBusiness) {
+    const err = new Error('Destination business not found');
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const sourceStore = await readStoreForBusiness(sourceKey);
+  if (Number.isFinite(baseRevision) && baseRevision !== sourceStore.revision) {
+    const err = new Error('Revision mismatch. Reload and try again.');
+    err.statusCode = 409;
+    err.currentRevision = sourceStore.revision;
+    throw err;
+  }
+
+  const sourceProjects = Array.isArray(sourceStore.projects) ? sourceStore.projects : [];
+  const missing = ids.filter((id) => !sourceProjects.some((p) => p.id === id));
+  if (missing.length) {
+    const err = new Error(`Project not found: ${missing.slice(0, 3).join(', ')}${missing.length > 3 ? '…' : ''}`);
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const movedProjectsRaw = sourceProjects.filter((p) => ids.includes(p.id));
+  const movedProjectIds = new Set(movedProjectsRaw.map((p) => p.id));
+  const movedNameKeys = new Set(movedProjectsRaw.map((p) => normKey(p?.name)));
+
+  const destinationStore = await readStoreForBusiness(destinationKey);
+  const destinationProjects = Array.isArray(destinationStore.projects) ? destinationStore.projects : [];
+  const conflictingProjects = destinationProjects.filter((p) => movedProjectIds.has(p.id) || movedNameKeys.has(normKey(p?.name)));
+  if (conflictingProjects.length) {
+    const labels = conflictingProjects.slice(0, 3).map((p) => String(p?.name || p?.id || 'project').trim()).filter(Boolean);
+    const err = new Error(`Destination business already has: ${labels.join(', ')}${conflictingProjects.length > 3 ? '…' : ''}`);
+    err.statusCode = 409;
+    throw err;
+  }
+
+  const ts = nowIso();
+  const movedProjects = movedProjectsRaw.map((project) => normalizeProject({ ...project, updatedAt: ts }));
+  const nextSourceProjects = sourceProjects.filter((p) => !movedProjectIds.has(p.id));
+  const sourceTasks = Array.isArray(sourceStore.tasks) ? sourceStore.tasks : [];
+  const movedTasks = sourceTasks.filter((t) => movedNameKeys.has(normKey(t?.project)));
+  const keptSourceTasks = sourceTasks.filter((t) => !movedNameKeys.has(normKey(t?.project)));
+
+  const sourceScratchpads = sourceStore.projectScratchpads && typeof sourceStore.projectScratchpads === 'object' ? sourceStore.projectScratchpads : {};
+  const sourceNoteEntries = sourceStore.projectNoteEntries && typeof sourceStore.projectNoteEntries === 'object' ? sourceStore.projectNoteEntries : {};
+  const sourceChats = sourceStore.projectChats && typeof sourceStore.projectChats === 'object' ? sourceStore.projectChats : {};
+  const sourceCommunications = sourceStore.projectCommunications && typeof sourceStore.projectCommunications === 'object' ? sourceStore.projectCommunications : {};
+  const sourceTranscriptUndo = sourceStore.projectTranscriptUndo && typeof sourceStore.projectTranscriptUndo === 'object' ? sourceStore.projectTranscriptUndo : {};
+  const sourceProjectNotes = sourceStore.projectNotes && typeof sourceStore.projectNotes === 'object' ? sourceStore.projectNotes : {};
+
+  const nextSourceScratchpads = { ...sourceScratchpads };
+  const nextSourceNoteEntries = { ...sourceNoteEntries };
+  const nextSourceChats = { ...sourceChats };
+  const nextSourceCommunications = { ...sourceCommunications };
+  const nextSourceTranscriptUndo = { ...sourceTranscriptUndo };
+  const nextSourceProjectNotes = { ...sourceProjectNotes };
+
+  const movedScratchpads = {};
+  const movedNoteEntries = {};
+  const movedChats = {};
+  const movedCommunications = {};
+  const movedTranscriptUndo = {};
+  const movedProjectNotes = {};
+
+  for (const project of movedProjectsRaw) {
+    const projectId = String(project?.id || '').trim();
+    if (!projectId) continue;
+    if (Object.prototype.hasOwnProperty.call(nextSourceScratchpads, projectId)) {
+      movedScratchpads[projectId] = nextSourceScratchpads[projectId];
+      delete nextSourceScratchpads[projectId];
+    }
+    if (Object.prototype.hasOwnProperty.call(nextSourceNoteEntries, projectId)) {
+      movedNoteEntries[projectId] = nextSourceNoteEntries[projectId];
+      delete nextSourceNoteEntries[projectId];
+    }
+    if (Object.prototype.hasOwnProperty.call(nextSourceChats, projectId)) {
+      movedChats[projectId] = nextSourceChats[projectId];
+      delete nextSourceChats[projectId];
+    }
+    if (Object.prototype.hasOwnProperty.call(nextSourceCommunications, projectId)) {
+      movedCommunications[projectId] = nextSourceCommunications[projectId];
+      delete nextSourceCommunications[projectId];
+    }
+    if (Object.prototype.hasOwnProperty.call(nextSourceTranscriptUndo, projectId)) {
+      movedTranscriptUndo[projectId] = nextSourceTranscriptUndo[projectId];
+      delete nextSourceTranscriptUndo[projectId];
+    }
+
+    const projectNoteKey = Object.keys(nextSourceProjectNotes).find((key) => normKey(key) === normKey(project?.name));
+    if (projectNoteKey) {
+      movedProjectNotes[String(project?.name || '').trim()] = nextSourceProjectNotes[projectNoteKey];
+      delete nextSourceProjectNotes[projectNoteKey];
+    }
+  }
+
+  const nextDestinationScratchpads = {
+    ...(destinationStore.projectScratchpads && typeof destinationStore.projectScratchpads === 'object' ? destinationStore.projectScratchpads : {}),
+    ...movedScratchpads,
+  };
+  const nextDestinationNoteEntries = {
+    ...(destinationStore.projectNoteEntries && typeof destinationStore.projectNoteEntries === 'object' ? destinationStore.projectNoteEntries : {}),
+    ...movedNoteEntries,
+  };
+  const nextDestinationChats = {
+    ...(destinationStore.projectChats && typeof destinationStore.projectChats === 'object' ? destinationStore.projectChats : {}),
+    ...movedChats,
+  };
+  const nextDestinationCommunications = {
+    ...(destinationStore.projectCommunications && typeof destinationStore.projectCommunications === 'object' ? destinationStore.projectCommunications : {}),
+    ...movedCommunications,
+  };
+  const nextDestinationTranscriptUndo = {
+    ...(destinationStore.projectTranscriptUndo && typeof destinationStore.projectTranscriptUndo === 'object' ? destinationStore.projectTranscriptUndo : {}),
+    ...movedTranscriptUndo,
+  };
+  const nextDestinationProjectNotes = {
+    ...(destinationStore.projectNotes && typeof destinationStore.projectNotes === 'object' ? destinationStore.projectNotes : {}),
+    ...movedProjectNotes,
+  };
+
+  const movedSenderProjectMap = pickSenderProjectMapEntriesForProjectIds(sourceStore.senderProjectMap, movedProjectIds);
+  const nextSourceSenderProjectMap = omitSenderProjectMapEntriesForProjectIds(sourceStore.senderProjectMap, movedProjectIds);
+  let nextDestinationSenderProjectMap = {
+    ...(destinationStore.senderProjectMap && typeof destinationStore.senderProjectMap === 'object' ? destinationStore.senderProjectMap : {}),
+    ...movedSenderProjectMap,
+  };
+  for (const project of movedProjects) {
+    if (!project?.clientPhone) continue;
+    nextDestinationSenderProjectMap = upsertSenderProjectMapForProject(nextDestinationSenderProjectMap, project.clientPhone, project);
+  }
+
+  const nextSourceStore = {
+    ...sourceStore,
+    revision: sourceStore.revision + 1,
+    updatedAt: ts,
+    projects: nextSourceProjects,
+    tasks: keptSourceTasks,
+    senderProjectMap: nextSourceSenderProjectMap,
+    projectScratchpads: nextSourceScratchpads,
+    projectNoteEntries: nextSourceNoteEntries,
+    projectChats: nextSourceChats,
+    projectCommunications: nextSourceCommunications,
+    projectTranscriptUndo: nextSourceTranscriptUndo,
+    projectNotes: nextSourceProjectNotes,
+  };
+
+  const nextDestinationStore = {
+    ...destinationStore,
+    revision: destinationStore.revision + 1,
+    updatedAt: ts,
+    projects: [...movedProjects, ...destinationProjects],
+    tasks: [...movedTasks, ...(Array.isArray(destinationStore.tasks) ? destinationStore.tasks : [])],
+    senderProjectMap: nextDestinationSenderProjectMap,
+    projectScratchpads: nextDestinationScratchpads,
+    projectNoteEntries: nextDestinationNoteEntries,
+    projectChats: nextDestinationChats,
+    projectCommunications: nextDestinationCommunications,
+    projectTranscriptUndo: nextDestinationTranscriptUndo,
+    projectNotes: nextDestinationProjectNotes,
+  };
+
+  try {
+    await writeStoreForBusiness(destinationKey, nextDestinationStore);
+    try {
+      await writeStoreForBusiness(sourceKey, nextSourceStore);
+    } catch (err) {
+      try {
+        await writeStoreForBusiness(destinationKey, destinationStore);
+      } catch {
+        // best-effort rollback
+      }
+      throw err;
+    }
+  } catch (err) {
+    const failure = new Error(err?.message || 'Failed to move projects');
+    failure.statusCode = Number(err?.statusCode) || 500;
+    throw failure;
+  }
+
+  return {
+    movedProjects,
+    movedProjectIds: movedProjects.map((p) => p.id),
+    sourceStore: nextSourceStore,
+    destinationStore: nextDestinationStore,
+    destinationBusiness,
+  };
+}
+
 function previewTextServer(text, maxLen = 140) {
   const s = String(text || '').replace(/\s+/g, ' ').trim();
   if (!s) return '';
@@ -3654,6 +3884,10 @@ async function googleListUpcomingEvents({ days = 7, max = 25 } = {}) {
 
 async function ensureStoreExists() {
   const file = getStoreFileForBusiness(getBusinessKeyFromContext());
+  await ensureStoreFileExists(file);
+}
+
+async function ensureStoreFileExists(file) {
   await fs.mkdir(path.dirname(file), { recursive: true });
   try {
     await fs.access(file);
@@ -3662,11 +3896,7 @@ async function ensureStoreExists() {
   }
 }
 
-async function readStore() {
-  await ensureStoreExists();
-  const file = getStoreFileForBusiness(getBusinessKeyFromContext());
-  const raw = await fs.readFile(file, 'utf8');
-  const parsed = JSON.parse(raw);
+function normalizeStoreShape(parsed) {
   if (!parsed || typeof parsed !== 'object') return structuredClone(EMPTY_STORE);
 
   const revision = Number(parsed.revision);
@@ -3674,6 +3904,7 @@ async function readStore() {
   const projects = Array.isArray(parsed.projects) ? parsed.projects : [];
   const clients = Array.isArray(parsed.clients) ? parsed.clients : [];
   const tasks = (Array.isArray(parsed.tasks) ? parsed.tasks : []).map(sanitizeTaskRecord);
+  const senderProjectMap = parsed.senderProjectMap && typeof parsed.senderProjectMap === 'object' ? parsed.senderProjectMap : {};
   const team = Array.isArray(parsed.team) ? parsed.team : [];
   const projectNotes = parsed.projectNotes && typeof parsed.projectNotes === 'object' ? parsed.projectNotes : {};
   const projectScratchpads = parsed.projectScratchpads && typeof parsed.projectScratchpads === 'object' ? parsed.projectScratchpads : {};
@@ -3689,6 +3920,7 @@ async function readStore() {
     projects,
     clients,
     tasks,
+    senderProjectMap,
     team,
     projectNotes,
     projectScratchpads,
@@ -3698,6 +3930,21 @@ async function readStore() {
     inboxItems,
     projectTranscriptUndo,
   };
+}
+
+async function readStoreFile(file) {
+  await ensureStoreFileExists(file);
+  const raw = await fs.readFile(file, 'utf8');
+  const parsed = JSON.parse(raw);
+  return normalizeStoreShape(parsed);
+}
+
+async function readStoreForBusiness(businessKey) {
+  return readStoreFile(getStoreFileForBusiness(businessKey));
+}
+
+async function readStore() {
+  return readStoreForBusiness(getBusinessKeyFromContext());
 }
 
 function normalizeClientRecord(input) {
@@ -4992,15 +5239,23 @@ app.get('/api/integrations/slack/team-presence', async (req, res) => {
 });
 
 async function writeStore(nextStore) {
-  await ensureStoreExists();
-
   const file = getStoreFileForBusiness(getBusinessKeyFromContext());
+  await writeStoreFile(file, nextStore);
+}
+
+async function writeStoreFile(file, nextStore) {
+  await ensureStoreFileExists(file);
   const tmpFile = `${file}.tmp-${crypto.randomBytes(6).toString('hex')}`;
   await fs.writeFile(tmpFile, JSON.stringify(nextStore, null, 2) + '\n', 'utf8');
   await fs.rename(tmpFile, file);
   backupCriticalFiles().catch(() => {
     // backup is best-effort
   });
+}
+
+async function writeStoreForBusiness(businessKey, nextStore) {
+  const file = getStoreFileForBusiness(businessKey);
+  await writeStoreFile(file, nextStore);
 }
 
 function nowIso() {
@@ -10403,6 +10658,7 @@ app.post('/api/projects/bulk-delete', async (req, res) => {
 
     const nextProjects = existingProjects.filter((p) => !deleteIds.has(p.id));
     const nextTasks = (Array.isArray(store.tasks) ? store.tasks : []).filter((t) => !deletedNameKeys.has(normKey(t?.project)));
+    const nextSenderProjectMap = omitSenderProjectMapEntriesForProjectIds(store.senderProjectMap, deleteIds);
 
     const nextProjectScratchpads = { ...(store.projectScratchpads && typeof store.projectScratchpads === 'object' ? store.projectScratchpads : {}) };
     const nextProjectNoteEntries = { ...(store.projectNoteEntries && typeof store.projectNoteEntries === 'object' ? store.projectNoteEntries : {}) };
@@ -10428,6 +10684,7 @@ app.post('/api/projects/bulk-delete', async (req, res) => {
       updatedAt: ts,
       projects: nextProjects,
       tasks: nextTasks,
+      senderProjectMap: nextSenderProjectMap,
       projectScratchpads: nextProjectScratchpads,
       projectNoteEntries: nextProjectNoteEntries,
       projectChats: nextProjectChats,
@@ -10437,6 +10694,106 @@ app.post('/api/projects/bulk-delete', async (req, res) => {
 
     await writeStore(nextStore);
     res.json({ ok: true, deletedProjectIds: deletedProjects.map((p) => p.id), store: nextStore });
+  });
+
+  await writeLock;
+});
+
+app.post('/api/projects/:id/move', async (req, res) => {
+  const projectId = String(req.params.id || '').trim();
+  const baseRevision = Number(req.body?.baseRevision);
+  const sourceBusinessKey = getBusinessKeyFromContext();
+  const destinationBusinessKey = normalizeBusinessKey(req.body?.destinationBusinessKey || req.body?.businessKey || '');
+
+  writeLock = writeLock.then(async () => {
+    try {
+      if (!projectId) {
+        res.status(400).json({ error: 'Project id is required' });
+        return;
+      }
+      if (!destinationBusinessKey) {
+        res.status(400).json({ error: 'Destination business is required' });
+        return;
+      }
+      if (destinationBusinessKey === sourceBusinessKey) {
+        res.status(400).json({ error: 'Project is already in that business' });
+        return;
+      }
+
+      const result = await moveProjectsBetweenBusinesses({
+        sourceBusinessKey,
+        destinationBusinessKey,
+        projectIds: [projectId],
+        baseRevision,
+      });
+
+      res.json({
+        ok: true,
+        projectId,
+        fromBusinessKey: sourceBusinessKey,
+        toBusinessKey: destinationBusinessKey,
+        toBusinessName: result.destinationBusiness.name,
+        store: result.sourceStore,
+        destinationRevision: result.destinationStore.revision,
+      });
+    } catch (err) {
+      const status = Number(err?.statusCode) || 500;
+      const body = { error: err?.message || 'Failed to move project' };
+      if (status === 409 && Number.isFinite(err?.currentRevision)) body.currentRevision = err.currentRevision;
+      res.status(status).json(body);
+    }
+  });
+
+  await writeLock;
+});
+
+app.post('/api/projects/bulk-move', async (req, res) => {
+  const baseRevision = Number(req.body?.baseRevision);
+  const sourceBusinessKey = getBusinessKeyFromContext();
+  const destinationBusinessKey = normalizeBusinessKey(req.body?.destinationBusinessKey || req.body?.businessKey || '');
+  const projectIds = Array.isArray(req.body?.projectIds)
+    ? req.body.projectIds.map((v) => String(v || '').trim()).filter(Boolean)
+    : [];
+
+  writeLock = writeLock.then(async () => {
+    try {
+      if (!projectIds.length) {
+        const store = await readStore();
+        res.json({ ok: true, movedProjectIds: [], store });
+        return;
+      }
+      if (!destinationBusinessKey) {
+        res.status(400).json({ error: 'Destination business is required' });
+        return;
+      }
+      if (destinationBusinessKey === sourceBusinessKey) {
+        res.status(400).json({ error: 'Projects are already in that business' });
+        return;
+      }
+
+      const result = await moveProjectsBetweenBusinesses({
+        sourceBusinessKey,
+        destinationBusinessKey,
+        projectIds,
+        baseRevision,
+      });
+
+      res.json({
+        ok: true,
+        movedProjectIds: result.movedProjectIds,
+        movedCount: result.movedProjectIds.length,
+        fromBusinessKey: sourceBusinessKey,
+        toBusinessKey: destinationBusinessKey,
+        toBusinessName: result.destinationBusiness.name,
+        store: result.sourceStore,
+        destinationRevision: result.destinationStore.revision,
+      });
+    } catch (err) {
+      const status = Number(err?.statusCode) || 500;
+      const body = { error: err?.message || 'Failed to move projects' };
+      if (status === 409 && Number.isFinite(err?.currentRevision)) body.currentRevision = err.currentRevision;
+      res.status(status).json(body);
+    }
   });
 
   await writeLock;

@@ -2393,6 +2393,60 @@ async function bulkUpdateProjectsByIdList(projectIds, patch) {
     applyStore(store);
 }
 
+async function moveProjectToBusiness(projectId, destinationBusinessKey) {
+    const id = safeText(projectId).trim();
+    const destinationKey = normalizeBusinessKey(destinationBusinessKey);
+    if (!id) throw new Error('Project id is required');
+    if (!destinationKey) throw new Error('Destination business is required');
+
+    const data = await withRevisionRetry(() => apiJson(`/api/projects/${encodeURIComponent(id)}/move`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ baseRevision: state.revision, destinationBusinessKey: destinationKey })
+    }));
+
+    if (data?.store && typeof data.store === 'object') {
+        applyStore(data.store);
+    } else {
+        await fetchState();
+    }
+
+    state.currentProjectId = null;
+    state.currentView = 'dashboard';
+    await fetchBusinesses().catch(() => {});
+    renderNav();
+    renderMain();
+    broadcastMarcusContext();
+    return data;
+}
+
+async function moveProjectsToBusiness(projectIds, destinationBusinessKey) {
+    const ids = Array.isArray(projectIds) ? projectIds.map((v) => safeText(v).trim()).filter(Boolean) : [];
+    const destinationKey = normalizeBusinessKey(destinationBusinessKey);
+    if (!ids.length) throw new Error('Select at least one project');
+    if (!destinationKey) throw new Error('Destination business is required');
+
+    const data = await withRevisionRetry(() => apiJson('/api/projects/bulk-move', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ baseRevision: state.revision, projectIds: ids, destinationBusinessKey: destinationKey })
+    }));
+
+    const nextStore = data?.store && typeof data.store === 'object' ? data.store : data;
+    applyStore(nextStore);
+
+    if (ids.includes(String(state.currentProjectId || ''))) {
+        state.currentProjectId = null;
+        state.currentView = 'dashboard';
+    }
+
+    await fetchBusinesses().catch(() => {});
+    renderNav();
+    renderMain();
+    broadcastMarcusContext();
+    return data;
+}
+
 async function saveProjectLinks(projectId, { workspacePath, airtableUrl }) {
     await saveProjectPatch(projectId, {
         workspacePath: safeText(workspacePath).trim(),
@@ -5366,16 +5420,20 @@ function renderSettings(container) {
     if (settingsPane === 'projects') {
         if (titleEl) titleEl.innerText = 'Settings • Projects';
 
-        const projectsSection = section('Projects', 'Bulk select projects and remove them. This also removes their tasks, notes, chat, scratchpad, and communications.');
+        const projectsSection = section('Projects', 'Bulk select projects and either move them to another business or remove them. Delete also removes their tasks, notes, chat, scratchpad, and communications.');
         const projectsBody = projectsSection.querySelector('[data-slot="body"]');
         const projects = Array.isArray(state.projects) ? state.projects : [];
         const selectedMap = (state.bulkProjectDeleteSelectedById && typeof state.bulkProjectDeleteSelectedById === 'object') ? state.bulkProjectDeleteSelectedById : {};
+        const moveBusinessOptions = (Array.isArray(state.businesses) ? state.businesses : [])
+            .filter((b) => normalizeBusinessKey(b?.key) && normalizeBusinessKey(b.key) !== normalizeBusinessKey(state.activeBusinessKey))
+            .map((b) => ({ key: normalizeBusinessKey(b.key), name: safeText(b.name).trim() || normalizeBusinessKey(b.key) }));
 
         const renderProjectsBody = () => {
             const selectedIds = Object.keys(selectedMap).filter((id) => selectedMap[id]);
             const limit = Math.max(50, Number(state.projectsSettingsLimit) || 200);
             const shown = projects.slice(0, limit);
             const remaining = Math.max(0, projects.length - shown.length);
+            const moveOptionsHtml = moveBusinessOptions.map((business) => `<option value="${escapeHtml(business.key)}">${escapeHtml(business.name)}</option>`).join('');
 
             projectsBody.innerHTML = `
                 <div class="flex items-center justify-between gap-3 flex-wrap">
@@ -5384,11 +5442,15 @@ function renderSettings(container) {
                         <a href="${escapeHtml(fullSettingsHref)}" class="px-3 py-2 rounded bg-ops-bg border border-ops-border text-ops-light text-xs hover:text-white">Back to Settings</a>
                         ${remaining > 0 ? `<button id="btn-projects-more" class="px-3 py-2 rounded bg-ops-bg border border-ops-border text-ops-light text-xs hover:text-white">Load ${Math.min(200, remaining)} more</button>` : ''}
                         <button id="btn-projects-clear" class="px-3 py-2 rounded bg-ops-bg border border-ops-border text-ops-light text-xs hover:text-white" ${selectedIds.length ? '' : 'disabled'}>Clear selection</button>
+                        <select id="bulk-move-business" class="px-3 py-2 rounded bg-ops-bg border border-ops-border text-ops-light text-xs ${moveBusinessOptions.length ? '' : 'opacity-50'}" ${moveBusinessOptions.length ? '' : 'disabled'}>
+                            ${moveBusinessOptions.length ? moveOptionsHtml : '<option value="">No other businesses</option>'}
+                        </select>
+                        <button id="btn-projects-move" class="px-3 py-2 rounded bg-amber-700 text-white text-xs hover:bg-amber-600" ${(selectedIds.length && moveBusinessOptions.length) ? '' : 'disabled'}>Move selected</button>
                         <button id="btn-projects-delete" class="px-3 py-2 rounded bg-red-600 text-white text-xs hover:bg-red-500" ${selectedIds.length ? '' : 'disabled'}>Delete selected</button>
                     </div>
                 </div>
                 <div class="mt-3 space-y-2" id="projects-list"></div>
-                <div class="text-[11px] text-ops-light mt-3">Tip: This delete is permanent (it removes the project and its related data).</div>
+                <div class="text-[11px] text-ops-light mt-3">Tip: Move transfers the selected projects and their linked records into another business. Delete is permanent.</div>
             `;
 
             const listEl = projectsBody.querySelector('#projects-list');
@@ -5427,8 +5489,10 @@ function renderSettings(container) {
                 const selectedEl = projectsBody.querySelector('#projects-selected');
                 if (selectedEl) selectedEl.textContent = String(selectedCount);
                 const btnClear = projectsBody.querySelector('#btn-projects-clear');
+                const btnMove = projectsBody.querySelector('#btn-projects-move');
                 const btnDel = projectsBody.querySelector('#btn-projects-delete');
                 if (btnClear) btnClear.disabled = selectedCount === 0;
+                if (btnMove) btnMove.disabled = selectedCount === 0 || moveBusinessOptions.length === 0;
                 if (btnDel) btnDel.disabled = selectedCount === 0;
             };
 
@@ -5492,6 +5556,41 @@ function renderSettings(container) {
                     } finally {
                         btnDeleteProjects.disabled = false;
                         btnDeleteProjects.textContent = prevLabel;
+                    }
+                };
+            }
+
+            const btnMoveProjects = projectsBody.querySelector('#btn-projects-move');
+            if (btnMoveProjects) {
+                btnMoveProjects.onclick = async () => {
+                    const ids = Object.keys(state.bulkProjectDeleteSelectedById || {}).filter((id) => state.bulkProjectDeleteSelectedById[id]);
+                    const destinationKey = normalizeBusinessKey(projectsBody.querySelector('#bulk-move-business')?.value);
+                    const destinationBusiness = moveBusinessOptions.find((b) => b.key === destinationKey);
+                    if (!ids.length) return;
+                    if (!destinationKey || !destinationBusiness) {
+                        alert('Choose a destination business first.');
+                        return;
+                    }
+                    if (!confirm(`Move ${ids.length} project(s) to ${destinationBusiness.name}? They will be removed from the current business.`)) return;
+
+                    const prevLabel = btnMoveProjects.textContent;
+                    btnMoveProjects.disabled = true;
+                    btnMoveProjects.textContent = 'Moving…';
+                    try {
+                        const result = await moveProjectsToBusiness(ids, destinationKey);
+                        state.bulkProjectDeleteSelectedById = {};
+                        renderNav();
+                        renderSettings(container);
+
+                        const switchNow = window.confirm(`Moved ${result?.movedCount || ids.length} project(s) to ${result?.toBusinessName || destinationBusiness.name}. Switch to that business now?`);
+                        if (switchNow) {
+                            await setActiveBusinessKey(destinationKey);
+                        }
+                    } catch (e) {
+                        alert(e?.message || 'Failed to move projects');
+                    } finally {
+                        btnMoveProjects.disabled = false;
+                        btnMoveProjects.textContent = prevLabel;
                     }
                 };
             }
@@ -12038,11 +12137,15 @@ function renderProjectView(container) {
         if (tab === 'details') {
             const ownerOptions = [''].concat(getAssignableOwnerNames());
             const currentOwner = getProjectOwnerName(project);
+            const moveBusinessOptions = (Array.isArray(state.businesses) ? state.businesses : [])
+                .filter((b) => normalizeBusinessKey(b?.key) && normalizeBusinessKey(b.key) !== normalizeBusinessKey(state.activeBusinessKey))
+                .map((b) => ({ key: normalizeBusinessKey(b.key), name: safeText(b.name).trim() || normalizeBusinessKey(b.key) }));
             const ownerOptionsHtml = ownerOptions.map((name) => {
                 const label = name ? name : 'Unassigned';
                 const selected = (name ? name : '') === (currentOwner ? currentOwner : '') ? 'selected' : '';
                 return `<option value="${escapeHtml(name)}" ${selected}>${escapeHtml(label)}</option>`;
             }).join('');
+            const moveOptionsHtml = moveBusinessOptions.map((business) => `<option value="${escapeHtml(business.key)}">${escapeHtml(business.name)}</option>`).join('');
 
             const el = document.createElement('div');
             el.className = 'space-y-3';
@@ -12092,6 +12195,16 @@ function renderProjectView(container) {
                     </div>
                 </div>
                 <button id="btn-save-details" class="w-full bg-zinc-800 hover:bg-zinc-700 text-zinc-200 px-3 py-2 rounded text-xs font-semibold uppercase tracking-wide transition-colors">Save</button>
+                <div class="pt-3 border-t border-zinc-800 space-y-2">
+                    <div class="text-zinc-500 text-xxs font-mono uppercase tracking-widest">Move To Business</div>
+                    <div class="text-[11px] text-zinc-500">Transfer this project and its linked tasks, notes, scratchpad, chat, and comms into another business workspace.</div>
+                    <div class="grid grid-cols-[1fr_auto] gap-2">
+                        <select id="proj-move-business" class="w-full bg-zinc-950/40 border border-zinc-800 rounded px-3 py-2 text-xs font-mono text-zinc-200 ${moveBusinessOptions.length ? '' : 'opacity-50'}" ${moveBusinessOptions.length ? '' : 'disabled'}>
+                            ${moveBusinessOptions.length ? moveOptionsHtml : '<option value="">No other businesses</option>'}
+                        </select>
+                        <button id="btn-move-project" class="bg-amber-700 hover:bg-amber-600 text-white px-3 py-2 rounded text-xs font-semibold uppercase tracking-wide transition-colors ${moveBusinessOptions.length ? '' : 'opacity-50 pointer-events-none'}" ${moveBusinessOptions.length ? '' : 'disabled'}>Move</button>
+                    </div>
+                </div>
             `;
             panel.appendChild(el);
 
@@ -12116,6 +12229,35 @@ function renderProjectView(container) {
                         alert(e?.message || 'Failed to save details');
                     } finally {
                         saveDetailsBtn.disabled = false;
+                    }
+                };
+            }
+
+            const moveProjectBtn = el.querySelector('#btn-move-project');
+            if (moveProjectBtn) {
+                moveProjectBtn.onclick = async () => {
+                    const selectedKey = normalizeBusinessKey(el.querySelector('#proj-move-business')?.value);
+                    const selectedBusiness = moveBusinessOptions.find((b) => b.key === selectedKey);
+                    if (!selectedKey || !selectedBusiness) {
+                        alert('Choose a destination business first.');
+                        return;
+                    }
+                    const confirmed = window.confirm(`Move "${project.name}" to ${selectedBusiness.name}? This will remove it from the current business.`);
+                    if (!confirmed) return;
+
+                    moveProjectBtn.disabled = true;
+                    try {
+                        const result = await moveProjectToBusiness(project.id, selectedKey);
+                        const switchNow = window.confirm(`Moved to ${result?.toBusinessName || selectedBusiness.name}. Switch to that business now?`);
+                        if (switchNow) {
+                            await setActiveBusinessKey(selectedKey);
+                        } else {
+                            alert(`Moved to ${result?.toBusinessName || selectedBusiness.name}.`);
+                        }
+                    } catch (e) {
+                        alert(e?.message || 'Failed to move project');
+                    } finally {
+                        moveProjectBtn.disabled = false;
                     }
                 };
             }
