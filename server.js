@@ -535,26 +535,52 @@ let openAiModelsCache = {
   models: OPENAI_MODEL_FALLBACKS.slice(),
 };
 
+const LEGACY_AGENT_SYSTEM_PROMPT_EXACT = new Set([
+  'You are my ops agent. Be concise. End with Next steps.',
+]);
+
+function normalizeAgentSystemPrompt(input) {
+  const value = typeof input === 'string' ? input.trim() : '';
+  if (!value) return '';
+  if (LEGACY_AGENT_SYSTEM_PROMPT_EXACT.has(value)) return '';
+
+  const lower = value.toLowerCase();
+  const looksLikeLegacyMartyPrompt = (
+    lower.includes('management assistant for routing tasks and yield') ||
+    lower.includes('you are marty') ||
+    lower.includes('m.a.r.t.y')
+  );
+
+  return looksLikeLegacyMartyPrompt ? '' : value;
+}
+
+function normalizeSettingsShape(settings) {
+  const parsed = settings && typeof settings === 'object' ? settings : {};
+  return {
+    ...parsed,
+    agentSystemPrompt: normalizeAgentSystemPrompt(parsed.agentSystemPrompt),
+    automationConfig: normalizeAutomationConfig(parsed.automationConfig),
+    automationDigestQueue: normalizeAutomationDigestQueue(parsed.automationDigestQueue),
+  };
+}
+
 async function readSettings() {
   try {
     await fs.mkdir(SETTINGS_DIR, { recursive: true });
     const raw = await fs.readFile(SETTINGS_FILE, 'utf8');
     const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object') return { automationConfig: normalizeAutomationConfig({}), automationDigestQueue: [] };
-    return {
-      ...parsed,
-      automationConfig: normalizeAutomationConfig(parsed.automationConfig),
-      automationDigestQueue: normalizeAutomationDigestQueue(parsed.automationDigestQueue),
-    };
+    if (!parsed || typeof parsed !== 'object') return normalizeSettingsShape({});
+    return normalizeSettingsShape(parsed);
   } catch {
-    return { automationConfig: normalizeAutomationConfig({}), automationDigestQueue: [] };
+    return normalizeSettingsShape({});
   }
 }
 
 async function writeSettings(next) {
+  const normalized = normalizeSettingsShape(next);
   await fs.mkdir(SETTINGS_DIR, { recursive: true });
   const tmpFile = `${SETTINGS_FILE}.tmp-${crypto.randomBytes(6).toString('hex')}`;
-  await fs.writeFile(tmpFile, JSON.stringify(next, null, 2) + '\n', 'utf8');
+  await fs.writeFile(tmpFile, JSON.stringify(normalized, null, 2) + '\n', 'utf8');
   await fs.rename(tmpFile, SETTINGS_FILE);
   refreshBusinessCacheFromSettings().catch(() => {
     // best-effort
