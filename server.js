@@ -2309,6 +2309,22 @@ function upsertSenderProjectMapForProject(senderProjectMap, senderValue, project
   return map;
 }
 
+function normalizeProjectRecord(input, { updatedAt } = {}) {
+  const existing = input && typeof input === 'object' ? input : {};
+  const normalized = normalizeProject(existing);
+  const createdAt = typeof existing.createdAt === 'string' && existing.createdAt.trim() ? existing.createdAt.trim() : nowIso();
+  const nextUpdatedAt = typeof updatedAt === 'string' && updatedAt.trim()
+    ? updatedAt.trim()
+    : (typeof existing.updatedAt === 'string' && existing.updatedAt.trim() ? existing.updatedAt.trim() : createdAt);
+  return {
+    ...existing,
+    ...normalized,
+    id: typeof existing.id === 'string' && existing.id.trim() ? existing.id.trim() : makeId(),
+    createdAt,
+    updatedAt: nextUpdatedAt,
+  };
+}
+
 function getSenderProjectIdFromMappingValue(value) {
   if (typeof value === 'string') return value.trim();
   if (value && typeof value === 'object') return String(value.projectId || '').trim();
@@ -2386,7 +2402,7 @@ async function moveProjectsBetweenBusinesses({ sourceBusinessKey, destinationBus
   }
 
   const ts = nowIso();
-  const movedProjects = movedProjectsRaw.map((project) => normalizeProject({ ...project, updatedAt: ts }));
+  const movedProjects = movedProjectsRaw.map((project) => normalizeProjectRecord(project, { updatedAt: ts }));
   const nextSourceProjects = sourceProjects.filter((p) => !movedProjectIds.has(p.id));
   const sourceTasks = Array.isArray(sourceStore.tasks) ? sourceStore.tasks : [];
   const movedTasks = sourceTasks.filter((t) => movedNameKeys.has(normKey(t?.project)));
@@ -2534,6 +2550,134 @@ async function moveProjectsBetweenBusinesses({ sourceBusinessKey, destinationBus
     sourceStore: nextSourceStore,
     destinationStore: nextDestinationStore,
     destinationBusiness,
+  };
+}
+
+function repairProjectsMissingIds(storeInput) {
+  const store = storeInput && typeof storeInput === 'object' ? storeInput : structuredClone(EMPTY_STORE);
+  const projects = Array.isArray(store.projects) ? store.projects : [];
+  const missingProjects = projects.filter((project) => !String(project?.id || '').trim());
+  if (!missingProjects.length) {
+    return { changed: false, store, repairedCount: 0 };
+  }
+
+  const ts = nowIso();
+  const usedIds = new Set(projects.map((project) => String(project?.id || '').trim()).filter(Boolean));
+  const senderMap = store.senderProjectMap && typeof store.senderProjectMap === 'object' ? { ...store.senderProjectMap } : {};
+  const phoneIdCandidates = new Map();
+  for (const [senderKey, value] of Object.entries(senderMap)) {
+    const projectId = getSenderProjectIdFromMappingValue(value);
+    if (!projectId) continue;
+    if (!phoneIdCandidates.has(senderKey)) phoneIdCandidates.set(senderKey, []);
+    phoneIdCandidates.get(senderKey).push(projectId);
+  }
+
+  const orphanIdSet = new Set();
+  const collectKeys = (obj) => {
+    const source = obj && typeof obj === 'object' ? obj : {};
+    for (const key of Object.keys(source)) {
+      const trimmed = String(key || '').trim();
+      if (!trimmed || usedIds.has(trimmed)) continue;
+      orphanIdSet.add(trimmed);
+    }
+  };
+  collectKeys(store.projectScratchpads);
+  collectKeys(store.projectNoteEntries);
+  collectKeys(store.projectChats);
+  collectKeys(store.projectCommunications);
+  collectKeys(store.projectTranscriptUndo);
+  for (const value of Object.values(senderMap)) {
+    const mappedId = getSenderProjectIdFromMappingValue(value);
+    if (mappedId && !usedIds.has(mappedId)) orphanIdSet.add(mappedId);
+  }
+  const orphanIds = Array.from(orphanIdSet);
+
+  const repairs = [];
+  const consumeOrphanId = (candidateId) => {
+    const idx = orphanIds.indexOf(candidateId);
+    if (idx >= 0) orphanIds.splice(idx, 1);
+  };
+
+  for (let index = 0; index < missingProjects.length; index++) {
+    const project = missingProjects[index];
+    let recoveredId = '';
+
+    const phoneKeys = senderLookupKeys(project?.clientPhone || '');
+    for (const key of phoneKeys) {
+      const candidates = phoneIdCandidates.get(key) || [];
+      const match = candidates.find((candidateId) => candidateId && !usedIds.has(candidateId));
+      if (match) {
+        recoveredId = match;
+        break;
+      }
+    }
+
+    const remainingMissing = missingProjects.length - index;
+    if (!recoveredId && orphanIds.length === remainingMissing) {
+      recoveredId = orphanIds[0];
+    }
+    if (!recoveredId && remainingMissing === 1 && orphanIds.length) {
+      recoveredId = orphanIds[0];
+    }
+    if (!recoveredId) {
+      recoveredId = makeId();
+    }
+
+    consumeOrphanId(recoveredId);
+    usedIds.add(recoveredId);
+    repairs.push({ project, recoveredId });
+  }
+
+  const repairedProjects = projects.map((project) => {
+    const repair = repairs.find((item) => item.project === project);
+    if (!repair) return project;
+    return normalizeProjectRecord({ ...project, id: repair.recoveredId }, { updatedAt: project?.updatedAt || ts });
+  });
+
+  const remapKeyedObject = (input) => {
+    const source = input && typeof input === 'object' ? input : {};
+    const next = { ...source };
+    for (const repair of repairs) {
+      const oldId = String(repair.project?.id || '').trim();
+      const newId = repair.recoveredId;
+      if (!oldId || !Object.prototype.hasOwnProperty.call(next, oldId) || oldId === newId) continue;
+      next[newId] = next[oldId];
+      delete next[oldId];
+    }
+    return next;
+  };
+
+  const nextSenderProjectMap = {};
+  const repairByOldId = new Map(repairs.map((repair) => [String(repair.project?.id || '').trim(), repair.recoveredId]));
+  for (const [senderKey, value] of Object.entries(senderMap)) {
+    if (typeof value === 'string') {
+      const updatedId = repairByOldId.get(value) || value;
+      nextSenderProjectMap[senderKey] = updatedId;
+      continue;
+    }
+    if (value && typeof value === 'object') {
+      const currentId = String(value.projectId || '').trim();
+      const updatedId = repairByOldId.get(currentId) || currentId;
+      nextSenderProjectMap[senderKey] = { ...value, projectId: updatedId };
+      continue;
+    }
+    nextSenderProjectMap[senderKey] = value;
+  }
+
+  return {
+    changed: true,
+    repairedCount: repairs.length,
+    store: {
+      ...store,
+      updatedAt: ts,
+      projects: repairedProjects,
+      senderProjectMap: nextSenderProjectMap,
+      projectScratchpads: remapKeyedObject(store.projectScratchpads),
+      projectNoteEntries: remapKeyedObject(store.projectNoteEntries),
+      projectChats: remapKeyedObject(store.projectChats),
+      projectCommunications: remapKeyedObject(store.projectCommunications),
+      projectTranscriptUndo: remapKeyedObject(store.projectTranscriptUndo),
+    },
   };
 }
 
@@ -9174,7 +9318,16 @@ app.get('/api/tasks', async (req, res) => {
   let outError = null;
 
   writeLock = writeLock.then(async () => {
-    const store = await readStore();
+    let store = await readStore();
+    const repaired = repairProjectsMissingIds(store);
+    if (repaired.changed) {
+      store = {
+        ...repaired.store,
+        revision: Math.max(Number(store.revision) || 1, 1) + 1,
+      };
+      await writeStore(store);
+    }
+
     const migrated = migrateLegacyAirtableClientProjects(store);
     if (!migrated.changed) {
       outStore = store;
