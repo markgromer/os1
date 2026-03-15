@@ -6077,10 +6077,16 @@ function resolveProjectForMessage(store, message, projectId) {
 
   const scored = [];
   for (const p of projects) {
+    const closed = isClosedProjectStatus(p?.status);
     const name = String(p?.name || '').trim();
     if (!name) continue;
     const nameKey = normKey(name);
     if (!nameKey) continue;
+
+    // Avoid nagging about old projects: only consider closed projects when the
+    // user explicitly types the full project name.
+    if (closed && !msg.includes(nameKey)) continue;
+
     let score = 0;
     if (msg.includes(nameKey)) score = 100 + nameKey.length; // strong signal
     else {
@@ -6126,7 +6132,7 @@ function tryHandleDeterministicTaskRequest(store, message, projectId) {
   const project = resolved && typeof resolved === 'object' ? resolved : null;
   if (!project) {
     const active = (Array.isArray(store?.projects) ? store.projects : [])
-      .filter((p) => String(p?.status || '') !== 'Done')
+      .filter((p) => !isClosedProjectStatus(p?.status))
       .slice(0, 12)
       .map((p) => `- ${p.name}`)
       .join('\n');

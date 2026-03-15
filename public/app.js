@@ -10378,8 +10378,8 @@ function renderDashboard(container, sidePort) {
     else if (callsLoading && !calls.length) { calPreview = `<div class="text-[10px] text-ops-light/50">Loading\u2026</div>`; }
     else if (calls.length) {
         const mkRow = (ev) => { const time = formatTimeFromIso(ev.start); const ti = safeText(ev.summary)||'Untitled'; const link = safeText(ev.meetingLink); return `<div class="flex items-center justify-between gap-2 border border-ops-border rounded bg-ops-bg/40 px-2.5 py-1.5"><div class="min-w-0"><div class="text-[11px] text-white truncate">${escapeHtml(ti)}</div><div class="text-[9px] font-mono text-ops-light/60">${escapeHtml(time||'')}</div></div>${link ? `<a class="shrink-0 text-[9px] font-mono text-ops-accent hover:underline" href="${escapeHtml(link)}" target="_blank" rel="noreferrer">Join</a>` : ''}</div>`; };
-        calPreview = calls.slice(0,2).map(mkRow).join('');
-        if (calls.length > 2) calBody = `<div class="space-y-1">${calls.slice(2).map(mkRow).join('')}</div>`;
+        calPreview = calls.slice(0,1).map(mkRow).join('');
+        if (calls.length > 1) calBody = `<div class="space-y-1">${calls.slice(1).map(mkRow).join('')}</div>`;
     } else { calPreview = `<div class="text-[10px] text-ops-light/50">No events today.</div>`; }
     const calCardRight = `<div class="flex gap-1"><button type="button" data-refresh-calls class="px-1.5 py-0.5 rounded border border-ops-border text-[9px] font-mono text-ops-light hover:text-white transition-colors"><i class="fa-solid fa-rotate text-[8px]"></i></button><button type="button" data-open-calendar class="px-1.5 py-0.5 rounded border border-ops-border text-[9px] font-mono text-ops-light hover:text-white transition-colors">Open</button></div>`;
     const calCard = makeCard('calendar', 'fa-calendar-days', 'text-blue-400', 'Calendar', calCardRight, `<div class="space-y-1">${calPreview}</div>`, calBody);
@@ -10388,15 +10388,15 @@ function renderDashboard(container, sidePort) {
     // Due Today card
     const dueTodayItems = Array.isArray(buckets.today) ? buckets.today : [];
     const mkProjBtn = (p, color) => `<button type="button" class="dash-project-btn w-full text-left px-2.5 py-1.5 rounded border border-ops-border bg-ops-bg/40 hover:bg-ops-surface/60 transition-colors" data-pid="${escapeHtml(safeText(p?.id))}"><div class="text-[11px] text-white truncate">${escapeHtml(safeText(p?.name)||'Untitled')}</div><div class="text-[9px] font-mono ${color}">${escapeHtml(safeText(p?.dueDate)||'')}</div></button>`;
-    const dtPreview = dueTodayItems.length ? `<div class="space-y-1">${dueTodayItems.slice(0,2).map(p=>mkProjBtn(p,'text-red-400/70')).join('')}</div>` : `<div class="text-[10px] text-ops-light/50">Nothing due today.</div>`;
-    const dtBody = dueTodayItems.length > 2 ? `<div class="space-y-1">${dueTodayItems.slice(2).map(p=>mkProjBtn(p,'text-red-400/70')).join('')}</div>` : '';
+    const dtPreview = dueTodayItems.length ? `<div class="space-y-1">${dueTodayItems.slice(0,1).map(p=>mkProjBtn(p,'text-red-400/70')).join('')}</div>` : `<div class="text-[10px] text-ops-light/50">Nothing due today.</div>`;
+    const dtBody = dueTodayItems.length > 1 ? `<div class="space-y-1">${dueTodayItems.slice(1).map(p=>mkProjBtn(p,'text-red-400/70')).join('')}</div>` : '';
     const dueTodayCard = makeCard('due-today', 'fa-fire', 'text-red-400', 'Due Today', `<span class="text-sm font-semibold text-white">${dueTodayItems.length}</span>`, dtPreview, dtBody, { extraClass: dueTodayItems.length ? 'dash-card--danger' : '' });
     if (pagePrefs.deliveryBoard) urgentRow.appendChild(dueTodayCard);
 
     // Due This Week card
     const dueWeekItems = [...(Array.isArray(buckets.tomorrow)?buckets.tomorrow:[]), ...(Array.isArray(buckets.thisWeek)?buckets.thisWeek:[])];
-    const dwPreview = dueWeekItems.length ? `<div class="space-y-1">${dueWeekItems.slice(0,2).map(p=>mkProjBtn(p,'text-amber-400/70')).join('')}</div>` : `<div class="text-[10px] text-ops-light/50">Nothing else this week.</div>`;
-    const dwBody = dueWeekItems.length > 2 ? `<div class="space-y-1">${dueWeekItems.slice(2).map(p=>mkProjBtn(p,'text-amber-400/70')).join('')}</div>` : '';
+    const dwPreview = dueWeekItems.length ? `<div class="space-y-1">${dueWeekItems.slice(0,1).map(p=>mkProjBtn(p,'text-amber-400/70')).join('')}</div>` : `<div class="text-[10px] text-ops-light/50">Nothing else this week.</div>`;
+    const dwBody = dueWeekItems.length > 1 ? `<div class="space-y-1">${dueWeekItems.slice(1).map(p=>mkProjBtn(p,'text-amber-400/70')).join('')}</div>` : '';
     const dueWeekCard = makeCard('due-week', 'fa-calendar-week', 'text-amber-400', 'Due This Week', `<span class="text-sm font-semibold text-white">${dueWeekItems.length}</span>`, dwPreview, dwBody, { extraClass: dueWeekItems.length ? 'dash-card--warning' : '' });
     if (pagePrefs.deliveryBoard) urgentRow.appendChild(dueWeekCard);
     if (!actionOnlyMode && pagePrefs.deliveryBoard) wrap.appendChild(urgentRow);
@@ -10408,10 +10408,10 @@ function renderDashboard(container, sidePort) {
     // Due Next Week
     const nextWeekItems = Array.isArray(buckets.nextWeek) ? buckets.nextWeek : [];
     const nwPreview = nextWeekItems.length
-        ? `<div class="space-y-1">${nextWeekItems.slice(0,2).map(p=>mkProjBtn(p,'text-ops-light/60')).join('')}</div>`
+        ? `<div class="space-y-1">${nextWeekItems.slice(0,1).map(p=>mkProjBtn(p,'text-ops-light/60')).join('')}</div>`
         : '<div class="text-[10px] text-ops-light/50">Nothing due next week.</div>';
-    const nwBody = nextWeekItems.length > 2
-        ? `<div class="space-y-1">${nextWeekItems.slice(2).map(p=>mkProjBtn(p,'text-ops-light/60')).join('')}</div>`
+    const nwBody = nextWeekItems.length > 1
+        ? `<div class="space-y-1">${nextWeekItems.slice(1).map(p=>mkProjBtn(p,'text-ops-light/60')).join('')}</div>`
         : '';
     const nwCard = makeCard('next-week', 'fa-calendar-check', 'text-sky-400', 'Due Next Week', `<span class="text-sm font-semibold text-white">${nextWeekItems.length}</span>`, nwPreview, nwBody);
     if (pagePrefs.deliveryBoard) midRow.appendChild(nwCard);
@@ -10419,10 +10419,10 @@ function renderDashboard(container, sidePort) {
     // Upcoming Projects
     const upcoming = (Array.isArray(buckets.upcoming) ? buckets.upcoming : []).slice(0, 6);
     const upPreview = upcoming.length
-        ? `<div class="space-y-1">${upcoming.slice(0,2).map(p=>mkProjBtn(p,'text-ops-light/60')).join('')}</div>`
+        ? `<div class="space-y-1">${upcoming.slice(0,1).map(p=>mkProjBtn(p,'text-ops-light/60')).join('')}</div>`
         : '<div class="text-[10px] text-ops-light/50">No upcoming projects.</div>';
-    const upBody = upcoming.length > 2
-        ? `<div class="space-y-1">${upcoming.slice(2).map(p=>mkProjBtn(p,'text-ops-light/60')).join('')}</div>`
+    const upBody = upcoming.length > 1
+        ? `<div class="space-y-1">${upcoming.slice(1).map(p=>mkProjBtn(p,'text-ops-light/60')).join('')}</div>`
         : '';
     const upCard = makeCard('upcoming', 'fa-forward', 'text-ops-light/40', 'Upcoming Projects', `<button type="button" data-open-projects class="px-1.5 py-0.5 rounded border border-ops-border text-[9px] font-mono text-ops-light hover:text-white transition-colors">All</button>`, upPreview, upBody);
     if (pagePrefs.deliveryBoard) midRow.appendChild(upCard);
