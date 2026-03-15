@@ -10401,19 +10401,31 @@ function renderDashboard(container, sidePort) {
     if (pagePrefs.deliveryBoard) urgentRow.appendChild(dueWeekCard);
     if (!actionOnlyMode && pagePrefs.deliveryBoard) wrap.appendChild(urgentRow);
 
-    // ═══ MID ROW: Streaks + Focus Timer ══════════════════════════════
+    // ═══ MID ROW: Due Next Week + Upcoming Projects + Focus Timer ════
     const midRow = document.createElement('div');
-    midRow.className = 'grid grid-cols-1 sm:grid-cols-2 gap-2';
+    midRow.className = 'grid grid-cols-1 md:grid-cols-3 gap-2';
 
-    // Streak chart
-    const barsHtml = weekDays.map((wd,i) => {
-        const count = completionsByDay[i]; const pct = Math.round((count/maxC)*100); const isToday = wd.ymd === today;
-        const barColor = isToday ? 'bg-blue-400' : count > 0 ? 'bg-emerald-400/70' : 'bg-ops-border';
-        return `<div class="flex flex-col items-center gap-0.5 flex-1"><div class="w-full rounded-sm ${barColor}" style="height:${Math.max(3, pct*0.5)}px" title="${count}"></div><span class="text-[8px] font-mono ${isToday?'text-blue-400 font-bold':'text-ops-light/40'}">${wd.label}</span></div>`;
-    }).join('');
-    const streakPreview = `<div class="flex items-end gap-0.5 h-12">${barsHtml}</div>`;
-    const streakCard = makeCard('streaks', 'fa-chart-bar', 'text-emerald-400', 'Week', `<span class="text-[10px] font-mono text-ops-light/50">${totalDoneWeek} done</span>`, streakPreview, '');
-    if (pagePrefs.deliveryBoard) midRow.appendChild(streakCard);
+    // Due Next Week
+    const nextWeekItems = Array.isArray(buckets.nextWeek) ? buckets.nextWeek : [];
+    const nwPreview = nextWeekItems.length
+        ? `<div class="space-y-1">${nextWeekItems.slice(0,2).map(p=>mkProjBtn(p,'text-ops-light/60')).join('')}</div>`
+        : '<div class="text-[10px] text-ops-light/50">Nothing due next week.</div>';
+    const nwBody = nextWeekItems.length > 2
+        ? `<div class="space-y-1">${nextWeekItems.slice(2).map(p=>mkProjBtn(p,'text-ops-light/60')).join('')}</div>`
+        : '';
+    const nwCard = makeCard('next-week', 'fa-calendar-check', 'text-sky-400', 'Due Next Week', `<span class="text-sm font-semibold text-white">${nextWeekItems.length}</span>`, nwPreview, nwBody);
+    if (pagePrefs.deliveryBoard) midRow.appendChild(nwCard);
+
+    // Upcoming Projects
+    const upcoming = (Array.isArray(buckets.upcoming) ? buckets.upcoming : []).slice(0, 6);
+    const upPreview = upcoming.length
+        ? `<div class="space-y-1">${upcoming.slice(0,2).map(p=>mkProjBtn(p,'text-ops-light/60')).join('')}</div>`
+        : '<div class="text-[10px] text-ops-light/50">No upcoming projects.</div>';
+    const upBody = upcoming.length > 2
+        ? `<div class="space-y-1">${upcoming.slice(2).map(p=>mkProjBtn(p,'text-ops-light/60')).join('')}</div>`
+        : '';
+    const upCard = makeCard('upcoming', 'fa-forward', 'text-ops-light/40', 'Upcoming Projects', `<button type="button" data-open-projects class="px-1.5 py-0.5 rounded border border-ops-border text-[9px] font-mono text-ops-light hover:text-white transition-colors">All</button>`, upPreview, upBody);
+    if (pagePrefs.deliveryBoard) midRow.appendChild(upCard);
 
     // Focus Timer
     const mins = Math.floor(state.focusTimer.remaining/60);
@@ -10904,23 +10916,6 @@ function renderDashboard(container, sidePort) {
     const teamCard = makeCard('team', 'fa-users', 'text-emerald-400', 'Team', `<button type="button" data-open-team class="px-1.5 py-0.5 rounded border border-ops-border text-[9px] font-mono text-ops-light hover:text-white transition-colors">Open</button>`, `<div class="space-y-1">${teamPreview}</div>`, teamBody ? `<div class="space-y-1">${teamBody}</div>` : '');
     if (pagePrefs.commsRadar) feedRow.appendChild(teamCard);
     if (!actionOnlyMode && pagePrefs.commsRadar) wrap.appendChild(feedRow);
-
-    // ═══ LATER ROW: Next Week + Future Projects ═════════════════════
-    const nextWeekItems = Array.isArray(buckets.nextWeek) ? buckets.nextWeek : [];
-    const laterRow = document.createElement('div');
-    laterRow.className = 'grid grid-cols-1 sm:grid-cols-2 gap-2';
-
-    const nwPreview = nextWeekItems.length ? `<div class="space-y-1">${nextWeekItems.slice(0,2).map(p=>mkProjBtn(p,'text-ops-light/60')).join('')}</div>` : '<div class="text-[10px] text-ops-light/50">Nothing due next week.</div>';
-    const nwBody = nextWeekItems.length > 2 ? `<div class="space-y-1">${nextWeekItems.slice(2).map(p=>mkProjBtn(p,'text-ops-light/60')).join('')}</div>` : '';
-    const nwCard = makeCard('next-week', 'fa-calendar-check', 'text-sky-400', 'Next Week', `<span class="text-sm font-semibold text-white">${nextWeekItems.length}</span>`, nwPreview, nwBody);
-    if (pagePrefs.deliveryBoard) laterRow.appendChild(nwCard);
-
-    const upcoming = (Array.isArray(buckets.upcoming)?buckets.upcoming:[]).slice(0,6);
-    const upPreview = upcoming.length ? `<div class="space-y-1">${upcoming.slice(0,2).map(p=>mkProjBtn(p,'text-ops-light/60')).join('')}</div>` : '<div class="text-[10px] text-ops-light/50">No future projects.</div>';
-    const upBody = upcoming.length > 2 ? `<div class="space-y-1">${upcoming.slice(2).map(p=>mkProjBtn(p,'text-ops-light/60')).join('')}</div>` : '';
-    const upCard = makeCard('upcoming', 'fa-forward', 'text-ops-light/40', 'Future Projects', `<button type="button" data-open-projects class="px-1.5 py-0.5 rounded border border-ops-border text-[9px] font-mono text-ops-light hover:text-white transition-colors">All</button>`, upPreview, upBody);
-    if (pagePrefs.deliveryBoard) laterRow.appendChild(upCard);
-    if (!actionOnlyMode && pagePrefs.deliveryBoard) wrap.appendChild(laterRow);
 
     // ═══ KEYBOARD SHORTCUTS (hidden) ════════════════════════════════
     const shortcutsPanel = document.createElement('div');
