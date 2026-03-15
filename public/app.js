@@ -2114,7 +2114,7 @@ async function init() {
 
 function isDoneTask(task) {
     const s = String(task?.status || "").trim().toLowerCase();
-    return s === "done" || s === "completed";
+    return s === "done" || s === "completed" || s === "complete" || s === "archived" || s === "archive";
 }
 
 function normalizeRole(role) {
@@ -5449,6 +5449,22 @@ function renderSettings(container) {
                         <button id="btn-projects-delete" class="px-3 py-2 rounded bg-red-600 text-white text-xs hover:bg-red-500" ${selectedIds.length ? '' : 'disabled'}>Delete selected</button>
                     </div>
                 </div>
+                <div class="mt-3 border border-ops-border rounded-lg bg-ops-bg/20 p-3">
+                    <div class="flex items-center justify-between gap-3 flex-wrap">
+                        <div>
+                            <div class="text-sm text-white font-semibold">Stale cleanup</div>
+                            <div class="text-[11px] text-ops-light mt-0.5">Preview and archive quiet, undated backlog that has had no meaningful activity for a while. Due-soon and P1 work is skipped automatically.</div>
+                        </div>
+                        <div class="flex gap-2 flex-wrap items-center">
+                            <label class="text-[11px] text-ops-light">Inactive for</label>
+                            <input id="projects-stale-days" type="number" min="7" max="365" value="${Math.max(7, Number(state.projectsCleanupDays) || 14)}" class="w-20 px-2 py-2 rounded bg-ops-bg border border-ops-border text-ops-light text-xs" />
+                            <span class="text-[11px] text-ops-light">days</span>
+                            <button id="btn-projects-preview-stale" class="px-3 py-2 rounded bg-ops-bg border border-ops-border text-ops-light text-xs hover:text-white">Preview stale</button>
+                            <button id="btn-projects-archive-stale" class="px-3 py-2 rounded bg-orange-700 text-white text-xs hover:bg-orange-600">Archive stale</button>
+                        </div>
+                    </div>
+                    <div id="projects-cleanup-result" class="text-[11px] text-ops-light mt-3">No stale cleanup preview run yet.</div>
+                </div>
                 <div class="mt-3 space-y-2" id="projects-list"></div>
                 <div class="text-[11px] text-ops-light mt-3">Tip: Move transfers the selected projects and their linked records into another business. Delete is permanent.</div>
             `;
@@ -5494,6 +5510,46 @@ function renderSettings(container) {
                 if (btnClear) btnClear.disabled = selectedCount === 0;
                 if (btnMove) btnMove.disabled = selectedCount === 0 || moveBusinessOptions.length === 0;
                 if (btnDel) btnDel.disabled = selectedCount === 0;
+            };
+
+            const cleanupResultEl = projectsBody.querySelector('#projects-cleanup-result');
+            const formatCleanupPreview = (result) => {
+                const candidateCount = Number(result?.candidateCount || 0);
+                const archivedTaskCount = Number(result?.archivedTaskCount || 0);
+                const days = Number(result?.staleDays || Math.max(14, Number(state.projectsCleanupDays) || 45));
+                if (!candidateCount) {
+                    return `No stale projects found using a ${days}-day inactivity threshold.`;
+                }
+                const items = Array.isArray(result?.candidates) ? result.candidates.slice(0, 6) : [];
+                const lines = items.map((candidate) => {
+                    const name = safeText(candidate?.name) || '(Unnamed)';
+                    const last = safeText(candidate?.lastActivityAt).trim();
+                    const open = Number(candidate?.openTaskCount || 0);
+                    return `${name}${open ? ` • ${open} open task${open === 1 ? '' : 's'}` : ''}${last ? ` • last activity ${last.slice(0, 10)}` : ''}`;
+                });
+                const suffix = (Array.isArray(result?.candidates) && result.candidates.length > items.length)
+                    ? ` …and ${result.candidates.length - items.length} more.`
+                    : '';
+                return `Preview: ${candidateCount} stale project(s), ${archivedTaskCount} linked open task(s) will be archived.${lines.length ? `\n${lines.join('\n')}${suffix}` : ''}`;
+            };
+            const readCleanupDays = () => {
+                const raw = Number(projectsBody.querySelector('#projects-stale-days')?.value);
+                const days = Number.isFinite(raw) ? Math.max(7, Math.min(365, Math.floor(raw))) : 14;
+                state.projectsCleanupDays = days;
+                const input = projectsBody.querySelector('#projects-stale-days');
+                if (input) input.value = String(days);
+                return days;
+            };
+            const runStaleCleanupPreview = async () => {
+                const staleDays = readCleanupDays();
+                const result = await withRevisionRetry(() => apiJson('/api/projects/archive-stale', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ baseRevision: state.revision, staleDays, dueSoonDays: 14, dryRun: true })
+                }));
+                state.projectsCleanupPreview = result;
+                if (cleanupResultEl) cleanupResultEl.textContent = formatCleanupPreview(result);
+                return result;
             };
 
             projectsBody.querySelectorAll('input[type="checkbox"][data-proj-sel]').forEach((cb) => {
@@ -5591,6 +5647,66 @@ function renderSettings(container) {
                     } finally {
                         btnMoveProjects.disabled = false;
                         btnMoveProjects.textContent = prevLabel;
+                    }
+                };
+            }
+
+            const btnPreviewStale = projectsBody.querySelector('#btn-projects-preview-stale');
+            if (btnPreviewStale) {
+                btnPreviewStale.onclick = async () => {
+                    const prevLabel = btnPreviewStale.textContent;
+                    btnPreviewStale.disabled = true;
+                    btnPreviewStale.textContent = 'Previewing…';
+                    try {
+                        await runStaleCleanupPreview();
+                    } catch (e) {
+                        if (cleanupResultEl) cleanupResultEl.textContent = safeText(e?.message || 'Failed to preview stale cleanup');
+                        alert(e?.message || 'Failed to preview stale cleanup');
+                    } finally {
+                        btnPreviewStale.disabled = false;
+                        btnPreviewStale.textContent = prevLabel;
+                    }
+                };
+            }
+
+            const btnArchiveStale = projectsBody.querySelector('#btn-projects-archive-stale');
+            if (btnArchiveStale) {
+                btnArchiveStale.onclick = async () => {
+                    const staleDays = readCleanupDays();
+                    const preview = await runStaleCleanupPreview().catch((e) => {
+                        alert(e?.message || 'Failed to preview stale cleanup');
+                        return null;
+                    });
+                    if (!preview) return;
+                    const candidateCount = Number(preview?.candidateCount || 0);
+                    const archivedTaskCount = Number(preview?.archivedTaskCount || 0);
+                    if (!candidateCount) {
+                        alert(`No stale projects found using the ${staleDays}-day rule.`);
+                        return;
+                    }
+                    if (!confirm(`Archive ${candidateCount} stale project(s) and ${archivedTaskCount} linked open task(s)? Due-soon and P1 work will be skipped.`)) return;
+
+                    const prevLabel = btnArchiveStale.textContent;
+                    btnArchiveStale.disabled = true;
+                    btnArchiveStale.textContent = 'Archiving…';
+                    try {
+                        const result = await withRevisionRetry(() => apiJson('/api/projects/archive-stale', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ baseRevision: state.revision, staleDays, dueSoonDays: 14, dryRun: false })
+                        }));
+                        const nextStore = result?.store && typeof result.store === 'object' ? result.store : result;
+                        applyStore(nextStore);
+                        state.projectsCleanupPreview = result;
+                        renderNav();
+                        renderSettings(container);
+                        alert(`Archived ${Number(result?.candidateCount || 0)} stale project(s) and ${Number(result?.archivedTaskCount || 0)} linked open task(s).`);
+                    } catch (e) {
+                        if (cleanupResultEl) cleanupResultEl.textContent = safeText(e?.message || 'Failed to archive stale work');
+                        alert(e?.message || 'Failed to archive stale work');
+                    } finally {
+                        btnArchiveStale.disabled = false;
+                        btnArchiveStale.textContent = prevLabel;
                     }
                 };
             }

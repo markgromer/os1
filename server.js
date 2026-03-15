@@ -541,6 +541,12 @@ const LEGACY_AGENT_SYSTEM_PROMPT_EXACT = new Set([
   'You are my ops agent. Be concise. End with Next steps.',
 ]);
 
+const MARCUS_RECENT_ACTIVITY_DAYS = 21;
+const MARCUS_UPCOMING_WINDOW_DAYS = 14;
+const MARCUS_HARD_STALE_TASK_DAYS = 45;
+const MARCUS_OVERDUE_GRACE_DAYS = 7;
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
 function normalizeAgentSystemPrompt(input) {
   const value = typeof input === 'string' ? input.trim() : '';
   if (!value) return '';
@@ -556,11 +562,19 @@ function normalizeAgentSystemPrompt(input) {
   return looksLikeLegacyMartyPrompt ? '' : value;
 }
 
+function normalizeOperatorVoice(input) {
+  const value = typeof input === 'string' ? input.trim().toLowerCase() : '';
+  if (!value) return '';
+  if (value === 'take_control') return '';
+  return value;
+}
+
 function normalizeSettingsShape(settings) {
   const parsed = settings && typeof settings === 'object' ? settings : {};
   return {
     ...parsed,
     agentSystemPrompt: normalizeAgentSystemPrompt(parsed.agentSystemPrompt),
+    operatorVoice: normalizeOperatorVoice(parsed.operatorVoice),
     automationConfig: normalizeAutomationConfig(parsed.automationConfig),
     automationDigestQueue: normalizeAutomationDigestQueue(parsed.automationDigestQueue),
   };
@@ -5657,6 +5671,224 @@ function normKey(input) {
     .trim();
 }
 
+function parseTrackerTime(value) {
+  const ms = Date.parse(String(value || '').trim());
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function normalizeTrackerDueDate(value) {
+  const raw = String(value || '').trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : '';
+}
+
+function addDaysToYmd(ymd, days) {
+  const base = normalizeTrackerDueDate(ymd);
+  if (!base) return '';
+  const dt = new Date(`${base}T00:00:00.000Z`);
+  if (Number.isNaN(dt.getTime())) return '';
+  dt.setUTCDate(dt.getUTCDate() + Number(days || 0));
+  return dt.toISOString().slice(0, 10);
+}
+
+function isClosedTaskStatus(status) {
+  const value = String(status == null ? '' : status).trim().toLowerCase();
+  return ['done', 'archived', 'complete', 'completed'].includes(value);
+}
+
+function isClosedProjectStatus(status) {
+  const value = String(status == null ? '' : status).trim().toLowerCase();
+  return ['done', 'archived', 'complete', 'completed'].includes(value);
+}
+
+function isPausedProjectStatus(status) {
+  return String(status == null ? '' : status).trim().toLowerCase() === 'on hold';
+}
+
+function resolveProjectForTaskRecord(task, projectsById, projectsByName) {
+  const directId = String(task?.projectId || '').trim();
+  if (directId && projectsById.has(directId)) return projectsById.get(directId) || null;
+
+  const projectRaw = String(task?.project || '').trim();
+  if (!projectRaw) return null;
+  if (projectsById.has(projectRaw)) return projectsById.get(projectRaw) || null;
+
+  const key = normKey(projectRaw);
+  if (key && projectsByName.has(key)) return projectsByName.get(key) || null;
+  return null;
+}
+
+function collectMarcusRelevantSnapshot(store, options = {}) {
+  const projects = Array.isArray(store?.projects) ? store.projects : [];
+  const tasks = Array.isArray(store?.tasks) ? store.tasks : [];
+  const today = normalizeTrackerDueDate(options.today) || new Date().toISOString().slice(0, 10);
+  const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
+  const currentProjectId = String(options.currentProjectId || '').trim();
+  const recentCutoffMs = nowMs - (MARCUS_RECENT_ACTIVITY_DAYS * MS_PER_DAY);
+  const hardStaleCutoffMs = nowMs - (MARCUS_HARD_STALE_TASK_DAYS * MS_PER_DAY);
+  const overdueFloor = addDaysToYmd(today, -MARCUS_OVERDUE_GRACE_DAYS) || today;
+  const upcomingCutoff = addDaysToYmd(today, MARCUS_UPCOMING_WINDOW_DAYS) || today;
+
+  const projectsById = new Map();
+  const projectsByName = new Map();
+  for (const project of projects) {
+    const id = String(project?.id || '').trim();
+    const nameKey = normKey(project?.name);
+    if (id) projectsById.set(id, project);
+    if (nameKey && !projectsByName.has(nameKey)) projectsByName.set(nameKey, project);
+  }
+
+  const relevantTasks = [];
+  const openTasks = [];
+  let suppressedTaskCount = 0;
+
+  for (const task of tasks) {
+    if (isClosedTaskStatus(task?.status)) continue;
+    openTasks.push(task);
+
+    const project = resolveProjectForTaskRecord(task, projectsById, projectsByName);
+    const dueDate = normalizeTrackerDueDate(task?.dueDate);
+    const taskUpdatedAt = Math.max(parseTrackerTime(task?.updatedAt), parseTrackerTime(task?.createdAt));
+    const projectUpdatedAt = Math.max(parseTrackerTime(project?.updatedAt), parseTrackerTime(project?.createdAt));
+    const taskMatchesCurrentProject = Boolean(
+      currentProjectId && (
+        String(task?.projectId || '').trim() === currentProjectId ||
+        String(task?.project || '').trim() === currentProjectId ||
+        String(project?.id || '').trim() === currentProjectId
+      )
+    );
+
+    if (project && isClosedProjectStatus(project.status) && !taskMatchesCurrentProject) {
+      suppressedTaskCount += 1;
+      continue;
+    }
+
+    const dueSoon = Boolean(dueDate) && dueDate >= overdueFloor && dueDate <= upcomingCutoff;
+    const highPriority = Number(task?.priority) === 1 || String(task?.status || '').trim().toLowerCase() === 'urgent';
+    const taskFresh = taskUpdatedAt >= recentCutoffMs;
+    const projectFresh = projectUpdatedAt >= recentCutoffMs;
+    const hardStale = taskUpdatedAt > 0 && taskUpdatedAt < hardStaleCutoffMs;
+    const pausedAndCold = Boolean(project)
+      && isPausedProjectStatus(project.status)
+      && !taskMatchesCurrentProject
+      && !dueSoon
+      && !highPriority
+      && !taskFresh
+      && !projectFresh;
+    const relevant = taskMatchesCurrentProject || dueSoon || highPriority || taskFresh || projectFresh;
+
+    if (!relevant || pausedAndCold || (hardStale && !dueSoon && !highPriority && !taskMatchesCurrentProject)) {
+      suppressedTaskCount += 1;
+      continue;
+    }
+
+    relevantTasks.push(task);
+  }
+
+  const overdueTasks = relevantTasks.filter((task) => {
+    const due = normalizeTrackerDueDate(task?.dueDate);
+    return Boolean(due) && due < today;
+  });
+  const dueTodayTasks = relevantTasks.filter((task) => normalizeTrackerDueDate(task?.dueDate) === today);
+  const sortedTasks = relevantTasks
+    .slice()
+    .sort((a, b) => {
+      const apRaw = Number(a?.priority);
+      const bpRaw = Number(b?.priority);
+      const ap = Number.isFinite(apRaw) ? apRaw : 2;
+      const bp = Number.isFinite(bpRaw) ? bpRaw : 2;
+      if (ap !== bp) return ap - bp;
+      const ad = normalizeTrackerDueDate(a?.dueDate) || '9999-12-31';
+      const bd = normalizeTrackerDueDate(b?.dueDate) || '9999-12-31';
+      if (ad !== bd) return ad.localeCompare(bd);
+      return String(b?.updatedAt || b?.createdAt || '').localeCompare(String(a?.updatedAt || a?.createdAt || ''));
+    });
+
+  return {
+    openTasks,
+    relevantTasks,
+    overdueTasks,
+    dueTodayTasks,
+    sortedTasks,
+    suppressedTaskCount,
+  };
+}
+
+function getLinkedProjectTasks(store, project) {
+  const tasks = Array.isArray(store?.tasks) ? store.tasks : [];
+  const projectId = String(project?.id || '').trim();
+  const projectName = String(project?.name || '').trim();
+  return tasks.filter((task) => {
+    const taskProjectId = String(task?.projectId || '').trim();
+    const taskProject = String(task?.project || '').trim();
+    return (projectId && (taskProjectId === projectId || taskProject === projectId)) || (projectName && taskProject === projectName);
+  });
+}
+
+function getLinkedProjectInboxItems(store, project) {
+  const list = Array.isArray(store?.inboxItems) ? store.inboxItems : [];
+  const projectId = String(project?.id || '').trim();
+  const projectName = String(project?.name || '').trim();
+  return list.filter((item) => {
+    const linkedProjectId = String(item?.projectId || '').trim();
+    const linkedProjectName = String(item?.projectName || '').trim();
+    return (projectId && linkedProjectId === projectId) || (!linkedProjectId && projectName && linkedProjectName === projectName);
+  });
+}
+
+function computeProjectLastActivityMs(store, project, linkedTasks = [], linkedInboxItems = []) {
+  const marks = [];
+  const push = (value) => {
+    const ms = parseTrackerTime(value);
+    if (ms > 0) marks.push(ms);
+  };
+
+  push(project?.updatedAt);
+  push(project?.createdAt);
+  push(store?.projectScratchpads?.[project?.id]?.updatedAt);
+  push(store?.projectChats?.[project?.id]?.updatedAt);
+
+  const chatMessages = Array.isArray(store?.projectChats?.[project?.id]?.messages)
+    ? store.projectChats[project.id].messages
+    : (Array.isArray(store?.projectChats?.[project?.id]) ? store.projectChats[project.id] : []);
+  for (const message of chatMessages) push(message?.timestamp);
+
+  const noteEntries = Array.isArray(store?.projectNoteEntries?.[project?.id]) ? store.projectNoteEntries[project.id] : [];
+  for (const note of noteEntries) {
+    push(note?.createdAt);
+    push(note?.date);
+  }
+
+  const communications = Array.isArray(store?.projectCommunications?.[project?.id]) ? store.projectCommunications[project.id] : [];
+  for (const comm of communications) {
+    push(comm?.createdAt);
+    push(comm?.date);
+  }
+
+  for (const task of linkedTasks) {
+    push(task?.updatedAt);
+    push(task?.createdAt);
+    push(task?.dueDate);
+  }
+
+  for (const item of linkedInboxItems) {
+    push(item?.updatedAt);
+    push(item?.createdAt);
+  }
+
+  if (!marks.length) return 0;
+  return Math.max(...marks);
+}
+
+function messageNeedsProjectContext(message) {
+  const msg = normKey(message);
+  if (!msg) return false;
+  if (/\b(project|task|tasks|scope|due|deadline|owner|assign|assigned|move|moving|moved|archive|archived|delete|deleted|open|show|status|notes|scratchpad|brief|launch|repo|docs|invoice|client|workspace)\b/.test(msg)) {
+    return true;
+  }
+  return /\b(create|add|update|change|set|move|archive|delete|open|show|review|summarize|plan|assign|link)\b/.test(msg)
+    && /\b(for|in|on|to)\b/.test(msg);
+}
+
 function appendTasksToStore(store, projectName, tasks) {
   if (!store || typeof store !== 'object') throw new Error('Store missing');
   if (!Array.isArray(tasks) || tasks.length === 0) return { ok: true, created: 0, tasks: [] };
@@ -5841,6 +6073,7 @@ function resolveProjectForMessage(store, message, projectId) {
   }
   const msg = normKey(message);
   if (!msg) return null;
+  if (!messageNeedsProjectContext(message)) return null;
 
   const scored = [];
   for (const p of projects) {
@@ -10780,6 +11013,125 @@ app.post('/api/projects/bulk-update', async (req, res) => {
   await writeLock;
 });
 
+app.post('/api/projects/archive-stale', async (req, res) => {
+  const baseRevision = Number(req.body?.baseRevision);
+  const staleDaysRaw = Number(req.body?.staleDays);
+  const dueSoonDaysRaw = Number(req.body?.dueSoonDays);
+  const dryRun = req.body?.dryRun !== false;
+
+  const staleDays = Number.isFinite(staleDaysRaw)
+    ? Math.max(7, Math.min(365, Math.floor(staleDaysRaw)))
+    : 45;
+  const dueSoonDays = Number.isFinite(dueSoonDaysRaw)
+    ? Math.max(1, Math.min(60, Math.floor(dueSoonDaysRaw)))
+    : 14;
+
+  writeLock = writeLock.then(async () => {
+    const store = await readStore();
+    if (Number.isFinite(baseRevision) && baseRevision !== store.revision) {
+      res.status(409).json({ error: 'Revision mismatch. Reload and try again.', currentRevision: store.revision });
+      return;
+    }
+
+    const today = new Date().toISOString().slice(0, 10);
+    const staleCutoffMs = Date.now() - (staleDays * MS_PER_DAY);
+    const overdueFloor = addDaysToYmd(today, -MARCUS_OVERDUE_GRACE_DAYS) || today;
+    const dueSoonCutoff = addDaysToYmd(today, dueSoonDays) || today;
+    const projects = Array.isArray(store.projects) ? store.projects : [];
+    const candidates = [];
+
+    for (const project of projects) {
+      if (isClosedProjectStatus(project?.status)) continue;
+
+      const linkedTasks = getLinkedProjectTasks(store, project);
+      const openLinkedTasks = linkedTasks.filter((task) => !isClosedTaskStatus(task?.status));
+      const linkedInboxItems = getLinkedProjectInboxItems(store, project);
+      const lastActivityMs = computeProjectLastActivityMs(store, project, linkedTasks, linkedInboxItems);
+      const lastActivityAt = lastActivityMs > 0 ? new Date(lastActivityMs).toISOString() : '';
+      const projectDueDate = normalizeTrackerDueDate(project?.dueDate);
+      const hasDueSoon = Boolean(projectDueDate && projectDueDate >= overdueFloor && projectDueDate <= dueSoonCutoff)
+        || openLinkedTasks.some((task) => {
+          const due = normalizeTrackerDueDate(task?.dueDate);
+          return Boolean(due) && due >= overdueFloor && due <= dueSoonCutoff;
+        });
+      const hasHighPriority = openLinkedTasks.some((task) => {
+        const status = String(task?.status || '').trim().toLowerCase();
+        return Number(task?.priority) === 1 || status === 'urgent';
+      });
+      const hasRecentActivity = lastActivityMs >= staleCutoffMs;
+      const openTaskCount = openLinkedTasks.length;
+      const linkedInboxCount = linkedInboxItems.filter((item) => String(item?.status || '').trim().toLowerCase() !== 'archived').length;
+
+      if (hasDueSoon || hasHighPriority || hasRecentActivity) continue;
+
+      candidates.push({
+        projectId: String(project?.id || '').trim(),
+        name: String(project?.name || '').trim(),
+        status: String(project?.status || 'Active').trim() || 'Active',
+        dueDate: projectDueDate,
+        lastActivityAt,
+        openTaskCount,
+        linkedInboxCount,
+        archivedTaskIds: openLinkedTasks.map((task) => String(task?.id || '').trim()).filter(Boolean),
+      });
+    }
+
+    const archivedTaskIds = candidates.flatMap((candidate) => candidate.archivedTaskIds);
+    if (dryRun || !candidates.length) {
+      res.json({
+        ok: true,
+        dryRun: true,
+        staleDays,
+        dueSoonDays,
+        candidateCount: candidates.length,
+        archivedTaskCount: archivedTaskIds.length,
+        candidates,
+      });
+      return;
+    }
+
+    const candidateIds = new Set(candidates.map((candidate) => candidate.projectId));
+    const taskIdSet = new Set(archivedTaskIds);
+    const ts = nowIso();
+
+    const nextProjects = projects.map((project) => {
+      const projectId = String(project?.id || '').trim();
+      if (!candidateIds.has(projectId)) return project;
+      return { ...project, status: 'Archived', updatedAt: ts };
+    });
+
+    const nextTasks = (Array.isArray(store.tasks) ? store.tasks : []).map((task) => {
+      const taskId = String(task?.id || '').trim();
+      if (!taskIdSet.has(taskId) || isClosedTaskStatus(task?.status)) return task;
+      return { ...task, status: 'Archived', updatedAt: ts };
+    });
+
+    const nextStore = {
+      ...store,
+      revision: store.revision + 1,
+      updatedAt: ts,
+      projects: nextProjects,
+      tasks: nextTasks,
+    };
+
+    await writeStore(nextStore);
+    res.json({
+      ok: true,
+      dryRun: false,
+      staleDays,
+      dueSoonDays,
+      candidateCount: candidates.length,
+      archivedTaskCount: archivedTaskIds.length,
+      archivedProjectIds: Array.from(candidateIds),
+      archivedTaskIds,
+      candidates,
+      store: nextStore,
+    });
+  });
+
+  await writeLock;
+});
+
 app.post('/api/projects/bulk-delete', async (req, res) => {
   const baseRevision = Number(req.body?.baseRevision);
   const projectIdsRaw = req.body?.projectIds;
@@ -12277,7 +12629,9 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
     const dailyReportingStructure = typeof settings.dailyReportingStructure === 'string' ? settings.dailyReportingStructure.trimEnd() : '';
 
     const operatorTone = typeof settings.operatorTone === 'string' ? settings.operatorTone.trim() : '';
-    const operatorVoice = typeof settings.operatorVoice === 'string' ? settings.operatorVoice.trim() : '';
+    const rawOperatorVoice = typeof settings.operatorVoice === 'string' ? settings.operatorVoice.trim() : '';
+    const operatorVoice = normalizeOperatorVoice(rawOperatorVoice);
+    const legacyTakeControlVoice = rawOperatorVoice.toLowerCase() === 'take_control';
 
     const coreUiOverrides = {
       operatorBio,
@@ -12295,6 +12649,14 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
       uiOverrides: coreUiOverrides,
       customSystemPrompt: userSystemPrompt,
     });
+    systemPrompt +=
+      "\n\n## Live Response Guardrails\n" +
+      "- Treat stale backlog items as weak evidence unless they were updated recently, are due soon, or the operator explicitly mentions them.\n" +
+      "- Do not nag, shame, taunt, or perform accountability theater.\n" +
+      "- Do not propose a timed sprint, a yes/no focus prompt, or a 30-minute plan unless the operator explicitly asks for planning or accountability.\n" +
+      "- Do not repeat the same recommendation unless new evidence materially changed.\n" +
+      "- If the tracker looks stale or ambiguous, say so briefly and recommend cleanup instead of pretending certainty.\n" +
+      "- Prefer concise, direct answers over performative coaching.\n";
 
     if (effectiveThreadId === 'operator_bio') {
       systemPrompt +=
@@ -12313,17 +12675,12 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
       context += `GLOBAL MEMORY (user-provided; treat as true unless contradicted):\n${String(userMemory).slice(0, 12000)}\n\n`;
     }
 
-    if (operatorTone || operatorVoice) {
+    if (operatorTone || operatorVoice || legacyTakeControlVoice) {
       context += `TONE/VOICE PREFERENCES:\n`;
       if (operatorTone) context += `- Tone: ${operatorTone}\n`;
       if (operatorVoice) context += `- Voice: ${operatorVoice}\n`;
-      if (operatorVoice === 'take_control') {
-        context +=
-          `\nBehavior rules for take_control voice:\n` +
-          `- Take control of the operator's day: propose a plan, schedule, and next actions.\n` +
-          `- Push back on weak excuses; argue if the operator ignores priorities.\n` +
-          `- Accept logical reasoning for deviations (update the plan accordingly).\n` +
-          `- Keep it bluntly funny/sarcastic when appropriate, but still useful.\n`;
+      if (legacyTakeControlVoice) {
+        context += `- Legacy take_control voice is deprecated. Interpret it as calm, decisive guidance without nagging, sarcasm, or forced accountability.\n`;
       }
       context += `\n`;
     }
@@ -12358,42 +12715,14 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
     // Always include a compact operational snapshot so Marcus can be proactive.
     try {
       const today = new Date().toISOString().slice(0, 10);
-      const tasks = Array.isArray(store.tasks) ? store.tasks : [];
       const inbox = getVisibleInboxItemsFromSettings(store.inboxItems, settings);
       const projects = Array.isArray(store.projects) ? store.projects : [];
-
-      const isDoneStatus = (st) => {
-        const v = String(st == null ? '' : st).trim().toLowerCase();
-        return ['done', 'archived', 'complete', 'completed'].includes(v);
-      };
-      const normalizeDue = (d) => {
-        const v = String(d == null ? '' : d).trim();
-        return /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : '';
-      };
-
-      const openTasks = tasks.filter((t) => !isDoneStatus(t.status));
-      const overdue = openTasks.filter((t) => {
-        const due = normalizeDue(t?.dueDate);
-        return Boolean(due) && due < today;
-      });
-      const dueToday = openTasks.filter((t) => normalizeDue(t?.dueDate) === today);
-
-      const sortedOpen = openTasks
-        .slice()
-        .sort((a, b) => {
-          const apRaw = Number(a?.priority);
-          const bpRaw = Number(b?.priority);
-          const ap = Number.isFinite(apRaw) ? apRaw : 2;
-          const bp = Number.isFinite(bpRaw) ? bpRaw : 2;
-          if (ap !== bp) return ap - bp;
-          const ad0 = normalizeDue(a?.dueDate);
-          const bd0 = normalizeDue(b?.dueDate);
-          const ad = ad0 ? ad0 : '9999-12-31';
-          const bd = bd0 ? bd0 : '9999-12-31';
-          if (ad !== bd) return ad.localeCompare(bd);
-          return String(b?.updatedAt || '').localeCompare(String(a?.updatedAt || ''));
-        })
-        .slice(0, 18);
+      const activeProjects = projects.filter((project) => !isClosedProjectStatus(project?.status));
+      const snapshot = collectMarcusRelevantSnapshot(store, { today, nowMs: Date.now(), currentProjectId: effectiveProjectId || '' });
+      const openTasks = snapshot.openTasks;
+      const overdue = snapshot.overdueTasks;
+      const dueToday = snapshot.dueTodayTasks;
+      const sortedOpen = snapshot.sortedTasks.slice(0, 12);
 
       const inboxNew = inbox.filter((it) => {
         const src = String(it?.source || '').trim().toLowerCase();
@@ -12414,18 +12743,19 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
       const businessKey = getBusinessKeyFromContext();
       const lines = [];
       lines.push(`OPS SNAPSHOT (ACTIVE BUSINESS: ${businessKey}; asOf: ${nowIso()}; today: ${today})`);
-      lines.push(`- Projects: ${projects.length} • Open tasks: ${openTasks.length} • Overdue: ${overdue.length} • Due today: ${dueToday.length} • New inbox: ${inboxNew.length}`);
+      lines.push(`- Projects: ${activeProjects.length} • Relevant open tasks: ${snapshot.relevantTasks.length} • Overdue: ${overdue.length} • Due today: ${dueToday.length} • New inbox: ${inboxNew.length}`);
+      if (snapshot.suppressedTaskCount > 0) lines.push(`- Suppressed stale/noisy tasks: ${snapshot.suppressedTaskCount} of ${openTasks.length} total open`);
       lines.push('');
       if (overdue.length) {
         lines.push('Top overdue:');
         overdue
           .slice()
-          .sort((a, b) => (normalizeDue(a?.dueDate) || '9999-12-31').localeCompare(normalizeDue(b?.dueDate) || '9999-12-31'))
+          .sort((a, b) => (normalizeTrackerDueDate(a?.dueDate) || '9999-12-31').localeCompare(normalizeTrackerDueDate(b?.dueDate) || '9999-12-31'))
           .slice(0, 8)
           .forEach((t, i) => {
             const priRaw = Number(t?.priority);
             const priNum = Number.isFinite(priRaw) ? priRaw : 2;
-            const due = normalizeDue(t?.dueDate);
+            const due = normalizeTrackerDueDate(t?.dueDate);
             const proj = String(t?.project || '').trim();
             const st = String(t?.status || 'Next');
             lines.push(`${i + 1}. [P${priNum}] ${String(t?.title || '').trim()}${proj ? ` — ${proj}` : ''}${due ? ` — due ${due}` : ''} — ${st}`);
@@ -12437,11 +12767,12 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
       sortedOpen.forEach((t, i) => {
         const priRaw = Number(t?.priority);
         const priNum = Number.isFinite(priRaw) ? priRaw : 2;
-        const due = normalizeDue(t?.dueDate);
+        const due = normalizeTrackerDueDate(t?.dueDate);
         const proj = String(t?.project || '').trim();
         const st = String(t?.status || 'Next');
         lines.push(`${i + 1}. [P${priNum}] ${String(t?.title || '').trim()}${proj ? ` — ${proj}` : ''}${due ? ` — due ${due}` : ''} — ${st}`);
       });
+      if (!sortedOpen.length) lines.push('- No live tasks surfaced after freshness filtering.');
 
       if (inboxLines.length) {
         lines.push('Recent inbox (new):');
@@ -12472,19 +12803,12 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
             const bKey = normalizeBusinessKey(b?.key || '') || DEFAULT_BUSINESS_KEY;
             const bName = String(b?.name || '').trim() || bKey;
             const bStore = await withBusinessKey(bKey, async () => readStore());
-            const tasks = Array.isArray(bStore?.tasks) ? bStore.tasks : [];
             const inbox = getVisibleInboxItemsFromSettings(bStore?.inboxItems, settings);
             const projects = Array.isArray(bStore?.projects) ? bStore.projects : [];
-
-            const openTasks = tasks.filter((t) => {
-              const st = String(t?.status || '').trim().toLowerCase();
-              return st !== 'done' && st !== 'archived' && st !== 'complete' && st !== 'completed';
-            });
-            const overdue = openTasks.filter((t) => {
-              const due = String(t?.dueDate || '').trim();
-              return /^\d{4}-\d{2}-\d{2}$/.test(due) && due < today;
-            });
-            const dueToday = openTasks.filter((t) => String(t?.dueDate || '').trim() === today);
+            const snapshot = collectMarcusRelevantSnapshot(bStore, { today, nowMs });
+            const openTasks = snapshot.relevantTasks;
+            const overdue = snapshot.overdueTasks;
+            const dueToday = snapshot.dueTodayTasks;
             const newInbox = inbox.filter((it) => {
               const src = String(it?.source || '').trim().toLowerCase();
               return String(it?.status || '').trim().toLowerCase() === 'new' && src !== 'marcus' && src !== 'marcus';
@@ -12493,8 +12817,8 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
 
             for (const p of projects) {
               const pst = String(p?.status || '').trim().toLowerCase();
-              if (pst === 'done' || pst === 'archived') continue;
-              const pTasks = tasks.filter((t) => t?.project === p?.name || t?.projectId === p?.id);
+              if (pst === 'done' || pst === 'archived' || pst === 'on hold') continue;
+              const pTasks = openTasks.filter((t) => t?.project === p?.name || t?.projectId === p?.id);
               const open = pTasks.filter((t) => {
                 const st = String(t?.status || '').trim().toLowerCase();
                 return st !== 'done' && st !== 'archived' && st !== 'complete' && st !== 'completed';
@@ -12504,7 +12828,7 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
               for (const t of open) {
                 const pri = Number(t?.priority);
                 const st = String(t?.status || '').trim().toLowerCase();
-                const due = String(t?.dueDate || '').trim();
+                const due = normalizeTrackerDueDate(t?.dueDate);
                 if (pri === 1 || st === 'urgent' || (due && due <= today)) urgent++;
               }
               if (urgent <= 0) continue;
@@ -12591,7 +12915,9 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
 
       context += `CURRENT PROJECT CONTEXT (JSON):\n${JSON.stringify(ctxObj, null, 2).slice(0, 24000)}\n\n`;
     } else {
-      const projectsOverview = (store.projects || []).map((p) => ({ id: p.id, name: p.name, type: p.type, status: p.status, dueDate: p.dueDate }));
+      const projectsOverview = (store.projects || [])
+        .filter((p) => !isClosedProjectStatus(p?.status))
+        .map((p) => ({ id: p.id, name: p.name, type: p.type, status: p.status, dueDate: p.dueDate }));
       context += `ALL PROJECTS (JSON): ${JSON.stringify(projectsOverview).slice(0, 24000)}\n\n`;
     }
 
@@ -12629,44 +12955,13 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
       }
 
       const today = new Date().toISOString().slice(0, 10);
-      const tasks = Array.isArray(store.tasks) ? store.tasks : [];
       const inbox = getVisibleInboxItemsFromSettings(store.inboxItems, settings);
       const projects = Array.isArray(store.projects) ? store.projects : [];
-
-      const isDoneStatus = (st) => {
-        const v = String(st == null ? '' : st).trim().toLowerCase();
-        return ['done', 'archived', 'complete', 'completed'].includes(v);
-      };
-      const normalizeDue = (d) => {
-        const v = String(d == null ? '' : d).trim();
-        return /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : '';
-      };
-
-      const openTasks = tasks.filter((t) => !isDoneStatus(t.status));
-      const overdue = openTasks.filter((t) => {
-        const due = normalizeDue(t.dueDate);
-        return Boolean(due) && due < today;
-      });
-      const dueToday = openTasks.filter((t) => normalizeDue(t.dueDate) === today);
-
-      const nextTasks = openTasks
-        .slice()
-        .sort((a, b) => {
-          const apRaw = Number(a?.priority);
-          const bpRaw = Number(b?.priority);
-          const ap = Number.isFinite(apRaw) ? apRaw : 2;
-          const bp = Number.isFinite(bpRaw) ? bpRaw : 2;
-          if (ap !== bp) return ap - bp;
-          const ad0 = normalizeDue(a?.dueDate);
-          const bd0 = normalizeDue(b?.dueDate);
-          const ad = ad0 ? ad0 : '9999-12-31';
-          const bd = bd0 ? bd0 : '9999-12-31';
-          if (ad !== bd) return ad.localeCompare(bd);
-          const au = String(a?.updatedAt || '');
-          const bu = String(b?.updatedAt || '');
-          return bu.localeCompare(au);
-        })
-        .slice(0, 10);
+      const activeProjects = projects.filter((project) => !isClosedProjectStatus(project?.status));
+      const snapshot = collectMarcusRelevantSnapshot(store, { today, nowMs: Date.now(), currentProjectId: effectiveProjectId || '' });
+      const overdue = snapshot.overdueTasks;
+      const dueToday = snapshot.dueTodayTasks;
+      const nextTasks = snapshot.sortedTasks.slice(0, 10);
 
       const newInbox = inbox.filter((it) => {
         const src = String(it?.source || '').trim().toLowerCase();
@@ -12676,7 +12971,8 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
       const lines = [];
       lines.push('AI is not enabled for this area (missing API key), but I can still guide you using the tracker data.');
       lines.push(`Today: ${today}`);
-      lines.push(`Projects: ${projects.length} • Open tasks: ${openTasks.length} • Overdue: ${overdue.length} • Due today: ${dueToday.length} • New inbox: ${newInbox.length}`);
+      lines.push(`Projects: ${activeProjects.length} • Relevant open tasks: ${snapshot.relevantTasks.length} • Overdue: ${overdue.length} • Due today: ${dueToday.length} • New inbox: ${newInbox.length}`);
+      if (snapshot.suppressedTaskCount > 0) lines.push(`Suppressed stale/noisy tasks: ${snapshot.suppressedTaskCount}`);
       lines.push('');
 
       if (overdue.length) {
@@ -12684,8 +12980,8 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
         overdue
           .slice()
           .sort((a, b) => {
-            const ad0 = normalizeDue(a?.dueDate);
-            const bd0 = normalizeDue(b?.dueDate);
+            const ad0 = normalizeTrackerDueDate(a?.dueDate);
+            const bd0 = normalizeTrackerDueDate(b?.dueDate);
             const ad = ad0 ? ad0 : '9999-12-31';
             const bd = bd0 ? bd0 : '9999-12-31';
             return ad.localeCompare(bd);
@@ -12694,7 +12990,7 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
           .forEach((t, i) => {
             const priRaw = Number(t?.priority);
             const priNum = Number.isFinite(priRaw) ? priRaw : 2;
-            const due = normalizeDue(t?.dueDate);
+            const due = normalizeTrackerDueDate(t?.dueDate);
             const proj = String(t?.project || '').trim();
             lines.push(`${i + 1}. [P${priNum}] ${String(t?.title || '').trim()}${proj ? ` — ${proj}` : ''}${due ? ` — due ${due}` : ''}`);
           });
@@ -12705,11 +13001,12 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
       nextTasks.forEach((t, i) => {
         const priRaw = Number(t?.priority);
         const priNum = Number.isFinite(priRaw) ? priRaw : 2;
-        const due = normalizeDue(t?.dueDate);
+        const due = normalizeTrackerDueDate(t?.dueDate);
         const proj = String(t?.project || '').trim();
         const st = String(t?.status || 'Next');
         lines.push(`${i + 1}. [P${priNum}] ${String(t?.title || '').trim()}${proj ? ` — ${proj}` : ''}${due ? ` — due ${due}` : ''} — ${st}`);
       });
+      if (!nextTasks.length) lines.push('- No live tasks surfaced after freshness filtering.');
 
       if (newInbox.length) {
         lines.push('Inbox triage (newest):');
