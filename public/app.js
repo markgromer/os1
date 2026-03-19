@@ -3508,7 +3508,13 @@ function renderCalendar(container) {
     wrap.className = 'h-full min-h-0 overflow-y-auto p-6';
 
     const connected = !!state.settings?.googleConnected;
-    const calls = Array.isArray(state.dashboardCalls?.events) ? state.dashboardCalls.events : [];
+    const callsRaw = Array.isArray(state.dashboardCalls?.events) ? state.dashboardCalls.events : [];
+    // Filter out birthday/social noise - only appointments
+    const isNoisyCalEv = (ev) => {
+        const s = safeText(ev?.summary).toLowerCase();
+        return /\bbirthday\b/.test(s) || /\banniversary\b/.test(s) || /\b(facebook|fb)\b/.test(s) || /^(contacts|birthdays)\b/.test(s);
+    };
+    const calls = callsRaw.filter((ev) => !isNoisyCalEv(ev));
     const error = safeText(state.dashboardCalls?.error);
     const loading = !!state.dashboardCalls?.loading;
     if (connected) setTimeout(() => refreshDashboardCalls({ force: false }), 0);
@@ -9788,6 +9794,18 @@ function renderDashboard(container, sidePort) {
     const allTasks = Array.isArray(state.tasks) ? state.tasks : [];
     const today = ymdToday();
 
+    // Filter out birthday/social noise from calendar - only show real appointments
+    const isNoisyCalEvent = (ev) => {
+        const s = safeText(ev?.summary).toLowerCase();
+        if (!s) return false;
+        if (/\bbirthday\b/.test(s)) return true;
+        if (/\banniversary\b/.test(s)) return true;
+        if (/\b(facebook|fb)\b/.test(s)) return true;
+        if (/^(contacts|birthdays)\b/.test(s)) return true;
+        return false;
+    };
+    calls.splice(0, calls.length, ...calls.filter((ev) => !isNoisyCalEvent(ev)));
+
     const aiPrev = (state.dashboardAiPreviews && typeof state.dashboardAiPreviews === 'object') ? state.dashboardAiPreviews : {};
     const aiTaskMap = (aiPrev.tasks && typeof aiPrev.tasks === 'object') ? aiPrev.tasks : {};
     const aiInboxMap = (aiPrev.inbox && typeof aiPrev.inbox === 'object') ? aiPrev.inbox : {};
@@ -10202,7 +10220,12 @@ function renderDashboard(container, sidePort) {
             const business = safeText(row?.businessLabel) || safeText(row?.businessKey) || 'Business';
             const stamp = formatInboxStamp(safeText(row?.latestAt));
             const count = Number(row?.count) || 0;
-            const summary = safeText(row?.summary).trim() || (Array.isArray(row?.sample) ? safeText(row.sample[0]) : '');
+            const samples = Array.isArray(row?.sample) ? row.sample.map(s => safeText(s).trim()).filter(Boolean) : [];
+            const senders = Array.isArray(row?.senders) ? row.senders.filter(Boolean).slice(0, 3) : [];
+            const sendersLine = senders.length ? senders.join(', ') : '';
+            const sampleHtml = samples.length
+                ? samples.slice(0, 3).map(s => `<div class="text-[10px] text-ops-light/70 truncate">${escapeHtml(s)}</div>`).join('')
+                : '';
             return `
                 <div class="border border-ops-border rounded bg-ops-bg/40 px-2.5 py-2">
                     <div class="flex items-start justify-between gap-2">
@@ -10212,10 +10235,11 @@ function renderDashboard(container, sidePort) {
                                 ${stamp ? `<span class=\"text-[9px] font-mono text-ops-light/40\">${escapeHtml(stamp)}</span>` : ''}
                             </div>
                             <div class="mt-1 flex items-center justify-between gap-2">
-                                <div class="min-w-0 text-[11px] text-white truncate">Messages</div>
+                                <div class="min-w-0 text-[11px] text-white truncate">${count} message${count !== 1 ? 's' : ''} needing review</div>
                                 <div class="shrink-0 text-[11px] font-mono font-semibold text-white">${count}</div>
                             </div>
-                            ${summary ? `<div class=\"mt-0.5 text-[10px] text-ops-light/60 truncate\">${escapeHtml(summary)}</div>` : ''}
+                            ${sendersLine ? `<div class="mt-0.5 text-[9px] font-mono text-ops-light/50 truncate">From: ${escapeHtml(sendersLine)}</div>` : ''}
+                            ${sampleHtml ? `<div class=\"mt-1 space-y-0.5\">${sampleHtml}</div>` : ''}
                         </div>
                     </div>
                 </div>
@@ -10364,6 +10388,61 @@ function renderDashboard(container, sidePort) {
                 // ignore
             }
         }, 0);
+    }
+
+    // ═══ SLACK (promoted, top-level) ═════════════════════════════════
+    const parseSlackContext = (item) => {
+        const raw = safeText(item?.title || item?.subject || '').trim();
+        const channel = (raw.match(/#([a-z0-9_-]{2,})/i) || [])[1] || '';
+        const at = (raw.match(/@([a-z0-9_.-]{2,})/i) || [])[1] || '';
+        return { channel, at };
+    };
+    const slackByChannel = {};
+    for (const item of slackNew) {
+        const ctx = parseSlackContext(item);
+        const key = ctx.channel ? `#${ctx.channel}` : 'Slack';
+        if (!slackByChannel[key]) slackByChannel[key] = { key, count: 0, sample: item };
+        slackByChannel[key].count += 1;
+    }
+    const slackChannels = Object.values(slackByChannel).sort((a, b) => (b.count - a.count));
+
+    const renderSlackRow = (row) => {
+        const item = row.sample;
+        const id = safeText(item?.id).trim();
+        const ai = id ? aiInboxMap[id] : null;
+        const ctx = parseSlackContext(item);
+        const who = ctx.at ? `@${ctx.at}` : '';
+        let title = safeText(ai?.title || item?.title || item?.subject).trim();
+        if (isBadDashText(title)) {
+            const full = safeText(item?.content) || safeText(item?.text) || safeText(item?.body) || '';
+            title = previewText(full, 90) || 'Slack message';
+        }
+        const summary = safeText(ai?.summary).trim() || previewText(safeText(item?.content) || safeText(item?.text) || safeText(item?.body) || '', 120);
+        const countBadge = row.count > 1 ? `<span class="px-1.5 py-0.5 rounded border border-ops-border text-[8px] font-mono text-ops-light/60">${row.count}</span>` : '';
+        return `
+            <div class="border border-ops-border rounded bg-ops-bg/40 px-2.5 py-2">
+                <div class="flex items-center justify-between gap-2">
+                    <div class="min-w-0 flex-1">
+                        <div class="flex items-center gap-2">
+                            <div class="text-[11px] text-white truncate">${escapeHtml(row.key)}${who ? ` <span class="text-ops-light/50">${escapeHtml(who)}</span>` : ''}</div>
+                        </div>
+                    </div>
+                    ${countBadge}
+                </div>
+                <div class="mt-1 text-[10px] text-white truncate">${escapeHtml(title)}</div>
+                ${summary ? `<div class="mt-0.5 text-[9px] font-mono text-ops-light/60 truncate">${escapeHtml(summary)}</div>` : ''}
+            </div>
+        `;
+    };
+
+    if (slackNew.length && pagePrefs.commsRadar) {
+        const slackPreview = slackChannels.slice(0, 3).map(renderSlackRow).join('');
+        const slackBody = slackChannels.length > 3
+            ? slackChannels.slice(3, 10).map(renderSlackRow).join('')
+            : '';
+        const slackTopCard = makeCard('slack-top', 'fa-slack', 'text-purple-400', 'Slack', `<span class="text-sm font-semibold text-white">${slackNew.length}</span>`, `<div class="space-y-1">${slackPreview}</div>`, slackBody ? `<div class="space-y-1">${slackBody}</div>` : '', { extraClass: 'dash-card--accent' });
+        slackTopCard.querySelector('.dash-card-head i.fa-slack')?.classList.replace('fa-solid', 'fa-brands');
+        wrap.appendChild(slackTopCard);
     }
 
     // ═══ URGENT ROW: Calendar + Due Today + Due This Week ════════════
@@ -10686,60 +10765,7 @@ function renderDashboard(container, sidePort) {
     const actCard = makeCard('activity', 'fa-clock-rotate-left', 'text-sky-400', 'Activity', '', `<div class="space-y-1.5">${actPreview || '<div class="text-[10px] text-ops-light/50">No recent activity.</div>'}</div>`, actBody ? `<div class="space-y-1.5">${actBody}</div>` : '');
     if (pagePrefs.commsRadar) feedRow.appendChild(actCard);
 
-    // Slack (group by channel)
-    const parseSlackContext = (item) => {
-        const raw = safeText(item?.title || item?.subject || '').trim();
-        const channel = (raw.match(/#([a-z0-9_-]{2,})/i) || [])[1] || '';
-        const at = (raw.match(/@([a-z0-9_.-]{2,})/i) || [])[1] || '';
-        return { channel, at };
-    };
-    const slackByChannel = {};
-    for (const item of slackNew) {
-        const ctx = parseSlackContext(item);
-        const key = ctx.channel ? `#${ctx.channel}` : 'Slack';
-        if (!slackByChannel[key]) slackByChannel[key] = { key, count: 0, sample: item };
-        slackByChannel[key].count += 1;
-    }
-    const slackChannels = Object.values(slackByChannel).sort((a, b) => (b.count - a.count));
-
-    const renderSlackRow = (row) => {
-        const item = row.sample;
-        const id = safeText(item?.id).trim();
-        const ai = id ? aiInboxMap[id] : null;
-        const ctx = parseSlackContext(item);
-        const who = ctx.at ? `@${ctx.at}` : '';
-        let title = safeText(ai?.title || item?.title || item?.subject).trim();
-        if (isBadDashText(title)) {
-            const full = safeText(item?.content) || safeText(item?.text) || safeText(item?.body) || '';
-            title = previewText(full, 90) || 'Slack message';
-        }
-        const summary = safeText(ai?.summary).trim() || previewText(safeText(item?.content) || safeText(item?.text) || safeText(item?.body) || '', 120);
-        const countBadge = row.count > 1 ? `<span class="px-1.5 py-0.5 rounded border border-ops-border text-[8px] font-mono text-ops-light/60">${row.count}</span>` : '';
-        return `
-            <div class="border border-ops-border rounded bg-ops-bg/40 px-2.5 py-2">
-                <div class="flex items-center justify-between gap-2">
-                    <div class="min-w-0 flex-1">
-                        <div class="flex items-center gap-2">
-                            <div class="text-[11px] text-white truncate">${escapeHtml(row.key)}${who ? ` <span class="text-ops-light/50">${escapeHtml(who)}</span>` : ''}</div>
-                        </div>
-                    </div>
-                    ${countBadge}
-                </div>
-                <div class="mt-1 text-[10px] text-white truncate">${escapeHtml(title)}</div>
-                ${summary ? `<div class="mt-0.5 text-[9px] font-mono text-ops-light/60 truncate">${escapeHtml(summary)}</div>` : ''}
-            </div>
-        `;
-    };
-
-    if (slackNew.length) {
-        const slackPreview = slackChannels.slice(0, 2).map(renderSlackRow).join('');
-        const slackBody = slackChannels.length > 2
-            ? slackChannels.slice(2, 8).map(renderSlackRow).join('')
-            : '';
-        const slackCard = makeCard('slack', 'fa-slack', 'text-purple-400', 'Slack', `<button type="button" data-open-slack class="px-1.5 py-0.5 rounded border border-ops-border text-[9px] font-mono text-ops-light hover:text-white transition-colors">Open</button>`, `<div class="space-y-1">${slackPreview}</div>`, slackBody ? `<div class="space-y-1">${slackBody}</div>` : '');
-        slackCard.querySelector('.dash-card-head i.fa-slack')?.classList.replace('fa-solid', 'fa-brands');
-        if (pagePrefs.commsRadar) feedRow.appendChild(slackCard);
-    }
+    // Slack already promoted to top-level card above, skip feedRow duplicate.
 
     // Inbox (group by assignment)
     const inboxGroupsByKey = {};
@@ -11454,7 +11480,12 @@ function renderDashboardCommandCenter(container, sidePort) {
             const business = safeText(row?.businessLabel) || safeText(row?.businessKey) || 'Business';
             const stamp = formatInboxStamp(safeText(row?.latestAt));
             const count = Number(row?.count) || 0;
-            const summary = safeText(row?.summary).trim() || (Array.isArray(row?.sample) ? safeText(row.sample[0]) : '');
+            const samples = Array.isArray(row?.sample) ? row.sample.map(s => safeText(s).trim()).filter(Boolean) : [];
+            const senders = Array.isArray(row?.senders) ? row.senders.filter(Boolean).slice(0, 3) : [];
+            const sendersLine = senders.length ? senders.join(', ') : '';
+            const sampleHtml = samples.length
+                ? samples.slice(0, 3).map(s => `<div class="text-[10px] text-ops-light/70 truncate">${escapeHtml(s)}</div>`).join('')
+                : '';
             return `
                 <div class="border border-ops-border rounded bg-ops-bg/40 px-2.5 py-2">
                     <div class="flex items-start justify-between gap-2">
@@ -11464,10 +11495,11 @@ function renderDashboardCommandCenter(container, sidePort) {
                                 ${stamp ? `<span class=\"text-[9px] font-mono text-ops-light/40\">${escapeHtml(stamp)}</span>` : ''}
                             </div>
                             <div class="mt-1 flex items-center justify-between gap-2">
-                                <div class="min-w-0 text-[11px] text-white truncate">Messages</div>
+                                <div class="min-w-0 text-[11px] text-white truncate">${count} message${count !== 1 ? 's' : ''} needing review</div>
                                 <div class="shrink-0 text-[11px] font-mono font-semibold text-white">${count}</div>
                             </div>
-                            ${summary ? `<div class=\"mt-0.5 text-[10px] text-ops-light/60 truncate\">${escapeHtml(summary)}</div>` : ''}
+                            ${sendersLine ? `<div class="mt-0.5 text-[9px] font-mono text-ops-light/50 truncate">From: ${escapeHtml(sendersLine)}</div>` : ''}
+                            ${sampleHtml ? `<div class=\"mt-1 space-y-0.5\">${sampleHtml}</div>` : ''}
                         </div>
                     </div>
                 </div>

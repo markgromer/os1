@@ -2706,35 +2706,9 @@ function summarizeRadarGroupText(texts) {
   const list = Array.isArray(texts) ? texts.map((t) => String(t || '')).filter(Boolean) : [];
   if (!list.length) return '';
 
-  const stop = new Set([
-    'this', 'that', 'with', 'from', 'your', 'youre', 'have', 'will', 'just', 'like', 'thanks', 'thank', 'hello',
-    'sent', 'text', 'message', 'sms', 'call', 'email', 'slack', 'team', 'please', 'need', 'needed', 'needed',
-    'client', 'project', 'title', 'link', 'airtable', 'http', 'https', 'www',
-  ]);
-
-  const counts = new Map();
-  for (const raw of list.slice(0, 8)) {
-    const s = raw
-      .replace(/https?:\/\/\S+/gi, ' ')
-      .replace(/\+?\d[\d\s().-]{7,}\d/g, ' ')
-      .replace(/[^a-zA-Z0-9\s]/g, ' ')
-      .toLowerCase();
-    for (const w of s.split(/\s+/g)) {
-      if (!w || w.length < 4) continue;
-      if (stop.has(w)) continue;
-      counts.set(w, (counts.get(w) || 0) + 1);
-    }
-  }
-
-  const top = Array.from(counts.entries())
-    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-    .slice(0, 3)
-    .map(([w]) => w);
-
-  if (top.length) return top.join(' · ');
-
-  const first = list.find((t) => String(t || '').trim()) || '';
-  return previewTextServer(first, 80);
+  // Return actual readable previews joined by separator, not keyword extraction
+  const previews = list.slice(0, 3).map((t) => previewTextServer(t, 80)).filter(Boolean);
+  return previews.join(' · ');
 }
 
 function businessKeyFromLabel(label) {
@@ -10241,8 +10215,14 @@ app.get('/api/inbox/radar', async (req, res) => {
           : (typeof normalized?.createdAt === 'string' ? normalized.createdAt : '');
         const ms = Number.isFinite(Date.parse(t)) ? Date.parse(t) : 0;
         const preview = previewTextServer(normalized?.text, 160);
+        const sender = String(normalized?.contactName || normalized?.fromName || normalized?.sender || normalized?.from || '').trim();
+        const source = String(normalized?.source || '').trim().toLowerCase();
         const existingBiz = businessGroupsByKey.get(bKey);
         if (!existingBiz) {
+          const senders = new Set();
+          if (sender) senders.add(sender);
+          const sources = new Set();
+          if (source) sources.add(source);
           businessGroupsByKey.set(bKey, {
             businessKey: bKey,
             businessLabel: bLabel,
@@ -10250,6 +10230,8 @@ app.get('/api/inbox/radar', async (req, res) => {
             latestAt: t,
             latestMs: ms,
             sample: preview ? [preview] : [],
+            _senders: senders,
+            _sources: sources,
             summary: '',
           });
         } else {
@@ -10259,6 +10241,8 @@ app.get('/api/inbox/radar', async (req, res) => {
             existingBiz.latestAt = t;
           }
           if (preview && existingBiz.sample.length < 3) existingBiz.sample.push(preview);
+          if (sender && existingBiz._senders.size < 5) existingBiz._senders.add(sender);
+          if (source) existingBiz._sources.add(source);
         }
       }
     }
@@ -10326,10 +10310,15 @@ app.get('/api/inbox/radar', async (req, res) => {
 
     groups.sort((a, b) => (b.latestMs - a.latestMs) || (b.count - a.count));
 
-    const businessGroups = Array.from(businessGroupsByKey.values()).map((g) => ({
-      ...g,
-      summary: summarizeRadarGroupText(g.sample),
-    }));
+    const businessGroups = Array.from(businessGroupsByKey.values()).map((g) => {
+      const { _senders, _sources, ...rest } = g;
+      return {
+        ...rest,
+        summary: summarizeRadarGroupText(g.sample),
+        senders: Array.from(_senders || []),
+        sources: Array.from(_sources || []),
+      };
+    });
     businessGroups.sort((a, b) => (b.latestMs - a.latestMs) || (b.count - a.count));
 
     res.json({ ok: true, status: status || 'New', limit, items, groups, businessGroups });
