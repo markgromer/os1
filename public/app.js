@@ -9931,9 +9931,9 @@ function renderDashboard(container, sidePort) {
     }
     recentActivity.sort((a,b) => b.time - a.time);
 
-    // M.A.R.C.U.S. insights (multi-line, Jarvis-style)
+    // M.A.R.C.U.S. insights (natural, Jarvis-style)
     const marcusInsights = [];
-    if (totalOverdue > 0) marcusInsights.push({ icon: 'fa-triangle-exclamation text-red-400', text: `${totalOverdue} overdue item${totalOverdue>1?'s':''}. I\u2019d recommend triaging those first.` });
+    if (totalOverdue > 0) marcusInsights.push({ icon: 'fa-triangle-exclamation text-red-400', text: `You've got ${totalOverdue} overdue item${totalOverdue>1?'s':''}. I'd start there.` });
     const topAction = nextActions[0] || null;
     if (topAction) {
         const pr = Number(topAction?.priority) || 3;
@@ -9941,17 +9941,17 @@ function renderDashboard(container, sidePort) {
         const ai = id ? aiTaskMap[id] : null;
         let title = safeText(ai?.title || topAction?.title).trim();
         if (isBadDashText(title)) title = safeText(topAction?.project).trim() ? `Follow up: ${safeText(topAction?.project).trim()}` : 'Top priority task';
-        marcusInsights.push({ icon: 'fa-bullseye text-blue-400', text: `Top priority: "${title}" (P${pr}). Focus there next.` });
+        marcusInsights.push({ icon: 'fa-bullseye text-blue-400', text: `Top priority is "${title}" (P${pr}). That's your next move.` });
     }
-    if (dueThisWeek > 0) marcusInsights.push({ icon: 'fa-clock text-amber-400', text: `${dueThisWeek} project${dueThisWeek>1?'s':''} due this week \u2014 stay ahead.` });
-    if (inboxNewCount > 3) marcusInsights.push({ icon: 'fa-inbox text-purple-400', text: `${inboxNewCount} inbox items accumulating. Consider a quick triage pass.` });
-    if (totalDoneWeek > 0) marcusInsights.push({ icon: 'fa-chart-line text-emerald-400', text: `${totalDoneWeek} tasks completed this week. ${totalDoneWeek >= 5 ? 'Strong momentum.' : 'Keep it going.'}` });
-    if (!marcusInsights.length) marcusInsights.push({ icon: 'fa-circle-check text-emerald-400', text: 'All clear. Review upcoming projects or set today\u2019s outcomes.' });
+    if (dueThisWeek > 0) marcusInsights.push({ icon: 'fa-clock text-amber-400', text: `${dueThisWeek} project${dueThisWeek>1?'s':''} due this week. Worth staying ahead of.` });
+    if (inboxNewCount > 3) marcusInsights.push({ icon: 'fa-inbox text-purple-400', text: `${inboxNewCount} items piling up in the inbox. Quick triage pass would help.` });
+    if (totalDoneWeek > 0) marcusInsights.push({ icon: 'fa-chart-line text-emerald-400', text: `${totalDoneWeek} tasks knocked out this week.${totalDoneWeek >= 5 ? ' Solid pace.' : ''}` });
+    if (!marcusInsights.length) marcusInsights.push({ icon: 'fa-circle-check text-emerald-400', text: 'All clear. Nothing pressing right now.' });
     const marcusCheckin = totalOverdue > 0
-        ? 'I can run a full cleanup sweep right now and queue only meaningful actions.'
+        ? 'I can run a sweep right now and queue only the stuff that actually matters.'
         : (inboxUnassignedNewCount > 0
-            ? `I found ${inboxUnassignedNewCount} inbox item${inboxUnassignedNewCount === 1 ? '' : 's'} without a project — want me to coach the next one?`
-            : 'I can proactively brief, triage, and queue approvals while you stay in flow.');
+            ? `There ${inboxUnassignedNewCount === 1 ? 's an inbox item' : `are ${inboxUnassignedNewCount} inbox items`} without a project. Want me to coach the next one?`
+            : 'I can brief, triage, and queue approvals while you stay in flow.');
 
     /* ── Helper: expandable card wrapper ─────────────────────────── */
     function makeCard(id, icon, iconColor, label, rightHtml, previewHtml, bodyHtml, opts) {
@@ -11156,8 +11156,11 @@ function renderDashboard(container, sidePort) {
             inp.focus();
             inp.value = 'Give me a brief status update on everything.';
         }
-        const briefLine = marcusInsights.slice(0, 2).map((x) => safeText(x?.text)).filter(Boolean).join(' ');
-        if (briefLine) speakMarcus(briefLine);
+        const insights = marcusInsights.slice(0, 2).map((x) => safeText(x?.text)).filter(Boolean);
+        const briefLine = insights.length
+            ? `Here's where things stand. ${insights.join(' ')}`
+            : 'Looking clean right now. Nothing urgent on the board.';
+        speakMarcus(briefLine);
     });
     wrap.querySelector('#dash-marcus-sweep')?.addEventListener('click', async (e) => {
         const btn = e.currentTarget;
@@ -11170,7 +11173,16 @@ function renderDashboard(container, sidePort) {
             const triage = await runMarcusInboxTriage({ onlyNew: true, includeArchived: false, limit: 120 });
             const auto = await runMarcusInboxAutomation();
             await fetchMarcusAutomationDigest().catch(() => {});
-            const summary = `Sweep complete. Archived ${Number(filtered?.archived || 0)} noise items, triaged ${Number(triage?.count || 0)}, queued ${Number(auto?.proposed || 0)} approvals.`;
+            const arch = Number(filtered?.archived || 0);
+            const tri = Number(triage?.count || 0);
+            const queued = Number(auto?.proposed || 0);
+            const parts = [];
+            if (arch > 0) parts.push(`cleared ${arch} noise item${arch !== 1 ? 's' : ''}`);
+            if (tri > 0) parts.push(`triaged ${tri}`);
+            if (queued > 0) parts.push(`queued ${queued} for approval`);
+            const summary = parts.length
+                ? `Sweep's done. ${parts.join(', ')}.`
+                : `Sweep's done. Everything was already pretty clean.`;
             speakMarcus(summary);
             alert(summary);
             if (state.currentView === 'dashboard') renderMain();
@@ -11191,7 +11203,10 @@ function renderDashboard(container, sidePort) {
             await openInbox();
             const result = await coachNextInboxStep();
             if (result?.applied) {
-                const msg = `Coaching applied. Linked: ${result.linked ? 'yes' : 'no'}. Tasks created: ${Number(result.tasksCreated || 0)}.`;
+                const linked = result.linked ? 'Linked it to a project.' : '';
+                const tasks = Number(result.tasksCreated || 0);
+                const taskMsg = tasks > 0 ? `Created ${tasks} task${tasks !== 1 ? 's' : ''}.` : '';
+                const msg = `Done. ${linked} ${taskMsg}`.replace(/\s+/g, ' ').trim();
                 speakMarcus(msg);
                 alert(msg);
             }
