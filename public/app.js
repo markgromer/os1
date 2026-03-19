@@ -248,6 +248,27 @@ function stripForSpeech(input) {
         .trim();
 }
 
+function condenseForSpeech(raw) {
+    const text = stripForSpeech(raw);
+    if (!text) return '';
+
+    // Split into sentences
+    const sentences = text.split(/(?<=[.!?])\s+/).filter(Boolean);
+    if (sentences.length <= 3) return text.slice(0, 400);
+
+    // Take the first 3-4 meaningful sentences (skip filler)
+    const filler = /^(here('s| is) (a |an |the )?(summary|breakdown|overview|list|update|report)|let me |i('ll| will) (go|start|begin)|as (requested|follows))/i;
+    const meaningful = sentences.filter(s => !filler.test(s.trim()));
+    const picked = (meaningful.length >= 2 ? meaningful : sentences).slice(0, 4);
+    const result = picked.join(' ').trim();
+
+    // Cap at ~400 chars for comfortable listening
+    if (result.length <= 400) return result;
+    const cut = result.slice(0, 400);
+    const lastPeriod = Math.max(cut.lastIndexOf('.'), cut.lastIndexOf('!'), cut.lastIndexOf('?'));
+    return lastPeriod > 100 ? cut.slice(0, lastPeriod + 1) : cut;
+}
+
 function pulseMarcusAmbient(mode = 'active', durationMs = 1400) {
     try {
         const bars = document.querySelectorAll('.marcus-ambient');
@@ -281,16 +302,24 @@ function pulseMarcusAmbient(mode = 'active', durationMs = 1400) {
     }
 }
 
-function speakMarcus(text) {
+function stopMarcusSpeech() {
+    try {
+        if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+    } catch {
+        // ignore
+    }
+}
+
+function speakMarcus(text, { condensed = true } = {}) {
     pulseMarcusAmbient('responding', 1800);
     if (!state.marcusVoiceOut) return;
     try {
-        const spoken = stripForSpeech(text);
+        const spoken = condensed ? condenseForSpeech(text) : stripForSpeech(text);
         if (!spoken) return;
         if (!('speechSynthesis' in window)) return;
         window.speechSynthesis.cancel();
-        const u = new SpeechSynthesisUtterance(spoken.slice(0, 1200));
-        u.rate = 1;
+        const u = new SpeechSynthesisUtterance(spoken.slice(0, 600));
+        u.rate = 1.05;
         u.pitch = 1;
         u.volume = 1;
         window.speechSynthesis.speak(u);
@@ -1583,6 +1612,9 @@ function stopMarcusListening() {
 }
 
 function startMarcusListening() {
+    // Interrupt any ongoing speech when user starts talking
+    stopMarcusSpeech();
+
     const Ctor = getSpeechRecognitionCtor();
     if (!Ctor) {
         alert('Voice input is not supported in this browser. Try Chrome/Edge on desktop.');
@@ -11143,12 +11175,13 @@ function renderDashboard(container, sidePort) {
 
     // M.A.R.C.U.S. buttons
     wrap.querySelector('#dash-ask-marcus')?.addEventListener('click', () => {
+        stopMarcusSpeech();
         const inp = document.getElementById('cmd-input');
         if (inp) {
             inp.focus();
             inp.value = 'What should I focus on right now?';
         }
-        speakMarcus('I am ready. Ask me for your next best action.');
+        speakMarcus('Ready. What do you need?');
     });
     wrap.querySelector('#dash-brief-marcus')?.addEventListener('click', () => {
         const inp = document.getElementById('cmd-input');
@@ -11216,6 +11249,13 @@ function renderDashboard(container, sidePort) {
             btn.disabled = false;
             btn.textContent = prev;
         }
+    });
+
+    // Click Marcus orb to interrupt speech
+    wrap.querySelectorAll('.marcus-dashboard-avatar').forEach((orb) => {
+        orb.style.cursor = 'pointer';
+        orb.title = 'Click to interrupt Marcus';
+        orb.addEventListener('click', () => stopMarcusSpeech());
     });
 
     // Shortcuts
@@ -13622,6 +13662,9 @@ async function handleChatSubmit() {
     const input = document.getElementById("cmd-input");
     const msg = safeText(input?.value).trim();
     if (!msg) return;
+    
+    // Interrupt any ongoing speech when user sends a new message
+    stopMarcusSpeech();
     
     if (input) input.value = "";
     
