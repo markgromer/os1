@@ -1758,6 +1758,22 @@ function getArchivedProjects() {
     return list.filter((p) => isArchivedProject(p) && !isContactOnlyProject(p) && shouldShowProjectInMyProjects(p));
 }
 
+function getMyTasks() {
+    const tasks = Array.isArray(state.tasks) ? state.tasks : [];
+    const projects = Array.isArray(state.projects) ? state.projects : [];
+    const hiddenProjectNames = new Set(
+        projects
+            .filter((p) => !shouldShowProjectInMyProjects(p))
+            .map((p) => safeText(p?.name).trim())
+            .filter(Boolean)
+    );
+    if (!hiddenProjectNames.size) return tasks;
+    return tasks.filter((t) => {
+        const proj = safeText(t?.project).trim();
+        return !proj || !hiddenProjectNames.has(proj);
+    });
+}
+
 function getAssignableOwnerNames() {
     const humanNames = getHumanTeamMembers()
         .map((m) => safeText(m?.name).trim())
@@ -1803,7 +1819,7 @@ async function refreshSlackTeamPresence({ force = false } = {}) {
 
 function getOpenTaskCountByOwner() {
     const counts = {};
-    const tasks = Array.isArray(state.tasks) ? state.tasks : [];
+    const tasks = getMyTasks();
     for (const t of tasks) {
         if (isDoneTask(t)) continue;
         const o = safeText(t?.owner).trim();
@@ -1855,7 +1871,7 @@ function setTranscriptDraft(projectId, patch) {
 
 function getTodayNextActions() {
     const today = ymdToday();
-    const tasks = (Array.isArray(state.tasks) ? state.tasks : []).filter((t) => !isDoneTask(t));
+    const tasks = getMyTasks().filter((t) => !isDoneTask(t));
     const score = (t) => {
         const due = safeText(t?.dueDate).trim();
         const pr = Number(t?.priority) || 3;
@@ -8757,8 +8773,9 @@ function renderDashboardLegacy(container) {
     const activeProjects = getActiveProjects();
     const archivedProjects = getArchivedProjects();
     const visibleProjects = state.showArchivedOnDashboard ? [...activeProjects, ...archivedProjects] : activeProjects;
-    const totalTasks = state.tasks.length;
-    const completedTasks = state.tasks.filter(t => isDoneTask(t)).length;
+    const myTasks = getMyTasks();
+    const totalTasks = myTasks.length;
+    const completedTasks = myTasks.filter(t => isDoneTask(t)).length;
     const progress = totalTasks === 0 ? 0 : Math.round((completedTasks / totalTasks) * 100);
     
     const portraitCompact = isPortraitCompactMode();
@@ -9823,7 +9840,7 @@ function renderDashboard(container, sidePort) {
 
     const nextActions = getTodayNextActions();
     const outcomes = safeText(state.settings?.todayOutcomes);
-    const allTasks = Array.isArray(state.tasks) ? state.tasks : [];
+    const allTasks = getMyTasks();
     const today = ymdToday();
 
     // Filter out birthday/social noise from calendar - only show real appointments
@@ -13845,7 +13862,7 @@ function computeFocusNudgeSnapshot() {
     const idleMinutes = Math.floor(idleMs / 60000);
 
     const today = ymdFromLocalDate(new Date());
-    const allTasks = Array.isArray(state.tasks) ? state.tasks : [];
+    const allTasks = getMyTasks();
     const openTasks = allTasks.filter((t) => !isDoneTask(t));
     const projects = Array.isArray(state.projects) ? state.projects : [];
 
