@@ -86,6 +86,7 @@ const state = {
         fetchedAt: 0,
         untrackedSince: 0,
         untrackedSignature: '',
+        untrackedSignatureKey: '',
         untrackedLastEditorAt: 0,
         untrackedNudgedAt: {},
     },
@@ -168,6 +169,7 @@ function stopDesktopAwareness() {
             fetchedAt: 0,
             untrackedSince: 0,
             untrackedSignature: '',
+            untrackedSignatureKey: '',
             untrackedLastEditorAt: 0,
             untrackedNudgedAt: state.desktopContext?.untrackedNudgedAt || {},
         };
@@ -1909,9 +1911,36 @@ async function refreshSlackTeamPresence({ force = false } = {}) {
 }
 
 function extractEditorWorkspace(windowTitle) {
-    const parts = windowTitle.split(' - ');
-    if (parts.length >= 3) return parts[parts.length - 2].trim();
-    if (parts.length === 2) return parts[0].trim();
+    const title = safeText(windowTitle).trim();
+    if (!title) return '';
+
+    const looksLikeFile = (s) => /\.[a-z0-9]{1,6}$/i.test(String(s || '').trim());
+    const isEditorTail = (s) => /visual studio code|vscode|cursor|webstorm|intellij|idea|pycharm|rubymine|phpstorm|clion|rider|sublime(\s+text)?|atom|neovim|nvim|vim|emacs|notepad\+\+/i.test(String(s || '').trim());
+
+    let parts = title.split(' - ').map((p) => p.trim()).filter(Boolean);
+    if (!parts.length) return '';
+
+    // Handle VS Code Insiders format: "... - Visual Studio Code - Insiders"
+    if (parts.length >= 2 && /insiders/i.test(parts[parts.length - 1]) && /visual\s+studio\s+code/i.test(parts[parts.length - 2])) {
+        parts = parts.slice(0, -2);
+    }
+
+    // Strip common editor app name tail.
+    if (parts.length && isEditorTail(parts[parts.length - 1])) {
+        parts = parts.slice(0, -1);
+    }
+
+    // Heuristic: pick the last segment that doesn't look like a filename.
+    for (let i = parts.length - 1; i >= 0; i -= 1) {
+        const candidate = safeText(parts[i]).trim();
+        if (!candidate) continue;
+        if (looksLikeFile(candidate)) continue;
+        return candidate;
+    }
+
+    // Fallback: single segment or all segments looked like filenames.
+    if (parts.length === 1) return safeText(parts[0]).trim();
+    if (parts.length >= 2) return safeText(parts[parts.length - 1]).trim();
     return '';
 }
 
@@ -1948,20 +1977,24 @@ async function refreshDesktopContext({ force = false } = {}) {
         const isEditor = /code|cursor|visual\s?studio|webstorm|idea|sublime|atom|nvim|vim/i.test(pn);
         let untrackedSince = state.desktopContext.untrackedSince || 0;
         let untrackedSignature = state.desktopContext.untrackedSignature || '';
+        let untrackedSignatureKey = state.desktopContext.untrackedSignatureKey || safeText(state.desktopContext.untrackedSignature || '').toLowerCase();
         let untrackedLastEditorAt = state.desktopContext.untrackedLastEditorAt || 0;
 
         if (!matchedProjectId && isEditor && wt) {
-            const sig = extractEditorWorkspace(wt).toLowerCase();
-            if (sig && sig === untrackedSignature) {
+            const sig = extractEditorWorkspace(wt);
+            const sigKey = safeText(sig).toLowerCase();
+            if (sigKey && sigKey === untrackedSignatureKey) {
                 // Same workspace, keep tracking
                 untrackedLastEditorAt = Date.now();
-            } else if (sig) {
+            } else if (sigKey) {
                 untrackedSince = Date.now();
-                untrackedSignature = sig;
+                untrackedSignature = safeText(sig).trim();
+                untrackedSignatureKey = sigKey;
                 untrackedLastEditorAt = Date.now();
             } else {
                 untrackedSince = 0;
                 untrackedSignature = '';
+                untrackedSignatureKey = '';
                 untrackedLastEditorAt = 0;
             }
         } else if (untrackedSignature && untrackedLastEditorAt) {
@@ -1971,11 +2004,13 @@ async function refreshDesktopContext({ force = false } = {}) {
             if (away > 5 * 60 * 1000) {
                 untrackedSince = 0;
                 untrackedSignature = '';
+                untrackedSignatureKey = '';
                 untrackedLastEditorAt = 0;
             }
         } else {
             untrackedSince = 0;
             untrackedSignature = '';
+            untrackedSignatureKey = '';
             untrackedLastEditorAt = 0;
         }
 
@@ -1988,6 +2023,7 @@ async function refreshDesktopContext({ force = false } = {}) {
             fetchedAt: Date.now(),
             untrackedSince,
             untrackedSignature,
+            untrackedSignatureKey,
             untrackedLastEditorAt,
             untrackedNudgedAt: state.desktopContext.untrackedNudgedAt || {},
         };
@@ -10259,10 +10295,12 @@ function renderDashboard(container, sidePort) {
 
     // Untracked work banner
     const untrackedSig = state.desktopAwarenessEnabled ? (state.desktopContext?.untrackedSignature || '') : '';
-    const untrackedMinutes = state.desktopAwarenessEnabled && state.desktopContext?.untrackedSince
-        ? Math.floor((Date.now() - state.desktopContext.untrackedSince) / 60000) : 0;
+    const untrackedAgeMs = state.desktopAwarenessEnabled && state.desktopContext?.untrackedSince
+        ? (Date.now() - state.desktopContext.untrackedSince)
+        : 0;
     const dismissedUntrackedSigs = state._dismissedUntrackedSigs || new Set();
-    if (untrackedSig && untrackedMinutes >= 1 && !dismissedUntrackedSigs.has(untrackedSig)) {
+    // If the operator explicitly enabled Desktop Awareness, make this actionable fast.
+    if (untrackedSig && untrackedAgeMs >= 10_000 && !dismissedUntrackedSigs.has(untrackedSig)) {
         headerEl.innerHTML += `
             <div id="dash-untracked-banner" class="flex items-center gap-2 px-3 py-1.5 bg-amber-500/10 border border-amber-500/20 rounded mt-1.5" style="margin-top:6px">
                 <i class="fa-solid fa-folder-open text-amber-400 text-[10px] shrink-0"></i>
@@ -14281,8 +14319,9 @@ function shouldTriggerFocusNudge(snapshot, { initial = false } = {}) {
     // Desktop awareness: user is working on something NOT tracked as a project
     const untrackedMinutes = Number(snapshot.desktopUntrackedMinutes) || 0;
     const untrackedSig = safeText(snapshot.desktopUntrackedSignature).trim();
+    const untrackedKey = untrackedSig ? untrackedSig.toLowerCase() : '';
     if (untrackedSig && untrackedMinutes >= 3 && desktopProcess && /code|cursor|visual\s?studio|webstorm|idea|sublime|atom|nvim|vim/i.test(desktopProcess)) {
-        const nudgedAt = state.desktopContext?.untrackedNudgedAt?.[untrackedSig] || 0;
+        const nudgedAt = state.desktopContext?.untrackedNudgedAt?.[untrackedKey] || 0;
         if (!nudgedAt || (Date.now() - nudgedAt) > 30 * 60 * 1000) {
             return {
                 ok: true,
@@ -14510,9 +14549,10 @@ function startProactiveFocusNudges() {
 
                 setStoredMarcusFocusNudgeLastTs(now);
                 if (decision.kind === 'untracked-project' && snapshot.desktopUntrackedSignature) {
+                    const sigKey = safeText(snapshot.desktopUntrackedSignature).toLowerCase();
                     state.desktopContext.untrackedNudgedAt = {
                         ...(state.desktopContext.untrackedNudgedAt || {}),
-                        [snapshot.desktopUntrackedSignature]: now,
+                        [sigKey]: now,
                     };
                 }
                 await sendProactiveFocusNudge(decision, snapshot);
