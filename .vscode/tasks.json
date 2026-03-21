@@ -68,6 +68,27 @@
         "Get-Process node -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue"
       ],
       "problemMatcher": []
+    },
+    {
+      "label": "M.A.R.C.U.S.: Desktop Agent (Render relay)",
+      "type": "shell",
+      "command": "node",
+      "args": [
+        "desktop-agent.cjs",
+        "https://os1-q78n.onrender.com",
+        "${input:adminToken}"
+      ],
+      "isBackground": true,
+      "problemMatcher": [],
+      "group": "build"
+    }
+  ],
+  "inputs": [
+    {
+      "id": "adminToken",
+      "type": "promptString",
+      "description": "Your ADMIN_TOKEN for the Render server",
+      "password": true
     }
   ]
 }
