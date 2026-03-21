@@ -12880,6 +12880,9 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
           if (matchedProject) {
             dcLines.push(`- Matched project: "${String(matchedProject.name || '').trim()}" (workspace: ${String(matchedProject.workspacePath || '').trim()})`);
             dcLines.push(`  Use this to give context-aware responses. The operator is actively working on this project.`);
+          } else {
+            dcLines.push(`- No matched project. The operator may be working on something not yet tracked.`);
+            dcLines.push(`  If they confirm they want to track it, use create_project, then inspect_workspace to learn about it.`);
           }
           dcLines.push('');
           context += dcLines.join('\n') + '\n';
@@ -13249,6 +13252,20 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
               required: ["tasks"]
             }
           }
+        },
+        {
+          type: "function",
+          function: {
+            name: "inspect_workspace",
+            description: "Inspect a local project directory to learn about it. Lists files and reads key files (README, package.json, etc.). Use after creating a new project to understand what it contains.",
+            parameters: {
+              type: "object",
+              properties: {
+                directoryPath: { type: "string", description: "Absolute path to the project directory on the local machine" }
+              },
+              required: ["directoryPath"]
+            }
+          }
         }
       );
     }
@@ -13427,6 +13444,64 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
           return { ok: false, error: e.message };
         }
       }
+        if (toolName === 'inspect_workspace') {
+          const dirPath = typeof args?.directoryPath === 'string' ? args.directoryPath.trim() : '';
+          if (!dirPath || !path.isAbsolute(dirPath)) {
+            return { ok: false, error: 'Absolute directory path required' };
+          }
+          try {
+            const dirStat = await fs.stat(dirPath);
+            if (!dirStat.isDirectory()) return { ok: false, error: 'Path is not a directory' };
+
+            const entries = await fs.readdir(dirPath, { withFileTypes: true });
+            const fileList = [];
+            const keyFilePaths = [];
+            const KEY_FILE_RE = /^(readme(\.md|\.txt)?|package\.json|cargo\.toml|pyproject\.toml|setup\.py|setup\.cfg|go\.mod|requirements\.txt|makefile|dockerfile|docker-compose\.ya?ml|tsconfig\.json|composer\.json|gemfile|pom\.xml|build\.gradle|\.gitignore)$/i;
+
+            for (const entry of entries.slice(0, 80)) {
+              const name = entry.name;
+              if (name.startsWith('.') && name !== '.gitignore') continue;
+              if (/^(node_modules|\.git|__pycache__|dist|build|\.next|vendor|target)$/.test(name)) {
+                fileList.push(name + '/ (skipped)');
+                continue;
+              }
+              if (entry.isDirectory()) {
+                fileList.push(name + '/');
+                try {
+                  const subEntries = await fs.readdir(path.join(dirPath, name), { withFileTypes: true });
+                  for (const sub of subEntries.slice(0, 20)) {
+                    if (sub.name.startsWith('.')) continue;
+                    fileList.push(`  ${name}/${sub.name}${sub.isDirectory() ? '/' : ''}`);
+                  }
+                } catch {}
+              } else {
+                fileList.push(name);
+                if (KEY_FILE_RE.test(name)) {
+                  keyFilePaths.push(path.join(dirPath, name));
+                }
+              }
+            }
+
+            const fileContents = {};
+            for (const fp of keyFilePaths.slice(0, 5)) {
+              try {
+                const content = await fs.readFile(fp, 'utf8');
+                const relPath = path.relative(dirPath, fp);
+                fileContents[relPath] = content.slice(0, 3000);
+              } catch {}
+            }
+
+            return {
+              ok: true,
+              directoryPath: dirPath,
+              fileCount: fileList.length,
+              files: fileList.slice(0, 120),
+              keyFileContents: fileContents,
+            };
+          } catch (e) {
+            return { ok: false, error: e.message };
+          }
+        }
         if (toolName === 'web_search') {
           try {
             const query = args?.query || '';

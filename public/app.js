@@ -84,6 +84,9 @@ const state = {
         matchedProjectId: null,
         matchedProjectName: '',
         fetchedAt: 0,
+        untrackedSince: 0,
+        untrackedSignature: '',
+        untrackedNudgedAt: {},
     },
 
     // Mock team if API fails, but we'll try to fetch
@@ -1827,6 +1830,13 @@ async function refreshSlackTeamPresence({ force = false } = {}) {
     }
 }
 
+function extractEditorWorkspace(windowTitle) {
+    const parts = windowTitle.split(' - ');
+    if (parts.length >= 3) return parts[parts.length - 2].trim();
+    if (parts.length === 2) return parts[0].trim();
+    return '';
+}
+
 async function refreshDesktopContext({ force = false } = {}) {
     const age = Date.now() - Number(state.desktopContext.fetchedAt || 0);
     if (!force && age < 10_000) return;
@@ -1855,6 +1865,27 @@ async function refreshDesktopContext({ force = false } = {}) {
             if (name && wtLower.includes(name.toLowerCase())) { matchedProjectId = p.id; matchedProjectName = name; break; }
         }
 
+        // Track untracked editor work
+        const isEditor = /code|cursor|visual\s?studio|webstorm|idea|sublime|atom|nvim|vim/i.test(pn);
+        let untrackedSince = state.desktopContext.untrackedSince || 0;
+        let untrackedSignature = state.desktopContext.untrackedSignature || '';
+
+        if (!matchedProjectId && isEditor && wt) {
+            const sig = extractEditorWorkspace(wt).toLowerCase();
+            if (sig && sig === untrackedSignature) {
+                // Same workspace, keep tracking
+            } else if (sig) {
+                untrackedSince = Date.now();
+                untrackedSignature = sig;
+            } else {
+                untrackedSince = 0;
+                untrackedSignature = '';
+            }
+        } else {
+            untrackedSince = 0;
+            untrackedSignature = '';
+        }
+
         state.desktopContext = {
             windowTitle: wt,
             processName: pn,
@@ -1862,6 +1893,9 @@ async function refreshDesktopContext({ force = false } = {}) {
             matchedProjectId,
             matchedProjectName,
             fetchedAt: Date.now(),
+            untrackedSince,
+            untrackedSignature,
+            untrackedNudgedAt: state.desktopContext.untrackedNudgedAt || {},
         };
     } catch {
         // Silently skip - desktop context is best-effort
@@ -14010,6 +14044,10 @@ function computeFocusNudgeSnapshot() {
         desktopIdleSeconds: Math.max(0, Number(state.desktopContext?.idleSeconds) || 0),
         desktopMatchedProjectId: safeText(state.desktopContext?.matchedProjectId).trim(),
         desktopMatchedProjectName: safeText(state.desktopContext?.matchedProjectName).trim(),
+        desktopUntrackedMinutes: state.desktopContext?.untrackedSince
+            ? Math.floor((Date.now() - state.desktopContext.untrackedSince) / 60000)
+            : 0,
+        desktopUntrackedSignature: state.desktopContext?.untrackedSignature || '',
     };
 }
 
@@ -14050,6 +14088,21 @@ function shouldTriggerFocusNudge(snapshot, { initial = false } = {}) {
                 kind: 'project-context',
                 reason: `Detected ${desktopMatchedProject} open in ${desktopProcess} with ${matchedProjTasks.length} open task(s)`,
                 cooldownMs: 15 * 60 * 1000,
+            };
+        }
+    }
+
+    // Desktop awareness: user is working on something NOT tracked as a project
+    const untrackedMinutes = Number(snapshot.desktopUntrackedMinutes) || 0;
+    const untrackedSig = safeText(snapshot.desktopUntrackedSignature).trim();
+    if (untrackedSig && untrackedMinutes >= 3 && desktopProcess && /code|cursor|visual\s?studio|webstorm|idea|sublime|atom|nvim|vim/i.test(desktopProcess)) {
+        const nudgedAt = state.desktopContext?.untrackedNudgedAt?.[untrackedSig] || 0;
+        if (!nudgedAt || (Date.now() - nudgedAt) > 30 * 60 * 1000) {
+            return {
+                ok: true,
+                kind: 'untracked-project',
+                reason: `Detected untracked workspace "${untrackedSig}" in ${desktopProcess} for ${untrackedMinutes}+ minutes`,
+                cooldownMs: 30 * 60 * 1000,
             };
         }
     }
@@ -14173,6 +14226,22 @@ function buildMarcusProactivePrompt(decision, snapshot) {
             `Be a helpful co-pilot, not a surveillance bot. Keep it to 3-4 sentences.`;
     }
 
+    if (kind === 'untracked-project') {
+        const wsName = safeText(snapshot?.desktopUntrackedSignature).trim();
+        const app = safeText(snapshot?.desktopProcessName).trim();
+        const wTitle = safeText(snapshot?.desktopWindowTitle).trim();
+        return header +
+            `Output format:\n` +
+            `You noticed the operator has been working in "${wsName}" in ${app} for a while, and it is not tracked as a project yet.\n` +
+            `Window title: "${wTitle}"\n\n` +
+            `1) Open with a natural, casual observation. You noticed they have been digging into something that is not in the project list.\n` +
+            `2) Suggest creating a draft project for it. Be casual, not pushy. Something like "Want me to set up a project for that?"\n` +
+            `3) If they accept, use the create_project tool. Set the name based on the workspace name. Type can be "Other" unless you can infer better from context.\n` +
+            `4) After creating it, ask for the full workspace path so you can take a closer look at the project files using inspect_workspace.\n` +
+            `5) If given the path, use inspect_workspace to learn about the project, then use update_project to set the workspacePath and fill in any details you learned (scratchpad with a brief summary of what you found).\n` +
+            `Keep it to 2-3 sentences for the initial suggestion. Do not over-explain.`;
+    }
+
     return header +
         `Output format:\n` +
         `1) One blunt sentence that snaps the operator back into motion.\n` +
@@ -14254,6 +14323,12 @@ function startProactiveFocusNudges() {
                 if (last && (now - last) < cooldownMs) return;
 
                 setStoredMarcusFocusNudgeLastTs(now);
+                if (decision.kind === 'untracked-project' && snapshot.desktopUntrackedSignature) {
+                    state.desktopContext.untrackedNudgedAt = {
+                        ...(state.desktopContext.untrackedNudgedAt || {}),
+                        [snapshot.desktopUntrackedSignature]: now,
+                    };
+                }
                 await sendProactiveFocusNudge(decision, snapshot);
             } catch {
                 // ignore
