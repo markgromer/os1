@@ -10244,7 +10244,7 @@ function renderDashboard(container, sidePort) {
                 <i class="fa-solid fa-desktop text-[8px]"></i>${state.desktopAwarenessEnabled ? 'Desktop: On' : 'Desktop: Off'}
             </button>
             ${state.desktopAwarenessEnabled && safeText(state.desktopContext?.matchedProjectName).trim()
-                ? `<span class="stat-pill" style="border-color:rgba(59,130,246,0.3);color:#93c5fd" title="Matched from your active window title">
+                                ? `<span class="stat-pill stat-pill--accent" title="Matched from your active window title">
                     <i class="fa-solid fa-eye text-[8px]"></i>Working on: ${escapeHtml(safeText(state.desktopContext.matchedProjectName).trim())}
                   </span>`
                 : ''}
