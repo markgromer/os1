@@ -2057,6 +2057,7 @@ async function refreshDesktopContext({ force = false } = {}) {
             matchedProjectName,
             fetchedAt: Date.now(),
             source,
+            workspace: data.workspace || null,
             untrackedSince,
             untrackedSignature,
             untrackedSignatureKey,
@@ -2066,7 +2067,7 @@ async function refreshDesktopContext({ force = false } = {}) {
 
         // When desktop awareness is enabled, refresh dashboard UI on change.
         if (state.desktopAwarenessEnabled) {
-            const nextKey = `${pn}||${wt}||${matchedProjectName}||${untrackedSignature}`;
+            const nextKey = `${pn}||${wt}||${matchedProjectName}||${untrackedSignature}||${data.workspace?.gitBranch || ''}`;
             if (nextKey !== String(state.__desktopContextUiKey || '')) {
                 state.__desktopContextUiKey = nextKey;
                 if (state.currentView === 'dashboard') {
@@ -10323,6 +10324,11 @@ function renderDashboard(container, sidePort) {
             ${state.desktopAwarenessEnabled && (safeText(state.desktopContext?.processName).trim() || safeText(state.desktopContext?.windowTitle).trim())
                 ? `<span class="stat-pill stat-pill--muted" title="${escapeHtml(safeText(state.desktopContext?.windowTitle).trim())}">
                     <i class="fa-solid fa-window-maximize text-[8px]"></i>${escapeHtml(safeText(state.desktopContext?.processName).trim() || 'app')}
+                  </span>`
+                : ''}
+            ${state.desktopAwarenessEnabled && state.desktopContext?.workspace?.gitBranch
+                ? `<span class="stat-pill stat-pill--muted" title="Git branch in the active workspace">
+                    <i class="fa-solid fa-code-branch text-[8px]"></i>${escapeHtml(state.desktopContext.workspace.gitBranch)}${state.desktopContext.workspace.gitStatus?.length ? ` (${state.desktopContext.workspace.gitStatus.length} changed)` : ''}
                   </span>`
                 : ''}
             <span class="stat-pill cursor-pointer hover:text-white" id="dash-shortcuts-btn" title="Keyboard Shortcuts"><i class="fa-solid fa-keyboard text-[8px]"></i>?</span>

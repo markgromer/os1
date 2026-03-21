@@ -11502,7 +11502,25 @@ app.post('/api/desktop-context/relay', (req, res) => {
   const pn = typeof req.body?.processName === 'string' ? req.body.processName.trim().slice(0, 128).toLowerCase() : '';
   const idle = Math.max(0, Number(req.body?.idleSeconds) || 0);
 
-  const data = { ok: true, windowTitle: wt, processName: pn, idleSeconds: idle, source: 'relay' };
+  // Workspace context (when the agent detects an editor)
+  const ws = req.body?.workspace && typeof req.body.workspace === 'object' ? req.body.workspace : null;
+  let workspace = null;
+  if (ws) {
+    workspace = {
+      workspacePath: typeof ws.workspacePath === 'string' ? ws.workspacePath.trim().slice(0, 512) : '',
+      folderName: typeof ws.folderName === 'string' ? ws.folderName.trim().slice(0, 128) : '',
+      gitBranch: typeof ws.gitBranch === 'string' ? ws.gitBranch.trim().slice(0, 128) : '',
+      gitStatus: Array.isArray(ws.gitStatus) ? ws.gitStatus.slice(0, 30).map(s => ({
+        status: typeof s?.status === 'string' ? s.status.slice(0, 4) : '',
+        file: typeof s?.file === 'string' ? s.file.slice(0, 256) : '',
+      })) : [],
+      gitRecentCommits: Array.isArray(ws.gitRecentCommits) ? ws.gitRecentCommits.slice(0, 5).map(c => typeof c === 'string' ? c.slice(0, 200) : '') : [],
+      recentFiles: Array.isArray(ws.recentFiles) ? ws.recentFiles.slice(0, 20).map(f => typeof f === 'string' ? f.slice(0, 256) : '') : [],
+      structure: Array.isArray(ws.structure) ? ws.structure.slice(0, 40).map(f => typeof f === 'string' ? f.slice(0, 128) : '') : [],
+    };
+  }
+
+  const data = { ok: true, windowTitle: wt, processName: pn, idleSeconds: idle, source: 'relay', workspace };
   desktopRelayCache = { at: Date.now(), data };
 
   // Also update the main cache so AI context injection picks it up
@@ -12909,6 +12927,30 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
             dcLines.push(`- No matched project. The operator may be working on something not yet tracked.`);
             dcLines.push(`  If they confirm they want to track it, use create_project, then inspect_workspace to learn about it.`);
           }
+
+          // Rich workspace data from the desktop agent
+          const ws = dc.workspace;
+          if (ws && typeof ws === 'object' && ws.workspacePath) {
+            dcLines.push(`\nWORKSPACE SNAPSHOT (${ws.folderName || ws.workspacePath}):`);
+            if (ws.gitBranch) dcLines.push(`- Git branch: ${ws.gitBranch}`);
+            if (ws.gitStatus && ws.gitStatus.length) {
+              dcLines.push(`- Uncommitted changes (${ws.gitStatus.length}):`);
+              ws.gitStatus.forEach(s => dcLines.push(`    ${s.status} ${s.file}`));
+            }
+            if (ws.gitRecentCommits && ws.gitRecentCommits.length) {
+              dcLines.push(`- Recent commits:`);
+              ws.gitRecentCommits.forEach(c => dcLines.push(`    ${c}`));
+            }
+            if (ws.recentFiles && ws.recentFiles.length) {
+              dcLines.push(`- Recently modified files (last 10 min):`);
+              ws.recentFiles.forEach(f => dcLines.push(`    ${f}`));
+            }
+            if (ws.structure && ws.structure.length) {
+              dcLines.push(`- Top-level structure:`);
+              ws.structure.forEach(f => dcLines.push(`    ${f}`));
+            }
+          }
+
           dcLines.push('');
           context += dcLines.join('\n') + '\n';
         }

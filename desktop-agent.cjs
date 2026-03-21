@@ -2,10 +2,11 @@
 // ─────────────────────────────────────────────────────────────
 // M.A.R.C.U.S. Desktop Agent
 // ─────────────────────────────────────────────────────────────
-// Captures the active window title, process name, and OS idle
-// time on Windows and relays it to a remote M.A.R.C.U.S. server
-// so desktop awareness works even when the server is hosted on
-// Render (or any non-Windows host).
+// Captures the active window title, process name, OS idle time,
+// and - when an editor is active - the workspace path, git info,
+// project structure, and recently modified files. Relays it all
+// to a remote M.A.R.C.U.S. server so desktop awareness works
+// even when the server is hosted on Render (Linux).
 //
 // Usage:
 //   node desktop-agent.cjs <SERVER_URL> <ADMIN_TOKEN>
@@ -15,7 +16,7 @@
 //
 // The agent runs until you press Ctrl+C.
 // ─────────────────────────────────────────────────────────────
-const { execFile } = require('child_process');
+const { execFile, exec } = require('child_process');
 const https = require('https');
 const http = require('http');
 const path = require('path');
@@ -33,6 +34,7 @@ if (!SERVER_URL) {
 }
 
 const POLL_MS = 5000;
+const WORKSPACE_SCAN_INTERVAL_MS = 30_000; // full workspace scan every 30s
 const RELAY_PATH = '/api/desktop-context/relay';
 
 // ── PowerShell capture script ──────────────────────────────────
@@ -69,6 +71,161 @@ try { Add-Type -TypeDefinition $cs -ErrorAction Stop } catch {}
 
 try { fs.mkdirSync(SCRIPT_DIR, { recursive: true }); } catch {}
 fs.writeFileSync(SCRIPT_PATH, PS_SCRIPT, 'utf8');
+
+// ── Editor process detection ────────────────────────────────────
+const EDITOR_PROCESSES = /^(code|cursor|devenv|webstorm64|idea64|pycharm64|phpstorm64|clion64|rider64|goland64|sublime_text|atom)$/i;
+const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.next', '__pycache__', '.venv', 'venv', '.idea', '.vs', 'coverage', '.parcel-cache', '.turbo', 'out']);
+
+// Cache for workspace scanning (avoid rescanning every 5s)
+let lastWorkspacePath = '';
+let lastWorkspaceScanAt = 0;
+let cachedWorkspaceInfo = null;
+
+function extractWorkspaceFromTitle(windowTitle) {
+  const parts = windowTitle.split(' - ').map(p => p.trim()).filter(Boolean);
+  if (parts.length < 2) return '';
+  // Strip editor name tail
+  const editorTail = /visual studio code|vscode|cursor|webstorm|intellij|pycharm|phpstorm|clion|rider|goland|sublime text|atom/i;
+  if (parts.length >= 2 && /^insiders$/i.test(parts[parts.length - 1]) && /visual studio code/i.test(parts[parts.length - 2])) {
+    parts.splice(-2);
+  }
+  if (parts.length && editorTail.test(parts[parts.length - 1])) parts.pop();
+  // Clean segments
+  const cleaned = parts.map(p => p.replace(/^[●◉]\s*/, '').replace(/\s*\[(?:SSH|WSL|Remote|Dev Container|Codespace|Tunnel)[^\]]*\]\s*$/i, '').replace(/\s*\(Workspace\)\s*$/i, '').trim()).filter(Boolean);
+  // Last non-file segment is typically the workspace/folder name
+  for (let i = cleaned.length - 1; i >= 0; i--) {
+    if (!/\.[a-z0-9]{1,6}$/i.test(cleaned[i])) return cleaned[i];
+  }
+  return cleaned[cleaned.length - 1] || '';
+}
+
+// ── Find VS Code workspace folder using its storage DB ──────────
+function findWorkspacePath(workspaceName) {
+  if (!workspaceName) return '';
+  const appDataPath = process.env.APPDATA || '';
+  if (!appDataPath) return '';
+
+  // Check VS Code and Cursor storage locations
+  const storagePaths = [
+    path.join(appDataPath, 'Code', 'User', 'globalStorage', 'storage.json'),
+    path.join(appDataPath, 'Code - Insiders', 'User', 'globalStorage', 'storage.json'),
+    path.join(appDataPath, 'Cursor', 'User', 'globalStorage', 'storage.json'),
+  ];
+
+  const nameLower = workspaceName.toLowerCase().replace(/[-_\s]+/g, ' ').trim();
+
+  for (const sp of storagePaths) {
+    try {
+      if (!fs.existsSync(sp)) continue;
+      const raw = fs.readFileSync(sp, 'utf8');
+      const data = JSON.parse(raw);
+      // VS Code stores recently opened URIs
+      const entries = data?.openedPathsList?.entries || data?.openedPathsList?.workspaces3 || [];
+      for (const entry of entries) {
+        const uri = typeof entry === 'string' ? entry : (entry?.folderUri || entry?.configPath || '');
+        if (!uri) continue;
+        try {
+          let folderPath = '';
+          if (uri.startsWith('file:///')) {
+            folderPath = decodeURIComponent(uri.replace('file:///', '').replace(/\//g, path.sep));
+          } else if (/^[a-zA-Z]:/.test(uri)) {
+            folderPath = uri;
+          }
+          if (!folderPath) continue;
+          const folderName = path.basename(folderPath).toLowerCase().replace(/[-_\s]+/g, ' ').trim();
+          if (folderName === nameLower) return folderPath;
+        } catch {}
+      }
+    } catch {}
+  }
+  return '';
+}
+
+// ── Run a git command in a directory ────────────────────────────
+function gitCmd(cwd, args) {
+  return new Promise((resolve) => {
+    execFile('git', args, { cwd, windowsHide: true, timeout: 5000 }, (err, stdout) => {
+      resolve(err ? '' : String(stdout || '').trim());
+    });
+  });
+}
+
+// ── Scan a workspace directory for structure + git info ─────────
+async function scanWorkspace(wsPath) {
+  if (!wsPath || !fs.existsSync(wsPath)) return null;
+
+  const info = {
+    workspacePath: wsPath,
+    folderName: path.basename(wsPath),
+    gitBranch: '',
+    gitStatus: [],
+    gitRecentCommits: [],
+    recentFiles: [],
+    structure: [],
+  };
+
+  // Git branch
+  info.gitBranch = await gitCmd(wsPath, ['rev-parse', '--abbrev-ref', 'HEAD']);
+
+  // Git status (changed/staged files)
+  const statusRaw = await gitCmd(wsPath, ['status', '--porcelain', '-u']);
+  if (statusRaw) {
+    info.gitStatus = statusRaw.split('\n').slice(0, 30).map(line => {
+      const status = line.slice(0, 2).trim();
+      const file = line.slice(3).trim();
+      return { status, file };
+    });
+  }
+
+  // Recent commits (last 5)
+  const logRaw = await gitCmd(wsPath, ['log', '--oneline', '-5', '--no-decorate']);
+  if (logRaw) {
+    info.gitRecentCommits = logRaw.split('\n').map(l => l.trim()).filter(Boolean);
+  }
+
+  // Recently modified files (last 10 minutes, max 20)
+  const tenMinAgo = new Date(Date.now() - 10 * 60 * 1000);
+  try {
+    const allFiles = [];
+    const walk = (dir, depth = 0) => {
+      if (depth > 3 || allFiles.length > 50) return;
+      let entries;
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+      for (const e of entries) {
+        if (SKIP_DIRS.has(e.name) || e.name.startsWith('.')) continue;
+        const full = path.join(dir, e.name);
+        if (e.isDirectory()) {
+          walk(full, depth + 1);
+        } else if (e.isFile()) {
+          try {
+            const stat = fs.statSync(full);
+            if (stat.mtime >= tenMinAgo) {
+              allFiles.push({ file: path.relative(wsPath, full), mtime: stat.mtime.toISOString() });
+            }
+          } catch {}
+        }
+      }
+    };
+    walk(wsPath);
+    allFiles.sort((a, b) => b.mtime.localeCompare(a.mtime));
+    info.recentFiles = allFiles.slice(0, 20).map(f => f.file);
+  } catch {}
+
+  // Top-level directory listing
+  try {
+    const entries = fs.readdirSync(wsPath, { withFileTypes: true });
+    const dirs = [];
+    const files = [];
+    for (const e of entries) {
+      if (e.name.startsWith('.') || SKIP_DIRS.has(e.name)) continue;
+      if (e.isDirectory()) dirs.push(e.name + '/');
+      else files.push(e.name);
+    }
+    info.structure = [...dirs.sort(), ...files.sort()].slice(0, 40);
+  } catch {}
+
+  return info;
+}
 
 // ── Capture desktop context via PowerShell ──────────────────────
 function captureDesktop() {
@@ -153,7 +310,53 @@ async function tick() {
     lastTitle = ctx.windowTitle;
   }
 
-  const result = await relay(ctx);
+  // When an editor is active, capture workspace context
+  const isEditor = EDITOR_PROCESSES.test(ctx.processName);
+  let workspace = null;
+
+  if (isEditor) {
+    const wsName = extractWorkspaceFromTitle(ctx.windowTitle);
+    let wsPath = '';
+
+    // Try to find the actual folder path
+    if (wsName) {
+      wsPath = findWorkspacePath(wsName);
+    }
+
+    // Rescan workspace if it changed or if it's time for a periodic refresh
+    const now = Date.now();
+    if (wsPath && (wsPath !== lastWorkspacePath || (now - lastWorkspaceScanAt) > WORKSPACE_SCAN_INTERVAL_MS)) {
+      const ts = new Date().toLocaleTimeString();
+      console.log(`[${ts}] Scanning workspace: ${wsPath}`);
+      cachedWorkspaceInfo = await scanWorkspace(wsPath);
+      lastWorkspacePath = wsPath;
+      lastWorkspaceScanAt = now;
+    } else if (!wsPath && wsName) {
+      // Couldn't find the path but have the name
+      cachedWorkspaceInfo = { workspacePath: '', folderName: wsName, gitBranch: '', gitStatus: [], gitRecentCommits: [], recentFiles: [], structure: [] };
+      lastWorkspacePath = '';
+    }
+
+    workspace = cachedWorkspaceInfo;
+  } else {
+    // Not in an editor - clear workspace cache
+    if (lastWorkspacePath) {
+      lastWorkspacePath = '';
+      cachedWorkspaceInfo = null;
+    }
+  }
+
+  // Build relay payload
+  const payload = {
+    windowTitle: ctx.windowTitle,
+    processName: ctx.processName,
+    idleSeconds: ctx.idleSeconds,
+  };
+  if (workspace) {
+    payload.workspace = workspace;
+  }
+
+  const result = await relay(payload);
   if (result.status === 401) {
     console.error('[!] 401 Unauthorized - check your ADMIN_TOKEN');
   } else if (result.status && result.status !== 200) {
