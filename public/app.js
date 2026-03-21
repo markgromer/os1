@@ -86,6 +86,7 @@ const state = {
         fetchedAt: 0,
         untrackedSince: 0,
         untrackedSignature: '',
+        untrackedLastEditorAt: 0,
         untrackedNudgedAt: {},
     },
 
@@ -1869,21 +1870,35 @@ async function refreshDesktopContext({ force = false } = {}) {
         const isEditor = /code|cursor|visual\s?studio|webstorm|idea|sublime|atom|nvim|vim/i.test(pn);
         let untrackedSince = state.desktopContext.untrackedSince || 0;
         let untrackedSignature = state.desktopContext.untrackedSignature || '';
+        let untrackedLastEditorAt = state.desktopContext.untrackedLastEditorAt || 0;
 
         if (!matchedProjectId && isEditor && wt) {
             const sig = extractEditorWorkspace(wt).toLowerCase();
             if (sig && sig === untrackedSignature) {
                 // Same workspace, keep tracking
+                untrackedLastEditorAt = Date.now();
             } else if (sig) {
                 untrackedSince = Date.now();
                 untrackedSignature = sig;
+                untrackedLastEditorAt = Date.now();
             } else {
                 untrackedSince = 0;
                 untrackedSignature = '';
+                untrackedLastEditorAt = 0;
+            }
+        } else if (untrackedSignature && untrackedLastEditorAt) {
+            // Grace period: keep untracked state alive for 5 min after leaving editor
+            // (e.g. user switched to browser to check dashboard)
+            const away = Date.now() - untrackedLastEditorAt;
+            if (away > 5 * 60 * 1000) {
+                untrackedSince = 0;
+                untrackedSignature = '';
+                untrackedLastEditorAt = 0;
             }
         } else {
             untrackedSince = 0;
             untrackedSignature = '';
+            untrackedLastEditorAt = 0;
         }
 
         state.desktopContext = {
@@ -1895,6 +1910,7 @@ async function refreshDesktopContext({ force = false } = {}) {
             fetchedAt: Date.now(),
             untrackedSince,
             untrackedSignature,
+            untrackedLastEditorAt,
             untrackedNudgedAt: state.desktopContext.untrackedNudgedAt || {},
         };
     } catch {
