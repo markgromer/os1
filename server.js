@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
 import { exec } from 'node:child_process';
 import net from 'node:net';
 import os from 'node:os';
@@ -11416,6 +11417,75 @@ app.post('/api/pick-folder', async (req, res) => {
   });
 });
 
+// ── Desktop context awareness ──────────────────────────────────────
+let desktopContextCache = { at: 0, data: null };
+const DESKTOP_CONTEXT_TTL_MS = 4000;
+
+// Write the helper script once to a temp file so we avoid quoting issues.
+const DESKTOP_SCRIPT_PATH = path.join(DATA_DIR, '.desktop-context.ps1');
+const DESKTOP_SCRIPT_CONTENT = `
+$cs = @"
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+public class DesktopInfo {
+    [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetWindowText(IntPtr h, StringBuilder t, int c);
+    [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+    [DllImport("user32.dll")] static extern bool GetLastInputInfo(ref LASTINPUTINFO p);
+    [StructLayout(LayoutKind.Sequential)]
+    struct LASTINPUTINFO { public uint cbSize; public uint dwTime; }
+    public static string Query() {
+        var sb = new StringBuilder(512);
+        IntPtr hw = GetForegroundWindow();
+        GetWindowText(hw, sb, 512);
+        uint pid; GetWindowThreadProcessId(hw, out pid);
+        string pn = ""; try { pn = System.Diagnostics.Process.GetProcessById((int)pid).ProcessName; } catch {}
+        var li = new LASTINPUTINFO(); li.cbSize = (uint)Marshal.SizeOf(li);
+        GetLastInputInfo(ref li);
+        uint idle = ((uint)Environment.TickCount - li.dwTime) / 1000;
+        return sb.ToString() + "||" + pn + "||" + idle;
+    }
+}
+"@
+try { Add-Type -TypeDefinition $cs -ErrorAction Stop } catch {}
+[DesktopInfo]::Query()
+`.trim();
+
+try { fsSync.mkdirSync(DATA_DIR, { recursive: true }); } catch {}
+try { fsSync.writeFileSync(DESKTOP_SCRIPT_PATH, DESKTOP_SCRIPT_CONTENT, 'utf8'); } catch (e) { console.error('Failed to write desktop script:', e.message); }
+
+app.get('/api/desktop-context', async (req, res) => {
+  if (process.platform !== 'win32') {
+    res.json({ ok: true, windowTitle: '', processName: '', idleSeconds: 0 });
+    return;
+  }
+
+  const now = Date.now();
+  if (desktopContextCache.data && (now - desktopContextCache.at) < DESKTOP_CONTEXT_TTL_MS) {
+    res.json(desktopContextCache.data);
+    return;
+  }
+
+  const ps = `powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${DESKTOP_SCRIPT_PATH}"`;
+
+  exec(ps, { windowsHide: true, timeout: 5000 }, (error, stdout) => {
+    if (error) {
+      res.json({ ok: true, windowTitle: '', processName: '', idleSeconds: 0 });
+      return;
+    }
+    const parts = String(stdout || '').trim().split('||');
+    const data = {
+      ok: true,
+      windowTitle: (parts[0] || '').trim(),
+      processName: (parts[1] || '').trim().toLowerCase(),
+      idleSeconds: Math.max(0, Number(parts[2]) || 0),
+    };
+    desktopContextCache = { at: Date.now(), data };
+    res.json(data);
+  });
+});
+
 app.post('/api/projects/:id/template', async (req, res) => {
   const projectId = req.params.id;
   const baseRevision = Number(req.body?.baseRevision);
@@ -12782,6 +12852,41 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
       context += `${lines.join('\n')}\n\n`;
     } catch {
       // ignore snapshot failures
+    }
+
+    // Desktop context awareness (active window, OS idle, project matching).
+    try {
+      if (desktopContextCache.data && (Date.now() - desktopContextCache.at) < 30_000) {
+        const dc = desktopContextCache.data;
+        const wt = String(dc.windowTitle || '').trim();
+        const pn = String(dc.processName || '').trim();
+        const idle = Number(dc.idleSeconds) || 0;
+        if (wt || pn) {
+          const dcLines = [`DESKTOP CONTEXT (what the operator is doing right now):`];
+          dcLines.push(`- Active window: "${wt}"`);
+          dcLines.push(`- Application: ${pn}`);
+          dcLines.push(`- OS idle: ${idle}s`);
+          // Try to match window title to a known project
+          const allProjects = Array.isArray(store.projects) ? store.projects : [];
+          const wtLower = wt.toLowerCase();
+          const matchedProject = allProjects.find((p) => {
+            const wp = String(p?.workspacePath || '').trim();
+            const name = String(p?.name || '').trim();
+            if (wp && wtLower.includes(wp.toLowerCase().replace(/\\/g, '/').split('/').pop())) return true;
+            if (wp && wtLower.includes(wp.toLowerCase().split('\\').pop())) return true;
+            if (name && wtLower.includes(name.toLowerCase())) return true;
+            return false;
+          });
+          if (matchedProject) {
+            dcLines.push(`- Matched project: "${String(matchedProject.name || '').trim()}" (workspace: ${String(matchedProject.workspacePath || '').trim()})`);
+            dcLines.push(`  Use this to give context-aware responses. The operator is actively working on this project.`);
+          }
+          dcLines.push('');
+          context += dcLines.join('\n') + '\n';
+        }
+      }
+    } catch {
+      // ignore
     }
 
     // Cross-business rollup (cached).

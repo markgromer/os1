@@ -76,6 +76,16 @@ const state = {
         intervalId: null,
     },
 
+    // Desktop context awareness
+    desktopContext: {
+        windowTitle: '',
+        processName: '',
+        idleSeconds: 0,
+        matchedProjectId: null,
+        matchedProjectName: '',
+        fetchedAt: 0,
+    },
+
     // Mock team if API fails, but we'll try to fetch
     team: [
         { id: "u1", name: "Mark", role: "admin", avatar: "M" },
@@ -1814,6 +1824,47 @@ async function refreshSlackTeamPresence({ force = false } = {}) {
         state.teamPresenceFetchedAt = Date.now();
     } finally {
         state.teamPresenceLoading = false;
+    }
+}
+
+async function refreshDesktopContext({ force = false } = {}) {
+    const age = Date.now() - Number(state.desktopContext.fetchedAt || 0);
+    if (!force && age < 10_000) return;
+
+    try {
+        const data = await apiJson('/api/desktop-context');
+        if (!data?.ok) return;
+
+        const wt = safeText(data.windowTitle).trim();
+        const pn = safeText(data.processName).trim();
+        const idle = Math.max(0, Number(data.idleSeconds) || 0);
+
+        // Match window title to a known project
+        const projects = Array.isArray(state.projects) ? state.projects : [];
+        const wtLower = wt.toLowerCase();
+        let matchedProjectId = null;
+        let matchedProjectName = '';
+
+        for (const p of projects) {
+            const wp = safeText(p?.workspacePath).trim();
+            const name = safeText(p?.name).trim();
+            const wpFolder = wp ? wp.replace(/\\/g, '/').split('/').pop().toLowerCase() : '';
+            const wpFolderWin = wp ? wp.split('\\').pop().toLowerCase() : '';
+            if (wpFolder && wtLower.includes(wpFolder)) { matchedProjectId = p.id; matchedProjectName = name; break; }
+            if (wpFolderWin && wpFolderWin !== wpFolder && wtLower.includes(wpFolderWin)) { matchedProjectId = p.id; matchedProjectName = name; break; }
+            if (name && wtLower.includes(name.toLowerCase())) { matchedProjectId = p.id; matchedProjectName = name; break; }
+        }
+
+        state.desktopContext = {
+            windowTitle: wt,
+            processName: pn,
+            idleSeconds: idle,
+            matchedProjectId,
+            matchedProjectName,
+            fetchedAt: Date.now(),
+        };
+    } catch {
+        // Silently skip - desktop context is best-effort
     }
 }
 
@@ -11366,6 +11417,7 @@ function renderDashboardCommandCenter(container, sidePort) {
                 ${totalOverdue ? `<span class="stat-pill" style="border-color:rgba(239,68,68,0.3);color:#fca5a5"><i class="fa-solid fa-triangle-exclamation text-[8px]"></i>${totalOverdue} overdue</span>` : ''}
                 <span class="stat-pill"><i class="fa-solid fa-inbox text-[8px] text-purple-400"></i>${inboxNew.length} inbox new</span>
                 <span class="stat-pill"><i class="fa-solid fa-calendar text-[8px] text-blue-400"></i>${calls.length} meetings</span>
+                ${state.desktopContext?.matchedProjectName ? `<span class="stat-pill" style="border-color:rgba(59,130,246,0.3);color:#93c5fd"><i class="fa-solid fa-eye text-[8px]"></i>Working on: ${escapeHtml(state.desktopContext.matchedProjectName)}</span>` : ''}
             </div>
         </div>
     `;
@@ -13858,8 +13910,13 @@ function renderChat() {
 function computeFocusNudgeSnapshot() {
     const now = Date.now();
     const last = Number(state.lastInteractionAt || 0);
-    const idleMs = last ? Math.max(0, now - last) : 60 * 60 * 1000;
-    const idleMinutes = Math.floor(idleMs / 60000);
+    const webIdleMs = last ? Math.max(0, now - last) : 60 * 60 * 1000;
+    const webIdleMinutes = Math.floor(webIdleMs / 60000);
+    // Use OS-level idle when available - if the user is active on their desktop
+    // (coding, browsing, etc.) they aren't truly idle even if they haven't touched this tab.
+    const osIdleSeconds = Number(state.desktopContext?.idleSeconds) || 0;
+    const osIdleFresh = state.desktopContext?.fetchedAt && (now - state.desktopContext.fetchedAt) < 60_000;
+    const idleMinutes = osIdleFresh ? Math.min(webIdleMinutes, Math.floor(osIdleSeconds / 60)) : webIdleMinutes;
 
     const today = ymdFromLocalDate(new Date());
     const allTasks = getMyTasks();
@@ -13947,6 +14004,12 @@ function computeFocusNudgeSnapshot() {
         currentProjectUrgentCount: currentProjectUrgent.length,
         recentInbox,
         topTasks,
+        // Desktop context
+        desktopWindowTitle: safeText(state.desktopContext?.windowTitle).trim(),
+        desktopProcessName: safeText(state.desktopContext?.processName).trim(),
+        desktopIdleSeconds: Math.max(0, Number(state.desktopContext?.idleSeconds) || 0),
+        desktopMatchedProjectId: safeText(state.desktopContext?.matchedProjectId).trim(),
+        desktopMatchedProjectName: safeText(state.desktopContext?.matchedProjectName).trim(),
     };
 }
 
@@ -13966,6 +14029,8 @@ function shouldTriggerFocusNudge(snapshot, { initial = false } = {}) {
     const currentProjectUrgent = Number(snapshot.currentProjectUrgentCount) || 0;
     const currentProjectOpen = Number(snapshot.currentProjectOpenCount) || 0;
     const currentProjectName = safeText(snapshot.currentProjectName).trim();
+    const desktopMatchedProject = safeText(snapshot.desktopMatchedProjectName).trim();
+    const desktopProcess = safeText(snapshot.desktopProcessName).trim();
 
     if (initial && (urgentDue >= 2 || overdue >= 3 || inboxNew >= 6)) {
         return {
@@ -13974,6 +14039,19 @@ function shouldTriggerFocusNudge(snapshot, { initial = false } = {}) {
             reason: `Startup brief: ${urgentDue} urgent items, ${overdue} overdue tasks, ${inboxNew} new inbox items`,
             cooldownMs: 8 * 60 * 1000,
         };
+    }
+
+    // Desktop awareness: user is working on a tracked project in their editor
+    if (desktopMatchedProject && desktopProcess && /code|cursor|visual\s?studio|webstorm|idea|sublime|atom|nvim|vim/i.test(desktopProcess)) {
+        const matchedProjTasks = getMyTasks().filter((t) => !isDoneTask(t) && safeText(t?.project).trim() === desktopMatchedProject);
+        if (matchedProjTasks.length >= 1) {
+            return {
+                ok: true,
+                kind: 'project-context',
+                reason: `Detected ${desktopMatchedProject} open in ${desktopProcess} with ${matchedProjTasks.length} open task(s)`,
+                cooldownMs: 15 * 60 * 1000,
+            };
+        }
     }
 
     if (currentProjectName && currentProjectUrgent >= 2 && idle >= 2) {
@@ -14048,7 +14126,7 @@ function buildMarcusProactivePrompt(decision, snapshot) {
         `You are initiating the conversation without being asked because the operator needs steering.\n\n` +
         `Intervention type: ${kind || 'focus-reset'}\n` +
         `Reason: ${reason.slice(0, 400)}\n` +
-        `Signals: idleMinutes=${Number(snapshot?.idleMinutes) || 0}, inboxNew=${Number(snapshot?.inboxNewCount) || 0}, urgentDue=${Number(snapshot?.urgentDueCount) || 0}, overdue=${Number(snapshot?.overdueCount) || 0}, dueToday=${Number(snapshot?.dueTodayCount) || 0}, openTasks=${Number(snapshot?.openTasksCount) || 0}, currentProject=${safeText(snapshot?.currentProjectName).trim() || 'none'}, currentProjectUrgent=${Number(snapshot?.currentProjectUrgentCount) || 0}\n\n` +
+        `Signals: idleMinutes=${Number(snapshot?.idleMinutes) || 0}, inboxNew=${Number(snapshot?.inboxNewCount) || 0}, urgentDue=${Number(snapshot?.urgentDueCount) || 0}, overdue=${Number(snapshot?.overdueCount) || 0}, dueToday=${Number(snapshot?.dueTodayCount) || 0}, openTasks=${Number(snapshot?.openTasksCount) || 0}, currentProject=${safeText(snapshot?.currentProjectName).trim() || 'none'}, currentProjectUrgent=${Number(snapshot?.currentProjectUrgentCount) || 0}, desktopWindow=${safeText(snapshot?.desktopWindowTitle).trim() || 'unknown'}, desktopApp=${safeText(snapshot?.desktopProcessName).trim() || 'unknown'}, desktopMatchedProject=${safeText(snapshot?.desktopMatchedProjectName).trim() || 'none'}, osIdleSeconds=${Number(snapshot?.desktopIdleSeconds) || 0}\n\n` +
         `Top urgent tasks:\n${topLines}\n\n` +
         `Recent inbox pressure:\n${inboxLines}\n\n`;
 
@@ -14080,6 +14158,19 @@ function buildMarcusProactivePrompt(decision, snapshot) {
             `3) Ask exactly one yes/no question that forces commitment.\n` +
             `4) Give a 3-step sprint plan for the next 30 minutes.\n` +
             `If the operator resists without a solid reason, challenge them.`;
+    }
+
+    if (kind === 'project-context') {
+        const projName = safeText(snapshot?.desktopMatchedProjectName).trim();
+        const app = safeText(snapshot?.desktopProcessName).trim();
+        return header +
+            `Output format:\n` +
+            `You noticed the operator is actively working on "${projName}" in ${app}.\n` +
+            `1) Open with a short, natural observation like "I see you're in ${projName}." Don't be creepy about it, just aware.\n` +
+            `2) Mention the most relevant open task(s) for that project: what's next, what's overdue, what's high priority.\n` +
+            `3) If there's anything useful from inbox or notes related to this project, surface it.\n` +
+            `4) Ask one question about what they're focused on or if they need help with anything specific.\n` +
+            `Be a helpful co-pilot, not a surveillance bot. Keep it to 3-4 sentences.`;
     }
 
     return header +
@@ -14170,6 +14261,7 @@ function startProactiveFocusNudges() {
         };
 
         state.__focusNudgeIntervalId = setInterval(() => {
+            refreshDesktopContext().catch(() => {});
             runProactiveCheck().catch(() => {});
         }, 45 * 1000);
 
@@ -14177,6 +14269,7 @@ function startProactiveFocusNudges() {
         setTimeout(() => {
             try {
                 state.lastInteractionAt = state.lastInteractionAt || Date.now();
+                refreshDesktopContext().catch(() => {});
                 runProactiveCheck({ initial: true }).catch(() => {});
             } catch {
                 // ignore
