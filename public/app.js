@@ -90,6 +90,12 @@ const state = {
         untrackedNudgedAt: {},
     },
 
+    // Desktop awareness toggle (off by default; no polling unless enabled)
+    desktopAwarenessEnabled: false,
+    desktopAwarenessUntilTs: 0,
+    __desktopAwarenessIntervalId: null,
+    __desktopAwarenessStopTimeoutId: null,
+
     // Mock team if API fails, but we'll try to fetch
     team: [
         { id: "u1", name: "Mark", role: "admin", avatar: "M" },
@@ -98,6 +104,76 @@ const state = {
         { id: "ai", name: "M.A.R.C.U.S.", role: "ai", avatar: "AI" },
     ],
 };
+
+function startDesktopAwareness({ durationMs = 60_000 } = {}) {
+    try {
+        const ms = Math.max(10_000, Number(durationMs) || 60_000);
+        state.desktopAwarenessEnabled = true;
+        state.desktopAwarenessUntilTs = Date.now() + ms;
+
+        if (state.__desktopAwarenessIntervalId) {
+            try { clearInterval(state.__desktopAwarenessIntervalId); } catch {}
+            state.__desktopAwarenessIntervalId = null;
+        }
+        if (state.__desktopAwarenessStopTimeoutId) {
+            try { clearTimeout(state.__desktopAwarenessStopTimeoutId); } catch {}
+            state.__desktopAwarenessStopTimeoutId = null;
+        }
+
+        // Burst polling only while enabled.
+        refreshDesktopContext({ force: true }).catch(() => {});
+        state.__desktopAwarenessIntervalId = setInterval(() => {
+            try {
+                if (!state.desktopAwarenessEnabled) return;
+                if (state.desktopAwarenessUntilTs && Date.now() > state.desktopAwarenessUntilTs) {
+                    stopDesktopAwareness();
+                    return;
+                }
+                refreshDesktopContext({ force: true }).catch(() => {});
+            } catch {
+                // ignore
+            }
+        }, 2_000);
+
+        state.__desktopAwarenessStopTimeoutId = setTimeout(() => {
+            try { stopDesktopAwareness(); } catch {}
+        }, ms + 250);
+    } catch {
+        // ignore
+    }
+}
+
+function stopDesktopAwareness() {
+    try {
+        state.desktopAwarenessEnabled = false;
+        state.desktopAwarenessUntilTs = 0;
+
+        if (state.__desktopAwarenessIntervalId) {
+            try { clearInterval(state.__desktopAwarenessIntervalId); } catch {}
+            state.__desktopAwarenessIntervalId = null;
+        }
+        if (state.__desktopAwarenessStopTimeoutId) {
+            try { clearTimeout(state.__desktopAwarenessStopTimeoutId); } catch {}
+            state.__desktopAwarenessStopTimeoutId = null;
+        }
+
+        // Clear desktop context when disabled.
+        state.desktopContext = {
+            windowTitle: '',
+            processName: '',
+            idleSeconds: 0,
+            matchedProjectId: null,
+            matchedProjectName: '',
+            fetchedAt: 0,
+            untrackedSince: 0,
+            untrackedSignature: '',
+            untrackedLastEditorAt: 0,
+            untrackedNudgedAt: state.desktopContext?.untrackedNudgedAt || {},
+        };
+    } catch {
+        // ignore
+    }
+}
 
 let pollIntervalId = null;
 
@@ -1839,6 +1915,7 @@ function extractEditorWorkspace(windowTitle) {
 }
 
 async function refreshDesktopContext({ force = false } = {}) {
+    if (!force && !state.desktopAwarenessEnabled) return;
     const age = Date.now() - Number(state.desktopContext.fetchedAt || 0);
     if (!force && age < 10_000) return;
 
@@ -10151,13 +10228,16 @@ function renderDashboard(container, sidePort) {
             <span class="stat-pill ${inboxNewCount ? 'stat-pill--accent' : 'stat-pill--muted'}"><i class="fa-solid fa-inbox text-[8px] text-purple-400"></i>${inboxNewCount} inbox</span>
             <span class="stat-pill ${totalDoneWeek ? 'stat-pill--success' : 'stat-pill--muted'}"><i class="fa-solid fa-check text-[8px] text-emerald-400"></i>${totalDoneWeek} done</span>
             <button id="dash-action-only-toggle" class="stat-pill ${actionOnlyMode ? 'stat-pill--accent' : 'stat-pill--muted'}" title="Show only high-confidence actionable items">${actionOnlyMode ? 'Action Only: On' : 'Action Only: Off'}</button>
+            <button id="dash-desktop-awareness-toggle" class="stat-pill ${state.desktopAwarenessEnabled ? 'stat-pill--accent' : 'stat-pill--muted'}" title="Desktop awareness is off by default; enable temporarily when you want Marcus to see active window/app">
+                <i class="fa-solid fa-desktop text-[8px]"></i>${state.desktopAwarenessEnabled ? 'Desktop: On' : 'Desktop: Off'}
+            </button>
             <span class="stat-pill cursor-pointer hover:text-white" id="dash-shortcuts-btn" title="Keyboard Shortcuts"><i class="fa-solid fa-keyboard text-[8px]"></i>?</span>
         </div>
     `;
 
     // Untracked work banner
-    const untrackedSig = state.desktopContext?.untrackedSignature || '';
-    const untrackedMinutes = state.desktopContext?.untrackedSince
+    const untrackedSig = state.desktopAwarenessEnabled ? (state.desktopContext?.untrackedSignature || '') : '';
+    const untrackedMinutes = state.desktopAwarenessEnabled && state.desktopContext?.untrackedSince
         ? Math.floor((Date.now() - state.desktopContext.untrackedSince) / 60000) : 0;
     const dismissedUntrackedSigs = state._dismissedUntrackedSigs || new Set();
     if (untrackedSig && untrackedMinutes >= 1 && !dismissedUntrackedSigs.has(untrackedSig)) {
@@ -11420,6 +11500,7 @@ function renderDashboard(container, sidePort) {
     // Shortcuts
     const shortcutsBtn = wrap.querySelector('#dash-shortcuts-btn');
     const actionOnlyBtn = wrap.querySelector('#dash-action-only-toggle');
+    const desktopAwarenessBtn = wrap.querySelector('#dash-desktop-awareness-toggle');
     const shortcutsPanelEl = wrap.querySelector('#dash-shortcuts-panel');
     const shortcutsClose = wrap.querySelector('#dash-shortcuts-close');
     if (actionOnlyBtn) {
@@ -11439,6 +11520,18 @@ function renderDashboard(container, sidePort) {
     }
     if (shortcutsBtn && shortcutsPanelEl) shortcutsBtn.addEventListener('click', () => shortcutsPanelEl.classList.toggle('hidden'));
     if (shortcutsClose && shortcutsPanelEl) shortcutsClose.addEventListener('click', () => shortcutsPanelEl.classList.add('hidden'));
+
+    if (desktopAwarenessBtn) {
+        desktopAwarenessBtn.addEventListener('click', () => {
+            if (state.desktopAwarenessEnabled) {
+                stopDesktopAwareness();
+            } else {
+                // Temporary enable: 60s burst.
+                startDesktopAwareness({ durationMs: 60_000 });
+            }
+            renderMain();
+        });
+    }
 }
 
 function renderDashboardCommandCenter(container, sidePort) {
@@ -14407,7 +14500,6 @@ function startProactiveFocusNudges() {
         };
 
         state.__focusNudgeIntervalId = setInterval(() => {
-            refreshDesktopContext().catch(() => {});
             runProactiveCheck().catch(() => {});
         }, 45 * 1000);
 
@@ -14415,7 +14507,6 @@ function startProactiveFocusNudges() {
         setTimeout(() => {
             try {
                 state.lastInteractionAt = state.lastInteractionAt || Date.now();
-                refreshDesktopContext().catch(() => {});
                 runProactiveCheck({ initial: true }).catch(() => {});
             } catch {
                 // ignore
