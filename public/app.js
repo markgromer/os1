@@ -10138,6 +10138,22 @@ function renderDashboard(container, sidePort) {
             <span class="stat-pill cursor-pointer hover:text-white" id="dash-shortcuts-btn" title="Keyboard Shortcuts"><i class="fa-solid fa-keyboard text-[8px]"></i>?</span>
         </div>
     `;
+
+    // Untracked work banner
+    const untrackedSig = state.desktopContext?.untrackedSignature || '';
+    const untrackedMinutes = state.desktopContext?.untrackedSince
+        ? Math.floor((Date.now() - state.desktopContext.untrackedSince) / 60000) : 0;
+    const dismissedUntrackedSigs = state._dismissedUntrackedSigs || new Set();
+    if (untrackedSig && untrackedMinutes >= 1 && !dismissedUntrackedSigs.has(untrackedSig)) {
+        headerEl.innerHTML += `
+            <div id="dash-untracked-banner" class="flex items-center gap-2 px-3 py-1.5 bg-amber-500/10 border border-amber-500/20 rounded mt-1.5" style="margin-top:6px">
+                <i class="fa-solid fa-folder-open text-amber-400 text-[10px] shrink-0"></i>
+                <span class="text-[10px] font-mono text-amber-200 flex-1 truncate">You're working in <strong>${escapeHtml(untrackedSig)}</strong> - not tracked as a project</span>
+                <button data-untracked-accept="${escapeHtml(untrackedSig)}" class="px-2 py-0.5 rounded border border-amber-500/30 bg-amber-500/15 text-[9px] font-mono text-amber-300 hover:bg-amber-500/25 transition-colors">Track it</button>
+                <button data-untracked-dismiss="${escapeHtml(untrackedSig)}" class="px-1.5 py-0.5 rounded text-[9px] font-mono text-ops-light/40 hover:text-ops-light/70 transition-colors">&times;</button>
+            </div>`;
+    }
+
     if (pagePrefs.missionControl) wrap.appendChild(headerEl);
 
     // ═══ M.A.R.C.U.S. AMBIENT INTELLIGENCE BAR ══════════════════════════════
@@ -11276,6 +11292,31 @@ function renderDashboard(container, sidePort) {
     if (timerReset) { timerReset.addEventListener('click', () => { clearInterval(state.focusTimer.intervalId); state.focusTimer.running = false; state.focusTimer.intervalId = null; state.focusTimer.remaining = state.focusTimer.duration; if (state.currentView==='dashboard') renderMain(); }); }
 
     // M.A.R.C.U.S. buttons
+    // Untracked work banner handlers
+    wrap.querySelectorAll('[data-untracked-accept]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            const sig = btn.getAttribute('data-untracked-accept') || '';
+            if (!sig) return;
+            applyMarcusOpenState(true);
+            setStoredMarcusOpen(true);
+            const inp = document.getElementById('cmd-input');
+            if (inp) {
+                inp.value = `Create a project for "${sig}" - I've been working on it`;
+                inp.focus();
+                handleChatSubmit();
+            }
+        });
+    });
+    wrap.querySelectorAll('[data-untracked-dismiss]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            const sig = btn.getAttribute('data-untracked-dismiss') || '';
+            if (!sig) return;
+            if (!state._dismissedUntrackedSigs) state._dismissedUntrackedSigs = new Set();
+            state._dismissedUntrackedSigs.add(sig);
+            const banner = btn.closest('#dash-untracked-banner') || btn.closest('div');
+            if (banner) banner.remove();
+        });
+    });
     wrap.querySelector('#dash-ask-marcus')?.addEventListener('click', () => {
         stopMarcusSpeech();
         const inp = document.getElementById('cmd-input');
@@ -11453,6 +11494,20 @@ function renderDashboardCommandCenter(container, sidePort) {
                 <span class="stat-pill"><i class="fa-solid fa-calendar text-[8px] text-blue-400"></i>${calls.length} meetings</span>
                 ${state.desktopContext?.matchedProjectName ? `<span class="stat-pill" style="border-color:rgba(59,130,246,0.3);color:#93c5fd"><i class="fa-solid fa-eye text-[8px]"></i>Working on: ${escapeHtml(state.desktopContext.matchedProjectName)}</span>` : ''}
             </div>
+            ${(() => {
+                const utSig = state.desktopContext?.untrackedSignature || '';
+                const utMin = state.desktopContext?.untrackedSince ? Math.floor((Date.now() - state.desktopContext.untrackedSince) / 60000) : 0;
+                const dismissed = state._dismissedUntrackedSigs || new Set();
+                if (utSig && utMin >= 1 && !dismissed.has(utSig)) {
+                    return `<div class="flex items-center gap-2 mt-1.5" style="margin-top:6px">
+                        <i class="fa-solid fa-folder-open text-amber-400 text-[10px] shrink-0"></i>
+                        <span class="text-[10px] font-mono text-amber-200 flex-1 truncate">Working in <strong>${escapeHtml(utSig)}</strong> - not tracked</span>
+                        <button data-untracked-accept="${escapeHtml(utSig)}" class="px-2 py-0.5 rounded border border-amber-500/30 bg-amber-500/15 text-[9px] font-mono text-amber-300 hover:bg-amber-500/25 transition-colors">Track it</button>
+                        <button data-untracked-dismiss="${escapeHtml(utSig)}" class="px-1.5 py-0.5 rounded text-[9px] font-mono text-ops-light/40 hover:text-ops-light/70 transition-colors">&times;</button>
+                    </div>`;
+                }
+                return '';
+            })()}
         </div>
     `;
     topRow.appendChild(welcome);
