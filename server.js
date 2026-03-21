@@ -11419,7 +11419,9 @@ app.post('/api/pick-folder', async (req, res) => {
 
 // ── Desktop context awareness ──────────────────────────────────────
 let desktopContextCache = { at: 0, data: null };
+let desktopRelayCache = { at: 0, data: null };
 const DESKTOP_CONTEXT_TTL_MS = 4000;
+const DESKTOP_RELAY_TTL_MS = 30_000; // relay data valid for 30s (agent sends every 5s)
 
 // Write the helper script once to a temp file so we avoid quoting issues.
 const DESKTOP_SCRIPT_PATH = path.join(DATA_DIR, '.desktop-context.ps1');
@@ -11456,34 +11458,57 @@ try { fsSync.mkdirSync(DATA_DIR, { recursive: true }); } catch {}
 try { fsSync.writeFileSync(DESKTOP_SCRIPT_PATH, DESKTOP_SCRIPT_CONTENT, 'utf8'); } catch (e) { console.error('Failed to write desktop script:', e.message); }
 
 app.get('/api/desktop-context', async (req, res) => {
-  if (process.platform !== 'win32') {
-    res.json({ ok: true, windowTitle: '', processName: '', idleSeconds: 0 });
-    return;
-  }
-
-  const now = Date.now();
-  if (desktopContextCache.data && (now - desktopContextCache.at) < DESKTOP_CONTEXT_TTL_MS) {
-    res.json(desktopContextCache.data);
-    return;
-  }
-
-  const ps = `powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${DESKTOP_SCRIPT_PATH}"`;
-
-  exec(ps, { windowsHide: true, timeout: 5000 }, (error, stdout) => {
-    if (error) {
-      res.json({ ok: true, windowTitle: '', processName: '', idleSeconds: 0 });
+  // On Windows: use native PowerShell capture
+  if (process.platform === 'win32') {
+    const now = Date.now();
+    if (desktopContextCache.data && (now - desktopContextCache.at) < DESKTOP_CONTEXT_TTL_MS) {
+      res.json(desktopContextCache.data);
       return;
     }
-    const parts = String(stdout || '').trim().split('||');
-    const data = {
-      ok: true,
-      windowTitle: (parts[0] || '').trim(),
-      processName: (parts[1] || '').trim().toLowerCase(),
-      idleSeconds: Math.max(0, Number(parts[2]) || 0),
-    };
-    desktopContextCache = { at: Date.now(), data };
-    res.json(data);
-  });
+
+    const ps = `powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${DESKTOP_SCRIPT_PATH}"`;
+
+    exec(ps, { windowsHide: true, timeout: 5000 }, (error, stdout) => {
+      if (error) {
+        res.json({ ok: true, windowTitle: '', processName: '', idleSeconds: 0, source: 'native' });
+        return;
+      }
+      const parts = String(stdout || '').trim().split('||');
+      const data = {
+        ok: true,
+        windowTitle: (parts[0] || '').trim(),
+        processName: (parts[1] || '').trim().toLowerCase(),
+        idleSeconds: Math.max(0, Number(parts[2]) || 0),
+        source: 'native',
+      };
+      desktopContextCache = { at: Date.now(), data };
+      res.json(data);
+    });
+    return;
+  }
+
+  // On non-Windows (Render, etc.): use relay data sent by the desktop agent
+  if (desktopRelayCache.data && (Date.now() - desktopRelayCache.at) < DESKTOP_RELAY_TTL_MS) {
+    res.json(desktopRelayCache.data);
+    return;
+  }
+
+  res.json({ ok: true, windowTitle: '', processName: '', idleSeconds: 0, source: 'none' });
+});
+
+// Receive desktop context from the local desktop agent
+app.post('/api/desktop-context/relay', (req, res) => {
+  const wt = typeof req.body?.windowTitle === 'string' ? req.body.windowTitle.trim().slice(0, 1024) : '';
+  const pn = typeof req.body?.processName === 'string' ? req.body.processName.trim().slice(0, 128).toLowerCase() : '';
+  const idle = Math.max(0, Number(req.body?.idleSeconds) || 0);
+
+  const data = { ok: true, windowTitle: wt, processName: pn, idleSeconds: idle, source: 'relay' };
+  desktopRelayCache = { at: Date.now(), data };
+
+  // Also update the main cache so AI context injection picks it up
+  desktopContextCache = { at: Date.now(), data };
+
+  res.json({ ok: true, received: true });
 });
 
 app.post('/api/projects/:id/template', async (req, res) => {

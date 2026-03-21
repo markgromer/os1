@@ -84,6 +84,7 @@ const state = {
         matchedProjectId: null,
         matchedProjectName: '',
         fetchedAt: 0,
+        source: '',
         untrackedSince: 0,
         untrackedSignature: '',
         untrackedSignatureKey: '',
@@ -167,6 +168,7 @@ function stopDesktopAwareness() {
             matchedProjectId: null,
             matchedProjectName: '',
             fetchedAt: 0,
+            source: '',
             untrackedSince: 0,
             untrackedSignature: '',
             untrackedSignatureKey: '',
@@ -1915,33 +1917,50 @@ function extractEditorWorkspace(windowTitle) {
     if (!title) return '';
 
     const looksLikeFile = (s) => /\.[a-z0-9]{1,6}$/i.test(String(s || '').trim());
-    const isEditorTail = (s) => /visual studio code|vscode|cursor|webstorm|intellij|idea|pycharm|rubymine|phpstorm|clion|rider|sublime(\s+text)?|atom|neovim|nvim|vim|emacs|notepad\+\+/i.test(String(s || '').trim());
+    const isEditorTail = (s) => /visual studio code|vscode|cursor|webstorm|intellij\s*idea|pycharm|rubymine|phpstorm|clion|rider|goland|datagrip|sublime(\s+text)?|atom|neovim|nvim|vim|emacs|notepad\+\+/i.test(String(s || '').trim());
+    const isNoise = (s) => /^\[?(extension\s+dev\s+host|restricted\s+mode|workspace\s+trust)\]?$/i.test(String(s || '').trim());
+    const cleanSegment = (s) => {
+        let c = String(s || '').trim();
+        // Strip leading unsaved-change indicator and whitespace
+        c = c.replace(/^[●◉]\s*/, '');
+        // Strip trailing remote/SSH/WSL tags: "folder [SSH: host]" -> "folder"
+        c = c.replace(/\s*\[(?:SSH|WSL|Remote|Dev Container|Codespace|Tunnel)[^\]]*\]\s*$/i, '');
+        // Strip trailing "(Workspace)" for multi-root
+        c = c.replace(/\s*\(Workspace\)\s*$/i, '');
+        return c.trim();
+    };
 
     let parts = title.split(' - ').map((p) => p.trim()).filter(Boolean);
     if (!parts.length) return '';
 
     // Handle VS Code Insiders format: "... - Visual Studio Code - Insiders"
-    if (parts.length >= 2 && /insiders/i.test(parts[parts.length - 1]) && /visual\s+studio\s+code/i.test(parts[parts.length - 2])) {
+    if (parts.length >= 2 && /^insiders$/i.test(parts[parts.length - 1]) && /visual\s+studio\s+code/i.test(parts[parts.length - 2])) {
         parts = parts.slice(0, -2);
     }
 
-    // Strip common editor app name tail.
+    // Strip common editor app name tail
     if (parts.length && isEditorTail(parts[parts.length - 1])) {
         parts = parts.slice(0, -1);
     }
 
-    // Heuristic: pick the last segment that doesn't look like a filename.
+    // Strip noise segments like "[Extension Dev Host]"
+    parts = parts.filter((p) => !isNoise(p));
+
+    // Clean remaining segments
+    parts = parts.map(cleanSegment).filter(Boolean);
+
+    if (!parts.length) return '';
+
+    // Heuristic: pick the last segment that doesn't look like a filename
     for (let i = parts.length - 1; i >= 0; i -= 1) {
-        const candidate = safeText(parts[i]).trim();
+        const candidate = parts[i];
         if (!candidate) continue;
         if (looksLikeFile(candidate)) continue;
         return candidate;
     }
 
-    // Fallback: single segment or all segments looked like filenames.
-    if (parts.length === 1) return safeText(parts[0]).trim();
-    if (parts.length >= 2) return safeText(parts[parts.length - 1]).trim();
-    return '';
+    // Fallback: all segments look like filenames - use the last one
+    return parts[parts.length - 1] || '';
 }
 
 async function refreshDesktopContext({ force = false } = {}) {
@@ -1956,25 +1975,41 @@ async function refreshDesktopContext({ force = false } = {}) {
         const wt = safeText(data.windowTitle).trim();
         const pn = safeText(data.processName).trim();
         const idle = Math.max(0, Number(data.idleSeconds) || 0);
+        const source = safeText(data.source).trim() || 'unknown';
 
         // Match window title to a known project
         const projects = Array.isArray(state.projects) ? state.projects : [];
         const wtLower = wt.toLowerCase();
+        const isEditor = /code|cursor|visual\s?studio|webstorm|idea|sublime|atom|nvim|vim/i.test(pn);
+        const editorWs = isEditor ? extractEditorWorkspace(wt) : '';
+        const editorWsLower = editorWs.toLowerCase();
         let matchedProjectId = null;
         let matchedProjectName = '';
 
         for (const p of projects) {
             const wp = safeText(p?.workspacePath).trim();
             const name = safeText(p?.name).trim();
+            const nameLower = name.toLowerCase();
             const wpFolder = wp ? wp.replace(/\\/g, '/').split('/').pop().toLowerCase() : '';
             const wpFolderWin = wp ? wp.split('\\').pop().toLowerCase() : '';
+
+            // Match by workspace path folder name in window title
             if (wpFolder && wtLower.includes(wpFolder)) { matchedProjectId = p.id; matchedProjectName = name; break; }
             if (wpFolderWin && wpFolderWin !== wpFolder && wtLower.includes(wpFolderWin)) { matchedProjectId = p.id; matchedProjectName = name; break; }
-            if (name && wtLower.includes(name.toLowerCase())) { matchedProjectId = p.id; matchedProjectName = name; break; }
+
+            // Match by project name in window title
+            if (nameLower && wtLower.includes(nameLower)) { matchedProjectId = p.id; matchedProjectName = name; break; }
+
+            // Match the extracted editor workspace name against project name (fuzzy: strip common separators)
+            if (editorWsLower && nameLower) {
+                const normalize = (s) => s.replace(/[-_\s]+/g, ' ').trim();
+                if (normalize(editorWsLower) === normalize(nameLower)) { matchedProjectId = p.id; matchedProjectName = name; break; }
+                // Also match if workspace folder name equals the last folder in workspacePath
+                if (wpFolder && normalize(editorWsLower) === normalize(wpFolder)) { matchedProjectId = p.id; matchedProjectName = name; break; }
+            }
         }
 
         // Track untracked editor work
-        const isEditor = /code|cursor|visual\s?studio|webstorm|idea|sublime|atom|nvim|vim/i.test(pn);
         let untrackedSince = state.desktopContext.untrackedSince || 0;
         let untrackedSignature = state.desktopContext.untrackedSignature || '';
         let untrackedSignatureKey = state.desktopContext.untrackedSignatureKey || safeText(state.desktopContext.untrackedSignature || '').toLowerCase();
@@ -2021,6 +2056,7 @@ async function refreshDesktopContext({ force = false } = {}) {
             matchedProjectId,
             matchedProjectName,
             fetchedAt: Date.now(),
+            source,
             untrackedSince,
             untrackedSignature,
             untrackedSignatureKey,
@@ -10276,8 +10312,8 @@ function renderDashboard(container, sidePort) {
             <span class="stat-pill ${inboxNewCount ? 'stat-pill--accent' : 'stat-pill--muted'}"><i class="fa-solid fa-inbox text-[8px] text-purple-400"></i>${inboxNewCount} inbox</span>
             <span class="stat-pill ${totalDoneWeek ? 'stat-pill--success' : 'stat-pill--muted'}"><i class="fa-solid fa-check text-[8px] text-emerald-400"></i>${totalDoneWeek} done</span>
             <button id="dash-action-only-toggle" class="stat-pill ${actionOnlyMode ? 'stat-pill--accent' : 'stat-pill--muted'}" title="Show only high-confidence actionable items">${actionOnlyMode ? 'Action Only: On' : 'Action Only: Off'}</button>
-            <button id="dash-desktop-awareness-toggle" class="stat-pill ${state.desktopAwarenessEnabled ? 'stat-pill--accent' : 'stat-pill--muted'}" title="Desktop awareness is off by default; enable temporarily when you want Marcus to see active window/app">
-                <i class="fa-solid fa-desktop text-[8px]"></i>${state.desktopAwarenessEnabled ? 'Desktop: On' : 'Desktop: Off'}
+            <button id="dash-desktop-awareness-toggle" class="stat-pill ${state.desktopAwarenessEnabled ? 'stat-pill--accent' : 'stat-pill--muted'}" title="${state.desktopAwarenessEnabled ? (state.desktopContext?.source === 'relay' ? 'Connected via desktop agent' : state.desktopContext?.source === 'native' ? 'Connected locally' : state.desktopContext?.windowTitle ? 'Receiving data' : 'Waiting for desktop agent...') : 'Enable to let Marcus see your active window/app. On remote servers, run desktop-agent.cjs locally.'}">
+                <i class="fa-solid fa-desktop text-[8px]"></i>${state.desktopAwarenessEnabled ? (state.desktopContext?.source === 'none' || (!state.desktopContext?.windowTitle && !state.desktopContext?.processName) ? 'Desktop: Waiting...' : 'Desktop: On') : 'Desktop: Off'}
             </button>
             ${state.desktopAwarenessEnabled && safeText(state.desktopContext?.matchedProjectName).trim()
                                 ? `<span class="stat-pill stat-pill--accent" title="Matched from your active window title">
