@@ -119,7 +119,21 @@ function findWorkspacePath(workspaceName) {
       if (!fs.existsSync(sp)) continue;
       const raw = fs.readFileSync(sp, 'utf8');
       const data = JSON.parse(raw);
-      // VS Code stores recently opened URIs
+
+      // Modern VS Code: profileAssociations.workspaces has URIs as keys
+      const paWorkspaces = data?.profileAssociations?.workspaces;
+      if (paWorkspaces && typeof paWorkspaces === 'object') {
+        for (const uri of Object.keys(paWorkspaces)) {
+          try {
+            if (!uri.startsWith('file:///')) continue;
+            const folderPath = decodeURIComponent(uri.replace('file:///', '').replace(/\//g, path.sep));
+            const folderName = path.basename(folderPath).toLowerCase().replace(/[-_\s]+/g, ' ').trim();
+            if (folderName === nameLower) return folderPath;
+          } catch {}
+        }
+      }
+
+      // Legacy VS Code: openedPathsList.entries or openedPathsList.workspaces3
       const entries = data?.openedPathsList?.entries || data?.openedPathsList?.workspaces3 || [];
       for (const entry of entries) {
         const uri = typeof entry === 'string' ? entry : (entry?.folderUri || entry?.configPath || '');
