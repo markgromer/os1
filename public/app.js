@@ -95,6 +95,7 @@ const state = {
     desktopAwarenessUntilTs: 0,
     __desktopAwarenessIntervalId: null,
     __desktopAwarenessStopTimeoutId: null,
+    __desktopContextUiKey: '',
 
     // Mock team if API fails, but we'll try to fetch
     team: [
@@ -1990,6 +1991,17 @@ async function refreshDesktopContext({ force = false } = {}) {
             untrackedLastEditorAt,
             untrackedNudgedAt: state.desktopContext.untrackedNudgedAt || {},
         };
+
+        // When desktop awareness is enabled, refresh dashboard UI on change.
+        if (state.desktopAwarenessEnabled) {
+            const nextKey = `${pn}||${wt}||${matchedProjectName}||${untrackedSignature}`;
+            if (nextKey !== String(state.__desktopContextUiKey || '')) {
+                state.__desktopContextUiKey = nextKey;
+                if (state.currentView === 'dashboard') {
+                    try { renderMain(); } catch {}
+                }
+            }
+        }
     } catch {
         // Silently skip - desktop context is best-effort
     }
@@ -10231,6 +10243,16 @@ function renderDashboard(container, sidePort) {
             <button id="dash-desktop-awareness-toggle" class="stat-pill ${state.desktopAwarenessEnabled ? 'stat-pill--accent' : 'stat-pill--muted'}" title="Desktop awareness is off by default; enable temporarily when you want Marcus to see active window/app">
                 <i class="fa-solid fa-desktop text-[8px]"></i>${state.desktopAwarenessEnabled ? 'Desktop: On' : 'Desktop: Off'}
             </button>
+            ${state.desktopAwarenessEnabled && safeText(state.desktopContext?.matchedProjectName).trim()
+                ? `<span class="stat-pill" style="border-color:rgba(59,130,246,0.3);color:#93c5fd" title="Matched from your active window title">
+                    <i class="fa-solid fa-eye text-[8px]"></i>Working on: ${escapeHtml(safeText(state.desktopContext.matchedProjectName).trim())}
+                  </span>`
+                : ''}
+            ${state.desktopAwarenessEnabled && (safeText(state.desktopContext?.processName).trim() || safeText(state.desktopContext?.windowTitle).trim())
+                ? `<span class="stat-pill stat-pill--muted" title="${escapeHtml(safeText(state.desktopContext?.windowTitle).trim())}">
+                    <i class="fa-solid fa-window-maximize text-[8px]"></i>${escapeHtml(safeText(state.desktopContext?.processName).trim() || 'app')}
+                  </span>`
+                : ''}
             <span class="stat-pill cursor-pointer hover:text-white" id="dash-shortcuts-btn" title="Keyboard Shortcuts"><i class="fa-solid fa-keyboard text-[8px]"></i>?</span>
         </div>
     `;
