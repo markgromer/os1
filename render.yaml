@@ -13,7 +13,7 @@ services:
       - key: BASE_URL
         sync: false
       - key: ADMIN_TOKEN
-        value: stbhat654c
+        sync: false
       - key: TASK_TRACKER_DATA_DIR
         value: /var/data/task-tracker/data
       - key: TASK_TRACKER_SETTINGS_DIR

@@ -88,6 +88,15 @@ class McpStdioClient {
       }
       this.pending.clear();
     });
+
+    proc.on('error', (spawnErr) => {
+      const err = new Error(`MCP server spawn error: ${spawnErr.message}`);
+      for (const { reject, timeoutId } of this.pending.values()) {
+        clearTimeout(timeoutId);
+        reject(err);
+      }
+      this.pending.clear();
+    });
   }
 
   onData(chunk) {
@@ -99,7 +108,7 @@ class McpStdioClient {
       if (headerEnd === -1) return;
       const header = this.buffer.slice(0, headerEnd).toString('utf8');
       const contentLength = parseHeader(header);
-      if (!contentLength) {
+      if (contentLength === null) {
         // Can't parse; drop up to headerEnd and continue.
         this.buffer = this.buffer.slice(headerEnd + 4);
         continue;
@@ -167,12 +176,22 @@ export async function withMcpClient(config, fn) {
 
   const isWinCmd = process.platform === 'win32' && (command.toLowerCase().endsWith('.cmd') || command.toLowerCase().endsWith('.bat'));
 
+  // Pass only PATH + MCP-specific env vars to child processes to avoid leaking host secrets
+  const safeEnv = {
+    PATH: process.env.PATH,
+    ...(process.env.HOME ? { HOME: process.env.HOME } : {}),
+    ...(process.env.USERPROFILE ? { USERPROFILE: process.env.USERPROFILE } : {}),
+    ...(process.env.TEMP ? { TEMP: process.env.TEMP } : {}),
+    ...(process.env.TMP ? { TMP: process.env.TMP } : {}),
+    ...(config?.env || {}),
+  };
+
   const proc = spawn(command, args, {
     cwd,
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true,
     shell: isWinCmd,
-    env: process.env,
+    env: safeEnv,
   });
 
   const client = new McpStdioClient(proc);
