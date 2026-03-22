@@ -1,1 +1,0 @@
-        const role = m.role === 'user' ? 'user' : m.role === 'ai' ? 'assistant' : '';
