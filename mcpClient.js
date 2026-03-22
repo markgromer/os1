@@ -140,9 +140,24 @@ class McpStdioClient {
     }
   }
 
+  _safeWrite(data) {
+    try {
+      if (!this.proc.stdin.writable) throw new Error('stdin not writable');
+      return this.proc.stdin.write(data);
+    } catch (err) {
+      const writeErr = new Error(`MCP stdin write failed: ${err.message}`);
+      for (const { reject, timeoutId } of this.pending.values()) {
+        clearTimeout(timeoutId);
+        reject(writeErr);
+      }
+      this.pending.clear();
+      return false;
+    }
+  }
+
   sendNotification(method, params) {
     const message = { jsonrpc: '2.0', method, params };
-    this.proc.stdin.write(encodeJsonRpc(message));
+    this._safeWrite(encodeJsonRpc(message));
   }
 
   sendRequest(method, params, { timeoutMs = 30000 } = {}) {
@@ -157,7 +172,7 @@ class McpStdioClient {
       }, timeoutMs);
 
       this.pending.set(id, { resolve, reject, timeoutId });
-      this.proc.stdin.write(encodeJsonRpc(message));
+      this._safeWrite(encodeJsonRpc(message));
     });
   }
 
@@ -230,7 +245,8 @@ export async function mcpListTools(config) {
 export async function mcpCallTool(config, name, args) {
   const toolName = String(name || '').trim();
   if (!toolName) throw new Error('Tool name is required');
-  const toolArgs = args && typeof args === 'object' && !Array.isArray(args) ? args : {};
+  if (Array.isArray(args)) throw new Error('MCP tool arguments must be a named object, not an array');
+  const toolArgs = args && typeof args === 'object' ? args : {};
 
   return await withMcpClient(config, async ({ client }) => {
     const result = await client.sendRequest('tools/call', { name: toolName, arguments: toolArgs }, { timeoutMs: 20000 });

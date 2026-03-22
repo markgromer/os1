@@ -419,6 +419,7 @@ function isPublicApiRoute(req) {
   if (method === 'POST' && p === '/api/auth/login') return true;
   if (method === 'POST' && p === '/api/auth/logout') return true;
   if (method === 'GET' && p === '/api/auth/status') return true;
+  if (method === 'GET' && p === '/api/health') return true;
   if (method === 'POST' && p === '/api/integrations/slack/events') return true;
   if (method === 'POST' && p === '/api/integrations/crm/webhook') return true;
   if (method === 'POST' && p === '/api/integrations/quo/sms') return true;
@@ -455,6 +456,10 @@ app.use((req, res, next) => {
   } catch {
     res.status(401).json({ error: 'Unauthorized' });
   }
+});
+
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok', uptime: process.uptime() });
 });
 
 app.get('/api/auth/status', (req, res) => {
