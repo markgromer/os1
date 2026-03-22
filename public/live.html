@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>M.A.R.C.U.S. Live</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+<style>
+  :root {
+    --bg: #0a0f1a;
+    --surface: #111827;
+    --border: rgba(59,130,246,0.15);
+    --accent: #3b82f6;
+    --text: #e2e8f0;
+    --muted: #64748b;
+    --green: #22c55e;
+    --amber: #f59e0b;
+    --red: #ef4444;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'SF Mono', 'Cascadia Code', 'JetBrains Mono', 'Fira Code', monospace;
+    background: var(--bg);
+    color: var(--text);
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    font-size: 12px;
+  }
+
+  /* Header */
+  .header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    flex-shrink: 0;
+  }
+  .header .logo {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--accent);
+    letter-spacing: 1px;
+  }
+  .header .status {
+    font-size: 10px;
+    color: var(--muted);
+    margin-left: auto;
+  }
+  .header .status.connected { color: var(--green); }
+  .header .status.disconnected { color: var(--red); }
+  .pulse {
+    display: inline-block;
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--green);
+    margin-right: 4px;
+    animation: pulse 2s infinite;
+  }
+  .pulse.off { background: var(--red); animation: none; }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+
+  /* Context bar */
+  .context-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 6px 12px;
+    background: rgba(59,130,246,0.05);
+    border-bottom: 1px solid var(--border);
+    font-size: 10px;
+    flex-shrink: 0;
+  }
+  .ctx-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  .ctx-pill i { font-size: 8px; }
+  .ctx-pill.active { color: var(--accent); border-color: rgba(59,130,246,0.3); }
+
+  /* Feed */
+  .feed {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .feed::-webkit-scrollbar { width: 4px; }
+  .feed::-webkit-scrollbar-track { background: transparent; }
+  .feed::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  .msg {
+    padding: 8px 10px;
+    border-radius: 8px;
+    max-width: 95%;
+    line-height: 1.5;
+    animation: fadeIn 0.3s ease;
+  }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+
+  .msg.observation {
+    background: rgba(59,130,246,0.08);
+    border-left: 2px solid var(--accent);
+    align-self: flex-start;
+  }
+  .msg.chat-marcus {
+    background: rgba(59,130,246,0.08);
+    border-left: 2px solid var(--accent);
+    align-self: flex-start;
+  }
+  .msg.chat-user {
+    background: rgba(34,197,94,0.08);
+    border-left: 2px solid var(--green);
+    align-self: flex-end;
+  }
+  .msg.thinking {
+    color: var(--muted);
+    font-style: italic;
+    font-size: 10px;
+    padding: 4px 10px;
+    align-self: flex-start;
+  }
+  .msg.system {
+    color: var(--muted);
+    font-size: 10px;
+    text-align: center;
+    align-self: center;
+    padding: 4px 8px;
+  }
+  .msg .meta {
+    font-size: 9px;
+    color: var(--muted);
+    margin-bottom: 4px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .msg .meta .tag {
+    font-size: 8px;
+    padding: 1px 5px;
+    border-radius: 3px;
+    background: rgba(59,130,246,0.15);
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  /* Chat input */
+  .chat-bar {
+    display: flex;
+    gap: 6px;
+    padding: 8px 12px;
+    border-top: 1px solid var(--border);
+    background: var(--surface);
+    flex-shrink: 0;
+  }
+  .chat-bar input {
+    flex: 1;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 10px;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 11px;
+    outline: none;
+  }
+  .chat-bar input:focus { border-color: var(--accent); }
+  .chat-bar input::placeholder { color: var(--muted); }
+  .chat-bar button {
+    background: var(--accent);
+    border: none;
+    border-radius: 6px;
+    padding: 8px 14px;
+    color: white;
+    font-family: inherit;
+    font-size: 11px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    transition: opacity 0.2s;
+  }
+  .chat-bar button:hover { opacity: 0.85; }
+  .chat-bar button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  /* Responsive */
+  @media (max-width: 400px) {
+    .context-bar { font-size: 9px; }
+    .msg { font-size: 11px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <span class="logo"><i class="fa-solid fa-brain"></i> M.A.R.C.U.S. LIVE</span>
+  <span class="status disconnected" id="status"><span class="pulse off"></span>Connecting...</span>
+</div>
+
+<div class="context-bar" id="context-bar">
+  <span class="ctx-pill" id="ctx-workspace"><i class="fa-solid fa-folder"></i> <span>No workspace</span></span>
+  <span class="ctx-pill" id="ctx-branch"><i class="fa-solid fa-code-branch"></i> <span>-</span></span>
+  <span class="ctx-pill" id="ctx-app"><i class="fa-solid fa-window-maximize"></i> <span>-</span></span>
+  <span class="ctx-pill" id="ctx-files"><i class="fa-solid fa-file-pen"></i> <span>-</span></span>
+</div>
+
+<div class="feed" id="feed">
+  <div class="msg system">Connecting to M.A.R.C.U.S. Live feed...</div>
+</div>
+
+<div class="chat-bar">
+  <input type="text" id="chat-input" placeholder="Talk to Marcus about what you're working on..." autocomplete="off" />
+  <button id="chat-send"><i class="fa-solid fa-paper-plane"></i> Send</button>
+</div>
+
+<script>
+(function() {
+  const feed = document.getElementById('feed');
+  const input = document.getElementById('chat-input');
+  const sendBtn = document.getElementById('chat-send');
+  const statusEl = document.getElementById('status');
+  const ctxWorkspace = document.querySelector('#ctx-workspace span');
+  const ctxBranch = document.querySelector('#ctx-branch span');
+  const ctxApp = document.querySelector('#ctx-app span');
+  const ctxFiles = document.querySelector('#ctx-files span');
+
+  // Get auth token from cookie
+  function getToken() {
+    const match = document.cookie.match(/(?:^|;\s*)ops_admin_token=([^;]*)/);
+    return match ? decodeURIComponent(match[1]) : '';
+  }
+
+  // Determine base URL (same origin)
+  const BASE = window.location.origin;
+
+  function esc(s) {
+    const d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+  }
+
+  function timeStr(ts) {
+    return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+
+  function addMsg(type, text, meta) {
+    // Remove thinking indicator if present
+    const thinking = feed.querySelector('.msg.thinking');
+    if (thinking && type !== 'thinking') thinking.remove();
+
+    const div = document.createElement('div');
+    div.className = `msg ${type}`;
+
+    let metaHtml = '';
+    if (meta) {
+      metaHtml = `<div class="meta">`;
+      if (meta.tag) metaHtml += `<span class="tag">${esc(meta.tag)}</span>`;
+      if (meta.time) metaHtml += `<span>${meta.time}</span>`;
+      if (meta.workspace) metaHtml += `<span>in ${esc(meta.workspace)}</span>`;
+      metaHtml += `</div>`;
+    }
+
+    div.innerHTML = metaHtml + esc(text);
+    feed.appendChild(div);
+
+    // Auto-scroll to bottom
+    feed.scrollTop = feed.scrollHeight;
+  }
+
+  // SSE Connection
+  let es = null;
+  let reconnectTimer = null;
+
+  function connect() {
+    if (es) { try { es.close(); } catch {} }
+
+    const token = getToken();
+    const url = `${BASE}/api/marcus/live${token ? '?token=' + encodeURIComponent(token) : ''}`;
+    es = new EventSource(url, { withCredentials: true });
+
+    es.onopen = () => {
+      statusEl.className = 'status connected';
+      statusEl.innerHTML = '<span class="pulse"></span>Live';
+      addMsg('system', 'Connected to M.A.R.C.U.S. Live');
+    };
+
+    es.onmessage = (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        handleEvent(data);
+      } catch {}
+    };
+
+    es.onerror = () => {
+      statusEl.className = 'status disconnected';
+      statusEl.innerHTML = '<span class="pulse off"></span>Disconnected';
+      try { es.close(); } catch {}
+      // Reconnect after 5s
+      clearTimeout(reconnectTimer);
+      reconnectTimer = setTimeout(connect, 5000);
+    };
+  }
+
+  function handleEvent(data) {
+    switch (data.type) {
+      case 'init':
+        if (data.observations?.length) {
+          for (const obs of data.observations) {
+            addMsg('observation', obs.text, {
+              tag: 'observation',
+              time: timeStr(obs.ts),
+              workspace: obs.workspace,
+            });
+          }
+        }
+        break;
+
+      case 'context':
+        if (data.workspace) {
+          ctxWorkspace.textContent = data.workspace;
+          document.getElementById('ctx-workspace').classList.add('active');
+        }
+        if (data.branch) {
+          ctxBranch.textContent = data.branch;
+          document.getElementById('ctx-branch').classList.add('active');
+        }
+        if (data.processName) {
+          ctxApp.textContent = data.processName;
+        }
+        if (data.recentFiles?.length) {
+          ctxFiles.textContent = data.recentFiles.length + ' active';
+          document.getElementById('ctx-files').classList.add('active');
+        }
+        break;
+
+      case 'observation':
+        addMsg('observation', data.text, {
+          tag: 'observation',
+          time: timeStr(data.ts),
+          workspace: data.workspace,
+        });
+        break;
+
+      case 'chat':
+        if (data.from === 'marcus') {
+          addMsg('chat-marcus', data.text, { tag: 'marcus', time: timeStr(data.ts) });
+        }
+        break;
+
+      case 'thinking':
+        addMsg('thinking', 'Marcus is analyzing your workspace...');
+        break;
+    }
+  }
+
+  // Chat
+  async function sendChat() {
+    const msg = input.value.trim();
+    if (!msg) return;
+    input.value = '';
+    sendBtn.disabled = true;
+
+    addMsg('chat-user', msg, { tag: 'you', time: timeStr(Date.now()) });
+
+    try {
+      const token = getToken();
+      const headers = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
+      const resp = await fetch(`${BASE}/api/marcus/live/chat`, {
+        method: 'POST',
+        headers,
+        credentials: 'include',
+        body: JSON.stringify({ message: msg }),
+      });
+      const data = await resp.json();
+      if (data.ok && data.reply) {
+        // Reply comes via SSE, but also show directly in case SSE is delayed
+        addMsg('chat-marcus', data.reply, { tag: 'marcus', time: timeStr(Date.now()) });
+      } else if (data.error) {
+        addMsg('system', 'Error: ' + data.error);
+      }
+    } catch (err) {
+      addMsg('system', 'Failed to send: ' + err.message);
+    } finally {
+      sendBtn.disabled = false;
+      input.focus();
+    }
+  }
+
+  sendBtn.addEventListener('click', sendChat);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendChat();
+    }
+  });
+
+  // Initial connect
+  connect();
+  input.focus();
+})();
+</script>
+</body>
+</html>

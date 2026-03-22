@@ -11518,6 +11518,26 @@ app.post('/api/desktop-context/relay', (req, res) => {
       recentFiles: Array.isArray(ws.recentFiles) ? ws.recentFiles.slice(0, 20).map(f => typeof f === 'string' ? f.slice(0, 256) : '') : [],
       structure: Array.isArray(ws.structure) ? ws.structure.slice(0, 40).map(f => typeof f === 'string' ? f.slice(0, 128) : '') : [],
     };
+
+    // File contents (actual code the operator is editing)
+    if (ws.fileContents && typeof ws.fileContents === 'object') {
+      const fc = {};
+      let totalLen = 0;
+      for (const [k, v] of Object.entries(ws.fileContents)) {
+        if (typeof k !== 'string' || typeof v !== 'string') continue;
+        const key = k.slice(0, 256);
+        const val = v.slice(0, 15_000);
+        if (totalLen + val.length > 80_000) break; // cap total ~80KB
+        fc[key] = val;
+        totalLen += val.length;
+      }
+      workspace.fileContents = fc;
+    }
+
+    // Git diff (uncommitted changes)
+    if (typeof ws.gitDiff === 'string' && ws.gitDiff.length > 0) {
+      workspace.gitDiff = ws.gitDiff.slice(0, 25_000);
+    }
   }
 
   const data = { ok: true, windowTitle: wt, processName: pn, idleSeconds: idle, source: 'relay', workspace };
@@ -11528,6 +11548,244 @@ app.post('/api/desktop-context/relay', (req, res) => {
 
   res.json({ ok: true, received: true });
 });
+
+// ═════════════════════════════════════════════════════════════════
+// Marcus Live - Proactive pair-programming analysis engine + SSE
+// ═════════════════════════════════════════════════════════════════
+const marcusLiveClients = new Set();
+let marcusLiveObservations = [];       // rolling window of recent observations
+const MARCUS_LIVE_MAX_OBS = 50;        // keep last 50
+let lastProactiveHash = '';
+let lastProactiveAt = 0;
+const PROACTIVE_COOLDOWN_MS = 45_000;  // min 45s between analyses
+let proactiveRunning = false;
+
+// SSE endpoint - Marcus Live feed
+app.get('/api/marcus/live', (req, res) => {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+
+  // Send current state
+  res.write(`data: ${JSON.stringify({ type: 'init', observations: marcusLiveObservations.slice(-20) })}\n\n`);
+
+  // Send current workspace context
+  if (desktopRelayCache?.data?.workspace) {
+    const ws = desktopRelayCache.data.workspace;
+    res.write(`data: ${JSON.stringify({
+      type: 'context',
+      windowTitle: desktopRelayCache.data.windowTitle || '',
+      processName: desktopRelayCache.data.processName || '',
+      workspace: ws.folderName || '',
+      branch: ws.gitBranch || '',
+      recentFiles: ws.recentFiles || [],
+    })}\n\n`);
+  }
+
+  const client = { id: Date.now(), res };
+  marcusLiveClients.add(client);
+
+  const keepAlive = setInterval(() => {
+    try { res.write(': keepalive\n\n'); } catch { clearInterval(keepAlive); }
+  }, 15_000);
+
+  req.on('close', () => {
+    marcusLiveClients.delete(client);
+    clearInterval(keepAlive);
+  });
+});
+
+function pushLiveEvent(data) {
+  const msg = `data: ${JSON.stringify(data)}\n\n`;
+  for (const c of marcusLiveClients) {
+    try { c.res.write(msg); } catch { marcusLiveClients.delete(c); }
+  }
+}
+
+// Chat from Marcus Live panel
+app.post('/api/marcus/live/chat', async (req, res) => {
+  const message = typeof req.body?.message === 'string' ? req.body.message.trim().slice(0, 2000) : '';
+  if (!message) return res.status(400).json({ error: 'Empty message' });
+
+  try {
+    // Build context from current workspace
+    const ws = desktopRelayCache?.data?.workspace;
+    const contextParts = [];
+    if (ws) {
+      contextParts.push(`WORKSPACE: ${ws.folderName || 'unknown'} (${ws.workspacePath || ''})`);
+      if (ws.gitBranch) contextParts.push(`GIT BRANCH: ${ws.gitBranch}`);
+      if (ws.gitStatus?.length) contextParts.push(`UNCOMMITTED FILES: ${ws.gitStatus.map(s => `${s.status} ${s.file}`).join(', ')}`);
+      if (ws.recentFiles?.length) contextParts.push(`RECENTLY MODIFIED: ${ws.recentFiles.join(', ')}`);
+      if (ws.structure?.length) contextParts.push(`PROJECT STRUCTURE: ${ws.structure.join(', ')}`);
+      if (ws.fileContents && Object.keys(ws.fileContents).length) {
+        for (const [fpath, content] of Object.entries(ws.fileContents)) {
+          contextParts.push(`\n--- ${fpath} ---\n${content}`);
+        }
+      }
+      if (ws.gitDiff) contextParts.push(`\nGIT DIFF:\n${ws.gitDiff}`);
+    }
+
+    const systemPrompt = `You are M.A.R.C.U.S., a proactive pair programming partner. You are watching your operator work in real-time through a live feed of their editor.
+
+Your personality: Direct, sharp, genuinely helpful. You get excited about clever solutions. You flag risks plainly. You're a co-pilot, not a lecturer.
+
+RULES:
+- NEVER modify, write, or execute code. You are read-only. Observe, analyze, suggest.
+- Be specific. Reference exact filenames, function names, line patterns.
+- Keep responses concise - 2-4 sentences usually. Think chat message, not essay.
+- If you spot something great, say so. If something concerns you, say so directly.
+- When asked about the code, use the actual file contents you can see.
+
+CURRENT WORKSPACE CONTEXT:
+${contextParts.join('\n')}`;
+
+    const saved = await readSettings();
+    const result = await aiChatCompletion({
+      routeKey: 'marcusChat',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: message },
+      ],
+      timeoutMs: 25_000,
+    });
+
+    if (!result.ok) {
+      return res.json({ ok: false, error: result.error || 'AI call failed' });
+    }
+
+    const reply = result.message?.content || '';
+    pushLiveEvent({ type: 'chat', from: 'marcus', text: reply, ts: Date.now() });
+    res.json({ ok: true, reply });
+  } catch (err) {
+    res.json({ ok: false, error: String(err.message || err) });
+  }
+});
+
+// Proactive analysis - runs when workspace data changes
+async function runProactiveAnalysis() {
+  if (proactiveRunning) return;
+  if (marcusLiveClients.size === 0) return; // nobody listening
+  const wsData = desktopRelayCache?.data?.workspace;
+  if (!wsData || !wsData.workspacePath) return;
+
+  // Build a change fingerprint
+  const fingerprint = JSON.stringify({
+    branch: wsData.gitBranch,
+    status: (wsData.gitStatus || []).map(s => s.file),
+    recent: wsData.recentFiles || [],
+    files: Object.keys(wsData.fileContents || {}),
+  });
+  if (fingerprint === lastProactiveHash) return;
+  if (Date.now() - lastProactiveAt < PROACTIVE_COOLDOWN_MS) return;
+
+  proactiveRunning = true;
+  lastProactiveHash = fingerprint;
+  lastProactiveAt = Date.now();
+
+  try {
+    pushLiveEvent({ type: 'thinking', ts: Date.now() });
+
+    const contextParts = [];
+    contextParts.push(`WORKSPACE: ${wsData.folderName} (${wsData.workspacePath})`);
+    if (wsData.gitBranch) contextParts.push(`GIT BRANCH: ${wsData.gitBranch}`);
+    if (wsData.gitStatus?.length) {
+      contextParts.push(`UNCOMMITTED CHANGES:\n${wsData.gitStatus.map(s => `  ${s.status} ${s.file}`).join('\n')}`);
+    }
+    if (wsData.gitRecentCommits?.length) {
+      contextParts.push(`RECENT COMMITS:\n${wsData.gitRecentCommits.join('\n')}`);
+    }
+    if (wsData.structure?.length) {
+      contextParts.push(`PROJECT STRUCTURE: ${wsData.structure.join(', ')}`);
+    }
+    if (wsData.fileContents && Object.keys(wsData.fileContents).length) {
+      for (const [fpath, content] of Object.entries(wsData.fileContents)) {
+        contextParts.push(`\n--- ${fpath} ---\n${content}`);
+      }
+    }
+    if (wsData.gitDiff) {
+      contextParts.push(`\nCURRENT GIT DIFF (uncommitted work):\n${wsData.gitDiff}`);
+    }
+
+    // Collect previous observations to avoid repeating
+    const recentObs = marcusLiveObservations.slice(-5).map(o => o.text).join('\n');
+
+    const systemPrompt = `You are M.A.R.C.U.S., a proactive pair programming partner observing your operator's workspace in real-time.
+
+Your job: Analyze the code they're actively working on and share observations WITHOUT being asked. Think of yourself as a sharp co-pilot who spots things.
+
+RULES:
+- NEVER modify, write, or execute code. Observe and advise only.
+- Generate 1-3 brief observations (1-3 sentences each). Separate with |||
+- Be specific: reference exact filenames, patterns, function names.
+- Types of observations:
+  * Bugs or issues you notice in the code
+  * Security concerns
+  * Things that impress you or show good patterns (be genuine, not sycophantic)
+  * Missed opportunities or improvements
+  * Architectural observations
+  * If they have uncommitted work, mention what you see changing
+- Do NOT repeat these recent observations:\n${recentObs || '(none yet)'}
+- If nothing meaningful to say, respond with just: NOTHING_NEW
+- Keep it conversational and direct. No fluff.`;
+
+    const saved = await readSettings();
+    const result = await aiChatCompletion({
+      routeKey: 'marcusChat',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: contextParts.join('\n') },
+      ],
+      timeoutMs: 30_000,
+    });
+
+    if (result.ok && result.message?.content) {
+      const raw = result.message.content.trim();
+      if (raw !== 'NOTHING_NEW' && raw.length > 5) {
+        const observations = raw.split('|||').map(s => s.trim()).filter(s => s.length > 5);
+        for (const text of observations) {
+          const obs = { id: Date.now() + Math.random(), text, ts: Date.now(), workspace: wsData.folderName };
+          marcusLiveObservations.push(obs);
+          if (marcusLiveObservations.length > MARCUS_LIVE_MAX_OBS) marcusLiveObservations.shift();
+          pushLiveEvent({ type: 'observation', ...obs });
+        }
+      }
+    }
+  } catch (err) {
+    // Silently fail - proactive is best-effort
+  } finally {
+    proactiveRunning = false;
+  }
+}
+
+// Context update push - send workspace changes to connected live clients
+let lastLiveContextPush = '';
+function pushLiveContext() {
+  if (marcusLiveClients.size === 0) return;
+  const dc = desktopRelayCache?.data;
+  if (!dc) return;
+  const ws = dc.workspace;
+  const key = `${dc.windowTitle}||${ws?.gitBranch}||${(ws?.recentFiles || []).join(',')}`;
+  if (key === lastLiveContextPush) return;
+  lastLiveContextPush = key;
+  pushLiveEvent({
+    type: 'context',
+    windowTitle: dc.windowTitle || '',
+    processName: dc.processName || '',
+    workspace: ws?.folderName || '',
+    branch: ws?.gitBranch || '',
+    recentFiles: ws?.recentFiles || [],
+    changedFiles: (ws?.gitStatus || []).map(s => `${s.status} ${s.file}`),
+  });
+}
+
+// Proactive analysis timer - check every 15s if analysis should run
+setInterval(() => {
+  pushLiveContext();
+  runProactiveAnalysis();
+}, 15_000);
 
 app.post('/api/projects/:id/template', async (req, res) => {
   const projectId = req.params.id;

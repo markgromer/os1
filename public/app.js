@@ -10331,6 +10331,9 @@ function renderDashboard(container, sidePort) {
                     <i class="fa-solid fa-code-branch text-[8px]"></i>${escapeHtml(state.desktopContext.workspace.gitBranch)}${state.desktopContext.workspace.gitStatus?.length ? ` (${state.desktopContext.workspace.gitStatus.length} changed)` : ''}
                   </span>`
                 : ''}
+            <button id="dash-marcus-live-btn" class="stat-pill stat-pill--accent" title="Open Marcus Live - real-time pair programming" style="cursor:pointer;background:rgba(59,130,246,0.15);border-color:rgba(59,130,246,0.4)">
+                <i class="fa-solid fa-satellite-dish text-[8px]"></i>Marcus Live
+            </button>
             <span class="stat-pill cursor-pointer hover:text-white" id="dash-shortcuts-btn" title="Keyboard Shortcuts"><i class="fa-solid fa-keyboard text-[8px]"></i>?</span>
         </div>
     `;
@@ -11632,6 +11635,14 @@ function renderDashboard(container, sidePort) {
                 startDesktopAwareness({ durationMs: 60_000 });
             }
             renderMain();
+        });
+    }
+
+    // Marcus Live pop-out
+    const marcusLiveBtn = wrap.querySelector('#dash-marcus-live-btn');
+    if (marcusLiveBtn) {
+        marcusLiveBtn.addEventListener('click', () => {
+            window.open('/live.html', 'marcus-live', 'width=420,height=650,menubar=no,toolbar=no,location=no,status=no,resizable=yes');
         });
     }
 }

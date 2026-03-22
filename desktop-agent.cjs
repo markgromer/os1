@@ -80,6 +80,9 @@ const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.next', '__
 let lastWorkspacePath = '';
 let lastWorkspaceScanAt = 0;
 let cachedWorkspaceInfo = null;
+let cachedFileContents = null;
+let cachedGitDiff = '';
+let lastFileContentsAt = 0;
 
 function extractWorkspaceFromTitle(windowTitle) {
   const parts = windowTitle.split(' - ').map(p => p.trim()).filter(Boolean);
@@ -241,6 +244,32 @@ async function scanWorkspace(wsPath) {
   return info;
 }
 
+// ── Read contents of recently modified files ────────────────────
+function readRecentFileContents(wsPath, recentFiles) {
+  const contents = {};
+  const MAX_FILES = 5;
+  const MAX_BYTES = 15_000;
+  for (const rel of recentFiles.slice(0, MAX_FILES)) {
+    try {
+      const full = path.join(wsPath, rel);
+      const stat = fs.statSync(full);
+      if (stat.size > 100_000) continue;
+      let text = fs.readFileSync(full, 'utf8');
+      if (text.length > MAX_BYTES) text = text.slice(0, MAX_BYTES) + '\n... (truncated)';
+      contents[rel] = text;
+    } catch {}
+  }
+  return contents;
+}
+
+// ── Get unified git diff of uncommitted work ────────────────────
+async function getGitDiff(wsPath) {
+  // staged + unstaged diff
+  const diff = await gitCmd(wsPath, ['diff', 'HEAD']);
+  if (!diff) return '';
+  return diff.length > 25_000 ? diff.slice(0, 25_000) + '\n... (diff truncated)' : diff;
+}
+
 // ── Capture desktop context via PowerShell ──────────────────────
 function captureDesktop() {
   return new Promise((resolve) => {
@@ -352,6 +381,25 @@ async function tick() {
     }
 
     workspace = cachedWorkspaceInfo;
+
+    // Deep context: read file contents + git diff (alongside scan, so same interval)
+    if (workspace && workspace.workspacePath) {
+      const now2 = Date.now();
+      if (wsPath === lastWorkspacePath && cachedFileContents && (now2 - lastFileContentsAt) < WORKSPACE_SCAN_INTERVAL_MS) {
+        workspace = { ...workspace, fileContents: cachedFileContents, gitDiff: cachedGitDiff };
+      } else {
+        const fc = readRecentFileContents(wsPath, workspace.recentFiles || []);
+        const gd = await getGitDiff(wsPath);
+        cachedFileContents = fc;
+        cachedGitDiff = gd;
+        lastFileContentsAt = now2;
+        workspace = { ...workspace, fileContents: fc, gitDiff: gd };
+        if (Object.keys(fc).length) {
+          const ts2 = new Date().toLocaleTimeString();
+          console.log(`[${ts2}] Read ${Object.keys(fc).length} file(s) + diff (${gd.length} chars)`);
+        }
+      }
+    }
   } else {
     // Not in an editor - clear workspace cache
     if (lastWorkspacePath) {
