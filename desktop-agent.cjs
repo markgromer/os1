@@ -35,6 +35,7 @@ if (!SERVER_URL) {
 
 const POLL_MS = 5000;
 const WORKSPACE_SCAN_INTERVAL_MS = 30_000; // full workspace scan every 30s
+const SYSTEM_HEALTH_INTERVAL_MS = 60_000; // system health check every 60s
 const RELAY_PATH = '/api/desktop-context/relay';
 
 // ── PowerShell capture script ──────────────────────────────────
@@ -473,6 +474,143 @@ function relay(data, customPath) {
   });
 }
 
+// ── System health monitoring ────────────────────────────────────
+const HEALTH_SCRIPT_PATH = path.join(SCRIPT_DIR, 'system-health.ps1');
+const HEALTH_PS_SCRIPT = `
+$ErrorActionPreference = 'SilentlyContinue'
+$out = @{}
+
+# CPU usage (sampled over ~1s)
+try {
+  $cpu = (Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average
+  $out.cpuPercent = [math]::Round($cpu, 1)
+} catch { $out.cpuPercent = -1 }
+
+# Memory
+try {
+  $os = Get-CimInstance Win32_OperatingSystem
+  $totalGB = [math]::Round($os.TotalVisibleMemorySize / 1MB, 1)
+  $freeGB = [math]::Round($os.FreePhysicalMemory / 1MB, 1)
+  $usedGB = [math]::Round($totalGB - $freeGB, 1)
+  $out.memoryTotalGB = $totalGB
+  $out.memoryUsedGB = $usedGB
+  $out.memoryPercent = [math]::Round(($usedGB / $totalGB) * 100, 1)
+} catch { $out.memoryPercent = -1 }
+
+# Disk usage (all fixed drives)
+try {
+  $disks = Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" | ForEach-Object {
+    @{
+      drive = $_.DeviceID
+      totalGB = [math]::Round($_.Size / 1GB, 1)
+      freeGB = [math]::Round($_.FreeSpace / 1GB, 1)
+      usedPercent = [math]::Round((($_.Size - $_.FreeSpace) / $_.Size) * 100, 1)
+    }
+  }
+  $out.disks = @($disks)
+} catch { $out.disks = @() }
+
+# Windows Defender status
+try {
+  $def = Get-MpComputerStatus
+  $out.defender = @{
+    enabled = [bool]$def.AntivirusEnabled
+    realTimeProtection = [bool]$def.RealTimeProtectionEnabled
+    defsUpToDate = [bool]$def.AntivirusSignatureLastUpdated -and ((Get-Date) - $def.AntivirusSignatureLastUpdated).TotalDays -lt 3
+    lastScan = if ($def.FullScanEndTime) { $def.FullScanEndTime.ToString('o') } else { '' }
+    quickScanAge = if ($def.QuickScanEndTime) { [math]::Round(((Get-Date) - $def.QuickScanEndTime).TotalHours, 1) } else { -1 }
+  }
+} catch { $out.defender = @{ enabled = $false; error = 'unavailable' } }
+
+# Recent Defender threat detections (last 7 days)
+try {
+  $threats = Get-MpThreatDetection | Where-Object { $_.InitialDetectionTime -gt (Get-Date).AddDays(-7) } | Select-Object -First 10 | ForEach-Object {
+    @{
+      threat = (Get-MpThreat -ThreatID $_.ThreatID).ThreatName
+      time = $_.InitialDetectionTime.ToString('o')
+      action = $_.ThreatStatusID
+    }
+  }
+  $out.recentThreats = @($threats)
+} catch { $out.recentThreats = @() }
+
+# Failed login attempts (last 2 hours, Event ID 4625)
+try {
+  $fails = Get-WinEvent -FilterHashtable @{LogName='Security'; Id=4625; StartTime=(Get-Date).AddHours(-2)} -MaxEvents 20 | ForEach-Object {
+    $xml = [xml]$_.ToXml()
+    $ip = ($xml.Event.EventData.Data | Where-Object { $_.Name -eq 'IpAddress' }).'#text'
+    $user = ($xml.Event.EventData.Data | Where-Object { $_.Name -eq 'TargetUserName' }).'#text'
+    @{ time = $_.TimeCreated.ToString('o'); user = $user; sourceIp = $ip }
+  }
+  $out.failedLogins = @($fails)
+} catch { $out.failedLogins = @() }
+
+# Firewall status
+try {
+  $fw = Get-NetFirewallProfile | ForEach-Object { @{ profile = $_.Name; enabled = [bool]$_.Enabled } }
+  $out.firewall = @($fw)
+} catch { $out.firewall = @() }
+
+# Top processes by CPU (top 5, excluding idle/system)
+try {
+  $topCpu = Get-Process | Where-Object { $_.ProcessName -notin 'Idle','System','_Total' } | Sort-Object CPU -Descending | Select-Object -First 5 | ForEach-Object {
+    @{ name = $_.ProcessName; cpu = [math]::Round($_.CPU, 1); memMB = [math]::Round($_.WorkingSet64 / 1MB, 0) }
+  }
+  $out.topProcesses = @($topCpu)
+} catch { $out.topProcesses = @() }
+
+# Top processes by memory (top 5)
+try {
+  $topMem = Get-Process | Where-Object { $_.ProcessName -notin 'Idle','System','_Total' } | Sort-Object WorkingSet64 -Descending | Select-Object -First 5 | ForEach-Object {
+    @{ name = $_.ProcessName; memMB = [math]::Round($_.WorkingSet64 / 1MB, 0) }
+  }
+  $out.topMemProcesses = @($topMem)
+} catch { $out.topMemProcesses = @() }
+
+# Unusual listening ports (exclude common ones)
+try {
+  $common = @(80,443,3000,3030,5000,5173,8080,8443,135,139,445,5040,5357,7680,1900)
+  $listeners = Get-NetTCPConnection -State Listen | Where-Object { $_.LocalPort -notin $common -and $_.LocalAddress -ne '::1' -and $_.LocalAddress -ne '127.0.0.1' } | Select-Object -First 15 | ForEach-Object {
+    $proc = try { (Get-Process -Id $_.OwningProcess).ProcessName } catch { 'unknown' }
+    @{ port = $_.LocalPort; process = $proc; address = $_.LocalAddress }
+  }
+  $out.unusualListeners = @($listeners)
+} catch { $out.unusualListeners = @() }
+
+# System uptime
+try {
+  $boot = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime
+  $out.uptimeHours = [math]::Round(((Get-Date) - $boot).TotalHours, 1)
+} catch { $out.uptimeHours = -1 }
+
+$out | ConvertTo-Json -Depth 4 -Compress
+`.trim();
+
+try { fs.writeFileSync(HEALTH_SCRIPT_PATH, HEALTH_PS_SCRIPT, 'utf8'); } catch {}
+
+let cachedSystemHealth = null;
+let lastSystemHealthAt = 0;
+
+function captureSystemHealth() {
+  return new Promise((resolve) => {
+    execFile(
+      'powershell.exe',
+      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', HEALTH_SCRIPT_PATH],
+      { windowsHide: true, timeout: 15_000 },
+      (err, stdout) => {
+        if (err) return resolve(null);
+        try {
+          const data = JSON.parse(stdout.trim());
+          data.collectedAt = new Date().toISOString();
+          resolve(data);
+        } catch {
+          resolve(null);
+        }
+      }
+    );
+  });
+}
+
 // ── Main loop ───────────────────────────────────────────────────
 let consecutive = 0;
 let lastTitle = '';
@@ -564,6 +702,26 @@ async function tick() {
   };
   if (workspace) {
     payload.workspace = workspace;
+  }
+
+  // System health (collected on slower interval)
+  const now3 = Date.now();
+  if (!cachedSystemHealth || (now3 - lastSystemHealthAt) > SYSTEM_HEALTH_INTERVAL_MS) {
+    const health = await captureSystemHealth();
+    if (health) {
+      cachedSystemHealth = health;
+      lastSystemHealthAt = now3;
+      const ts3 = new Date().toLocaleTimeString();
+      const alerts = [];
+      if (health.cpuPercent > 90) alerts.push(`CPU ${health.cpuPercent}%`);
+      if (health.memoryPercent > 90) alerts.push(`RAM ${health.memoryPercent}%`);
+      if (health.recentThreats?.length) alerts.push(`${health.recentThreats.length} threat(s)`);
+      if (health.failedLogins?.length) alerts.push(`${health.failedLogins.length} failed login(s)`);
+      if (alerts.length) console.log(`[${ts3}] HEALTH ALERT: ${alerts.join(', ')}`);
+    }
+  }
+  if (cachedSystemHealth) {
+    payload.systemHealth = cachedSystemHealth;
   }
 
   const result = await relay(payload);

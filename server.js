@@ -11569,12 +11569,41 @@ app.post('/api/desktop-context/relay', (req, res) => {
   }
 
   const data = { ok: true, windowTitle: wt, processName: pn, idleSeconds: idle, source: 'relay', workspace };
+
+  // System health telemetry from the desktop agent
+  if (req.body?.systemHealth && typeof req.body.systemHealth === 'object') {
+    const sh = req.body.systemHealth;
+    data.systemHealth = {
+      cpuPercent: typeof sh.cpuPercent === 'number' ? sh.cpuPercent : -1,
+      memoryTotalGB: typeof sh.memoryTotalGB === 'number' ? sh.memoryTotalGB : 0,
+      memoryUsedGB: typeof sh.memoryUsedGB === 'number' ? sh.memoryUsedGB : 0,
+      memoryPercent: typeof sh.memoryPercent === 'number' ? sh.memoryPercent : -1,
+      disks: Array.isArray(sh.disks) ? sh.disks.slice(0, 10) : [],
+      defender: sh.defender && typeof sh.defender === 'object' ? sh.defender : {},
+      recentThreats: Array.isArray(sh.recentThreats) ? sh.recentThreats.slice(0, 10) : [],
+      failedLogins: Array.isArray(sh.failedLogins) ? sh.failedLogins.slice(0, 20) : [],
+      firewall: Array.isArray(sh.firewall) ? sh.firewall.slice(0, 5) : [],
+      topProcesses: Array.isArray(sh.topProcesses) ? sh.topProcesses.slice(0, 5) : [],
+      topMemProcesses: Array.isArray(sh.topMemProcesses) ? sh.topMemProcesses.slice(0, 5) : [],
+      unusualListeners: Array.isArray(sh.unusualListeners) ? sh.unusualListeners.slice(0, 15) : [],
+      uptimeHours: typeof sh.uptimeHours === 'number' ? sh.uptimeHours : -1,
+      collectedAt: typeof sh.collectedAt === 'string' ? sh.collectedAt.slice(0, 30) : '',
+    };
+  }
+
   desktopRelayCache = { at: Date.now(), data };
 
   // Also update the main cache so AI context injection picks it up
   desktopContextCache = { at: Date.now(), data };
 
   res.json({ ok: true, received: true });
+});
+
+// Get latest system health snapshot
+app.get('/api/desktop-context/health', (req, res) => {
+  const health = desktopRelayCache?.data?.systemHealth;
+  if (!health) return res.json({ ok: true, available: false });
+  res.json({ ok: true, available: true, health, relayAge: Date.now() - (desktopRelayCache?.at || 0) });
 });
 
 // ═════════════════════════════════════════════════════════════════
@@ -11802,6 +11831,39 @@ async function runProactiveAnalysis() {
       contextParts.push(`\nCURRENT GIT DIFF (uncommitted work):\n${wsData.gitDiff}`);
     }
 
+    // System health telemetry from the operator's PC
+    const healthData = desktopRelayCache?.data?.systemHealth;
+    if (healthData) {
+      const healthLines = [`\n=== SYSTEM HEALTH (operator's PC) ===`];
+      healthLines.push(`CPU: ${healthData.cpuPercent}% | RAM: ${healthData.memoryUsedGB}/${healthData.memoryTotalGB} GB (${healthData.memoryPercent}%) | Uptime: ${healthData.uptimeHours}h`);
+      if (healthData.disks?.length) {
+        healthLines.push(`Disks: ${healthData.disks.map(d => `${d.drive} ${d.usedPercent}% used (${d.freeGB} GB free)`).join(', ')}`);
+      }
+      if (healthData.defender) {
+        const d = healthData.defender;
+        healthLines.push(`Defender: ${d.enabled ? 'ON' : 'OFF'} | Real-time: ${d.realTimeProtection ? 'ON' : 'OFF'} | Defs up-to-date: ${d.defsUpToDate ? 'yes' : 'NO'}${d.quickScanAge > 0 ? ` | Last quick scan: ${d.quickScanAge}h ago` : ''}`);
+      }
+      if (healthData.recentThreats?.length) {
+        healthLines.push(`THREATS DETECTED (last 7 days):`);
+        healthData.recentThreats.forEach(t => healthLines.push(`  - ${t.threat} at ${t.time}`));
+      }
+      if (healthData.failedLogins?.length) {
+        healthLines.push(`FAILED LOGIN ATTEMPTS (last 2h): ${healthData.failedLogins.length}`);
+        healthData.failedLogins.slice(0, 5).forEach(f => healthLines.push(`  - User: ${f.user} from ${f.sourceIp} at ${f.time}`));
+      }
+      if (healthData.firewall?.length) {
+        const fwOff = healthData.firewall.filter(f => !f.enabled);
+        if (fwOff.length) healthLines.push(`FIREWALL WARNING: ${fwOff.map(f => f.profile).join(', ')} profile(s) DISABLED`);
+      }
+      if (healthData.topProcesses?.length) {
+        healthLines.push(`Top CPU: ${healthData.topProcesses.map(p => `${p.name}(${p.cpu}s/${p.memMB}MB)`).join(', ')}`);
+      }
+      if (healthData.unusualListeners?.length) {
+        healthLines.push(`Unusual listening ports: ${healthData.unusualListeners.map(l => `${l.port}(${l.process})`).join(', ')}`);
+      }
+      contextParts.push(healthLines.join('\n'));
+    }
+
     // Collect previous observations to avoid repeating
     const recentObs = marcusLiveObservations.slice(-5).map(o => o.text).join('\n');
 
@@ -11840,6 +11902,7 @@ CONTEXT YOU HAVE:
 - Git branch, uncommitted changes, recent commits
 - Full project directory structure
 - Any files you previously requested for deeper exploration
+- SYSTEM HEALTH: CPU, RAM, disk, Windows Defender status, recent threats, failed logins, firewall, unusual network listeners
 
 QUALITY STANDARDS (critical - follow these strictly):
 - Only note things that are ACTIONABLE and relevant to the CORE project code the operator is building.
@@ -11864,6 +11927,18 @@ RULES:
   * Missed opportunities that would meaningfully improve the codebase
   * When you notice the operator building something new - what it does, how it fits
   * If they have uncommitted work, what's the intent behind the changes
+
+SYSTEM HEALTH MONITORING:
+When system health data is present, watch for and ALWAYS flag these:
+  * High CPU (>85%) or RAM (>90%) sustained - identify the offending process
+  * Disk space critically low (<10% free)
+  * Windows Defender disabled or definitions out of date
+  * ANY recent threat detections - always surface these immediately
+  * Failed login attempts - especially from external IPs, could indicate brute force
+  * Firewall profiles disabled
+  * Unusual listening ports from unknown processes - could indicate malware/backdoors
+  * System uptime excessively long (>168h/7d) - suggest a reboot
+Normal/healthy readings don't need mention. Only flag when something looks wrong or suspicious.
 - If you see imports or references to files you don't have yet, add a final line: EXPLORE: path/to/file1, path/to/dir2
 - Do NOT repeat these recent observations:\n${recentObs || '(none yet)'}
 ${existingNotesContext ? `\n${existingNotesContext}\nBuild on what you already know. Don't repeat old notes - add NEW insights.` : ''}
@@ -11945,10 +12020,10 @@ function pushLiveContext() {
   const dc = desktopRelayCache?.data;
   if (!dc) return;
   const ws = dc.workspace;
-  const key = `${dc.windowTitle}||${ws?.gitBranch}||${ws?.activeFile || ''}||${(ws?.recentFiles || []).join(',')}`;
+  const key = `${dc.windowTitle}||${ws?.gitBranch}||${ws?.activeFile || ''}||${(ws?.recentFiles || []).join(',')}||${dc.systemHealth?.cpuPercent}||${dc.systemHealth?.memoryPercent}`;
   if (key === lastLiveContextPush) return;
   lastLiveContextPush = key;
-  pushLiveEvent({
+  const evt = {
     type: 'context',
     windowTitle: dc.windowTitle || '',
     processName: dc.processName || '',
@@ -11958,7 +12033,21 @@ function pushLiveContext() {
     recentFiles: ws?.recentFiles || [],
     fileCount: Object.keys(ws?.fileContents || {}).length,
     changedFiles: (ws?.gitStatus || []).map(s => `${s.status} ${s.file}`),
-  });
+  };
+  if (dc.systemHealth) {
+    evt.systemHealth = {
+      cpu: dc.systemHealth.cpuPercent,
+      ram: dc.systemHealth.memoryPercent,
+      ramUsed: dc.systemHealth.memoryUsedGB,
+      ramTotal: dc.systemHealth.memoryTotalGB,
+      disks: dc.systemHealth.disks,
+      defenderOk: dc.systemHealth.defender?.enabled && dc.systemHealth.defender?.realTimeProtection,
+      threats: dc.systemHealth.recentThreats?.length || 0,
+      failedLogins: dc.systemHealth.failedLogins?.length || 0,
+      uptime: dc.systemHealth.uptimeHours,
+    };
+  }
+  pushLiveEvent(evt);
 }
 
 // Proactive analysis timer - check every 15s if analysis should run
