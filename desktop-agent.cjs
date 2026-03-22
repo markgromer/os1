@@ -244,27 +244,171 @@ async function scanWorkspace(wsPath) {
   return info;
 }
 
-// ── Read contents of recently modified files ────────────────────
-function readRecentFileContents(wsPath, recentFiles) {
+// ── Binary file extensions to skip ──────────────────────────────
+const BINARY_EXT = new Set(['.png','.jpg','.jpeg','.gif','.bmp','.ico','.svg','.woff','.woff2','.ttf','.eot','.mp3','.mp4','.wav','.avi','.mov','.zip','.tar','.gz','.rar','.7z','.exe','.dll','.so','.dylib','.pdf','.doc','.docx','.xls','.xlsx','.ppt','.pptx','.db','.sqlite','.pyc','.class','.o','.obj','.min.js','.min.css','.map','.lock']);
+
+// ── Extract active filename from VS Code title ─────────────────
+function extractActiveFileFromTitle(windowTitle) {
+  const parts = windowTitle.split(' - ').map(p => p.trim()).filter(Boolean);
+  if (!parts.length) return '';
+  const first = parts[0].replace(/^[●◉]\s*/, '').trim();
+  if (/\.[a-z0-9]{1,8}$/i.test(first)) return first;
+  return '';
+}
+
+// ── Read a single file safely ───────────────────────────────────
+function readFileSafe(fullPath, maxBytes = 20_000) {
+  try {
+    const ext = path.extname(fullPath).toLowerCase();
+    if (BINARY_EXT.has(ext)) return null;
+    const stat = fs.statSync(fullPath);
+    if (!stat.isFile() || stat.size > 200_000) return null;
+    let text = fs.readFileSync(fullPath, 'utf8');
+    if (text.length > maxBytes) text = text.slice(0, maxBytes) + '\n... (truncated)';
+    return text;
+  } catch { return null; }
+}
+
+// ── Read active file + all sibling files in the same directory ──
+function readActiveContext(wsPath, activeFileName) {
   const contents = {};
-  const MAX_FILES = 5;
-  const MAX_BYTES = 15_000;
-  for (const rel of recentFiles.slice(0, MAX_FILES)) {
-    try {
-      const full = path.join(wsPath, rel);
-      const stat = fs.statSync(full);
-      if (stat.size > 100_000) continue;
-      let text = fs.readFileSync(full, 'utf8');
-      if (text.length > MAX_BYTES) text = text.slice(0, MAX_BYTES) + '\n... (truncated)';
-      contents[rel] = text;
-    } catch {}
-  }
+  if (!wsPath || !activeFileName) return contents;
+
+  // Find the active file in the workspace
+  let activeRelPath = '';
+  const findFile = (dir, depth = 0) => {
+    if (depth > 4 || activeRelPath) return;
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (activeRelPath) return;
+      if (SKIP_DIRS.has(e.name) || e.name.startsWith('.')) continue;
+      const full = path.join(dir, e.name);
+      if (e.isFile() && e.name === activeFileName) {
+        activeRelPath = path.relative(wsPath, full);
+        return;
+      }
+      if (e.isDirectory()) findFile(full, depth + 1);
+    }
+  };
+  findFile(wsPath);
+
+  if (!activeRelPath) return contents;
+
+  // Read the active file (larger limit - this is what they're working on)
+  const activeFullPath = path.join(wsPath, activeRelPath);
+  const activeContent = readFileSafe(activeFullPath, 30_000);
+  if (activeContent) contents[activeRelPath] = activeContent;
+
+  // Read ALL sibling files in the same directory
+  const activeDir = path.dirname(activeFullPath);
+  let totalSize = activeContent ? activeContent.length : 0;
+  const MAX_TOTAL = 120_000;
+  try {
+    const siblings = fs.readdirSync(activeDir, { withFileTypes: true });
+    for (const e of siblings) {
+      if (totalSize >= MAX_TOTAL) break;
+      if (!e.isFile()) continue;
+      const full = path.join(activeDir, e.name);
+      const rel = path.relative(wsPath, full);
+      if (rel === activeRelPath) continue;
+      const text = readFileSafe(full, 15_000);
+      if (text) {
+        contents[rel] = text;
+        totalSize += text.length;
+      }
+    }
+  } catch {}
+
   return contents;
+}
+
+// ── Read key project config files ───────────────────────────────
+function readProjectConfigFiles(wsPath) {
+  const configs = {};
+  const configNames = ['package.json', 'requirements.txt', 'Pipfile', 'pyproject.toml', 'Cargo.toml', 'go.mod', 'composer.json', 'Gemfile', 'README.md', 'readme.md', '.env.example', 'render.yaml', 'Dockerfile', 'docker-compose.yml'];
+  for (const name of configNames) {
+    const full = path.join(wsPath, name);
+    const text = readFileSafe(full, 8_000);
+    if (text) configs[name] = text;
+  }
+  return configs;
+}
+
+// ── HTTP helper for GET requests ────────────────────────────────
+function httpGet(urlPath) {
+  return new Promise((resolve) => {
+    const url = new URL(urlPath, SERVER_URL);
+    const isHttps = url.protocol === 'https:';
+    const mod = isHttps ? https : http;
+    const headers = {};
+    if (ADMIN_TOKEN) headers['Authorization'] = `Bearer ${ADMIN_TOKEN}`;
+    const req = mod.get({ hostname: url.hostname, port: url.port || (isHttps ? 443 : 80), path: url.pathname, headers, timeout: 5000 }, (res) => {
+      let buf = '';
+      res.on('data', d => buf += d);
+      res.on('end', () => { try { resolve(JSON.parse(buf)); } catch { resolve(null); } });
+    });
+    req.on('error', () => resolve(null));
+    req.on('timeout', () => { req.destroy(); resolve(null); });
+  });
+}
+
+// ── Fulfil file-read requests from Marcus (exploring deeper) ────
+async function checkFileRequests(wsPath) {
+  if (!wsPath) return;
+  try {
+    const result = await httpGet('/api/desktop-context/file-requests');
+    if (!result?.requests?.length) return;
+
+    const responses = {};
+    for (const r of result.requests) {
+      const reqPath = String(r.path || '').trim();
+      if (!reqPath) continue;
+      const fullPath = path.join(wsPath, reqPath);
+
+      // Safety: must stay within workspace
+      const resolved = path.resolve(fullPath);
+      if (!resolved.startsWith(path.resolve(wsPath))) continue;
+
+      try {
+        const stat = fs.statSync(fullPath);
+        if (stat.isFile()) {
+          const text = readFileSafe(fullPath, 25_000);
+          if (text) responses[reqPath] = text;
+        } else if (stat.isDirectory()) {
+          const entries = fs.readdirSync(fullPath, { withFileTypes: true });
+          const listing = [];
+          let dirTotal = 0;
+          for (const e of entries) {
+            if (SKIP_DIRS.has(e.name) || e.name.startsWith('.')) continue;
+            if (e.isDirectory()) {
+              listing.push(e.name + '/');
+            } else if (e.isFile()) {
+              const childFull = path.join(fullPath, e.name);
+              const childRel = path.relative(wsPath, childFull);
+              const text = readFileSafe(childFull, 15_000);
+              if (text && dirTotal + text.length < 100_000) {
+                responses[childRel] = text;
+                dirTotal += text.length;
+              }
+              listing.push(e.name);
+            }
+          }
+          responses[reqPath + '/__listing__'] = listing.join('\n');
+        }
+      } catch {}
+    }
+
+    if (Object.keys(responses).length) {
+      const ts = new Date().toLocaleTimeString();
+      console.log(`[${ts}] Fulfilled ${Object.keys(responses).length} file request(s) from Marcus`);
+      await relay({ fileResponses: responses }, '/api/desktop-context/file-responses');
+    }
+  } catch {}
 }
 
 // ── Get unified git diff of uncommitted work ────────────────────
 async function getGitDiff(wsPath) {
-  // staged + unstaged diff
   const diff = await gitCmd(wsPath, ['diff', 'HEAD']);
   if (!diff) return '';
   return diff.length > 25_000 ? diff.slice(0, 25_000) + '\n... (diff truncated)' : diff;
@@ -291,10 +435,10 @@ function captureDesktop() {
 }
 
 // ── Send data to the server ─────────────────────────────────────
-function relay(data) {
+function relay(data, customPath) {
   return new Promise((resolve) => {
     const body = JSON.stringify(data);
-    const url = new URL(RELAY_PATH, SERVER_URL);
+    const url = new URL(customPath || RELAY_PATH, SERVER_URL);
     const isHttps = url.protocol === 'https:';
     const mod = isHttps ? https : http;
 
@@ -382,23 +526,27 @@ async function tick() {
 
     workspace = cachedWorkspaceInfo;
 
-    // Deep context: read file contents + git diff (alongside scan, so same interval)
+    // Deep context: active file + sibling dir + project configs + git diff
     if (workspace && workspace.workspacePath) {
       const now2 = Date.now();
       if (wsPath === lastWorkspacePath && cachedFileContents && (now2 - lastFileContentsAt) < WORKSPACE_SCAN_INTERVAL_MS) {
         workspace = { ...workspace, fileContents: cachedFileContents, gitDiff: cachedGitDiff };
       } else {
-        const fc = readRecentFileContents(wsPath, workspace.recentFiles || []);
+        const activeFile = extractActiveFileFromTitle(ctx.windowTitle);
+        const activeCtx = readActiveContext(wsPath, activeFile);
+        const configCtx = readProjectConfigFiles(wsPath);
+        const fc = { ...configCtx, ...activeCtx };
         const gd = await getGitDiff(wsPath);
         cachedFileContents = fc;
         cachedGitDiff = gd;
         lastFileContentsAt = now2;
-        workspace = { ...workspace, fileContents: fc, gitDiff: gd };
-        if (Object.keys(fc).length) {
-          const ts2 = new Date().toLocaleTimeString();
-          console.log(`[${ts2}] Read ${Object.keys(fc).length} file(s) + diff (${gd.length} chars)`);
-        }
+        workspace = { ...workspace, fileContents: fc, gitDiff: gd, activeFile: activeFile || '' };
+        const ts2 = new Date().toLocaleTimeString();
+        console.log(`[${ts2}] Context: ${Object.keys(fc).length} file(s)${activeFile ? ' (active: ' + activeFile + ')' : ''} + diff (${gd.length} chars)`);
       }
+
+      // Check for file exploration requests from Marcus
+      await checkFileRequests(wsPath);
     }
   } else {
     // Not in an editor - clear workspace cache

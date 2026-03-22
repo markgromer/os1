@@ -37,7 +37,7 @@ const DEBUG_WEBHOOKS = String(process.env.DEBUG_WEBHOOKS || '').trim().toLowerCa
 
 // Capture the raw request bytes so we can verify webhook signatures (Slack/Twilio/etc).
 app.use(express.json({
-  limit: '256kb',
+  limit: '512kb',
   verify: (req, res, buf) => {
     // Buffer may be empty for requests with no body.
     req.rawBody = buf;
@@ -11519,15 +11519,20 @@ app.post('/api/desktop-context/relay', (req, res) => {
       structure: Array.isArray(ws.structure) ? ws.structure.slice(0, 40).map(f => typeof f === 'string' ? f.slice(0, 128) : '') : [],
     };
 
-    // File contents (actual code the operator is editing)
+    // Active file being edited (from window title)
+    if (typeof ws.activeFile === 'string' && ws.activeFile.length > 0) {
+      workspace.activeFile = ws.activeFile.slice(0, 256);
+    }
+
+    // File contents (active file + sibling dir + project configs)
     if (ws.fileContents && typeof ws.fileContents === 'object') {
       const fc = {};
       let totalLen = 0;
       for (const [k, v] of Object.entries(ws.fileContents)) {
         if (typeof k !== 'string' || typeof v !== 'string') continue;
         const key = k.slice(0, 256);
-        const val = v.slice(0, 15_000);
-        if (totalLen + val.length > 80_000) break; // cap total ~80KB
+        const val = v.slice(0, 30_000);
+        if (totalLen + val.length > 200_000) break; // cap total ~200KB
         fc[key] = val;
         totalLen += val.length;
       }
@@ -11548,6 +11553,58 @@ app.post('/api/desktop-context/relay', (req, res) => {
 
   res.json({ ok: true, received: true });
 });
+
+// ═════════════════════════════════════════════════════════════════
+// File exploration - Marcus can request specific files/dirs
+// ═════════════════════════════════════════════════════════════════
+let pendingFileRequests = [];      // [{path, requestedAt, requestedBy}]
+let fileResponseCache = {};        // {path: {content, receivedAt}}
+const FILE_RESPONSE_TTL_MS = 120_000; // responses expire after 2 min
+
+// Agent polls this to see what files Marcus wants
+app.get('/api/desktop-context/file-requests', (req, res) => {
+  const requests = pendingFileRequests.splice(0); // drain queue
+  res.json({ ok: true, requests });
+});
+
+// Agent sends file contents back here
+app.post('/api/desktop-context/file-responses', (req, res) => {
+  const responses = req.body?.fileResponses;
+  if (!responses || typeof responses !== 'object') {
+    return res.status(400).json({ error: 'fileResponses object required' });
+  }
+  const now = Date.now();
+  let count = 0;
+  for (const [filePath, content] of Object.entries(responses)) {
+    if (typeof filePath !== 'string' || typeof content !== 'string') continue;
+    fileResponseCache[filePath.slice(0, 256)] = {
+      content: content.slice(0, 30_000),
+      receivedAt: now,
+    };
+    count++;
+  }
+  // Clean up old entries
+  for (const key of Object.keys(fileResponseCache)) {
+    if (now - fileResponseCache[key].receivedAt > FILE_RESPONSE_TTL_MS) {
+      delete fileResponseCache[key];
+    }
+  }
+  res.json({ ok: true, received: count });
+});
+
+// Queue file requests from AI or proactive engine
+function requestFilesFromAgent(paths, requestedBy = 'proactive') {
+  const now = Date.now();
+  for (const p of paths) {
+    if (typeof p !== 'string' || p.length > 256) continue;
+    // Don't re-request if already in queue or recently received
+    const existing = pendingFileRequests.find(r => r.path === p);
+    if (existing) continue;
+    const cached = fileResponseCache[p];
+    if (cached && (now - cached.receivedAt) < FILE_RESPONSE_TTL_MS) continue;
+    pendingFileRequests.push({ path: p, requestedAt: now, requestedBy });
+  }
+}
 
 // ═════════════════════════════════════════════════════════════════
 // Marcus Live - Proactive pair-programming analysis engine + SSE
@@ -11677,6 +11734,8 @@ async function runProactiveAnalysis() {
     status: (wsData.gitStatus || []).map(s => s.file),
     recent: wsData.recentFiles || [],
     files: Object.keys(wsData.fileContents || {}),
+    active: wsData.activeFile || '',
+    exploredFiles: Object.keys(fileResponseCache),
   });
   if (fingerprint === lastProactiveHash) return;
   if (Date.now() - lastProactiveAt < PROACTIVE_COOLDOWN_MS) return;
@@ -11690,6 +11749,7 @@ async function runProactiveAnalysis() {
 
     const contextParts = [];
     contextParts.push(`WORKSPACE: ${wsData.folderName} (${wsData.workspacePath})`);
+    if (wsData.activeFile) contextParts.push(`ACTIVE FILE (currently editing): ${wsData.activeFile}`);
     if (wsData.gitBranch) contextParts.push(`GIT BRANCH: ${wsData.gitBranch}`);
     if (wsData.gitStatus?.length) {
       contextParts.push(`UNCOMMITTED CHANGES:\n${wsData.gitStatus.map(s => `  ${s.status} ${s.file}`).join('\n')}`);
@@ -11701,7 +11761,17 @@ async function runProactiveAnalysis() {
       contextParts.push(`PROJECT STRUCTURE: ${wsData.structure.join(', ')}`);
     }
     if (wsData.fileContents && Object.keys(wsData.fileContents).length) {
+      contextParts.push(`\n=== FILES IN ACTIVE DIRECTORY + PROJECT CONFIGS ===`);
       for (const [fpath, content] of Object.entries(wsData.fileContents)) {
+        contextParts.push(`\n--- ${fpath} ---\n${content}`);
+      }
+    }
+    // Include any files that were previously requested and received
+    const now = Date.now();
+    const exploredEntries = Object.entries(fileResponseCache).filter(([, v]) => now - v.receivedAt < FILE_RESPONSE_TTL_MS);
+    if (exploredEntries.length) {
+      contextParts.push(`\n=== EXPLORED FILES (requested by Marcus) ===`);
+      for (const [fpath, { content }] of exploredEntries) {
         contextParts.push(`\n--- ${fpath} ---\n${content}`);
       }
     }
@@ -11716,10 +11786,17 @@ async function runProactiveAnalysis() {
 
 Your job: Analyze the code they're actively working on and share observations WITHOUT being asked. Think of yourself as a sharp co-pilot who spots things.
 
+CONTEXT YOU HAVE:
+- The active file they're editing + ALL sibling files in the same directory
+- Key project config files (package.json, etc.)
+- Git branch, uncommitted changes, recent commits
+- Full project directory structure
+- Any files you previously requested for deeper exploration
+
 RULES:
 - NEVER modify, write, or execute code. Observe and advise only.
 - Generate 1-3 brief observations (1-3 sentences each). Separate with |||
-- Be specific: reference exact filenames, patterns, function names.
+- Be specific: reference exact filenames, line patterns, function names.
 - Types of observations:
   * Bugs or issues you notice in the code
   * Security concerns
@@ -11727,6 +11804,8 @@ RULES:
   * Missed opportunities or improvements
   * Architectural observations
   * If they have uncommitted work, mention what you see changing
+  * Cross-file relationships and dependencies you notice
+- If you see imports or references to files you don't have yet, add a final line: EXPLORE: path/to/file1, path/to/dir2
 - Do NOT repeat these recent observations:\n${recentObs || '(none yet)'}
 - If nothing meaningful to say, respond with just: NOTHING_NEW
 - Keep it conversational and direct. No fluff.`;
@@ -11742,8 +11821,16 @@ RULES:
     });
 
     if (result.ok && result.message?.content) {
-      const raw = result.message.content.trim();
+      let raw = result.message.content.trim();
       if (raw !== 'NOTHING_NEW' && raw.length > 5) {
+        // Check for EXPLORE: file requests at the end
+        const exploreMatch = raw.match(/\nEXPLORE:\s*(.+)$/i);
+        if (exploreMatch) {
+          const paths = exploreMatch[1].split(',').map(p => p.trim()).filter(Boolean);
+          if (paths.length) requestFilesFromAgent(paths, 'proactive');
+          raw = raw.replace(/\nEXPLORE:\s*.+$/i, '').trim();
+        }
+
         const observations = raw.split('|||').map(s => s.trim()).filter(s => s.length > 5);
         for (const text of observations) {
           const obs = { id: Date.now() + Math.random(), text, ts: Date.now(), workspace: wsData.folderName };
@@ -11767,7 +11854,7 @@ function pushLiveContext() {
   const dc = desktopRelayCache?.data;
   if (!dc) return;
   const ws = dc.workspace;
-  const key = `${dc.windowTitle}||${ws?.gitBranch}||${(ws?.recentFiles || []).join(',')}`;
+  const key = `${dc.windowTitle}||${ws?.gitBranch}||${ws?.activeFile || ''}||${(ws?.recentFiles || []).join(',')}`;
   if (key === lastLiveContextPush) return;
   lastLiveContextPush = key;
   pushLiveEvent({
@@ -11776,7 +11863,9 @@ function pushLiveContext() {
     processName: dc.processName || '',
     workspace: ws?.folderName || '',
     branch: ws?.gitBranch || '',
+    activeFile: ws?.activeFile || '',
     recentFiles: ws?.recentFiles || [],
+    fileCount: Object.keys(ws?.fileContents || {}).length,
     changedFiles: (ws?.gitStatus || []).map(s => `${s.status} ${s.file}`),
   });
 }
@@ -13190,6 +13279,7 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
           const ws = dc.workspace;
           if (ws && typeof ws === 'object' && ws.workspacePath) {
             dcLines.push(`\nWORKSPACE SNAPSHOT (${ws.folderName || ws.workspacePath}):`);
+            if (ws.activeFile) dcLines.push(`- Active file (currently editing): ${ws.activeFile}`);
             if (ws.gitBranch) dcLines.push(`- Git branch: ${ws.gitBranch}`);
             if (ws.gitStatus && ws.gitStatus.length) {
               dcLines.push(`- Uncommitted changes (${ws.gitStatus.length}):`);
@@ -13200,12 +13290,22 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
               ws.gitRecentCommits.forEach(c => dcLines.push(`    ${c}`));
             }
             if (ws.recentFiles && ws.recentFiles.length) {
-              dcLines.push(`- Recently modified files (last 10 min):`);
+              dcLines.push(`- Recently modified files:`);
               ws.recentFiles.forEach(f => dcLines.push(`    ${f}`));
             }
             if (ws.structure && ws.structure.length) {
               dcLines.push(`- Top-level structure:`);
               ws.structure.forEach(f => dcLines.push(`    ${f}`));
+            }
+            // File contents - the actual code from the active directory + configs
+            if (ws.fileContents && Object.keys(ws.fileContents).length) {
+              dcLines.push(`\nFILE CONTENTS (active directory + project configs, ${Object.keys(ws.fileContents).length} files):`);
+              for (const [fpath, content] of Object.entries(ws.fileContents)) {
+                dcLines.push(`\n--- ${fpath} ---\n${content}`);
+              }
+            }
+            if (ws.gitDiff) {
+              dcLines.push(`\nGIT DIFF (uncommitted work):\n${ws.gitDiff}`);
             }
           }
 

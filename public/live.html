@@ -342,8 +342,11 @@
         if (data.processName) {
           ctxApp.textContent = data.processName;
         }
-        if (data.recentFiles?.length) {
-          ctxFiles.textContent = data.recentFiles.length + ' active';
+        if (data.activeFile) {
+          ctxFiles.textContent = data.activeFile + (data.fileCount ? ' +' + (data.fileCount - 1) : '');
+          document.getElementById('ctx-files').classList.add('active');
+        } else if (data.recentFiles?.length) {
+          ctxFiles.textContent = data.recentFiles.length + ' files';
           document.getElementById('ctx-files').classList.add('active');
         }
         break;
