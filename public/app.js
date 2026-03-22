@@ -28,6 +28,7 @@ const state = {
     projectScratchpads: {},
     projectNoteEntries: {},
     projectCommunications: {},
+    marcusNotes: {},
 
     projectRightTabById: {},
     bulkProjectDeleteSelectedById: {},
@@ -2448,6 +2449,7 @@ function applyStore(store) {
     if (store.projectScratchpads && typeof store.projectScratchpads === 'object') state.projectScratchpads = store.projectScratchpads;
     if (store.projectNoteEntries && typeof store.projectNoteEntries === 'object') state.projectNoteEntries = store.projectNoteEntries;
     if (store.projectCommunications && typeof store.projectCommunications === 'object') state.projectCommunications = store.projectCommunications;
+    if (store.marcusNotes && typeof store.marcusNotes === 'object') state.marcusNotes = store.marcusNotes;
 
     ensureAiTeamMember();
 }
@@ -12762,6 +12764,7 @@ function renderProjectView(container) {
         { id: 'notes', label: 'Notes', icon: 'fa-note-sticky' },
         { id: 'scratch', label: 'Scratch', icon: 'fa-pen-to-square' },
         { id: 'comms', label: 'Comms', icon: 'fa-message' },
+        { id: 'marcus', label: 'Marcus', icon: 'fa-brain' },
     ];
 
     const tabRow = document.createElement('div');
@@ -13450,6 +13453,48 @@ function renderProjectView(container) {
                     }
                 };
             }
+            return;
+        }
+
+        if (tab === 'marcus') {
+            const notes = Array.isArray(state.marcusNotes?.[project.id]) ? state.marcusNotes[project.id] : [];
+            const notesHtml = notes.length
+                ? notes.slice().reverse().slice(0, 100).map(n => {
+                    const when = n.ts ? new Date(n.ts).toLocaleString() : '';
+                    const file = n.activeFile ? escapeHtml(n.activeFile) : '';
+                    const branch = n.branch ? escapeHtml(n.branch) : '';
+                    const text = escapeHtml(String(n.text || ''));
+                    const meta = [file, branch].filter(Boolean).join(' / ');
+                    return `
+                        <div class="border border-violet-500/10 rounded-md bg-violet-950/10 p-3 space-y-1">
+                            <div class="flex items-center justify-between gap-2">
+                                <div class="text-violet-300 text-[10px] font-mono uppercase tracking-widest">${meta ? escapeHtml(meta) : 'observation'}</div>
+                                <div class="text-[10px] font-mono text-zinc-500">${escapeHtml(when)}</div>
+                            </div>
+                            <div class="text-xs text-zinc-200 whitespace-pre-wrap font-mono leading-relaxed">${text}</div>
+                        </div>
+                    `;
+                }).join('')
+                : `<div class="text-zinc-600 italic text-sm text-center py-6">Marcus hasn't observed this project yet. Open the workspace in VS Code with Marcus Live running, and he'll start learning.</div>`;
+
+            const el = document.createElement('div');
+            el.className = 'space-y-3';
+            el.innerHTML = `
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center gap-2">
+                        <div class="w-6 h-6 rounded-full bg-violet-600/20 border border-violet-500/30 flex items-center justify-center">
+                            <i class="fa-solid fa-brain text-violet-400 text-[10px]"></i>
+                        </div>
+                        <div class="text-violet-300 text-xxs font-mono uppercase tracking-widest">Marcus's Notes</div>
+                    </div>
+                    <div class="text-zinc-500 text-[10px] font-mono">${notes.length} observation${notes.length === 1 ? '' : 's'}</div>
+                </div>
+                <div class="text-zinc-500 text-[10px] font-mono leading-relaxed border-b border-zinc-800 pb-2">
+                    Rolling knowledge base. Marcus watches you work and records what he learns about this project. He uses these notes to give better context-aware help.
+                </div>
+                <div class="space-y-2">${notesHtml}</div>
+            `;
+            panel.appendChild(el);
             return;
         }
     };

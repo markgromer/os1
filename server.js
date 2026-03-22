@@ -516,6 +516,7 @@ const EMPTY_STORE = {
   projectNoteEntries: {},
   projectChats: {},
   projectCommunications: {},
+  marcusNotes: {},
   inboxItems: [],
   projectTranscriptUndo: {},
 };
@@ -2429,6 +2430,7 @@ async function moveProjectsBetweenBusinesses({ sourceBusinessKey, destinationBus
   const sourceCommunications = sourceStore.projectCommunications && typeof sourceStore.projectCommunications === 'object' ? sourceStore.projectCommunications : {};
   const sourceTranscriptUndo = sourceStore.projectTranscriptUndo && typeof sourceStore.projectTranscriptUndo === 'object' ? sourceStore.projectTranscriptUndo : {};
   const sourceProjectNotes = sourceStore.projectNotes && typeof sourceStore.projectNotes === 'object' ? sourceStore.projectNotes : {};
+  const sourceMarcusNotes = sourceStore.marcusNotes && typeof sourceStore.marcusNotes === 'object' ? sourceStore.marcusNotes : {};
 
   const nextSourceScratchpads = { ...sourceScratchpads };
   const nextSourceNoteEntries = { ...sourceNoteEntries };
@@ -2436,6 +2438,7 @@ async function moveProjectsBetweenBusinesses({ sourceBusinessKey, destinationBus
   const nextSourceCommunications = { ...sourceCommunications };
   const nextSourceTranscriptUndo = { ...sourceTranscriptUndo };
   const nextSourceProjectNotes = { ...sourceProjectNotes };
+  const nextSourceMarcusNotes = { ...sourceMarcusNotes };
 
   const movedScratchpads = {};
   const movedNoteEntries = {};
@@ -2443,6 +2446,7 @@ async function moveProjectsBetweenBusinesses({ sourceBusinessKey, destinationBus
   const movedCommunications = {};
   const movedTranscriptUndo = {};
   const movedProjectNotes = {};
+  const movedMarcusNotes = {};
 
   for (const project of movedProjectsRaw) {
     const projectId = String(project?.id || '').trim();
@@ -2466,6 +2470,10 @@ async function moveProjectsBetweenBusinesses({ sourceBusinessKey, destinationBus
     if (Object.prototype.hasOwnProperty.call(nextSourceTranscriptUndo, projectId)) {
       movedTranscriptUndo[projectId] = nextSourceTranscriptUndo[projectId];
       delete nextSourceTranscriptUndo[projectId];
+    }
+    if (Object.prototype.hasOwnProperty.call(nextSourceMarcusNotes, projectId)) {
+      movedMarcusNotes[projectId] = nextSourceMarcusNotes[projectId];
+      delete nextSourceMarcusNotes[projectId];
     }
 
     const projectNoteKey = Object.keys(nextSourceProjectNotes).find((key) => normKey(key) === normKey(project?.name));
@@ -2499,6 +2507,10 @@ async function moveProjectsBetweenBusinesses({ sourceBusinessKey, destinationBus
     ...(destinationStore.projectNotes && typeof destinationStore.projectNotes === 'object' ? destinationStore.projectNotes : {}),
     ...movedProjectNotes,
   };
+  const nextDestinationMarcusNotes = {
+    ...(destinationStore.marcusNotes && typeof destinationStore.marcusNotes === 'object' ? destinationStore.marcusNotes : {}),
+    ...movedMarcusNotes,
+  };
 
   const movedSenderProjectMap = pickSenderProjectMapEntriesForProjectIds(sourceStore.senderProjectMap, movedProjectIds);
   const nextSourceSenderProjectMap = omitSenderProjectMapEntriesForProjectIds(sourceStore.senderProjectMap, movedProjectIds);
@@ -2524,6 +2536,7 @@ async function moveProjectsBetweenBusinesses({ sourceBusinessKey, destinationBus
     projectCommunications: nextSourceCommunications,
     projectTranscriptUndo: nextSourceTranscriptUndo,
     projectNotes: nextSourceProjectNotes,
+    marcusNotes: nextSourceMarcusNotes,
   };
 
   const nextDestinationStore = {
@@ -2539,6 +2552,7 @@ async function moveProjectsBetweenBusinesses({ sourceBusinessKey, destinationBus
     projectCommunications: nextDestinationCommunications,
     projectTranscriptUndo: nextDestinationTranscriptUndo,
     projectNotes: nextDestinationProjectNotes,
+    marcusNotes: nextDestinationMarcusNotes,
   };
 
   try {
@@ -2601,6 +2615,7 @@ function repairProjectsMissingIds(storeInput) {
   collectKeys(store.projectChats);
   collectKeys(store.projectCommunications);
   collectKeys(store.projectTranscriptUndo);
+  collectKeys(store.marcusNotes);
   for (const value of Object.values(senderMap)) {
     const mappedId = getSenderProjectIdFromMappingValue(value);
     if (mappedId && !usedIds.has(mappedId)) orphanIdSet.add(mappedId);
@@ -2692,6 +2707,7 @@ function repairProjectsMissingIds(storeInput) {
       projectChats: remapKeyedObject(store.projectChats),
       projectCommunications: remapKeyedObject(store.projectCommunications),
       projectTranscriptUndo: remapKeyedObject(store.projectTranscriptUndo),
+      marcusNotes: remapKeyedObject(store.marcusNotes),
     },
   };
 }
@@ -4044,6 +4060,7 @@ function normalizeStoreShape(parsed) {
   const projectNoteEntries = parsed.projectNoteEntries && typeof parsed.projectNoteEntries === 'object' ? parsed.projectNoteEntries : {};
   const projectChats = parsed.projectChats && typeof parsed.projectChats === 'object' ? parsed.projectChats : {};
   const projectCommunications = parsed.projectCommunications && typeof parsed.projectCommunications === 'object' ? parsed.projectCommunications : {};
+  const marcusNotes = parsed.marcusNotes && typeof parsed.marcusNotes === 'object' ? parsed.marcusNotes : {};
   const inboxItems = Array.isArray(parsed.inboxItems) ? parsed.inboxItems : [];
   const projectTranscriptUndo = parsed.projectTranscriptUndo && typeof parsed.projectTranscriptUndo === 'object' ? parsed.projectTranscriptUndo : {};
 
@@ -4060,6 +4077,7 @@ function normalizeStoreShape(parsed) {
     projectNoteEntries,
     projectChats,
     projectCommunications,
+    marcusNotes,
     inboxItems,
     projectTranscriptUndo,
   };
@@ -11782,6 +11800,31 @@ async function runProactiveAnalysis() {
     // Collect previous observations to avoid repeating
     const recentObs = marcusLiveObservations.slice(-5).map(o => o.text).join('\n');
 
+    // Also include recent Marcus Notes from the matched project for continuity
+    let existingNotesContext = '';
+    try {
+      const store = await readStore();
+      const allProjects = Array.isArray(store.projects) ? store.projects : [];
+      const folderLower = (wsData.folderName || '').toLowerCase();
+      const wsPathLower = (wsData.workspacePath || '').toLowerCase();
+      const mp = allProjects.find((p) => {
+        const wp = String(p?.workspacePath || '').trim();
+        const name = String(p?.name || '').trim();
+        if (wp && wsPathLower && (wsPathLower === wp.toLowerCase() || wsPathLower.replace(/\\/g, '/') === wp.toLowerCase().replace(/\\/g, '/'))) return true;
+        if (wp && folderLower && folderLower === wp.toLowerCase().replace(/\\/g, '/').split('/').pop()) return true;
+        if (wp && folderLower && folderLower === wp.toLowerCase().split('\\').pop()) return true;
+        if (name && folderLower && folderLower.includes(name.toLowerCase())) return true;
+        return false;
+      });
+      if (mp) {
+        const mNotes = Array.isArray(store.marcusNotes?.[mp.id]) ? store.marcusNotes[mp.id] : [];
+        if (mNotes.length) {
+          existingNotesContext = `\nYour previous notes on this project (last ${Math.min(10, mNotes.length)}):\n` +
+            mNotes.slice(-10).map(n => `- ${String(n.text || '').slice(0, 300)}`).join('\n');
+        }
+      }
+    } catch {}
+
     const systemPrompt = `You are M.A.R.C.U.S., a proactive pair programming partner observing your operator's workspace in real-time.
 
 Your job: Analyze the code they're actively working on and share observations WITHOUT being asked. Think of yourself as a sharp co-pilot who spots things.
@@ -11807,6 +11850,7 @@ RULES:
   * Cross-file relationships and dependencies you notice
 - If you see imports or references to files you don't have yet, add a final line: EXPLORE: path/to/file1, path/to/dir2
 - Do NOT repeat these recent observations:\n${recentObs || '(none yet)'}
+${existingNotesContext ? `\n${existingNotesContext}\nBuild on what you already know. Don't repeat old notes - add NEW insights.` : ''}
 - If nothing meaningful to say, respond with just: NOTHING_NEW
 - Keep it conversational and direct. No fluff.`;
 
@@ -11837,6 +11881,37 @@ RULES:
           marcusLiveObservations.push(obs);
           if (marcusLiveObservations.length > MARCUS_LIVE_MAX_OBS) marcusLiveObservations.shift();
           pushLiveEvent({ type: 'observation', ...obs });
+        }
+
+        // Save observations as Marcus Notes to the matched project
+        if (observations.length) {
+          try {
+            const store = await readStore();
+            const allProjects = Array.isArray(store.projects) ? store.projects : [];
+            const folderLower = (wsData.folderName || '').toLowerCase();
+            const wsPathLower = (wsData.workspacePath || '').toLowerCase();
+            const matchedProject = allProjects.find((p) => {
+              const wp = String(p?.workspacePath || '').trim();
+              const name = String(p?.name || '').trim();
+              if (wp && wsPathLower && (wsPathLower === wp.toLowerCase() || wsPathLower.replace(/\\/g, '/') === wp.toLowerCase().replace(/\\/g, '/'))) return true;
+              if (wp && folderLower && folderLower === wp.toLowerCase().replace(/\\/g, '/').split('/').pop()) return true;
+              if (wp && folderLower && folderLower === wp.toLowerCase().split('\\').pop()) return true;
+              if (name && folderLower && folderLower.includes(name.toLowerCase())) return true;
+              return false;
+            });
+            if (matchedProject) {
+              for (const text of observations) {
+                await appendMarcusNote(matchedProject.id, {
+                  id: makeId(),
+                  text,
+                  ts: Date.now(),
+                  activeFile: wsData.activeFile || '',
+                  branch: wsData.gitBranch || '',
+                  source: 'proactive',
+                });
+              }
+            }
+          } catch {}
         }
       }
     }
@@ -12054,6 +12129,42 @@ app.get('/api/projects/:id/notes', async (req, res) => {
   const notes = Array.isArray(store.projectNoteEntries?.[projectId]) ? store.projectNoteEntries[projectId] : [];
   res.json({ revision: store.revision, notes });
 });
+
+// ── Marcus Notes - rolling knowledge base per project ───────────
+app.get('/api/projects/:id/marcus-notes', async (req, res) => {
+  const projectId = req.params.id;
+  const store = await readStore();
+  const notes = Array.isArray(store.marcusNotes?.[projectId]) ? store.marcusNotes[projectId] : [];
+  res.json({ ok: true, notes });
+});
+
+// Internal helper: append a Marcus note to a project (no revision bump needed for internal use)
+async function appendMarcusNote(projectId, note) {
+  if (!projectId || !note) return;
+  return new Promise((resolve) => {
+    writeLock = writeLock.then(async () => {
+      try {
+        const store = await readStore();
+        const existing = Array.isArray(store.marcusNotes?.[projectId]) ? store.marcusNotes[projectId] : [];
+        // Cap at 200 notes per project, trim oldest
+        const updated = [...existing, note].slice(-200);
+        const nextStore = {
+          ...store,
+          revision: store.revision + 1,
+          updatedAt: nowIso(),
+          marcusNotes: {
+            ...(store.marcusNotes || {}),
+            [projectId]: updated,
+          },
+        };
+        await writeStore(nextStore);
+        resolve(true);
+      } catch {
+        resolve(false);
+      }
+    });
+  });
+}
 
 app.get('/api/projects/:id/chat', async (req, res) => {
   const projectId = req.params.id;
@@ -13270,6 +13381,19 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
           if (matchedProject) {
             dcLines.push(`- Matched project: "${String(matchedProject.name || '').trim()}" (workspace: ${String(matchedProject.workspacePath || '').trim()})`);
             dcLines.push(`  Use this to give context-aware responses. The operator is actively working on this project.`);
+
+            // Inject Marcus's accumulated knowledge about this project
+            const mNotes = Array.isArray(store.marcusNotes?.[matchedProject.id]) ? store.marcusNotes[matchedProject.id] : [];
+            if (mNotes.length) {
+              const recentNotes = mNotes.slice(-15);
+              dcLines.push(`\nYOUR NOTES ON THIS PROJECT (${mNotes.length} total, showing last ${recentNotes.length}):`);
+              dcLines.push(`These are observations you've recorded while watching the operator work on this project. Use them for context.`);
+              for (const n of recentNotes) {
+                const when = n.ts ? new Date(n.ts).toLocaleString() : '';
+                const file = n.activeFile ? ` [${n.activeFile}]` : '';
+                dcLines.push(`  - ${when}${file}: ${String(n.text || '').slice(0, 500)}`);
+              }
+            }
           } else {
             dcLines.push(`- No matched project. The operator may be working on something not yet tracked.`);
             dcLines.push(`  If they confirm they want to track it, use create_project, then inspect_workspace to learn about it.`);
