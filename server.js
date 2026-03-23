@@ -12042,8 +12042,13 @@ function pushLiveContext() {
       ramTotal: dc.systemHealth.memoryTotalGB,
       disks: dc.systemHealth.disks,
       defenderOk: dc.systemHealth.defender?.enabled && dc.systemHealth.defender?.realTimeProtection,
+      defender: dc.systemHealth.defender,
       threats: dc.systemHealth.recentThreats?.length || 0,
-      failedLogins: dc.systemHealth.failedLogins?.length || 0,
+      recentThreats: dc.systemHealth.recentThreats || [],
+      failedLogins: dc.systemHealth.failedLogins || [],
+      firewall: dc.systemHealth.firewall || [],
+      topProcesses: dc.systemHealth.topProcesses || [],
+      unusualListeners: dc.systemHealth.unusualListeners || [],
       uptime: dc.systemHealth.uptimeHours,
     };
   }

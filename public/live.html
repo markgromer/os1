@@ -299,6 +299,50 @@
     border: 1px solid rgba(34,197,94,0.25);
   }
 
+  .health-details {
+    margin-top: 6px;
+  }
+  .health-detail-section {
+    background: rgba(255,255,255,0.02);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    margin-bottom: 4px;
+    overflow: hidden;
+  }
+  .health-detail-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 8px;
+    font-size: 10px;
+    font-weight: 600;
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.15s;
+  }
+  .health-detail-header:hover { background: rgba(255,255,255,0.03); }
+  .health-detail-header .hd-icon { font-size: 9px; color: var(--muted); transition: transform 0.2s; }
+  .health-detail-header.expanded .hd-icon { transform: rotate(90deg); }
+  .health-detail-body {
+    display: none;
+    padding: 0 8px 6px 8px;
+    font-size: 10px;
+    line-height: 1.6;
+  }
+  .health-detail-body.open { display: block; }
+  .health-detail-row {
+    display: flex;
+    gap: 8px;
+    padding: 3px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+  }
+  .health-detail-row:last-child { border-bottom: none; }
+  .hdr-label { color: var(--muted); min-width: 70px; flex-shrink: 0; }
+  .hdr-value { word-break: break-all; }
+  .hdr-crit { color: var(--red); font-weight: 600; }
+  .hdr-warn { color: var(--amber); }
+  .hdr-time { color: var(--muted); font-size: 9px; margin-left: auto; white-space: nowrap; }
+
   /* Responsive */
   @media (max-width: 400px) {
     .context-bar { font-size: 9px; }
@@ -350,6 +394,7 @@
     </div>
   </div>
   <div class="health-alerts" id="health-alerts"></div>
+  <div class="health-details" id="health-details"></div>
 </div>
 
 <div class="feed" id="feed">
@@ -641,11 +686,19 @@
     // Alerts bar
     const alertsEl = document.getElementById('health-alerts');
     const alerts = [];
-    const threats = h.threats || h.recentThreats?.length || 0;
-    const logins = h.failedLogins?.length || h.failedLogins || 0;
-    if (threats > 0) alerts.push({ text: threats + ' threat(s) detected', cls: 'danger', icon: 'fa-bug' });
-    if (typeof logins === 'number' && logins > 0) alerts.push({ text: logins + ' failed login(s)', cls: 'danger', icon: 'fa-user-xmark' });
+    const threatList = Array.isArray(h.recentThreats) ? h.recentThreats : [];
+    const threatCount = threatList.length || (typeof h.threats === 'number' ? h.threats : 0);
+    const loginList = Array.isArray(h.failedLogins) ? h.failedLogins : [];
+    const loginCount = loginList.length;
+    const listenerList = Array.isArray(h.unusualListeners) ? h.unusualListeners : [];
+    const fwList = Array.isArray(h.firewall) ? h.firewall : [];
+    const fwOff = fwList.filter(f => !f.enabled);
+    const topProcs = Array.isArray(h.topProcesses) ? h.topProcesses : [];
+
+    if (threatCount > 0) alerts.push({ text: threatCount + ' threat(s) detected', cls: 'danger', icon: 'fa-bug' });
+    if (loginCount > 0) alerts.push({ text: loginCount + ' failed login(s)', cls: 'danger', icon: 'fa-user-xmark' });
     if (!defOk) alerts.push({ text: 'Defender issue', cls: 'danger', icon: 'fa-shield-halved' });
+    if (fwOff.length) alerts.push({ text: fwOff.length + ' firewall profile(s) off', cls: 'danger', icon: 'fa-shield-halved' });
     if (cpu > 90) alerts.push({ text: 'High CPU', cls: 'warning', icon: 'fa-fire' });
     if (ram > 90) alerts.push({ text: 'High RAM', cls: 'warning', icon: 'fa-memory' });
     if (disks.length && disks[0].usedPercent > 90) alerts.push({ text: 'Low disk space', cls: 'warning', icon: 'fa-hard-drive' });
@@ -656,9 +709,66 @@
       `<span class="health-alert-pill ${a.cls}"><i class="fa-solid ${a.icon}"></i> ${esc(a.text)}</span>`
     ).join('');
 
+    // Detail sections (threats, logins, listeners, top processes)
+    const detailsEl = document.getElementById('health-details');
+    const sections = [];
+
+    if (threatList.length) {
+      let rows = threatList.map(t => {
+        const when = t.time ? new Date(t.time).toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+        const actionMap = { 1: 'Detected', 2: 'Blocked', 3: 'Removed', 5: 'Allowed', 6: 'Quarantined' };
+        const action = actionMap[t.action] || 'Action ' + t.action;
+        return `<div class="health-detail-row"><span class="hdr-value hdr-crit"><i class="fa-solid fa-bug"></i> ${esc(t.threat || 'Unknown')}</span><span class="hdr-time">${esc(action)} - ${esc(when)}</span></div>`;
+      }).join('');
+      sections.push(buildDetailSection('fa-bug', 'Threats (' + threatList.length + ')', 'hdr-crit', rows, true));
+    }
+
+    if (loginList.length) {
+      let rows = loginList.map(l => {
+        const when = l.time ? new Date(l.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+        return `<div class="health-detail-row"><span class="hdr-label">User:</span><span class="hdr-value">${esc(l.user || '-')}</span><span class="hdr-label">IP:</span><span class="hdr-value">${esc(l.sourceIp || '-')}</span><span class="hdr-time">${esc(when)}</span></div>`;
+      }).join('');
+      sections.push(buildDetailSection('fa-user-xmark', 'Failed Logins (' + loginList.length + ')', 'hdr-crit', rows, true));
+    }
+
+    if (listenerList.length) {
+      let rows = listenerList.map(l =>
+        `<div class="health-detail-row"><span class="hdr-label">:${l.port}</span><span class="hdr-value">${esc(l.process || '?')}</span><span class="hdr-time">${esc(l.address || '')}</span></div>`
+      ).join('');
+      sections.push(buildDetailSection('fa-network-wired', 'Unusual Ports (' + listenerList.length + ')', 'hdr-warn', rows, false));
+    }
+
+    if (topProcs.length) {
+      let rows = topProcs.map(p =>
+        `<div class="health-detail-row"><span class="hdr-value">${esc(p.name)}</span><span class="hdr-time">CPU: ${p.cpu}s | ${p.memMB} MB</span></div>`
+      ).join('');
+      sections.push(buildDetailSection('fa-microchip', 'Top Processes', '', rows, false));
+    }
+
+    detailsEl.innerHTML = sections.join('');
+
+    // Wire up expand/collapse
+    detailsEl.querySelectorAll('.health-detail-header').forEach(hdr => {
+      hdr.addEventListener('click', () => {
+        hdr.classList.toggle('expanded');
+        hdr.nextElementSibling.classList.toggle('open');
+      });
+    });
+
     // Update toggle button color based on alerts
     const hasCrit = alerts.some(a => a.cls === 'danger');
     healthToggle.classList.toggle('alert', hasCrit);
+  }
+
+  function buildDetailSection(icon, title, titleCls, rowsHtml, startOpen) {
+    return `<div class="health-detail-section">
+      <div class="health-detail-header ${startOpen ? 'expanded' : ''}">
+        <i class="fa-solid fa-chevron-right hd-icon"></i>
+        <i class="fa-solid ${icon} ${titleCls}"></i>
+        <span class="${titleCls}">${esc(title)}</span>
+      </div>
+      <div class="health-detail-body ${startOpen ? 'open' : ''}">${rowsHtml}</div>
+    </div>`;
   }
 
   // Initial connect
