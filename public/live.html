@@ -418,6 +418,7 @@
   const ctxFiles = document.querySelector('#ctx-files span');
   const healthToggle = document.getElementById('health-toggle');
   const healthPanel = document.getElementById('health-panel');
+  const BASE = window.location.origin;
 
   // Health panel toggle
   healthToggle.addEventListener('click', () => {
@@ -428,23 +429,41 @@
   // Also fetch health on load
   (async function fetchInitialHealth() {
     try {
-      const token = getToken();
-      const headers = {};
-      if (token) headers['Authorization'] = 'Bearer ' + token;
-      const r = await fetch(BASE + '/api/desktop-context/health', { headers, credentials: 'include' });
+      const r = await fetch(BASE + '/api/desktop-context/health', { headers: buildAuthHeaders(), credentials: 'include' });
       const d = await r.json();
       if (d.available && d.health) updateHealthUI(d.health);
     } catch {}
   })();
 
-  // Get auth token from cookie
+  function getUrlToken() {
+    try {
+      return new URLSearchParams(window.location.search).get('token') || '';
+    } catch {
+      return '';
+    }
+  }
+
+  // Get auth token from URL or cookie. The normal login cookie is HttpOnly, so
+  // EventSource/fetch send it via credentials even when JavaScript cannot read it.
   function getToken() {
+    const urlToken = getUrlToken().trim();
+    if (urlToken) return urlToken;
     const match = document.cookie.match(/(?:^|;\s*)ops_admin_token=([^;]*)/);
     return match ? decodeURIComponent(match[1]) : '';
   }
 
-  // Determine base URL (same origin)
-  const BASE = window.location.origin;
+  function buildAuthHeaders(extra = {}) {
+    const headers = { ...extra };
+    const token = getToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+    return headers;
+  }
+
+  function setStatus(kind, label) {
+    const connected = kind === 'connected';
+    statusEl.className = `status ${connected ? 'connected' : 'disconnected'}`;
+    statusEl.innerHTML = `<span class="pulse${connected ? '' : ' off'}"></span>${esc(label)}`;
+  }
 
   function esc(s) {
     const d = document.createElement('div');
@@ -483,17 +502,73 @@
   // SSE Connection
   let es = null;
   let reconnectTimer = null;
+  let lastConnectionIssue = '';
 
-  function connect() {
+  function reportConnectionIssue(key, message) {
+    if (lastConnectionIssue === key) return;
+    lastConnectionIssue = key;
+    addMsg('system', message);
+  }
+
+  async function checkAuthStatus() {
+    const token = getToken();
+    const qs = token ? `?token=${encodeURIComponent(token)}` : '';
+    const resp = await fetch(`${BASE}/api/auth/status${qs}`, {
+      headers: buildAuthHeaders(),
+      credentials: 'include',
+      cache: 'no-store',
+    });
+    if (!resp.ok) throw new Error(`auth status ${resp.status}`);
+    return resp.json();
+  }
+
+  async function diagnoseDisconnect() {
+    try {
+      const auth = await checkAuthStatus();
+      if (auth?.authRequired && !auth?.authenticated) {
+        setStatus('disconnected', 'Login required');
+        reportConnectionIssue('auth', 'Login required: open the main M.A.R.C.U.S. app, sign in, then reopen Live.');
+        return false;
+      }
+    } catch {
+      // Fall through to the reachability probe below.
+    }
+
+    try {
+      const health = await fetch(`${BASE}/api/health`, { cache: 'no-store' });
+      if (!health.ok) throw new Error(`health ${health.status}`);
+      setStatus('disconnected', 'Disconnected');
+      reportConnectionIssue('sse', 'Live stream disconnected. Reconnecting...');
+      return true;
+    } catch {
+      setStatus('disconnected', 'Server unreachable');
+      reportConnectionIssue('server', 'Server unreachable: the app is not responding at this URL.');
+      return true;
+    }
+  }
+
+  async function connect() {
     if (es) { try { es.close(); } catch {} }
+    clearTimeout(reconnectTimer);
+
+    try {
+      const auth = await checkAuthStatus();
+      if (auth?.authRequired && !auth?.authenticated) {
+        setStatus('disconnected', 'Login required');
+        reportConnectionIssue('auth', 'Login required: open the main M.A.R.C.U.S. app, sign in, then reopen Live.');
+        return;
+      }
+    } catch {
+      setStatus('disconnected', 'Checking...');
+    }
 
     const token = getToken();
     const url = `${BASE}/api/marcus/live${token ? '?token=' + encodeURIComponent(token) : ''}`;
     es = new EventSource(url, { withCredentials: true });
 
     es.onopen = () => {
-      statusEl.className = 'status connected';
-      statusEl.innerHTML = '<span class="pulse"></span>Live';
+      setStatus('connected', 'Live');
+      lastConnectionIssue = '';
       addMsg('system', 'Connected to M.A.R.C.U.S. Live');
     };
 
@@ -504,13 +579,11 @@
       } catch {}
     };
 
-    es.onerror = () => {
-      statusEl.className = 'status disconnected';
-      statusEl.innerHTML = '<span class="pulse off"></span>Disconnected';
+    es.onerror = async () => {
       try { es.close(); } catch {}
-      // Reconnect after 5s
       clearTimeout(reconnectTimer);
-      reconnectTimer = setTimeout(connect, 5000);
+      const shouldReconnect = await diagnoseDisconnect();
+      if (shouldReconnect) reconnectTimer = setTimeout(connect, 5000);
     };
   }
 
@@ -580,13 +653,9 @@
     addMsg('chat-user', msg, { tag: 'you', time: timeStr(Date.now()) });
 
     try {
-      const token = getToken();
-      const headers = { 'Content-Type': 'application/json' };
-      if (token) headers['Authorization'] = `Bearer ${token}`;
-
       const resp = await fetch(`${BASE}/api/marcus/live/chat`, {
         method: 'POST',
-        headers,
+        headers: buildAuthHeaders({ 'Content-Type': 'application/json' }),
         credentials: 'include',
         body: JSON.stringify({ message: msg }),
       });
