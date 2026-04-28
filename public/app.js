@@ -11643,8 +11643,18 @@ function renderDashboard(container, sidePort) {
     // Marcus Live pop-out
     const marcusLiveBtn = wrap.querySelector('#dash-marcus-live-btn');
     if (marcusLiveBtn) {
-        marcusLiveBtn.addEventListener('click', () => {
-            window.open('/live.html', 'marcus-live', 'width=420,height=650,menubar=no,toolbar=no,location=no,status=no,resizable=yes');
+        marcusLiveBtn.addEventListener('click', async () => {
+            const features = 'width=420,height=650,menubar=no,toolbar=no,location=no,status=no,resizable=yes';
+            const popup = window.open('/live.html', 'marcus-live', features);
+            try {
+                const resp = await apiFetch('/api/marcus/live/session', { credentials: 'include' });
+                const data = await resp.json();
+                if (data?.ok && data.url && popup) {
+                    popup.location.href = data.url;
+                }
+            } catch {
+                // The already-opened fallback page will show the connection diagnostic.
+            }
         });
     }
 }

@@ -437,8 +437,43 @@ function extractBearerToken(req) {
   if (headerToken) return headerToken;
   const cookieToken = String(parseCookies(req)[AUTH_COOKIE_NAME] || '').trim();
   if (cookieToken) return cookieToken;
+  const liveToken = typeof req.query?.liveToken === 'string' ? req.query.liveToken.trim() : '';
+  if (liveToken) return liveToken;
   const queryToken = typeof req.query?.token === 'string' ? req.query.token.trim() : '';
   return queryToken;
+}
+
+const MARCUS_LIVE_SESSION_TTL_MS = 10 * 60 * 1000;
+const marcusLiveSessionTokens = new Map();
+
+function pruneMarcusLiveSessionTokens() {
+  const now = Date.now();
+  for (const [token, expiresAt] of marcusLiveSessionTokens.entries()) {
+    if (!Number.isFinite(expiresAt) || expiresAt <= now) marcusLiveSessionTokens.delete(token);
+  }
+}
+
+function createMarcusLiveSessionToken() {
+  pruneMarcusLiveSessionTokens();
+  const token = crypto.randomBytes(24).toString('base64url');
+  const expiresAt = Date.now() + MARCUS_LIVE_SESSION_TTL_MS;
+  marcusLiveSessionTokens.set(token, expiresAt);
+  return { token, expiresAt };
+}
+
+function isValidMarcusLiveSessionToken(token) {
+  const t = typeof token === 'string' ? token.trim() : '';
+  if (!t) return false;
+  pruneMarcusLiveSessionTokens();
+  return Boolean(marcusLiveSessionTokens.has(t));
+}
+
+function isMarcusLiveSessionRoute(req) {
+  const p = String(req?.path || '');
+  return p === '/api/marcus/live'
+    || p === '/api/marcus/live/chat'
+    || p === '/api/marcus/live/session-status'
+    || p === '/api/desktop-context/health';
 }
 
 // Optional auth for internet-hosting. If ADMIN_TOKEN is set, all /api/* routes require it
@@ -452,6 +487,7 @@ app.use((req, res, next) => {
 
     const token = extractBearerToken(req);
     if (token && safeTimingEqual(token, ADMIN_TOKEN)) return next();
+    if (isMarcusLiveSessionRoute(req) && isValidMarcusLiveSessionToken(token)) return next();
     res.status(401).json({ error: 'Unauthorized' });
   } catch {
     res.status(401).json({ error: 'Unauthorized' });
@@ -468,7 +504,7 @@ app.get('/api/auth/status', (req, res) => {
     return;
   }
   const token = extractBearerToken(req);
-  const authenticated = Boolean(token && safeTimingEqual(token, ADMIN_TOKEN));
+  const authenticated = Boolean(token && (safeTimingEqual(token, ADMIN_TOKEN) || isValidMarcusLiveSessionToken(token)));
   res.json({ ok: true, authRequired: true, authenticated });
 });
 
@@ -11668,6 +11704,26 @@ let lastProactiveHash = '';
 let lastProactiveAt = 0;
 const PROACTIVE_COOLDOWN_MS = 45_000;  // min 45s between analyses
 let proactiveRunning = false;
+
+app.get('/api/marcus/live/session', (req, res) => {
+  const { token, expiresAt } = createMarcusLiveSessionToken();
+  res.json({
+    ok: true,
+    token,
+    expiresAt,
+    ttlMs: MARCUS_LIVE_SESSION_TTL_MS,
+    url: `/live.html?liveToken=${encodeURIComponent(token)}`,
+  });
+});
+
+app.get('/api/marcus/live/session-status', (req, res) => {
+  const token = extractBearerToken(req);
+  const authenticated = Boolean(token && (
+    (ADMIN_TOKEN && safeTimingEqual(token, ADMIN_TOKEN))
+    || isValidMarcusLiveSessionToken(token)
+  ));
+  res.json({ ok: true, authRequired: Boolean(ADMIN_TOKEN), authenticated });
+});
 
 // SSE endpoint - Marcus Live feed
 app.get('/api/marcus/live', (req, res) => {

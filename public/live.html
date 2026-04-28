@@ -437,7 +437,8 @@
 
   function getUrlToken() {
     try {
-      return new URLSearchParams(window.location.search).get('token') || '';
+      const params = new URLSearchParams(window.location.search);
+      return params.get('liveToken') || params.get('token') || '';
     } catch {
       return '';
     }
@@ -513,7 +514,8 @@
   async function checkAuthStatus() {
     const token = getToken();
     const qs = token ? `?token=${encodeURIComponent(token)}` : '';
-    const resp = await fetch(`${BASE}/api/auth/status${qs}`, {
+    const endpoint = token ? '/api/marcus/live/session-status' : '/api/auth/status';
+    const resp = await fetch(`${BASE}${endpoint}${qs}`, {
       headers: buildAuthHeaders(),
       credentials: 'include',
       cache: 'no-store',
