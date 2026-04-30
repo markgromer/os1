@@ -291,7 +291,7 @@
   /* Command HUD */
   .command-stage {
     display: grid;
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: minmax(420px, 1fr) minmax(300px, 0.56fr);
     gap: 12px;
     padding: 10px 14px 12px;
     border-bottom: 1px solid var(--border);
@@ -452,7 +452,7 @@
     margin-top: 12px;
   }
   .command-side {
-    display: none;
+    display: grid;
     grid-template-rows: 1fr auto;
     gap: 10px;
   }
@@ -465,9 +465,9 @@
   }
   .signal-strip {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 6px;
-    margin-top: 12px;
+    margin-top: 8px;
   }
   .signal-strip span {
     min-width: 0;
@@ -481,6 +481,9 @@
     white-space: nowrap;
     background: rgba(255,255,255,0.025);
   }
+  .signal-strip span.good { color: var(--green); border-color: rgba(34,197,94,0.22); }
+  .signal-strip span.warn { color: var(--amber); border-color: rgba(245,158,11,0.28); }
+  .signal-strip span.bad { color: var(--red); border-color: rgba(239,68,68,0.32); }
   .voice-panel {
     display: flex;
     align-items: center;
@@ -652,8 +655,8 @@
     display: grid;
     gap: 8px;
     padding: 10px;
-    max-height: 238px;
-    overflow-y: auto;
+    max-height: none;
+    overflow: visible;
   }
   .next-move-card {
     display: grid;
@@ -1208,6 +1211,10 @@
       <div class="readout-main" id="readout-main">Waiting for live workspace context.</div>
       <div class="signal-strip">
         <span id="signal-focus">Focus: idle</span>
+        <span id="signal-context">Context: steady</span>
+        <span id="signal-messages">Messages: none</span>
+        <span id="signal-system">System: waiting</span>
+        <span id="signal-security">Security: waiting</span>
         <span id="signal-risk">Risk: nominal</span>
         <span id="signal-action">Action: none</span>
       </div>
@@ -1331,6 +1338,10 @@
   const drawerToggle = document.getElementById('drawer-toggle');
   const drawerSummary = document.getElementById('drawer-summary');
   const signalFocus = document.getElementById('signal-focus');
+  const signalContext = document.getElementById('signal-context');
+  const signalMessages = document.getElementById('signal-messages');
+  const signalSystem = document.getElementById('signal-system');
+  const signalSecurity = document.getElementById('signal-security');
   const signalRisk = document.getElementById('signal-risk');
   const signalAction = document.getElementById('signal-action');
   const voiceToggle = document.getElementById('voice-toggle');
@@ -1347,6 +1358,9 @@
     activeBrief: null,
     observationDigest: null,
     nextMoves: loadStoredArray('marcusLiveNextMoves'),
+    recentContexts: loadStoredArray('marcusLiveRecentContexts'),
+    lastBriefLoadAt: 0,
+    briefLoadTimer: null,
     dismissed: loadStoredSet('marcusLiveHudDismissed'),
     resolved: loadStoredSet('marcusLiveHudResolved'),
   };
@@ -1602,6 +1616,34 @@
     return raw.replace(/\s+/g, ' ');
   }
 
+  function rememberProjectContext(data) {
+    const workspace = String(data?.workspace || '').trim();
+    if (!workspace) return;
+    const entry = {
+      workspace,
+      workspacePath: String(data?.workspacePath || '').trim(),
+      branch: String(data?.branch || '').trim(),
+      activeFile: String(data?.activeFile || '').trim(),
+      ts: Date.now(),
+    };
+    const merged = [entry, ...liveState.recentContexts.filter(c => String(c.workspace || '') !== workspace)].slice(0, 6);
+    liveState.recentContexts = merged;
+    saveStoredArray('marcusLiveRecentContexts', merged, 8);
+  }
+
+  function recentProjectLabel() {
+    const names = liveState.recentContexts.map(c => String(c.workspace || '').trim()).filter(Boolean);
+    if (!names.length) return 'Context: steady';
+    return names.length === 1 ? `Context: ${names[0]}` : `Context: ${names.slice(0, 3).join(' / ')}`;
+  }
+
+  function setSignal(el, text, cls = '') {
+    if (!el) return;
+    el.textContent = text;
+    el.classList.remove('good', 'warn', 'bad');
+    if (cls) el.classList.add(cls);
+  }
+
   function humanizeTechnicalText(text) {
     const project = currentHumanProjectName();
     const raw = String(text || '').replace(/\s+/g, ' ').trim();
@@ -1808,7 +1850,7 @@
         ts: Number(move.ts) || Date.now(),
       });
     }
-    liveState.nextMoves = merged.slice(0, 4);
+    liveState.nextMoves = merged.slice(0, 3);
     saveStoredArray('marcusLiveNextMoves', liveState.nextMoves, 8);
   }
 
@@ -1907,6 +1949,7 @@
   }
 
   async function loadActiveBrief() {
+    liveState.lastBriefLoadAt = Date.now();
     try {
       const resp = await fetch(`${BASE}/api/marcus/active-brief`, {
         headers: buildAuthHeaders(),
@@ -1919,6 +1962,12 @@
         renderHud();
       }
     } catch {}
+  }
+
+  function scheduleActiveBriefLoad(delayMs = 800) {
+    clearTimeout(liveState.briefLoadTimer);
+    const elapsed = Date.now() - (liveState.lastBriefLoadAt || 0);
+    liveState.briefLoadTimer = setTimeout(loadActiveBrief, elapsed > 4000 ? delayMs : 3500);
   }
 
   function openHudItem(item) {
@@ -1970,6 +2019,33 @@
     return false;
   }
 
+  function updateGlanceSignals(items) {
+    const h = liveState.health || {};
+    const cpu = typeof h.cpu === 'number' ? h.cpu : (h.cpuPercent || 0);
+    const ram = typeof h.ram === 'number' ? h.ram : (h.memoryPercent || 0);
+    const disks = Array.isArray(h.disks) ? h.disks : [];
+    const disk = disks[0]?.usedPercent || 0;
+    const threatCount = Array.isArray(h.recentThreats) ? h.recentThreats.length : (Number(h.threats) || 0);
+    const failedLogins = Array.isArray(h.failedLogins) ? h.failedLogins.length : 0;
+    const fwOff = (Array.isArray(h.firewall) ? h.firewall : []).filter(f => !f.enabled).length;
+    const defenderOk = h.defenderOk !== undefined ? h.defenderOk : (h.defender?.enabled && h.defender?.realTimeProtection);
+    const conversations = Array.isArray(liveState.activeBrief?.conversations) ? liveState.activeBrief.conversations : [];
+    const actionable = liveState.activeBrief?.stats?.inboxActionable || conversations.filter(c => c.needsAction).length;
+    const critical = items.filter(i => i.priority === 'critical').length;
+    const warning = items.filter(i => i.priority === 'warning').length;
+
+    setSignal(signalFocus, liveState.context?.workspace ? `Focus: ${liveState.context.workspace}` : 'Focus: idle', liveState.context?.workspace ? 'good' : '');
+    setSignal(signalContext, recentProjectLabel(), liveState.recentContexts.length > 1 ? 'warn' : 'good');
+    setSignal(signalMessages, actionable ? `Messages: ${actionable} need action` : conversations.length ? `Messages: ${conversations.length} new` : 'Messages: clear', actionable ? 'warn' : conversations.length ? 'good' : '');
+    setSignal(signalSystem, cpu || ram || disk ? `System: CPU ${cpu}% RAM ${ram}%` : 'System: waiting', cpu > 90 || ram > 90 || disk > 92 ? 'bad' : cpu > 75 || ram > 82 || disk > 85 ? 'warn' : cpu || ram ? 'good' : '');
+    setSignal(signalSecurity, threatCount || failedLogins || fwOff || defenderOk === false
+      ? `Security: ${threatCount + failedLogins + fwOff + (defenderOk === false ? 1 : 0)} alert${(threatCount + failedLogins + fwOff + (defenderOk === false ? 1 : 0)) === 1 ? '' : 's'}`
+      : defenderOk === true ? 'Security: protected' : 'Security: waiting',
+      threatCount || failedLogins || fwOff || defenderOk === false ? 'bad' : defenderOk === true ? 'good' : '');
+    setSignal(signalRisk, critical ? `Risk: ${critical} critical` : warning ? `Risk: ${warning} warning` : 'Risk: nominal', critical ? 'bad' : warning ? 'warn' : 'good');
+    setSignal(signalAction, liveState.actions.length ? `Action: ${String(liveState.actions[liveState.actions.length - 1]?.action || 'logged')}` : 'Action: none', liveState.actions.length ? 'good' : '');
+  }
+
   function buildHealthHudItems(h) {
     if (!h) return [];
     const items = [];
@@ -2013,7 +2089,7 @@
       });
     }
 
-    (Array.isArray(brief.conversations) ? brief.conversations : []).slice(0, 2).forEach((conv, idx) => {
+    (Array.isArray(brief.conversations) ? brief.conversations : []).slice(0, 3).forEach((conv, idx) => {
       const projectName = conv.projectName ? humanProjectLabel(conv.projectName) : currentHumanProjectName();
       const who = conv.who || 'the client';
       items.push({
@@ -2099,24 +2175,14 @@
       });
     }
 
-    return filtered.slice(0, 3);
+    return filtered.slice(0, 5);
   }
 
   function renderHud() {
     const items = buildHudItems();
     const visibleItems = items.slice(0, 2);
     hudCountEl.textContent = items.length ? 'Now' : 'Quiet';
-    const critical = items.filter(i => i.priority === 'critical').length;
-    const warning = items.filter(i => i.priority === 'warning').length;
-    signalFocus.textContent = liveState.context?.workspace
-      ? `Focus: ${liveState.activeBrief?.activeProject?.name || liveState.context.workspace}`
-      : 'Focus: idle';
-    signalRisk.textContent = critical
-      ? `Risk: ${critical} critical`
-      : warning ? `Risk: ${warning} warning` : (liveState.activeBrief?.stats?.inboxActionable ? `Risk: ${liveState.activeBrief.stats.inboxActionable} conversation${liveState.activeBrief.stats.inboxActionable === 1 ? '' : 's'}` : 'Risk: nominal');
-    signalAction.textContent = liveState.actions.length
-      ? `Action: ${String(liveState.actions[liveState.actions.length - 1]?.action || 'logged')}`
-      : 'Action: none';
+    updateGlanceSignals(items);
     if (!items.length) {
       hudItemsEl.innerHTML = '<div class="hud-empty">Quiet right now. I’m watching, but nothing deserves your attention.</div>';
       readoutMain.textContent = 'Quiet right now. I’m watching, but nothing deserves your attention.';
@@ -2299,6 +2365,7 @@
 
       case 'context':
         liveState.context = { ...liveState.context, ...data };
+        rememberProjectContext(data);
         if (data.workspace) {
           ctxWorkspace.textContent = data.workspace;
           document.getElementById('ctx-workspace').classList.add('active');
@@ -2319,6 +2386,7 @@
         }
         if (data.systemHealth) updateHealthUI(data.systemHealth);
         setReadoutFromContext(data);
+        scheduleActiveBriefLoad(500);
         renderHud();
         break;
 
@@ -2600,7 +2668,7 @@
   renderActionTape();
   initVoiceLayer();
   loadActiveBrief();
-  setInterval(loadActiveBrief, 60_000);
+  setInterval(loadActiveBrief, 12_000);
   connect();
   input.focus();
 })();

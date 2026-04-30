@@ -6126,7 +6126,7 @@ function buildMarcusActiveBriefForStore({ store, settings, businessKey, business
     activeProjectId,
     activeProjectName: String(activeProject?.name || '').trim(),
     projects: projectCards.slice(0, 2),
-    conversations: conversationCards.slice(0, 2),
+    conversations: conversationCards.slice(0, 4),
     tasks: priorityTasks,
     messageDrafts,
     stats: {
@@ -6157,7 +6157,7 @@ async function buildMarcusActiveBrief() {
   }
 
   const projects = briefs.flatMap((b) => b.projects || []).sort((a, b) => (b.score - a.score)).slice(0, 3);
-  const conversations = briefs.flatMap((b) => b.conversations || []).sort((a, b) => (b.score - a.score)).slice(0, 3);
+  const conversations = briefs.flatMap((b) => b.conversations || []).sort((a, b) => (b.score - a.score)).slice(0, 6);
   const tasks = briefs.flatMap((b) => b.tasks || []).slice(0, 4);
   const messageDrafts = briefs.flatMap((b) => b.messageDrafts || []).slice(0, 1);
   const active = briefs.find((b) => b.activeProjectId) || null;
@@ -11972,7 +11972,7 @@ let marcusLiveActions = [];            // recent HUD actions taken by the operat
 const MARCUS_LIVE_MAX_ACTIONS = 80;
 let lastProactiveHash = '';
 let lastProactiveAt = 0;
-const PROACTIVE_COOLDOWN_MS = 45_000;  // min 45s between analyses
+const PROACTIVE_COOLDOWN_MS = 20_000;  // keep up when Mark bounces between projects
 let proactiveRunning = false;
 
 function rememberMarcusLiveAction(action) {
@@ -12483,11 +12483,11 @@ function pushLiveContext() {
   if (evt) pushLiveEvent(evt);
 }
 
-// Proactive analysis timer - check every 15s if analysis should run
+// Proactive analysis timer - keep live context responsive as Mark switches windows.
 setInterval(() => {
   pushLiveContext();
   runProactiveAnalysis();
-}, 15_000);
+}, 5_000);
 
 app.post('/api/projects/:id/template', async (req, res) => {
   const projectId = req.params.id;
