@@ -1539,7 +1539,8 @@
       return;
     }
     const latest = observations[observations.length - 1];
-    const riskCount = observations.filter(o => /security|defender|firewall|failed login|critical|secret|auth|token|risk/i.test(o.text || '')).length;
+    const issuePattern = /security|defender|firewall|failed login|critical|secret|auth|token|risk|deploy|build|docker|playwright|cron|api|bug|error|fail|invalid|missing|undefined|nan/i;
+    const riskCount = observations.filter(o => issuePattern.test(o.text || '')).length;
     const workspaces = [...new Set(observations.map(o => String(o.workspace || '').trim()).filter(Boolean))].slice(0, 3);
     liveState.observationDigest = {
       id: 'observation-digest',
@@ -1549,6 +1550,80 @@
       workspaces,
     };
     updateDrawerSummary();
+  }
+
+  function buildCodexHandoffPrompt(item) {
+    const workspace = String(liveState.context?.workspace || currentHumanProjectName() || '').trim();
+    const workspacePath = String(liveState.context?.workspacePath || '').trim();
+    const branch = String(liveState.context?.branch || '').trim();
+    const activeFile = String(liveState.context?.activeFile || '').trim();
+    const changedFiles = Array.isArray(liveState.context?.changedFiles)
+      ? liveState.context.changedFiles.map(f => String(f || '').trim()).filter(Boolean).slice(0, 8)
+      : [];
+    const digest = liveState.observationDigest || {};
+    const issue = String(item?.sourceText || digest.latestText || item?.detail || item?.title || '').replace(/\s+/g, ' ').trim();
+    const lines = [
+      'You are Codex working on a MARCUS-flagged issue.',
+      '',
+      `Project/workspace: ${workspace || 'unknown'}`,
+      workspacePath ? `Workspace path: ${workspacePath}` : '',
+      branch ? `Branch: ${branch}` : '',
+      activeFile ? `Active file: ${activeFile}` : '',
+      changedFiles.length ? `Recent changed files: ${changedFiles.join(', ')}` : '',
+      '',
+      'Plain-English issue:',
+      issue || 'MARCUS flagged this work area as needing investigation.',
+      '',
+      'Goal:',
+      'Find the real bug or risk, make the smallest safe fix, and keep the change scoped.',
+      '',
+      'Instructions:',
+      '- Inspect the relevant code before editing.',
+      '- Do not rewrite unrelated areas.',
+      '- Prefer existing project patterns.',
+      '- Add or update focused tests if the repo has a reasonable test path.',
+      '- Run the most relevant verification command you can.',
+      '- Summarize exactly what changed, what you verified, and any remaining risk.',
+      '',
+      'Acceptance check:',
+      '- The flagged issue is fixed or clearly explained if no code change is needed.',
+      '- The app still starts or the relevant tests/checks pass.',
+    ].filter(Boolean);
+    return lines.join('\n');
+  }
+
+  async function copyTextToClipboard(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      const box = document.createElement('textarea');
+      box.value = text;
+      box.setAttribute('readonly', '');
+      box.style.position = 'fixed';
+      box.style.opacity = '0';
+      document.body.appendChild(box);
+      box.select();
+      let copied = false;
+      try { copied = document.execCommand('copy'); } catch {}
+      box.remove();
+      return copied;
+    }
+  }
+
+  async function prepareCodexHandoff(item) {
+    const prompt = item.codexPrompt || buildCodexHandoffPrompt(item);
+    try { window.open('https://chatgpt.com/codex', '_blank', 'noopener'); } catch {}
+    const copied = await copyTextToClipboard(prompt);
+    recordHudAction({ ...item, target: 'codex-cloud' }, 'codex_handoff');
+    addMsg(
+      'chat-marcus',
+      copied
+        ? 'I copied the Codex prompt and opened Codex Cloud. Paste it there, or into the VS Code Codex extension, and let it run.'
+        : 'I prepared the Codex prompt, but the browser blocked clipboard access. I put it in the message box so you can grab it.',
+      { tag: 'codex', time: timeStr(Date.now()) }
+    );
+    if (!copied) input.value = prompt;
   }
 
   async function recordHudAction(item, action) {
@@ -1607,7 +1682,9 @@
   }
 
   function openHudItem(item) {
-    if (item.targetType === 'health') {
+    if (item.codexPrompt) {
+      prepareCodexHandoff(item);
+    } else if (item.targetType === 'health') {
       healthPanel.classList.add('visible');
       healthToggle.classList.add('active');
     } else if (item.targetType === 'file' && item.target) {
@@ -1623,7 +1700,7 @@
       input.focus();
       sendChat();
     }
-    recordHudAction(item, 'open');
+    if (!item.codexPrompt) recordHudAction(item, 'open');
   }
 
   function resolveHudItem(item) {
@@ -1749,7 +1826,7 @@
 
     if (liveState.observationDigest?.riskCount) {
       const digest = liveState.observationDigest;
-      items.push({
+      const item = {
         id: digest.id,
         kind: 'observation-digest',
         priority: 'warning',
@@ -1757,8 +1834,11 @@
         title: `There’s an issue in ${currentHumanProjectName()}.`,
         detail: humanizeTechnicalText(digest.latestText),
         targetType: '',
+        sourceText: digest.latestText || '',
         prompt: `Summarize these recent Marcus Live observations into only the decisions and next actions that matter. Do not list every observation. Latest: "${digest.latestText || ''}"`,
-      });
+      };
+      item.codexPrompt = buildCodexHandoffPrompt(item);
+      items.push(item);
     }
 
     const filtered = items
@@ -1816,7 +1896,7 @@
           <div class="hud-detail">${esc(item.detail || '')}</div>
         </div>
         <div class="hud-actions">
-          <button class="hud-btn primary action-text" type="button" data-hud-action="open" title="Open or focus"><i class="fa-solid fa-wand-magic-sparkles"></i><span>Prep it</span></button>
+          <button class="hud-btn primary action-text" type="button" data-hud-action="open" title="${item.codexPrompt ? 'Copy Codex prompt and open Codex Cloud' : 'Open or prep'}"><i class="fa-solid ${item.codexPrompt ? 'fa-code' : 'fa-wand-magic-sparkles'}"></i><span>${item.codexPrompt ? 'Codex' : 'Prep it'}</span></button>
           <button class="hud-btn action-text" type="button" data-hud-action="done" title="Mark action taken"><i class="fa-solid fa-check"></i><span>Done</span></button>
           <button class="hud-btn" type="button" data-hud-action="dismiss" title="Remove from HUD"><i class="fa-solid fa-xmark"></i></button>
         </div>
