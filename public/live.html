@@ -288,6 +288,207 @@
   }
   .quick-action i { font-size: 9px; color: var(--accent); }
 
+  /* Command HUD */
+  .command-stage {
+    display: grid;
+    grid-template-columns: minmax(340px, 1.15fr) minmax(280px, 0.85fr);
+    gap: 12px;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border);
+    background:
+      linear-gradient(90deg, rgba(56,189,248,0.08), transparent 24%, rgba(45,212,191,0.07) 72%, transparent),
+      rgba(6,10,15,0.38);
+    flex-shrink: 0;
+  }
+  .command-core-panel,
+  .command-side,
+  .voice-panel {
+    min-width: 0;
+  }
+  .command-core-panel {
+    position: relative;
+    display: grid;
+    grid-template-columns: 142px minmax(0, 1fr);
+    align-items: center;
+    gap: 16px;
+    min-height: 188px;
+    padding: 18px;
+    border: 1px solid var(--border-strong);
+    border-radius: 10px;
+    overflow: hidden;
+    background:
+      radial-gradient(circle at 18% 50%, rgba(56,189,248,0.2), transparent 33%),
+      linear-gradient(135deg, rgba(10,20,31,0.92), rgba(3,9,15,0.68));
+    box-shadow: var(--shadow), inset 0 0 48px rgba(56,189,248,0.04);
+  }
+  .command-core-panel::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: linear-gradient(110deg, transparent 0 34%, rgba(125,211,252,0.1) 44%, transparent 54% 100%);
+    transform: translateX(-70%);
+    animation: stageSweep 7s ease-in-out infinite;
+  }
+  @keyframes stageSweep {
+    0%, 35% { transform: translateX(-85%); opacity: 0; }
+    48% { opacity: 1; }
+    70%, 100% { transform: translateX(85%); opacity: 0; }
+  }
+  .core-stack {
+    position: relative;
+    display: grid;
+    place-items: center;
+    min-height: 142px;
+  }
+  .command-core-panel .assistant-core {
+    width: 118px;
+    background:
+      radial-gradient(circle, rgba(237,247,255,1) 0 5%, rgba(125,211,252,0.96) 6% 11%, rgba(45,212,191,0.26) 12% 30%, transparent 31%),
+      repeating-conic-gradient(from 12deg, rgba(56,189,248,0.08) 0 12deg, rgba(45,212,191,0.68) 13deg 17deg, rgba(167,139,250,0.24) 18deg 23deg, rgba(56,189,248,0.08) 24deg 37deg);
+    box-shadow: 0 0 42px rgba(56,189,248,0.36), inset 0 0 30px rgba(237,247,255,0.12);
+  }
+  .core-reticle,
+  .core-scan {
+    position: absolute;
+    inset: 50%;
+    pointer-events: none;
+  }
+  .core-reticle::before,
+  .core-reticle::after {
+    content: "";
+    position: absolute;
+    background: rgba(237,247,255,0.46);
+  }
+  .core-reticle::before {
+    width: 96px;
+    height: 1px;
+    transform: translate(-50%, -50%);
+  }
+  .core-reticle::after {
+    width: 1px;
+    height: 96px;
+    transform: translate(-50%, -50%);
+  }
+  .core-scan {
+    width: 58px;
+    height: 58px;
+    border-radius: 50%;
+    border-top: 2px solid rgba(45,212,191,0.85);
+    transform: translate(-50%, -50%);
+    animation: coreSpin 1.8s linear infinite;
+    filter: drop-shadow(0 0 10px rgba(45,212,191,0.55));
+  }
+  .voice-wave {
+    position: absolute;
+    left: 50%;
+    bottom: 2px;
+    display: flex;
+    gap: 4px;
+    transform: translateX(-50%);
+    opacity: 0.42;
+  }
+  .voice-wave span {
+    width: 4px;
+    height: 12px;
+    border-radius: 999px;
+    background: var(--accent);
+    transform-origin: bottom;
+  }
+  body.speaking .voice-wave,
+  body.listening .voice-wave { opacity: 1; }
+  body.speaking .voice-wave span,
+  body.listening .voice-wave span {
+    animation: wavePulse 0.72s ease-in-out infinite;
+  }
+  body.speaking .voice-wave span:nth-child(2),
+  body.listening .voice-wave span:nth-child(2) { animation-delay: 0.08s; }
+  body.speaking .voice-wave span:nth-child(3),
+  body.listening .voice-wave span:nth-child(3) { animation-delay: 0.16s; }
+  body.speaking .voice-wave span:nth-child(4),
+  body.listening .voice-wave span:nth-child(4) { animation-delay: 0.24s; }
+  body.speaking .voice-wave span:nth-child(5),
+  body.listening .voice-wave span:nth-child(5) { animation-delay: 0.32s; }
+  @keyframes wavePulse {
+    0%, 100% { transform: scaleY(0.55); }
+    50% { transform: scaleY(1.75); }
+  }
+  .command-core-panel .presence-title {
+    font-size: clamp(22px, 3.1vw, 42px);
+    line-height: 1;
+    letter-spacing: 0;
+  }
+  .command-core-panel .presence-status {
+    max-width: 720px;
+    white-space: normal;
+    font-size: 13px;
+    color: #9fb1c6;
+  }
+  .command-core-panel .quick-actions {
+    margin-top: 14px;
+  }
+  .command-side {
+    display: grid;
+    grid-template-rows: 1fr auto;
+    gap: 10px;
+  }
+  .command-side .readout-panel,
+  .voice-panel {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: rgba(6,13,21,0.74);
+    box-shadow: inset 0 0 36px rgba(56,189,248,0.035);
+  }
+  .signal-strip {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+    margin-top: 12px;
+  }
+  .signal-strip span {
+    min-width: 0;
+    padding: 6px 8px;
+    border: 1px solid rgba(125,211,252,0.14);
+    border-radius: 7px;
+    color: var(--muted);
+    font-size: 10px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    background: rgba(255,255,255,0.025);
+  }
+  .voice-panel {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px;
+  }
+  .voice-status {
+    color: var(--muted);
+    font-size: 11px;
+    margin-top: 4px;
+  }
+  .voice-controls {
+    display: flex;
+    gap: 7px;
+  }
+  .voice-btn {
+    width: 34px;
+    height: 34px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: rgba(255,255,255,0.035);
+    color: var(--muted);
+    cursor: pointer;
+  }
+  .voice-btn:hover,
+  .voice-btn.active {
+    color: var(--text);
+    border-color: var(--border-strong);
+    background: rgba(56,189,248,0.12);
+  }
+
   /* Adaptive HUD */
   .hud-shell {
     display: grid;
@@ -713,7 +914,50 @@
       padding: 4px 7px;
       z-index: 8;
     }
-    .assistant-deck { grid-template-columns: 1fr; }
+    .context-bar {
+      flex-wrap: nowrap;
+      overflow-x: auto;
+      padding-right: 8px;
+    }
+    .ctx-pill { flex: 0 0 auto; }
+    .command-stage {
+      grid-template-columns: minmax(0, 1fr);
+      padding: 10px 14px;
+    }
+    .command-core-panel {
+      grid-template-columns: minmax(0, 1fr);
+      min-height: 148px;
+      padding: 12px;
+      text-align: center;
+    }
+    .core-stack { min-height: 92px; }
+    .command-core-panel .assistant-core { width: 74px; }
+    .core-reticle::before { width: 62px; }
+    .core-reticle::after { height: 62px; }
+    .command-core-panel .presence-title {
+      font-size: 24px;
+      line-height: 1.08;
+      overflow-wrap: anywhere;
+    }
+    .command-core-panel .presence-status {
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+    .command-core-panel .quick-actions {
+      justify-content: center;
+      max-width: 100%;
+    }
+    .command-side { grid-template-columns: minmax(0, 1fr); }
+    .voice-panel {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      justify-items: start;
+    }
+    .voice-controls {
+      width: 100%;
+      justify-content: flex-start;
+    }
+    .signal-strip { grid-template-columns: 1fr; }
     .hud-shell { grid-template-columns: 1fr; }
     .hud-items,
     .action-tape { max-height: 132px; }
@@ -768,27 +1012,56 @@
   <button class="health-toggle" id="health-toggle" title="System Health"><i class="fa-solid fa-heartbeat"></i> SYS</button>
 </div>
 
-<div class="assistant-deck">
-  <section class="presence-panel" aria-label="Assistant status">
-    <div class="assistant-core" id="assistant-core"></div>
+<div class="command-stage">
+  <section class="command-core-panel" aria-label="MARCUS command field">
+    <div class="core-stack">
+      <div class="assistant-core" id="assistant-core">
+        <span class="core-reticle"></span>
+        <span class="core-scan"></span>
+      </div>
+      <div class="voice-wave" id="voice-meter">
+        <span></span><span></span><span></span><span></span><span></span>
+      </div>
+    </div>
     <div class="presence-copy">
-      <div class="presence-kicker">Personal Assistant</div>
-      <div class="presence-title">Standing by, Mark.</div>
-      <div class="presence-status" id="presence-status">Watching the workspace for useful signals.</div>
+      <div class="presence-kicker">Live Command HUD</div>
+      <div class="presence-title">M.A.R.C.U.S. is online.</div>
+      <div class="presence-status" id="presence-status">Watching your workspace, system state, and action trail.</div>
+      <div class="quick-actions">
+        <button class="quick-action" type="button" data-command="Give me the current readout. What matters right now?"><i class="fa-solid fa-crosshairs"></i> Readout</button>
+        <button class="quick-action" type="button" data-command="Scan the current workspace for risks, blockers, and the next best move."><i class="fa-solid fa-radar"></i> Scan</button>
+        <button class="quick-action" type="button" data-command="What should I do next? Keep it short and decisive."><i class="fa-solid fa-route"></i> Next Move</button>
+        <button class="quick-action" type="button" id="voice-brief"><i class="fa-solid fa-volume-high"></i> Voice Brief</button>
+      </div>
     </div>
   </section>
-  <section class="readout-panel" aria-label="Current readout">
-    <div class="readout-top">
-      <span class="readout-label">Current Readout</span>
-      <span class="readout-signal"></span>
-    </div>
-    <div class="readout-main" id="readout-main">Waiting for live workspace context.</div>
-    <div class="quick-actions">
-      <button class="quick-action" type="button" data-command="Give me the current readout. What matters right now?"><i class="fa-solid fa-crosshairs"></i> Readout</button>
-      <button class="quick-action" type="button" data-command="Scan the current workspace for risks, blockers, and the next best move."><i class="fa-solid fa-radar"></i> Scan</button>
-      <button class="quick-action" type="button" data-command="What should I do next? Keep it short and decisive."><i class="fa-solid fa-route"></i> Next Move</button>
-    </div>
-  </section>
+
+  <aside class="command-side" aria-label="Live readout and voice controls">
+    <section class="readout-panel" aria-label="Current readout">
+      <div class="readout-top">
+        <span class="readout-label">Tactical Readout</span>
+        <span class="readout-signal"></span>
+      </div>
+      <div class="readout-main" id="readout-main">Waiting for live workspace context.</div>
+      <div class="signal-strip">
+        <span id="signal-focus">Focus: idle</span>
+        <span id="signal-risk">Risk: nominal</span>
+        <span id="signal-action">Action: none</span>
+      </div>
+    </section>
+
+    <section class="voice-panel" aria-label="Voice controls">
+      <div>
+        <div class="readout-label">Voice Layer</div>
+        <div class="voice-status" id="voice-status">Browser voice standby</div>
+      </div>
+      <div class="voice-controls">
+        <button class="voice-btn" type="button" id="voice-toggle" title="Toggle spoken responses"><i class="fa-solid fa-volume-xmark"></i></button>
+        <button class="voice-btn" type="button" id="voice-listen" title="Push to talk"><i class="fa-solid fa-microphone"></i></button>
+        <button class="voice-btn" type="button" id="voice-replay" title="Replay last response"><i class="fa-solid fa-rotate-left"></i></button>
+      </div>
+    </section>
+  </aside>
 </div>
 
 <div class="hud-shell">
@@ -872,14 +1145,31 @@
   const hudCountEl = document.getElementById('hud-count');
   const actionTapeEl = document.getElementById('action-tape');
   const actionCountEl = document.getElementById('action-count');
+  const signalFocus = document.getElementById('signal-focus');
+  const signalRisk = document.getElementById('signal-risk');
+  const signalAction = document.getElementById('signal-action');
+  const voiceToggle = document.getElementById('voice-toggle');
+  const voiceListen = document.getElementById('voice-listen');
+  const voiceReplay = document.getElementById('voice-replay');
+  const voiceBrief = document.getElementById('voice-brief');
+  const voiceStatus = document.getElementById('voice-status');
   const BASE = window.location.origin;
   const liveState = {
     context: {},
     health: null,
     observations: [],
     actions: [],
+    activeBrief: null,
     dismissed: loadStoredSet('marcusLiveHudDismissed'),
     resolved: loadStoredSet('marcusLiveHudResolved'),
+  };
+  const voiceState = {
+    enabled: localStorage.getItem('marcusLiveVoiceEnabled') === 'true',
+    provider: 'browser',
+    lastText: '',
+    audio: null,
+    recognition: null,
+    listening: false,
   };
 
   // Health panel toggle
@@ -936,6 +1226,152 @@
     } catch {}
   }
 
+  function updateVoiceUi() {
+    voiceToggle.classList.toggle('active', voiceState.enabled);
+    voiceToggle.innerHTML = voiceState.enabled
+      ? '<i class="fa-solid fa-volume-high"></i>'
+      : '<i class="fa-solid fa-volume-xmark"></i>';
+    const providerLabel = voiceState.provider === 'elevenlabs' ? 'ElevenLabs voice' : 'Browser voice';
+    if (voiceState.listening) {
+      voiceStatus.textContent = 'Listening. Speak your command.';
+    } else if (document.body.classList.contains('speaking')) {
+      voiceStatus.textContent = providerLabel + ' speaking.';
+    } else {
+      voiceStatus.textContent = providerLabel + (voiceState.enabled ? ' armed.' : ' muted.');
+    }
+  }
+
+  async function initVoiceLayer() {
+    try {
+      const resp = await fetch(`${BASE}/api/marcus/live/voice/status`, {
+        headers: buildAuthHeaders(),
+        credentials: 'include',
+        cache: 'no-store',
+      });
+      const data = await resp.json();
+      voiceState.provider = data?.provider === 'elevenlabs' ? 'elevenlabs' : 'browser';
+    } catch {
+      voiceState.provider = 'browser';
+    }
+
+    const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition || null;
+    if (Recognition) {
+      voiceState.recognition = new Recognition();
+      voiceState.recognition.lang = 'en-US';
+      voiceState.recognition.interimResults = false;
+      voiceState.recognition.maxAlternatives = 1;
+      voiceState.recognition.onstart = () => {
+        voiceState.listening = true;
+        document.body.classList.add('listening');
+        updateVoiceUi();
+      };
+      voiceState.recognition.onend = () => {
+        voiceState.listening = false;
+        document.body.classList.remove('listening');
+        updateVoiceUi();
+      };
+      voiceState.recognition.onresult = (evt) => {
+        const transcript = String(evt.results?.[0]?.[0]?.transcript || '').trim();
+        if (transcript) {
+          input.value = transcript;
+          sendChat();
+        }
+      };
+      voiceState.recognition.onerror = () => {
+        voiceState.listening = false;
+        document.body.classList.remove('listening');
+        updateVoiceUi();
+      };
+    } else {
+      voiceListen.disabled = true;
+      voiceListen.title = 'Speech recognition is not available in this browser';
+    }
+    updateVoiceUi();
+  }
+
+  function cleanSpeechText(text) {
+    return String(text || '')
+      .replace(/\s+/g, ' ')
+      .replace(/[|*_`#>\[\]{}]/g, '')
+      .trim()
+      .slice(0, 520);
+  }
+
+  function chooseBrowserVoice() {
+    if (!('speechSynthesis' in window)) return null;
+    const voices = window.speechSynthesis.getVoices();
+    return voices.find(v => /Microsoft Guy|Microsoft Davis|Google US English|Daniel|Alex/i.test(v.name))
+      || voices.find(v => /en-US|en_GB|en-/i.test(v.lang))
+      || voices[0]
+      || null;
+  }
+
+  async function speakText(text, { force = false } = {}) {
+    const speech = cleanSpeechText(text);
+    if (!speech) return;
+    voiceState.lastText = speech;
+    if (!voiceState.enabled && !force) return;
+
+    try {
+      if (voiceState.audio) {
+        voiceState.audio.pause();
+        voiceState.audio = null;
+      }
+      if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+    } catch {}
+
+    document.body.classList.add('speaking');
+    updateVoiceUi();
+
+    if (voiceState.provider === 'elevenlabs') {
+      try {
+        const resp = await fetch(`${BASE}/api/marcus/live/voice/speak`, {
+          method: 'POST',
+          headers: buildAuthHeaders({ 'Content-Type': 'application/json' }),
+          credentials: 'include',
+          body: JSON.stringify({ text: speech }),
+        });
+        if (!resp.ok) throw new Error('voice ' + resp.status);
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
+        voiceState.audio = audio;
+        audio.onended = () => {
+          URL.revokeObjectURL(url);
+          document.body.classList.remove('speaking');
+          updateVoiceUi();
+        };
+        audio.onerror = () => {
+          URL.revokeObjectURL(url);
+          document.body.classList.remove('speaking');
+          updateVoiceUi();
+        };
+        await audio.play();
+        return;
+      } catch {
+        voiceState.provider = 'browser';
+      }
+    }
+
+    if (!('speechSynthesis' in window)) {
+      document.body.classList.remove('speaking');
+      updateVoiceUi();
+      return;
+    }
+    const utterance = new SpeechSynthesisUtterance(speech);
+    const picked = chooseBrowserVoice();
+    if (picked) utterance.voice = picked;
+    utterance.rate = 0.96;
+    utterance.pitch = 0.86;
+    utterance.volume = 0.95;
+    utterance.onend = () => {
+      document.body.classList.remove('speaking');
+      updateVoiceUi();
+    };
+    utterance.onerror = utterance.onend;
+    window.speechSynthesis.speak(utterance);
+  }
+
   function setStatus(kind, label) {
     const connected = kind === 'connected';
     statusEl.className = `status ${connected ? 'connected' : 'disconnected'}`;
@@ -977,6 +1413,11 @@
     if (type === 'chat-marcus' || type === 'observation') {
       presenceStatus.textContent = type === 'observation' ? 'New signal surfaced.' : 'Response delivered.';
       readoutMain.textContent = text.length > 180 ? text.slice(0, 177) + '...' : text;
+      if (type === 'chat-marcus') {
+        speakText(text);
+      } else if (/threat|defender|firewall|failed login|security|critical|blocked|risk/i.test(text || '')) {
+        speakText('Heads up. ' + text);
+      }
     }
     assistantCore.classList.toggle('thinking', type === 'thinking');
 
@@ -1032,6 +1473,21 @@
     return base.replace(/[\\/]+$/, '') + '/' + rel;
   }
 
+  async function loadActiveBrief() {
+    try {
+      const resp = await fetch(`${BASE}/api/marcus/active-brief`, {
+        headers: buildAuthHeaders(),
+        credentials: 'include',
+        cache: 'no-store',
+      });
+      const data = await resp.json();
+      if (data?.ok) {
+        liveState.activeBrief = data;
+        renderHud();
+      }
+    } catch {}
+  }
+
   function openHudItem(item) {
     if (item.targetType === 'health') {
       healthPanel.classList.add('visible');
@@ -1040,6 +1496,10 @@
       window.open(toVsCodeUrl(workspaceFilePath(item.target)), '_blank');
     } else if (item.targetType === 'workspace') {
       window.open(toVsCodeUrl(liveState.context.workspacePath || ''), '_blank');
+    } else if (item.targetType === 'project' || item.targetType === 'conversation' || item.targetType === 'draft') {
+      input.value = item.prompt || `Brief me on ${item.title}`;
+      input.focus();
+      sendChat();
     } else if (item.prompt) {
       input.value = item.prompt;
       input.focus();
@@ -1090,12 +1550,70 @@
 
   function buildHudItems() {
     const c = liveState.context || {};
+    const brief = liveState.activeBrief || {};
     const items = [];
     const workspace = String(c.workspace || '').trim();
     const activeFile = String(c.activeFile || '').trim();
     const changedFiles = Array.isArray(c.changedFiles) ? c.changedFiles : [];
 
     items.push(...buildHealthHudItems(liveState.health));
+
+    if (brief.activeProject?.name) {
+      items.push({
+        id: 'life-active-' + brief.activeProject.businessKey + '-' + brief.activeProject.id,
+        kind: 'life',
+        priority: 'critical',
+        icon: 'fa-location-crosshairs',
+        title: 'Active project: ' + brief.activeProject.name,
+        detail: 'Marcus matched this from your live workspace. Keep the working set small.',
+        targetType: 'project',
+        target: brief.activeProject.id || '',
+        prompt: `Give me the operating brief for ${brief.activeProject.name}. What am I supposed to do next, who needs a message, and what can wait?`,
+      });
+    }
+
+    (Array.isArray(brief.conversations) ? brief.conversations : []).slice(0, 4).forEach((conv, idx) => {
+      items.push({
+        id: 'life-conv-' + conv.businessKey + '-' + conv.id,
+        kind: 'conversation',
+        priority: conv.needsAction ? (idx === 0 ? 'critical' : 'warning') : 'active',
+        icon: 'fa-comments',
+        title: (conv.who || 'Client') + (conv.projectName ? ' - ' + conv.projectName : ''),
+        detail: conv.preview || 'Conversation needs review.',
+        targetType: 'conversation',
+        target: conv.id || '',
+        prompt: `Review this conversation from ${conv.who || 'the client'}${conv.projectName ? ` on ${conv.projectName}` : ''}: "${conv.preview || ''}". Tell me what to do, what task to create, and what message to send.`,
+      });
+    });
+
+    (Array.isArray(brief.messageDrafts) ? brief.messageDrafts : []).slice(0, 3).forEach((draft, idx) => {
+      items.push({
+        id: 'life-draft-' + draft.businessKey + '-' + draft.conversationId,
+        kind: 'draft',
+        priority: idx === 0 ? 'warning' : 'normal',
+        icon: 'fa-paper-plane',
+        title: 'Suggested team message: ' + (draft.to || 'Team'),
+        detail: draft.reason || draft.body || 'Marcus recommends an internal follow-up.',
+        targetType: 'draft',
+        target: draft.conversationId || '',
+        prompt: `Tighten this team message and tell me who should receive it:\n\n${draft.body || ''}`,
+      });
+    });
+
+    (Array.isArray(brief.projects) ? brief.projects : []).slice(0, 4).forEach((project, idx) => {
+      if (brief.activeProject?.id && String(project.id) === String(brief.activeProject.id)) return;
+      items.push({
+        id: 'life-project-' + project.businessKey + '-' + project.id,
+        kind: 'project',
+        priority: idx === 0 ? 'active' : 'normal',
+        icon: 'fa-diagram-project',
+        title: project.name,
+        detail: `${project.reason || 'Needs attention'}${project.openTasks ? `, ${project.openTasks} open task${project.openTasks === 1 ? '' : 's'}` : ''}${project.inboxCount ? `, ${project.inboxCount} conversation${project.inboxCount === 1 ? '' : 's'}` : ''}`,
+        targetType: 'project',
+        target: project.id || '',
+        prompt: `Give me a concise operating brief for ${project.name}. What matters, what should I ignore, and what message should I send if any?`,
+      });
+    });
 
     if (workspace) {
       items.push({
@@ -1162,6 +1680,17 @@
   function renderHud() {
     const items = buildHudItems();
     hudCountEl.textContent = `${items.length} active`;
+    const critical = items.filter(i => i.priority === 'critical').length;
+    const warning = items.filter(i => i.priority === 'warning').length;
+    signalFocus.textContent = liveState.context?.workspace
+      ? `Focus: ${liveState.activeBrief?.activeProject?.name || liveState.context.workspace}`
+      : 'Focus: idle';
+    signalRisk.textContent = critical
+      ? `Risk: ${critical} critical`
+      : warning ? `Risk: ${warning} warning` : (liveState.activeBrief?.stats?.inboxActionable ? `Risk: ${liveState.activeBrief.stats.inboxActionable} conversation${liveState.activeBrief.stats.inboxActionable === 1 ? '' : 's'}` : 'Risk: nominal');
+    signalAction.textContent = liveState.actions.length
+      ? `Action: ${String(liveState.actions[liveState.actions.length - 1]?.action || 'logged')}`
+      : 'Action: none';
     if (!items.length) {
       hudItemsEl.innerHTML = '<div class="hud-empty">No active HUD items. Marcus will surface the next useful signal.</div>';
       readoutMain.textContent = 'No urgent HUD items. Watching for the next useful signal.';
@@ -1403,6 +1932,39 @@
     });
   });
 
+  voiceToggle.addEventListener('click', () => {
+    voiceState.enabled = !voiceState.enabled;
+    localStorage.setItem('marcusLiveVoiceEnabled', voiceState.enabled ? 'true' : 'false');
+    if (!voiceState.enabled) {
+      try { window.speechSynthesis?.cancel?.(); } catch {}
+      if (voiceState.audio) voiceState.audio.pause();
+      document.body.classList.remove('speaking');
+    } else {
+      speakText('Voice layer online. I will keep it concise.', { force: true });
+    }
+    updateVoiceUi();
+  });
+
+  voiceListen.addEventListener('click', () => {
+    if (!voiceState.recognition) return;
+    try {
+      if (voiceState.listening) {
+        voiceState.recognition.stop();
+      } else {
+        voiceState.recognition.start();
+      }
+    } catch {}
+  });
+
+  voiceReplay.addEventListener('click', () => {
+    speakText(voiceState.lastText || readoutMain.textContent || 'No voice brief is available yet.', { force: true });
+  });
+
+  voiceBrief.addEventListener('click', () => {
+    const brief = readoutMain.textContent || 'No active readout yet.';
+    speakText(brief, { force: true });
+  });
+
   // Chat
   async function sendChat() {
     const msg = input.value.trim();
@@ -1605,6 +2167,9 @@
   // Initial connect
   renderHud();
   renderActionTape();
+  initVoiceLayer();
+  loadActiveBrief();
+  setInterval(loadActiveBrief, 60_000);
   connect();
   input.focus();
 })();

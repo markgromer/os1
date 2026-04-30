@@ -375,6 +375,10 @@ function startBackupScheduler() {
 }
 
 const ADMIN_TOKEN = typeof process.env.ADMIN_TOKEN === 'string' ? process.env.ADMIN_TOKEN.trim() : '';
+const ELEVENLABS_API_KEY = typeof process.env.ELEVENLABS_API_KEY === 'string' ? process.env.ELEVENLABS_API_KEY.trim() : '';
+const ELEVENLABS_VOICE_ID = typeof process.env.ELEVENLABS_VOICE_ID === 'string' ? process.env.ELEVENLABS_VOICE_ID.trim() : '';
+const ELEVENLABS_MODEL_ID = typeof process.env.ELEVENLABS_MODEL_ID === 'string' ? process.env.ELEVENLABS_MODEL_ID.trim() : 'eleven_flash_v2_5';
+const ELEVENLABS_OUTPUT_FORMAT = typeof process.env.ELEVENLABS_OUTPUT_FORMAT === 'string' ? process.env.ELEVENLABS_OUTPUT_FORMAT.trim() : 'mp3_44100_128';
 const AUTH_COOKIE_NAME = 'ops_admin_token';
 const AUTH_COOKIE_MAX_AGE_SEC = 60 * 60 * 24 * 30;
 
@@ -471,8 +475,12 @@ function isValidMarcusLiveSessionToken(token) {
 function isMarcusLiveSessionRoute(req) {
   const p = String(req?.path || '');
   return p === '/api/marcus/live'
+    || p === '/api/marcus/live/action'
+    || p === '/api/marcus/active-brief'
     || p === '/api/marcus/live/chat'
     || p === '/api/marcus/live/session-status'
+    || p === '/api/marcus/live/voice/status'
+    || p === '/api/marcus/live/voice/speak'
     || p === '/api/desktop-context/health';
 }
 
@@ -5911,6 +5919,236 @@ function computeProjectLastActivityMs(store, project, linkedTasks = [], linkedIn
 
   if (!marks.length) return 0;
   return Math.max(...marks);
+}
+
+function findProjectForDesktopContext(store, desktopData) {
+  const projects = Array.isArray(store?.projects) ? store.projects : [];
+  const ws = desktopData?.workspace && typeof desktopData.workspace === 'object' ? desktopData.workspace : {};
+  const title = String(desktopData?.windowTitle || '').toLowerCase();
+  const wsPath = String(ws?.workspacePath || '').trim().toLowerCase().replace(/\\/g, '/');
+  const folder = String(ws?.folderName || '').trim().toLowerCase();
+
+  for (const project of projects) {
+    const pPath = String(project?.workspacePath || '').trim().toLowerCase().replace(/\\/g, '/');
+    if (pPath && wsPath && (pPath === wsPath || wsPath.endsWith('/' + pPath.split('/').pop()))) return project;
+  }
+  for (const project of projects) {
+    const name = String(project?.name || '').trim().toLowerCase();
+    if (!name) continue;
+    if (folder && (folder.includes(name) || name.includes(folder))) return project;
+    if (title && title.includes(name)) return project;
+  }
+  return null;
+}
+
+function buildTeamMessageDraft({ project, signal, teamMember }) {
+  const projectName = String(project?.name || '').trim() || 'the project';
+  const owner = String(teamMember?.name || project?.accountManagerName || '').trim();
+  const opener = owner ? `${owner},` : 'Team,';
+  const ask = String(signal || '').replace(/\s+/g, ' ').trim();
+  const shortAsk = ask ? previewTextServer(ask, 160) : `Please check ${projectName} and confirm the next move.`;
+  return `${opener} quick check on ${projectName}: ${shortAsk}\n\nCan you confirm owner, next step, and ETA?`;
+}
+
+function buildMarcusActiveBriefForStore({ store, settings, businessKey, businessName, desktopData, nowMs = Date.now() }) {
+  const s = store && typeof store === 'object' ? store : EMPTY_STORE;
+  const projects = Array.isArray(s.projects) ? s.projects : [];
+  const tasks = Array.isArray(s.tasks) ? s.tasks : [];
+  const inbox = Array.isArray(s.inboxItems) ? s.inboxItems : [];
+  const today = new Date(nowMs).toISOString().slice(0, 10);
+  const activeProject = findProjectForDesktopContext(s, desktopData);
+  const activeProjectId = String(activeProject?.id || '').trim();
+  const snapshot = collectMarcusRelevantSnapshot(s, { today, nowMs, currentProjectId: activeProjectId });
+
+  const openByProject = new Map();
+  for (const task of tasks) {
+    if (isClosedTaskStatus(task?.status)) continue;
+    const key = String(task?.projectId || task?.project || '').trim();
+    if (!key) continue;
+    const list = openByProject.get(key) || [];
+    list.push(task);
+    openByProject.set(key, list);
+  }
+
+  const projectCards = [];
+  for (const project of projects) {
+    if (isClosedProjectStatus(project?.status)) continue;
+    const linkedTasks = getLinkedProjectTasks(s, project).filter((task) => !isClosedTaskStatus(task?.status));
+    const linkedInbox = getLinkedProjectInboxItems(s, project).filter((item) => {
+      const status = String(item?.status || '').trim().toLowerCase();
+      return status === 'new' || status === 'triaged' || !status;
+    });
+    const activityMs = computeProjectLastActivityMs(s, project, linkedTasks, linkedInbox);
+    const dueDate = normalizeTrackerDueDate(project?.dueDate);
+    const overdue = Boolean(dueDate && dueDate < today);
+    const dueSoon = Boolean(dueDate && dueDate >= today && dueDate <= (addDaysToYmd(today, 7) || today));
+    const urgentTasks = linkedTasks.filter((task) => {
+      const due = normalizeTrackerDueDate(task?.dueDate);
+      return Number(task?.priority) === 1 || (due && due <= today) || String(task?.status || '').toLowerCase() === 'urgent';
+    });
+    const isActive = activeProjectId && String(project?.id || '') === activeProjectId;
+    let score = 0;
+    if (isActive) score += 100;
+    if (overdue) score += 45;
+    if (dueSoon) score += 24;
+    score += Math.min(28, urgentTasks.length * 9);
+    score += Math.min(24, linkedInbox.length * 6);
+    if (activityMs > 0) score += Math.max(0, 18 - Math.floor((nowMs - activityMs) / MS_PER_DAY));
+    const staleDays = activityMs > 0 ? Math.floor((nowMs - activityMs) / MS_PER_DAY) : 999;
+    if (!isActive && staleDays > 30 && !linkedInbox.length) score -= 34;
+
+    if (score <= 0 && projectCards.length > 8) continue;
+    projectCards.push({
+      id: String(project?.id || ''),
+      name: String(project?.name || '').trim(),
+      status: String(project?.status || '').trim(),
+      dueDate,
+      businessKey,
+      businessName,
+      score,
+      reason: isActive
+        ? 'Active in your current window'
+        : overdue
+          ? 'Project is overdue'
+          : linkedInbox.length
+            ? 'Client conversation needs attention'
+            : urgentTasks.length
+              ? 'Urgent task pressure'
+              : 'Recent project activity',
+      openTasks: linkedTasks.length,
+      urgentTasks: urgentTasks.length,
+      inboxCount: linkedInbox.length,
+      lastActivityAt: activityMs ? new Date(activityMs).toISOString() : '',
+    });
+  }
+
+  projectCards.sort((a, b) => (b.score - a.score) || String(a.dueDate || '9999-12-31').localeCompare(String(b.dueDate || '9999-12-31')));
+
+  const conversationCards = [];
+  for (const item of inbox) {
+    const status = String(item?.status || '').trim().toLowerCase();
+    if (status && !['new', 'triaged'].includes(status)) continue;
+    const sourceLower = String(item?.source || '').trim().toLowerCase();
+    const idLower = String(item?.id || '').trim().toLowerCase();
+    const rawTextLower = String(item?.text || item?.body || '').trim().toLowerCase();
+    if (sourceLower === 'marty' || sourceLower === 'marcus' || idLower.includes(':brief:') || idLower.includes('smoke') || rawTextLower.includes('smoke')) continue;
+    if (shouldSuppressInboxRadarItem(item, settings || {})) continue;
+    const signal = extractInboxSignalText(item);
+    if (!signal) continue;
+    const projectId = String(item?.projectId || '').trim();
+    const project = projects.find((p) => String(p?.id || '') === projectId) || null;
+    const recommendation = buildMarcusInboxRecommendation(s, item);
+    const needsAction = hasActionCueInText(signal);
+    const activeBoost = activeProjectId && projectId === activeProjectId ? 30 : 0;
+    const ts = Math.max(parseTrackerTime(item?.updatedAt), parseTrackerTime(item?.createdAt));
+    const ageHours = ts ? Math.max(0, (nowMs - ts) / (60 * 60 * 1000)) : 999;
+    const score = activeBoost + (needsAction ? 38 : 12) + Math.max(0, 24 - Math.floor(ageHours / 3)) + (projectId ? 8 : 0);
+    conversationCards.push({
+      id: String(item?.id || ''),
+      projectId,
+      projectName: String(item?.projectName || project?.name || recommendation?.project?.projectName || '').trim(),
+      businessKey,
+      businessName,
+      who: String(item?.contactName || item?.fromName || item?.sender || item?.fromNumber || recommendation?.who?.name || 'Client').trim(),
+      source: String(item?.source || item?.channel || '').trim(),
+      preview: previewTextServer(signal, 180),
+      score,
+      needsAction,
+      updatedAt: ts ? new Date(ts).toISOString() : '',
+      recommendation,
+    });
+  }
+  conversationCards.sort((a, b) => (b.score - a.score) || String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
+
+  const messageDrafts = conversationCards.slice(0, 5).map((conversation) => {
+    const project = projects.find((p) => String(p?.id || '') === String(conversation.projectId || '')) || null;
+    const team = Array.isArray(s.team) ? s.team : [];
+    const delegate = conversation?.recommendation?.delegate || suggestDelegateForInboxItem(s, conversation.preview, conversation.recommendation?.project);
+    const member = team.find((m) => String(m?.id || '') === String(delegate?.teamId || '')) || team.find((m) => String(m?.name || '') === String(project?.accountManagerName || '')) || null;
+    return {
+      id: `draft:${conversation.id}`,
+      conversationId: conversation.id,
+      businessKey,
+      businessName,
+      projectId: conversation.projectId,
+      projectName: conversation.projectName,
+      to: String(member?.name || project?.accountManagerName || 'Team').trim(),
+      reason: conversation.needsAction ? 'Client conversation appears actionable' : 'Conversation may need an internal follow-up',
+      body: buildTeamMessageDraft({ project, signal: conversation.preview, teamMember: member }),
+    };
+  });
+
+  const priorityTasks = snapshot.sortedTasks.slice(0, 8).map((task) => ({
+    id: String(task?.id || ''),
+    title: String(task?.title || '').trim(),
+    project: String(task?.project || '').trim(),
+    owner: String(task?.owner || '').trim(),
+    priority: Number(task?.priority) || 2,
+    dueDate: normalizeTrackerDueDate(task?.dueDate),
+    status: String(task?.status || '').trim(),
+    businessKey,
+    businessName,
+  }));
+
+  return {
+    businessKey,
+    businessName,
+    activeProjectId,
+    activeProjectName: String(activeProject?.name || '').trim(),
+    projects: projectCards.slice(0, 6),
+    conversations: conversationCards.slice(0, 8),
+    tasks: priorityTasks,
+    messageDrafts,
+    stats: {
+      openTasks: snapshot.openTasks.length,
+      relevantTasks: snapshot.relevantTasks.length,
+      overdueTasks: snapshot.overdueTasks.length,
+      dueTodayTasks: snapshot.dueTodayTasks.length,
+      inboxActionable: conversationCards.filter((c) => c.needsAction).length,
+    },
+  };
+}
+
+async function buildMarcusActiveBrief() {
+  const settings = await readSettings();
+  const cfg = getBusinessConfigFromSettings(settings);
+  const businesses = Array.isArray(cfg.businesses) && cfg.businesses.length
+    ? cfg.businesses
+    : [{ key: DEFAULT_BUSINESS_KEY, name: 'Personal' }];
+  const desktopData = desktopRelayCache?.data || desktopContextCache?.data || null;
+  const briefs = [];
+  for (const business of businesses) {
+    const key = normalizeBusinessKey(business?.key || '') || DEFAULT_BUSINESS_KEY;
+    const name = String(business?.name || key).trim();
+    try {
+      const store = await readStoreForBusiness(key);
+      briefs.push(buildMarcusActiveBriefForStore({ store, settings, businessKey: key, businessName: name, desktopData }));
+    } catch {}
+  }
+
+  const projects = briefs.flatMap((b) => b.projects || []).sort((a, b) => (b.score - a.score)).slice(0, 8);
+  const conversations = briefs.flatMap((b) => b.conversations || []).sort((a, b) => (b.score - a.score)).slice(0, 10);
+  const tasks = briefs.flatMap((b) => b.tasks || []).slice(0, 12);
+  const messageDrafts = briefs.flatMap((b) => b.messageDrafts || []).slice(0, 8);
+  const active = briefs.find((b) => b.activeProjectId) || null;
+
+  return {
+    ok: true,
+    generatedAt: nowIso(),
+    activeProject: active ? { id: active.activeProjectId, name: active.activeProjectName, businessKey: active.businessKey, businessName: active.businessName } : null,
+    projects,
+    conversations,
+    tasks,
+    messageDrafts,
+    stats: briefs.reduce((acc, b) => {
+      acc.openTasks += Number(b?.stats?.openTasks) || 0;
+      acc.relevantTasks += Number(b?.stats?.relevantTasks) || 0;
+      acc.overdueTasks += Number(b?.stats?.overdueTasks) || 0;
+      acc.dueTodayTasks += Number(b?.stats?.dueTodayTasks) || 0;
+      acc.inboxActionable += Number(b?.stats?.inboxActionable) || 0;
+      return acc;
+    }, { openTasks: 0, relevantTasks: 0, overdueTasks: 0, dueTodayTasks: 0, inboxActionable: 0 }),
+  };
 }
 
 function messageNeedsProjectContext(message) {
@@ -11764,19 +12002,6 @@ app.get('/api/marcus/live', (req, res) => {
     res.write(`data: ${JSON.stringify(currentContext)}\n\n`);
   }
 
-  // Send current workspace context
-  if (desktopRelayCache?.data?.workspace) {
-    const ws = desktopRelayCache.data.workspace;
-    res.write(`data: ${JSON.stringify({
-      type: 'context',
-      windowTitle: desktopRelayCache.data.windowTitle || '',
-      processName: desktopRelayCache.data.processName || '',
-      workspace: ws.folderName || '',
-      branch: ws.gitBranch || '',
-      recentFiles: ws.recentFiles || [],
-    })}\n\n`);
-  }
-
   const client = { id: Date.now(), res };
   marcusLiveClients.add(client);
 
@@ -11839,6 +12064,67 @@ app.post('/api/marcus/live/action', (req, res) => {
   const entry = rememberMarcusLiveAction(req.body || {});
   pushLiveEvent({ type: 'action', ...entry });
   res.json({ ok: true, action: entry });
+});
+
+app.get('/api/marcus/live/voice/status', (req, res) => {
+  res.json({
+    ok: true,
+    provider: ELEVENLABS_API_KEY && ELEVENLABS_VOICE_ID ? 'elevenlabs' : 'browser',
+    elevenLabsConfigured: Boolean(ELEVENLABS_API_KEY && ELEVENLABS_VOICE_ID),
+    model: ELEVENLABS_API_KEY && ELEVENLABS_VOICE_ID ? ELEVENLABS_MODEL_ID : '',
+  });
+});
+
+app.post('/api/marcus/live/voice/speak', async (req, res) => {
+  const text = typeof req.body?.text === 'string'
+    ? req.body.text.replace(/\s+/g, ' ').trim().slice(0, 900)
+    : '';
+  if (!text) return res.status(400).json({ error: 'Empty text' });
+  if (!ELEVENLABS_API_KEY || !ELEVENLABS_VOICE_ID) {
+    return res.status(501).json({ error: 'ElevenLabs voice is not configured.' });
+  }
+
+  try {
+    const url = new URL(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(ELEVENLABS_VOICE_ID)}`);
+    if (ELEVENLABS_OUTPUT_FORMAT) url.searchParams.set('output_format', ELEVENLABS_OUTPUT_FORMAT);
+    const upstream = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Accept': 'audio/mpeg',
+        'Content-Type': 'application/json',
+        'xi-api-key': ELEVENLABS_API_KEY,
+      },
+      body: JSON.stringify({
+        text,
+        model_id: ELEVENLABS_MODEL_ID,
+        voice_settings: {
+          stability: 0.46,
+          similarity_boost: 0.82,
+          style: 0.28,
+          use_speaker_boost: true,
+        },
+      }),
+    });
+    if (!upstream.ok) {
+      const errText = await upstream.text().catch(() => '');
+      return res.status(502).json({ error: `ElevenLabs failed (${upstream.status})`, detail: errText.slice(0, 500) });
+    }
+    const audio = Buffer.from(await upstream.arrayBuffer());
+    res.setHeader('Content-Type', upstream.headers.get('content-type') || 'audio/mpeg');
+    res.setHeader('Cache-Control', 'no-store');
+    res.send(audio);
+  } catch (err) {
+    res.status(502).json({ error: String(err?.message || err) });
+  }
+});
+
+app.get('/api/marcus/active-brief', async (req, res) => {
+  try {
+    const brief = await buildMarcusActiveBrief();
+    res.json(brief);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: String(err?.message || err) });
+  }
 });
 
 // Chat from Marcus Live panel
