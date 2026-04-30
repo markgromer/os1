@@ -5956,6 +5956,10 @@ function buildMarcusActiveBriefForStore({ store, settings, businessKey, business
   const tasks = Array.isArray(s.tasks) ? s.tasks : [];
   const inbox = Array.isArray(s.inboxItems) ? s.inboxItems : [];
   const today = new Date(nowMs).toISOString().slice(0, 10);
+  const realConversationSources = new Set(['fireflies', 'zoom', 'openphone', 'slack', 'email', 'sms', 'quo']);
+  const currentConversationCutoffMs = nowMs - (10 * MS_PER_DAY);
+  const freshConversationCutoffMs = nowMs - (3 * MS_PER_DAY);
+  const recentProjectCutoffMs = nowMs - (14 * MS_PER_DAY);
   const activeProject = findProjectForDesktopContext(s, desktopData);
   const activeProjectId = String(activeProject?.id || '').trim();
   const snapshot = collectMarcusRelevantSnapshot(s, { today, nowMs, currentProjectId: activeProjectId });
@@ -5979,6 +5983,14 @@ function buildMarcusActiveBriefForStore({ store, settings, businessKey, business
       return status === 'new' || status === 'triaged' || !status;
     });
     const activityMs = computeProjectLastActivityMs(s, project, linkedTasks, linkedInbox);
+    const recentLinkedInbox = linkedInbox.filter((item) => {
+      const source = String(item?.source || item?.channel || '').trim().toLowerCase();
+      const rawText = String(item?.text || item?.body || '').toLowerCase();
+      if (rawText.includes('inboxcreate') || rawText.includes('smoke')) return false;
+      if (source && !realConversationSources.has(source)) return false;
+      const ts = Math.max(parseTrackerTime(item?.updatedAt), parseTrackerTime(item?.createdAt));
+      return ts >= currentConversationCutoffMs;
+    });
     const dueDate = normalizeTrackerDueDate(project?.dueDate);
     const overdue = Boolean(dueDate && dueDate < today);
     const dueSoon = Boolean(dueDate && dueDate >= today && dueDate <= (addDaysToYmd(today, 7) || today));
@@ -5987,17 +5999,26 @@ function buildMarcusActiveBriefForStore({ store, settings, businessKey, business
       return Number(task?.priority) === 1 || (due && due <= today) || String(task?.status || '').toLowerCase() === 'urgent';
     });
     const isActive = activeProjectId && String(project?.id || '') === activeProjectId;
+    const staleDays = activityMs > 0 ? Math.floor((nowMs - activityMs) / MS_PER_DAY) : 999;
+    const hasRecentProjectActivity = activityMs >= recentProjectCutoffMs;
+    const hasRecentConversation = recentLinkedInbox.length > 0;
+    const belongsInNow = Boolean(
+      isActive ||
+      hasRecentProjectActivity ||
+      hasRecentConversation ||
+      (dueSoon && (hasRecentProjectActivity || hasRecentConversation)) ||
+      (urgentTasks.length && staleDays <= 14)
+    );
+    if (!belongsInNow) continue;
+
     let score = 0;
     if (isActive) score += 100;
-    if (overdue) score += 45;
+    if (overdue && (isActive || hasRecentConversation || staleDays <= 14)) score += 18;
     if (dueSoon) score += 24;
     score += Math.min(28, urgentTasks.length * 9);
-    score += Math.min(24, linkedInbox.length * 6);
+    score += Math.min(24, recentLinkedInbox.length * 8);
     if (activityMs > 0) score += Math.max(0, 18 - Math.floor((nowMs - activityMs) / MS_PER_DAY));
-    const staleDays = activityMs > 0 ? Math.floor((nowMs - activityMs) / MS_PER_DAY) : 999;
-    if (!isActive && staleDays > 30 && !linkedInbox.length) score -= 34;
 
-    if (score <= 0 && projectCards.length > 8) continue;
     projectCards.push({
       id: String(project?.id || ''),
       name: String(project?.name || '').trim(),
@@ -6008,16 +6029,16 @@ function buildMarcusActiveBriefForStore({ store, settings, businessKey, business
       score,
       reason: isActive
         ? 'Active in your current window'
-        : overdue
-          ? 'Project is overdue'
-          : linkedInbox.length
-            ? 'Client conversation needs attention'
-            : urgentTasks.length
-              ? 'Urgent task pressure'
+        : hasRecentConversation
+          ? 'Recent client conversation needs attention'
+          : urgentTasks.length
+            ? 'Current task pressure'
+            : dueSoon
+              ? 'Due soon and recently active'
               : 'Recent project activity',
       openTasks: linkedTasks.length,
       urgentTasks: urgentTasks.length,
-      inboxCount: linkedInbox.length,
+      inboxCount: recentLinkedInbox.length,
       lastActivityAt: activityMs ? new Date(activityMs).toISOString() : '',
     });
   }
@@ -6032,16 +6053,25 @@ function buildMarcusActiveBriefForStore({ store, settings, businessKey, business
     const idLower = String(item?.id || '').trim().toLowerCase();
     const rawTextLower = String(item?.text || item?.body || '').trim().toLowerCase();
     if (sourceLower === 'marty' || sourceLower === 'marcus' || idLower.includes(':brief:') || idLower.includes('smoke') || rawTextLower.includes('smoke')) continue;
+    if (rawTextLower.includes('inboxcreate')) continue;
     if (shouldSuppressInboxRadarItem(item, settings || {})) continue;
     const signal = extractInboxSignalText(item);
     if (!signal) continue;
     const projectId = String(item?.projectId || '').trim();
     const project = projects.find((p) => String(p?.id || '') === projectId) || null;
     const recommendation = buildMarcusInboxRecommendation(s, item);
+    const whoName = String(item?.contactName || item?.fromName || item?.sender || item?.fromNumber || recommendation?.who?.name || '').trim();
+    if (!whoName && !projectId && !realConversationSources.has(sourceLower)) continue;
     const needsAction = hasActionCueInText(signal);
-    const activeBoost = activeProjectId && projectId === activeProjectId ? 30 : 0;
+    const isActiveConversationProject = Boolean(activeProjectId && projectId === activeProjectId);
     const ts = Math.max(parseTrackerTime(item?.updatedAt), parseTrackerTime(item?.createdAt));
     const ageHours = ts ? Math.max(0, (nowMs - ts) / (60 * 60 * 1000)) : 999;
+    const isCurrent = ts >= currentConversationCutoffMs;
+    const isFresh = ts >= freshConversationCutoffMs;
+    if (!isActiveConversationProject && !isCurrent) continue;
+    if (!isActiveConversationProject && !needsAction && !isFresh) continue;
+    if (!isActiveConversationProject && /unknown\s+sender|unknown\s+contact/i.test(whoName || signal)) continue;
+    const activeBoost = isActiveConversationProject ? 30 : 0;
     const score = activeBoost + (needsAction ? 38 : 12) + Math.max(0, 24 - Math.floor(ageHours / 3)) + (projectId ? 8 : 0);
     conversationCards.push({
       id: String(item?.id || ''),
@@ -6049,7 +6079,7 @@ function buildMarcusActiveBriefForStore({ store, settings, businessKey, business
       projectName: String(item?.projectName || project?.name || recommendation?.project?.projectName || '').trim(),
       businessKey,
       businessName,
-      who: String(item?.contactName || item?.fromName || item?.sender || item?.fromNumber || recommendation?.who?.name || 'Client').trim(),
+      who: whoName || (sourceLower === 'fireflies' ? 'Meeting transcript' : sourceLower === 'slack' ? 'Slack' : 'Client'),
       source: String(item?.source || item?.channel || '').trim(),
       preview: previewTextServer(signal, 180),
       score,
@@ -6060,7 +6090,7 @@ function buildMarcusActiveBriefForStore({ store, settings, businessKey, business
   }
   conversationCards.sort((a, b) => (b.score - a.score) || String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
 
-  const messageDrafts = conversationCards.slice(0, 5).map((conversation) => {
+  const messageDrafts = conversationCards.slice(0, 1).map((conversation) => {
     const project = projects.find((p) => String(p?.id || '') === String(conversation.projectId || '')) || null;
     const team = Array.isArray(s.team) ? s.team : [];
     const delegate = conversation?.recommendation?.delegate || suggestDelegateForInboxItem(s, conversation.preview, conversation.recommendation?.project);
@@ -6078,7 +6108,7 @@ function buildMarcusActiveBriefForStore({ store, settings, businessKey, business
     };
   });
 
-  const priorityTasks = snapshot.sortedTasks.slice(0, 8).map((task) => ({
+  const priorityTasks = snapshot.sortedTasks.slice(0, 3).map((task) => ({
     id: String(task?.id || ''),
     title: String(task?.title || '').trim(),
     project: String(task?.project || '').trim(),
@@ -6095,8 +6125,8 @@ function buildMarcusActiveBriefForStore({ store, settings, businessKey, business
     businessName,
     activeProjectId,
     activeProjectName: String(activeProject?.name || '').trim(),
-    projects: projectCards.slice(0, 6),
-    conversations: conversationCards.slice(0, 8),
+    projects: projectCards.slice(0, 2),
+    conversations: conversationCards.slice(0, 2),
     tasks: priorityTasks,
     messageDrafts,
     stats: {
@@ -6126,10 +6156,10 @@ async function buildMarcusActiveBrief() {
     } catch {}
   }
 
-  const projects = briefs.flatMap((b) => b.projects || []).sort((a, b) => (b.score - a.score)).slice(0, 8);
-  const conversations = briefs.flatMap((b) => b.conversations || []).sort((a, b) => (b.score - a.score)).slice(0, 10);
-  const tasks = briefs.flatMap((b) => b.tasks || []).slice(0, 12);
-  const messageDrafts = briefs.flatMap((b) => b.messageDrafts || []).slice(0, 8);
+  const projects = briefs.flatMap((b) => b.projects || []).sort((a, b) => (b.score - a.score)).slice(0, 3);
+  const conversations = briefs.flatMap((b) => b.conversations || []).sort((a, b) => (b.score - a.score)).slice(0, 3);
+  const tasks = briefs.flatMap((b) => b.tasks || []).slice(0, 4);
+  const messageDrafts = briefs.flatMap((b) => b.messageDrafts || []).slice(0, 1);
   const active = briefs.find((b) => b.activeProjectId) || null;
 
   return {
@@ -12159,7 +12189,10 @@ Your personality: Direct, sharp, calm under pressure, and situationally aware. Y
 
 RULES:
 - NEVER modify, write, or execute code. You are read-only. Observe, analyze, suggest.
-- Be specific. Reference exact filenames, function names, line patterns.
+- Talk to Mark like a lifelong coworker/friend who is smart but does not want raw technical noise.
+- Default to plain English: project name, why it matters, what happens if ignored, and the next useful move.
+- Do NOT lead with full file paths, API routes, stack traces, or function names unless Mark asks for technical detail.
+- If a dev should handle it, offer to package a clean prompt for the dev.
 - Keep responses concise - 2-4 sentences usually. Think chat message, not essay.
 - If you spot something great, say so. If something concerns you, say so directly.
 - When asked about the code, use the actual file contents you can see.
@@ -12340,7 +12373,9 @@ QUALITY STANDARDS (critical - follow these strictly):
 RULES:
 - NEVER modify, write, or execute code. Observe and advise only.
 - Generate 1-3 brief observations (1-3 sentences each). Separate with |||
-- Be specific: reference exact filenames, line patterns, function names.
+- Write for Mark first, not for the codebase. Say the project/work area, the plain-English issue, the consequence, and the next move.
+- Do NOT lead with full file paths, API routes, line patterns, or function names. Keep technical specifics implicit unless the issue cannot be understood without one short reference.
+- Prefer wording like: "There's an issue in WARREN. If we ignore it, the admin screen may fail after deploy. Want me to prep a dev prompt?"
 - Types of observations worth recording:
   * Bugs or logic errors in the core application code
   * Security risks in production code paths
@@ -12364,7 +12399,7 @@ Normal/healthy readings don't need mention. Only flag when something looks wrong
 - Do NOT repeat these recent observations:\n${recentObs || '(none yet)'}
 ${existingNotesContext ? `\n${existingNotesContext}\nBuild on what you already know. Don't repeat old notes - add NEW insights.` : ''}
 - If nothing meaningful to say, respond with just: NOTHING_NEW. Saying nothing is ALWAYS better than noting something trivial.
-- Keep it conversational and direct. Lead with signal. No fluff, no robotic phrasing.`;
+- Keep it conversational and direct, with light coworker banter when natural. Lead with signal. No fluff, no robotic phrasing.`;
 
     const saved = await readSettings();
     const result = await aiChatCompletion({

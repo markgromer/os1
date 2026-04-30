@@ -125,7 +125,7 @@
 
   /* Context bar */
   .context-bar {
-    display: flex;
+    display: none;
     flex-wrap: wrap;
     gap: 6px;
     padding: 8px 14px;
@@ -291,9 +291,9 @@
   /* Command HUD */
   .command-stage {
     display: grid;
-    grid-template-columns: minmax(340px, 1.15fr) minmax(280px, 0.85fr);
+    grid-template-columns: minmax(0, 1fr);
     gap: 12px;
-    padding: 12px 14px;
+    padding: 10px 14px 12px;
     border-bottom: 1px solid var(--border);
     background:
       linear-gradient(90deg, rgba(56,189,248,0.08), transparent 24%, rgba(45,212,191,0.07) 72%, transparent),
@@ -308,11 +308,11 @@
   .command-core-panel {
     position: relative;
     display: grid;
-    grid-template-columns: 142px minmax(0, 1fr);
+    grid-template-columns: 112px minmax(0, 1fr);
     align-items: center;
-    gap: 16px;
-    min-height: 188px;
-    padding: 18px;
+    gap: 18px;
+    min-height: 148px;
+    padding: 16px 18px;
     border: 1px solid var(--border-strong);
     border-radius: 10px;
     overflow: hidden;
@@ -342,7 +342,7 @@
     min-height: 142px;
   }
   .command-core-panel .assistant-core {
-    width: 118px;
+    width: 96px;
     background:
       radial-gradient(circle, rgba(237,247,255,1) 0 5%, rgba(125,211,252,0.96) 6% 11%, rgba(45,212,191,0.26) 12% 30%, transparent 31%),
       repeating-conic-gradient(from 12deg, rgba(56,189,248,0.08) 0 12deg, rgba(45,212,191,0.68) 13deg 17deg, rgba(167,139,250,0.24) 18deg 23deg, rgba(56,189,248,0.08) 24deg 37deg);
@@ -414,8 +414,8 @@
     50% { transform: scaleY(1.75); }
   }
   .command-core-panel .presence-title {
-    font-size: clamp(22px, 3.1vw, 42px);
-    line-height: 1;
+    font-size: 34px;
+    line-height: 1.05;
     letter-spacing: 0;
   }
   .command-core-panel .presence-status {
@@ -425,10 +425,10 @@
     color: #9fb1c6;
   }
   .command-core-panel .quick-actions {
-    margin-top: 14px;
+    margin-top: 12px;
   }
   .command-side {
-    display: grid;
+    display: none;
     grid-template-rows: 1fr auto;
     gap: 10px;
   }
@@ -492,7 +492,7 @@
   /* Adaptive HUD */
   .hud-shell {
     display: grid;
-    grid-template-columns: minmax(280px, 1.2fr) minmax(220px, 0.8fr);
+    grid-template-columns: minmax(280px, 1fr);
     gap: 10px;
     padding: 0 14px 10px;
     border-bottom: 1px solid var(--border);
@@ -503,7 +503,7 @@
     min-width: 0;
     border: 1px solid var(--border);
     border-radius: 8px;
-    background: rgba(6,13,21,0.62);
+    background: rgba(6,13,21,0.46);
     overflow: hidden;
   }
   .hud-lane-header {
@@ -528,29 +528,29 @@
   .hud-items {
     display: grid;
     gap: 7px;
-    padding: 8px;
-    max-height: 178px;
-    overflow-y: auto;
+    padding: 10px;
+    max-height: none;
+    overflow: visible;
   }
   .hud-items::-webkit-scrollbar { width: 4px; }
   .hud-items::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
   .hud-card {
     display: grid;
-    grid-template-columns: 24px minmax(0, 1fr) auto;
-    gap: 8px;
+    grid-template-columns: 34px minmax(0, 1fr) auto;
+    gap: 10px;
     align-items: start;
-    padding: 8px;
-    border: 1px solid rgba(125,211,252,0.14);
+    padding: 12px;
+    border: 1px solid rgba(125,211,252,0.18);
     border-radius: 8px;
-    background: rgba(255,255,255,0.025);
+    background: rgba(3,9,15,0.78);
   }
   .hud-card.priority-critical { border-color: rgba(239,68,68,0.36); background: rgba(239,68,68,0.06); }
   .hud-card.priority-warning { border-color: rgba(245,158,11,0.34); background: rgba(245,158,11,0.055); }
   .hud-card.priority-active { border-color: rgba(56,189,248,0.32); background: rgba(56,189,248,0.065); }
   .hud-card.priority-normal { border-color: rgba(125,211,252,0.14); }
   .hud-icon {
-    width: 24px;
-    height: 24px;
+    width: 32px;
+    height: 32px;
     border-radius: 50%;
     display: inline-flex;
     align-items: center;
@@ -564,16 +564,16 @@
   .hud-body { min-width: 0; }
   .hud-title {
     color: var(--text);
-    font-size: 12px;
+    font-size: 14px;
     font-weight: 700;
     line-height: 1.25;
     overflow-wrap: anywhere;
   }
   .hud-detail {
-    color: var(--muted);
-    font-size: 10px;
-    line-height: 1.35;
-    margin-top: 3px;
+    color: #b7c7da;
+    font-size: 12px;
+    line-height: 1.45;
+    margin-top: 5px;
     overflow-wrap: anywhere;
   }
   .hud-actions {
@@ -582,8 +582,8 @@
     gap: 4px;
   }
   .hud-btn {
-    width: 26px;
-    height: 26px;
+    width: 30px;
+    height: 30px;
     border-radius: 999px;
     border: 1px solid var(--border);
     background: rgba(255,255,255,0.03);
@@ -600,9 +600,19 @@
     background: rgba(56,189,248,0.08);
   }
   .hud-btn.primary { color: var(--accent); }
+  .hud-btn.action-text {
+    width: auto;
+    min-width: 0;
+    gap: 6px;
+    padding: 0 10px;
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 700;
+    white-space: nowrap;
+  }
   .hud-empty {
-    color: var(--subtle);
-    font-size: 11px;
+    color: #9fb1c6;
+    font-size: 12px;
     padding: 10px;
     text-align: center;
     overflow-wrap: anywhere;
@@ -630,14 +640,49 @@
     white-space: nowrap;
   }
 
+  .secondary-drawer {
+    border-top: 1px solid var(--border);
+    background: rgba(6,10,15,0.54);
+    flex-shrink: 0;
+  }
+  .drawer-toggle {
+    width: 100%;
+    border: 0;
+    border-bottom: 1px solid rgba(125,211,252,0.12);
+    background: rgba(255,255,255,0.025);
+    color: var(--muted);
+    font-family: inherit;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    padding: 8px 14px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .drawer-toggle:hover { color: var(--text); }
+  .secondary-drawer:not(.open) .drawer-body { display: none; }
+  .drawer-body {
+    display: grid;
+    grid-template-columns: minmax(220px, 0.45fr) minmax(280px, 0.55fr);
+    gap: 10px;
+    padding: 10px 14px;
+    max-height: 240px;
+  }
+  .drawer-body .hud-lane { min-height: 0; }
+
   /* Feed */
   .feed {
-    flex: 1;
+    min-height: 0;
     overflow-y: auto;
     padding: 12px 14px;
     display: flex;
     flex-direction: column;
     gap: 8px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: rgba(6,13,21,0.48);
   }
   .feed::-webkit-scrollbar { width: 4px; }
   .feed::-webkit-scrollbar-track { background: transparent; }
@@ -659,6 +704,9 @@
     border-color: rgba(56,189,248,0.16);
     border-left: 2px solid var(--accent);
     align-self: flex-start;
+  }
+  .msg.observation.noise {
+    display: none;
   }
   .msg.chat-marcus {
     background: rgba(45,212,191,0.08);
@@ -959,6 +1007,7 @@
     }
     .signal-strip { grid-template-columns: 1fr; }
     .hud-shell { grid-template-columns: 1fr; }
+    .drawer-body { grid-template-columns: 1fr; max-height: 260px; overflow-y: auto; }
     .hud-items,
     .action-tape { max-height: 132px; }
     .hud-card {
@@ -1024,9 +1073,9 @@
       </div>
     </div>
     <div class="presence-copy">
-      <div class="presence-kicker">Live Command HUD</div>
-      <div class="presence-title">M.A.R.C.U.S. is online.</div>
-      <div class="presence-status" id="presence-status">Watching your workspace, system state, and action trail.</div>
+      <div class="presence-kicker">Marcus Live</div>
+      <div class="presence-title">I’m watching what matters.</div>
+      <div class="presence-status" id="presence-status">I’ll interrupt you only when there is a clear next move.</div>
       <div class="quick-actions">
         <button class="quick-action" type="button" data-command="Give me the current readout. What matters right now?"><i class="fa-solid fa-crosshairs"></i> Readout</button>
         <button class="quick-action" type="button" data-command="Scan the current workspace for risks, blockers, and the next best move."><i class="fa-solid fa-radar"></i> Scan</button>
@@ -1067,20 +1116,11 @@
 <div class="hud-shell">
   <section class="hud-lane" aria-label="Adaptive HUD items">
     <div class="hud-lane-header">
-      <span class="hud-lane-title">HUD Stack</span>
-      <span class="hud-count" id="hud-count">0 active</span>
+      <span class="hud-lane-title">Marcus Says</span>
+      <span class="hud-count" id="hud-count">Quiet</span>
     </div>
     <div class="hud-items" id="hud-items">
       <div class="hud-empty">Waiting for live signals.</div>
-    </div>
-  </section>
-  <section class="hud-lane" aria-label="Action history">
-    <div class="hud-lane-header">
-      <span class="hud-lane-title">Action Tape</span>
-      <span class="hud-count" id="action-count">0 logged</span>
-    </div>
-    <div class="action-tape" id="action-tape">
-      <div class="hud-empty">Actions you take here will feed back into Marcus.</div>
     </div>
   </section>
 </div>
@@ -1116,8 +1156,25 @@
   <div class="health-details" id="health-details"></div>
 </div>
 
-<div class="feed" id="feed">
-  <div class="msg system">Initializing live assistant feed...</div>
+<div class="secondary-drawer" id="secondary-drawer">
+  <button class="drawer-toggle" type="button" id="drawer-toggle">
+    <span>Details muted</span>
+    <span id="drawer-summary">Open action tape and raw feed</span>
+  </button>
+  <div class="drawer-body">
+    <section class="hud-lane" aria-label="Action history">
+      <div class="hud-lane-header">
+        <span class="hud-lane-title">Action Tape</span>
+        <span class="hud-count" id="action-count">0 logged</span>
+      </div>
+      <div class="action-tape" id="action-tape">
+        <div class="hud-empty">Actions you take here will feed back into Marcus.</div>
+      </div>
+    </section>
+    <div class="feed" id="feed">
+      <div class="msg system">Raw feed muted. Marcus will summarize signal above.</div>
+    </div>
+  </div>
 </div>
 
 <div class="chat-bar">
@@ -1145,6 +1202,9 @@
   const hudCountEl = document.getElementById('hud-count');
   const actionTapeEl = document.getElementById('action-tape');
   const actionCountEl = document.getElementById('action-count');
+  const secondaryDrawer = document.getElementById('secondary-drawer');
+  const drawerToggle = document.getElementById('drawer-toggle');
+  const drawerSummary = document.getElementById('drawer-summary');
   const signalFocus = document.getElementById('signal-focus');
   const signalRisk = document.getElementById('signal-risk');
   const signalAction = document.getElementById('signal-action');
@@ -1160,6 +1220,7 @@
     observations: [],
     actions: [],
     activeBrief: null,
+    observationDigest: null,
     dismissed: loadStoredSet('marcusLiveHudDismissed'),
     resolved: loadStoredSet('marcusLiveHudResolved'),
   };
@@ -1390,6 +1451,33 @@
     return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   }
 
+  function currentHumanProjectName() {
+    return String(liveState.activeBrief?.activeProject?.name || liveState.context?.workspace || 'this project').trim() || 'this project';
+  }
+
+  function humanProjectLabel(name) {
+    const raw = String(name || '').trim();
+    if (!raw) return currentHumanProjectName();
+    return raw.replace(/\s+/g, ' ');
+  }
+
+  function humanizeTechnicalText(text) {
+    const project = currentHumanProjectName();
+    const raw = String(text || '').replace(/\s+/g, ' ').trim();
+    const lower = raw.toLowerCase();
+    if (!raw) return `Something in ${project} needs a look. Want me to package it for the dev?`;
+    if (/security|auth|token|secret|password|defender|firewall|failed login/i.test(raw)) {
+      return `There's a security-sensitive issue around ${project}. If we ignore it, access or private data could be exposed. Want me to prep a dev prompt?`;
+    }
+    if (/deploy|render|docker|playwright|build|browser|runtime|cron|api/i.test(raw)) {
+      return `There's a technical issue in ${project}. If we leave it alone, deploys or live features may fail when you need them. Want me to prep a dev prompt?`;
+    }
+    if (/invalid|missing|empty|undefined|nan|error|fail|bug/i.test(lower)) {
+      return `There's a bug risk in ${project}. It may look fine until a real user hits the edge case. Want me to turn this into a dev-ready prompt?`;
+    }
+    return `Marcus spotted something in ${project}. It may be worth handling, but it does not need to hijack your day. Want the short dev prompt?`;
+  }
+
   function addMsg(type, text, meta) {
     // Remove thinking indicator if present
     const thinking = feed.querySelector('.msg.thinking');
@@ -1397,6 +1485,7 @@
 
     const div = document.createElement('div');
     div.className = `msg ${type}`;
+    if (type === 'observation') div.classList.add('noise');
 
     let metaHtml = '';
     if (meta) {
@@ -1411,18 +1500,18 @@
     feed.appendChild(div);
 
     if (type === 'chat-marcus' || type === 'observation') {
-      presenceStatus.textContent = type === 'observation' ? 'New signal surfaced.' : 'Response delivered.';
-      readoutMain.textContent = text.length > 180 ? text.slice(0, 177) + '...' : text;
+      presenceStatus.textContent = type === 'observation' ? 'Signal captured. Holding it unless it changes the brief.' : 'Response delivered.';
+      if (type !== 'observation') readoutMain.textContent = text.length > 180 ? text.slice(0, 177) + '...' : text;
       if (type === 'chat-marcus') {
         speakText(text);
       } else if (/threat|defender|firewall|failed login|security|critical|blocked|risk/i.test(text || '')) {
         speakText('Heads up. ' + text);
       }
     }
-    assistantCore.classList.toggle('thinking', type === 'thinking');
+    if (type !== 'thinking') assistantCore.classList.remove('thinking');
 
     // Auto-scroll to bottom
-    feed.scrollTop = feed.scrollHeight;
+    if (secondaryDrawer.classList.contains('open')) feed.scrollTop = feed.scrollHeight;
   }
 
   function rememberAction(action) {
@@ -1431,6 +1520,35 @@
     liveState.actions.push(action);
     liveState.actions = liveState.actions.slice(-40);
     renderActionTape();
+    updateDrawerSummary();
+  }
+
+  function updateDrawerSummary() {
+    const obsCount = liveState.observations.length;
+    const actionCount = liveState.actions.length;
+    drawerSummary.textContent = actionCount || obsCount
+      ? `${actionCount} actions logged. Raw noise is muted.`
+      : 'Raw feed stays out of your way';
+  }
+
+  function updateObservationDigest() {
+    const observations = liveState.observations.slice(-12);
+    if (!observations.length) {
+      liveState.observationDigest = null;
+      updateDrawerSummary();
+      return;
+    }
+    const latest = observations[observations.length - 1];
+    const riskCount = observations.filter(o => /security|defender|firewall|failed login|critical|secret|auth|token|risk/i.test(o.text || '')).length;
+    const workspaces = [...new Set(observations.map(o => String(o.workspace || '').trim()).filter(Boolean))].slice(0, 3);
+    liveState.observationDigest = {
+      id: 'observation-digest',
+      count: observations.length,
+      riskCount,
+      latestText: latest.text || '',
+      workspaces,
+    };
+    updateDrawerSummary();
   }
 
   async function recordHudAction(item, action) {
@@ -1527,6 +1645,14 @@
     return { critical: 0, warning: 1, active: 2, normal: 3 }[priority] ?? 4;
   }
 
+  function isLowConfidenceHudItem(item) {
+    const text = `${item?.title || ''} ${item?.detail || ''}`.toLowerCase();
+    if (text.includes('smoke')) return true;
+    if (text.includes('unknown sender')) return true;
+    if (text.includes('inboxcreate') && !text.includes('slack') && !text.includes('fireflies')) return true;
+    return false;
+  }
+
   function buildHealthHudItems(h) {
     if (!h) return [];
     const items = [];
@@ -1553,8 +1679,6 @@
     const brief = liveState.activeBrief || {};
     const items = [];
     const workspace = String(c.workspace || '').trim();
-    const activeFile = String(c.activeFile || '').trim();
-    const changedFiles = Array.isArray(c.changedFiles) ? c.changedFiles : [];
 
     items.push(...buildHealthHudItems(liveState.health));
 
@@ -1562,124 +1686,106 @@
       items.push({
         id: 'life-active-' + brief.activeProject.businessKey + '-' + brief.activeProject.id,
         kind: 'life',
-        priority: 'critical',
+        priority: 'active',
         icon: 'fa-location-crosshairs',
-        title: 'Active project: ' + brief.activeProject.name,
-        detail: 'Marcus matched this from your live workspace. Keep the working set small.',
+        title: 'I’m focused on ' + humanProjectLabel(brief.activeProject.name) + '.',
+        detail: 'I matched this from your live window, so I’ll keep the noise around other projects down.',
         targetType: 'project',
         target: brief.activeProject.id || '',
         prompt: `Give me the operating brief for ${brief.activeProject.name}. What am I supposed to do next, who needs a message, and what can wait?`,
       });
     }
 
-    (Array.isArray(brief.conversations) ? brief.conversations : []).slice(0, 4).forEach((conv, idx) => {
+    (Array.isArray(brief.conversations) ? brief.conversations : []).slice(0, 2).forEach((conv, idx) => {
+      const projectName = conv.projectName ? humanProjectLabel(conv.projectName) : currentHumanProjectName();
+      const who = conv.who || 'the client';
       items.push({
         id: 'life-conv-' + conv.businessKey + '-' + conv.id,
         kind: 'conversation',
         priority: conv.needsAction ? (idx === 0 ? 'critical' : 'warning') : 'active',
         icon: 'fa-comments',
-        title: (conv.who || 'Client') + (conv.projectName ? ' - ' + conv.projectName : ''),
-        detail: conv.preview || 'Conversation needs review.',
+        title: `Hey, ${who} may need you on ${projectName}.`,
+        detail: conv.needsAction
+          ? 'This looks like it needs a reply or a handoff. Want me to draft the message?'
+          : 'Not urgent, but it belongs in today’s awareness instead of the old pile.',
         targetType: 'conversation',
         target: conv.id || '',
         prompt: `Review this conversation from ${conv.who || 'the client'}${conv.projectName ? ` on ${conv.projectName}` : ''}: "${conv.preview || ''}". Tell me what to do, what task to create, and what message to send.`,
       });
     });
 
-    (Array.isArray(brief.messageDrafts) ? brief.messageDrafts : []).slice(0, 3).forEach((draft, idx) => {
+    (Array.isArray(brief.messageDrafts) ? brief.messageDrafts : []).slice(0, 1).forEach((draft, idx) => {
       items.push({
         id: 'life-draft-' + draft.businessKey + '-' + draft.conversationId,
         kind: 'draft',
         priority: idx === 0 ? 'warning' : 'normal',
         icon: 'fa-paper-plane',
-        title: 'Suggested team message: ' + (draft.to || 'Team'),
-        detail: draft.reason || draft.body || 'Marcus recommends an internal follow-up.',
+        title: 'Want me to draft the handoff to ' + (draft.to || 'the team') + '?',
+        detail: 'I can turn the client conversation into a short message and next step.',
         targetType: 'draft',
         target: draft.conversationId || '',
         prompt: `Tighten this team message and tell me who should receive it:\n\n${draft.body || ''}`,
       });
     });
 
-    (Array.isArray(brief.projects) ? brief.projects : []).slice(0, 4).forEach((project, idx) => {
+    (Array.isArray(brief.projects) ? brief.projects : []).slice(0, 2).forEach((project, idx) => {
       if (brief.activeProject?.id && String(project.id) === String(brief.activeProject.id)) return;
       items.push({
         id: 'life-project-' + project.businessKey + '-' + project.id,
         kind: 'project',
         priority: idx === 0 ? 'active' : 'normal',
         icon: 'fa-diagram-project',
-        title: project.name,
-        detail: `${project.reason || 'Needs attention'}${project.openTasks ? `, ${project.openTasks} open task${project.openTasks === 1 ? '' : 's'}` : ''}${project.inboxCount ? `, ${project.inboxCount} conversation${project.inboxCount === 1 ? '' : 's'}` : ''}`,
+        title: humanProjectLabel(project.name) + ' is in the active set.',
+        detail: project.inboxCount
+          ? 'There is recent client pressure here. Want me to draft the next message?'
+          : project.urgentTasks
+            ? 'This has current task pressure. I can package the next move.'
+            : 'It is recent enough to track, but it should not take over your screen.',
         targetType: 'project',
         target: project.id || '',
         prompt: `Give me a concise operating brief for ${project.name}. What matters, what should I ignore, and what message should I send if any?`,
       });
     });
 
-    if (workspace) {
+    if (liveState.observationDigest?.riskCount) {
+      const digest = liveState.observationDigest;
       items.push({
+        id: digest.id,
+        kind: 'observation-digest',
+        priority: 'warning',
+        icon: 'fa-layer-group',
+        title: `There’s an issue in ${currentHumanProjectName()}.`,
+        detail: humanizeTechnicalText(digest.latestText),
+        targetType: '',
+        prompt: `Summarize these recent Marcus Live observations into only the decisions and next actions that matter. Do not list every observation. Latest: "${digest.latestText || ''}"`,
+      });
+    }
+
+    const filtered = items
+      .filter(item => item.id && !liveState.dismissed.has(item.id) && !liveState.resolved.has(item.id))
+      .filter(item => !isLowConfidenceHudItem(item))
+      .sort((a, b) => severityRank(a.priority) - severityRank(b.priority));
+
+    if (!filtered.length && workspace) {
+      filtered.push({
         id: 'workspace-' + workspace,
         kind: 'workspace',
-        priority: 'active',
+        priority: 'normal',
         icon: 'fa-crosshairs',
-        title: 'Current workspace: ' + workspace,
-        detail: c.branch ? `Branch ${c.branch}${changedFiles.length ? `, ${changedFiles.length} changed` : ''}` : 'Live workspace context is active.',
+        title: `I’m with you on ${humanProjectLabel(workspace)}.`,
+        detail: 'Nothing is worth interrupting you for right now. Keep moving.',
         targetType: c.workspacePath ? 'workspace' : '',
         target: c.workspacePath || '',
       });
     }
 
-    if (activeFile) {
-      items.push({
-        id: 'file-' + activeFile,
-        kind: 'file',
-        priority: 'active',
-        icon: 'fa-file-pen',
-        title: 'Active file: ' + activeFile,
-        detail: 'Open it, ask Marcus for a scan, or mark handled when you have acted.',
-        targetType: 'file',
-        target: activeFile,
-        prompt: `Scan ${activeFile}. What matters right now and what should I do next?`,
-      });
-    }
-
-    changedFiles.slice(0, 5).forEach((raw, idx) => {
-      const file = String(raw || '').replace(/^\S+\s+/, '').trim();
-      if (!file) return;
-      items.push({
-        id: 'changed-' + file,
-        kind: 'change',
-        priority: idx === 0 ? 'active' : 'normal',
-        icon: 'fa-code-compare',
-        title: file,
-        detail: 'Uncommitted change in the current workspace.',
-        targetType: 'file',
-        target: file,
-        prompt: `Review the uncommitted change in ${file}. Any risk or next move?`,
-      });
-    });
-
-    liveState.observations.slice(-4).reverse().forEach(obs => {
-      items.push({
-        id: 'obs-' + obs.id,
-        kind: 'observation',
-        priority: /threat|defender|firewall|failed login|security|critical|bug|risk/i.test(obs.text || '') ? 'warning' : 'normal',
-        icon: 'fa-satellite-dish',
-        title: 'Marcus observation',
-        detail: obs.text || '',
-        targetType: '',
-        prompt: `Expand this Marcus Live observation into the next concrete action: "${obs.text || ''}"`,
-      });
-    });
-
-    return items
-      .filter(item => item.id && !liveState.dismissed.has(item.id) && !liveState.resolved.has(item.id))
-      .sort((a, b) => severityRank(a.priority) - severityRank(b.priority))
-      .slice(0, 12);
+    return filtered.slice(0, 3);
   }
 
   function renderHud() {
     const items = buildHudItems();
-    hudCountEl.textContent = `${items.length} active`;
+    const visibleItems = items.slice(0, 1);
+    hudCountEl.textContent = items.length ? 'Now' : 'Quiet';
     const critical = items.filter(i => i.priority === 'critical').length;
     const warning = items.filter(i => i.priority === 'warning').length;
     signalFocus.textContent = liveState.context?.workspace
@@ -1692,14 +1798,17 @@
       ? `Action: ${String(liveState.actions[liveState.actions.length - 1]?.action || 'logged')}`
       : 'Action: none';
     if (!items.length) {
-      hudItemsEl.innerHTML = '<div class="hud-empty">No active HUD items. Marcus will surface the next useful signal.</div>';
-      readoutMain.textContent = 'No urgent HUD items. Watching for the next useful signal.';
+      hudItemsEl.innerHTML = '<div class="hud-empty">Quiet right now. I’m watching, but nothing deserves your attention.</div>';
+      readoutMain.textContent = 'Quiet right now. I’m watching, but nothing deserves your attention.';
+      presenceStatus.textContent = 'Quiet right now. I’m watching, but nothing deserves your attention.';
+      updateDrawerSummary();
       return;
     }
 
     const top = items[0];
-    readoutMain.textContent = `${top.title} - ${top.detail || 'Ready.'}`;
-    hudItemsEl.innerHTML = items.map(item => `
+    readoutMain.textContent = `${top.title} ${top.detail || ''}`.trim();
+    presenceStatus.textContent = `${top.title} ${top.detail || ''}`.trim();
+    hudItemsEl.innerHTML = visibleItems.map(item => `
       <article class="hud-card priority-${esc(item.priority || 'normal')}" data-id="${esc(item.id)}">
         <div class="hud-icon"><i class="fa-solid ${esc(item.icon || 'fa-circle-dot')}"></i></div>
         <div class="hud-body">
@@ -1707,8 +1816,8 @@
           <div class="hud-detail">${esc(item.detail || '')}</div>
         </div>
         <div class="hud-actions">
-          <button class="hud-btn primary" type="button" data-hud-action="open" title="Open or focus"><i class="fa-solid fa-arrow-up-right-from-square"></i></button>
-          <button class="hud-btn" type="button" data-hud-action="done" title="Mark action taken"><i class="fa-solid fa-check"></i></button>
+          <button class="hud-btn primary action-text" type="button" data-hud-action="open" title="Open or focus"><i class="fa-solid fa-wand-magic-sparkles"></i><span>Prep it</span></button>
+          <button class="hud-btn action-text" type="button" data-hud-action="done" title="Mark action taken"><i class="fa-solid fa-check"></i><span>Done</span></button>
           <button class="hud-btn" type="button" data-hud-action="dismiss" title="Remove from HUD"><i class="fa-solid fa-xmark"></i></button>
         </div>
       </article>
@@ -1717,7 +1826,7 @@
     hudItemsEl.querySelectorAll('[data-hud-action]').forEach(btn => {
       btn.addEventListener('click', () => {
         const card = btn.closest('.hud-card');
-        const item = items.find(i => i.id === card?.dataset.id);
+        const item = visibleItems.find(i => i.id === card?.dataset.id);
         if (!item) return;
         const action = btn.dataset.hudAction;
         if (action === 'open') openHudItem(item);
@@ -1725,6 +1834,7 @@
         if (action === 'dismiss') dismissHudItem(item);
       });
     });
+    updateDrawerSummary();
   }
 
   function renderActionTape() {
@@ -1857,13 +1967,10 @@
             if (!liveState.observations.some(o => o.id === obs.id)) {
               liveState.observations.push(obs);
             }
-            addMsg('observation', obs.text, {
-              tag: 'observation',
-              time: timeStr(obs.ts),
-              workspace: obs.workspace,
-            });
+            addMsg('observation', obs.text, { tag: 'observation', time: timeStr(obs.ts), workspace: obs.workspace });
           }
           liveState.observations = liveState.observations.slice(-30);
+          updateObservationDigest();
         }
         renderHud();
         break;
@@ -1898,11 +2005,8 @@
           liveState.observations.push(data);
           liveState.observations = liveState.observations.slice(-30);
         }
-        addMsg('observation', data.text, {
-          tag: 'observation',
-          time: timeStr(data.ts),
-          workspace: data.workspace,
-        });
+        addMsg('observation', data.text, { tag: 'observation', time: timeStr(data.ts), workspace: data.workspace });
+        updateObservationDigest();
         renderHud();
         break;
 
@@ -1915,7 +2019,7 @@
       case 'thinking':
         presenceStatus.textContent = 'Analyzing workspace changes.';
         assistantLine.textContent = 'Analysis in progress';
-        addMsg('thinking', 'M.A.R.C.U.S. is analyzing the workspace...');
+        assistantCore.classList.add('thinking');
         break;
 
       case 'action':
@@ -1930,6 +2034,11 @@
       input.focus();
       sendChat();
     });
+  });
+
+  drawerToggle.addEventListener('click', () => {
+    secondaryDrawer.classList.toggle('open');
+    drawerToggle.querySelector('span').textContent = secondaryDrawer.classList.contains('open') ? 'Details visible' : 'Details muted';
   });
 
   voiceToggle.addEventListener('click', () => {
