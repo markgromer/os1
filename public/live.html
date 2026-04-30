@@ -7,19 +7,26 @@
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
 <style>
   :root {
-    --bg: #0a0f1a;
-    --surface: #111827;
-    --border: rgba(59,130,246,0.15);
-    --accent: #3b82f6;
-    --text: #e2e8f0;
-    --muted: #64748b;
+    --bg: #060a0f;
+    --surface: rgba(12,18,28,0.84);
+    --surface-strong: rgba(15,23,35,0.94);
+    --panel: rgba(9,17,27,0.72);
+    --border: rgba(125,211,252,0.18);
+    --border-strong: rgba(125,211,252,0.34);
+    --accent: #38bdf8;
+    --accent-2: #2dd4bf;
+    --violet: #a78bfa;
     --green: #22c55e;
     --amber: #f59e0b;
     --red: #ef4444;
+    --text: #edf7ff;
+    --muted: #7b8ca3;
+    --subtle: #405064;
+    --shadow: 0 20px 70px rgba(0,0,0,0.46);
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
-    font-family: 'SF Mono', 'Cascadia Code', 'JetBrains Mono', 'Fira Code', monospace;
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     background: var(--bg);
     color: var(--text);
     height: 100vh;
@@ -27,28 +34,78 @@
     flex-direction: column;
     overflow: hidden;
     font-size: 12px;
+    letter-spacing: 0;
+    width: 100vw;
+  }
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    background:
+      radial-gradient(circle at 15% 15%, rgba(56,189,248,0.16), transparent 31%),
+      radial-gradient(circle at 82% 20%, rgba(45,212,191,0.11), transparent 27%),
+      linear-gradient(135deg, rgba(3,7,18,0.95), rgba(8,13,23,0.74) 48%, rgba(5,9,14,0.96));
+    z-index: -2;
+  }
+  body::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    background-image:
+      linear-gradient(rgba(125,211,252,0.035) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(125,211,252,0.035) 1px, transparent 1px);
+    background-size: 38px 38px;
+    mask-image: linear-gradient(to bottom, rgba(0,0,0,0.74), transparent 88%);
+    z-index: -1;
   }
 
   /* Header */
   .header {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 8px 12px;
+    gap: 12px;
+    padding: 10px 14px;
     border-bottom: 1px solid var(--border);
-    background: var(--surface);
+    background: rgba(6,10,15,0.78);
+    backdrop-filter: blur(18px);
     flex-shrink: 0;
+    min-width: 0;
   }
   .header .logo {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
     font-size: 11px;
     font-weight: 700;
     color: var(--accent);
-    letter-spacing: 1px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .header .logo i {
+    color: var(--accent-2);
+    filter: drop-shadow(0 0 10px rgba(45,212,191,0.45));
+  }
+  .header .assistant-line {
+    min-width: 0;
+    color: var(--muted);
+    font-size: 11px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .header .status {
     font-size: 10px;
     color: var(--muted);
     margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 4px 8px;
+    background: rgba(255,255,255,0.03);
+    white-space: nowrap;
   }
   .header .status.connected { color: var(--green); }
   .header .status.disconnected { color: var(--red); }
@@ -71,30 +128,312 @@
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
-    padding: 6px 12px;
-    background: rgba(59,130,246,0.05);
+    padding: 8px 14px;
+    background: rgba(8,13,21,0.74);
     border-bottom: 1px solid var(--border);
     font-size: 10px;
     flex-shrink: 0;
+    min-width: 0;
   }
   .ctx-pill {
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    padding: 2px 8px;
+    min-height: 24px;
+    padding: 3px 9px;
     border-radius: 999px;
     border: 1px solid var(--border);
     color: var(--muted);
+    background: rgba(255,255,255,0.025);
     white-space: nowrap;
   }
   .ctx-pill i { font-size: 8px; }
-  .ctx-pill.active { color: var(--accent); border-color: rgba(59,130,246,0.3); }
+  .ctx-pill.active {
+    color: var(--accent);
+    border-color: var(--border-strong);
+    box-shadow: inset 0 0 18px rgba(56,189,248,0.06);
+  }
+
+  /* Assistant deck */
+  .assistant-deck {
+    display: grid;
+    grid-template-columns: minmax(190px, 0.72fr) minmax(240px, 1.28fr);
+    gap: 10px;
+    padding: 12px 14px 10px;
+    border-bottom: 1px solid var(--border);
+    background: linear-gradient(180deg, rgba(6,10,15,0.72), rgba(8,13,21,0.36));
+    flex-shrink: 0;
+  }
+  .presence-panel,
+  .readout-panel {
+    border: 1px solid var(--border);
+    background: var(--panel);
+    border-radius: 8px;
+    box-shadow: var(--shadow);
+    min-width: 0;
+  }
+  .presence-panel {
+    display: grid;
+    grid-template-columns: 72px minmax(0, 1fr);
+    align-items: center;
+    gap: 10px;
+    padding: 12px;
+  }
+  .assistant-core {
+    position: relative;
+    width: 64px;
+    aspect-ratio: 1;
+    border-radius: 50%;
+    background:
+      radial-gradient(circle, rgba(237,247,255,0.95) 0 8%, rgba(125,211,252,0.9) 9% 16%, rgba(45,212,191,0.25) 17% 34%, transparent 35%),
+      conic-gradient(from 20deg, rgba(56,189,248,0.1), rgba(45,212,191,0.68), rgba(167,139,250,0.36), rgba(56,189,248,0.1));
+    box-shadow: 0 0 26px rgba(56,189,248,0.26), inset 0 0 22px rgba(237,247,255,0.1);
+    overflow: hidden;
+  }
+  .assistant-core::before,
+  .assistant-core::after {
+    content: "";
+    position: absolute;
+    inset: 7px;
+    border: 1px solid rgba(237,247,255,0.42);
+    border-radius: 50%;
+    animation: coreSpin 9s linear infinite;
+  }
+  .assistant-core::after {
+    inset: 16px;
+    border-color: rgba(45,212,191,0.48);
+    animation-duration: 5.5s;
+    animation-direction: reverse;
+  }
+  .assistant-core.thinking::before,
+  .assistant-core.thinking::after { animation-duration: 2.5s; }
+  @keyframes coreSpin { to { transform: rotate(360deg); } }
+  .presence-copy { min-width: 0; }
+  .presence-kicker {
+    font-size: 9px;
+    color: var(--accent-2);
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    margin-bottom: 4px;
+  }
+  .presence-title {
+    font-size: 17px;
+    line-height: 1.15;
+    font-weight: 760;
+    color: var(--text);
+  }
+  .presence-status {
+    margin-top: 5px;
+    color: var(--muted);
+    font-size: 11px;
+    line-height: 1.35;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .readout-panel {
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+  }
+  .readout-top {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+  .readout-label {
+    color: var(--muted);
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    white-space: nowrap;
+  }
+  .readout-signal {
+    height: 1px;
+    flex: 1;
+    background: linear-gradient(90deg, rgba(56,189,248,0.52), transparent);
+  }
+  .readout-main {
+    color: var(--text);
+    font-size: 12px;
+    line-height: 1.45;
+    min-height: 34px;
+  }
+  .quick-actions {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .quick-action {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    min-height: 26px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--muted);
+    background: rgba(255,255,255,0.03);
+    padding: 4px 9px;
+    font-family: inherit;
+    font-size: 10px;
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s, background 0.15s;
+  }
+  .quick-action:hover {
+    color: var(--text);
+    border-color: var(--border-strong);
+    background: rgba(56,189,248,0.08);
+  }
+  .quick-action i { font-size: 9px; color: var(--accent); }
+
+  /* Adaptive HUD */
+  .hud-shell {
+    display: grid;
+    grid-template-columns: minmax(280px, 1.2fr) minmax(220px, 0.8fr);
+    gap: 10px;
+    padding: 0 14px 10px;
+    border-bottom: 1px solid var(--border);
+    background: rgba(6,10,15,0.34);
+    flex-shrink: 0;
+  }
+  .hud-lane {
+    min-width: 0;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: rgba(6,13,21,0.62);
+    overflow: hidden;
+  }
+  .hud-lane-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 8px 10px;
+    border-bottom: 1px solid rgba(125,211,252,0.12);
+  }
+  .hud-lane-title {
+    color: var(--muted);
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+  }
+  .hud-count {
+    color: var(--accent);
+    font-size: 10px;
+    font-weight: 700;
+  }
+  .hud-items {
+    display: grid;
+    gap: 7px;
+    padding: 8px;
+    max-height: 178px;
+    overflow-y: auto;
+  }
+  .hud-items::-webkit-scrollbar { width: 4px; }
+  .hud-items::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  .hud-card {
+    display: grid;
+    grid-template-columns: 24px minmax(0, 1fr) auto;
+    gap: 8px;
+    align-items: start;
+    padding: 8px;
+    border: 1px solid rgba(125,211,252,0.14);
+    border-radius: 8px;
+    background: rgba(255,255,255,0.025);
+  }
+  .hud-card.priority-critical { border-color: rgba(239,68,68,0.36); background: rgba(239,68,68,0.06); }
+  .hud-card.priority-warning { border-color: rgba(245,158,11,0.34); background: rgba(245,158,11,0.055); }
+  .hud-card.priority-active { border-color: rgba(56,189,248,0.32); background: rgba(56,189,248,0.065); }
+  .hud-card.priority-normal { border-color: rgba(125,211,252,0.14); }
+  .hud-icon {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--accent);
+    background: rgba(56,189,248,0.09);
+    border: 1px solid rgba(56,189,248,0.18);
+  }
+  .hud-card.priority-critical .hud-icon { color: var(--red); background: rgba(239,68,68,0.1); border-color: rgba(239,68,68,0.24); }
+  .hud-card.priority-warning .hud-icon { color: var(--amber); background: rgba(245,158,11,0.1); border-color: rgba(245,158,11,0.22); }
+  .hud-body { min-width: 0; }
+  .hud-title {
+    color: var(--text);
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1.25;
+    overflow-wrap: anywhere;
+  }
+  .hud-detail {
+    color: var(--muted);
+    font-size: 10px;
+    line-height: 1.35;
+    margin-top: 3px;
+    overflow-wrap: anywhere;
+  }
+  .hud-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .hud-btn {
+    width: 26px;
+    height: 26px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: rgba(255,255,255,0.03);
+    color: var(--muted);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s, background 0.15s;
+  }
+  .hud-btn:hover {
+    color: var(--text);
+    border-color: var(--border-strong);
+    background: rgba(56,189,248,0.08);
+  }
+  .hud-btn.primary { color: var(--accent); }
+  .hud-empty {
+    color: var(--subtle);
+    font-size: 11px;
+    padding: 10px;
+    text-align: center;
+    overflow-wrap: anywhere;
+  }
+  .action-tape {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px;
+    max-height: 178px;
+    overflow-y: auto;
+  }
+  .action-row {
+    display: grid;
+    grid-template-columns: 54px minmax(0, 1fr);
+    gap: 7px;
+    color: var(--muted);
+    font-size: 10px;
+    line-height: 1.3;
+  }
+  .action-time { color: var(--subtle); }
+  .action-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 
   /* Feed */
   .feed {
     flex: 1;
     overflow-y: auto;
-    padding: 8px 12px;
+    padding: 12px 14px;
     display: flex;
     flex-direction: column;
     gap: 8px;
@@ -104,26 +443,31 @@
   .feed::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 
   .msg {
-    padding: 8px 10px;
+    padding: 9px 11px;
     border-radius: 8px;
     max-width: 95%;
     line-height: 1.5;
     animation: fadeIn 0.3s ease;
+    border: 1px solid transparent;
+    font-size: 12px;
   }
   @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 
   .msg.observation {
-    background: rgba(59,130,246,0.08);
+    background: rgba(56,189,248,0.08);
+    border-color: rgba(56,189,248,0.16);
     border-left: 2px solid var(--accent);
     align-self: flex-start;
   }
   .msg.chat-marcus {
-    background: rgba(59,130,246,0.08);
-    border-left: 2px solid var(--accent);
+    background: rgba(45,212,191,0.08);
+    border-color: rgba(45,212,191,0.18);
+    border-left: 2px solid var(--accent-2);
     align-self: flex-start;
   }
   .msg.chat-user {
     background: rgba(34,197,94,0.08);
+    border-color: rgba(34,197,94,0.16);
     border-left: 2px solid var(--green);
     align-self: flex-end;
   }
@@ -140,6 +484,7 @@
     text-align: center;
     align-self: center;
     padding: 4px 8px;
+    border: 0;
   }
   .msg .meta {
     font-size: 9px;
@@ -153,7 +498,7 @@
     font-size: 8px;
     padding: 1px 5px;
     border-radius: 3px;
-    background: rgba(59,130,246,0.15);
+    background: rgba(56,189,248,0.13);
     color: var(--accent);
     text-transform: uppercase;
     letter-spacing: 0.5px;
@@ -163,32 +508,41 @@
   .chat-bar {
     display: flex;
     gap: 6px;
-    padding: 8px 12px;
+    padding: 10px 14px 12px;
     border-top: 1px solid var(--border);
-    background: var(--surface);
+    background: rgba(6,10,15,0.82);
+    backdrop-filter: blur(18px);
     flex-shrink: 0;
+    width: 100%;
+    min-width: 0;
   }
   .chat-bar input {
     flex: 1;
+    min-width: 0;
     background: rgba(255,255,255,0.05);
     border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 8px 10px;
+    border-radius: 999px;
+    padding: 9px 12px;
     color: var(--text);
     font-family: inherit;
-    font-size: 11px;
+    font-size: 12px;
     outline: none;
   }
-  .chat-bar input:focus { border-color: var(--accent); }
+  .chat-bar input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(56,189,248,0.1);
+  }
   .chat-bar input::placeholder { color: var(--muted); }
   .chat-bar button {
-    background: var(--accent);
+    flex: 0 0 auto;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
     border: none;
-    border-radius: 6px;
-    padding: 8px 14px;
-    color: white;
+    border-radius: 999px;
+    padding: 9px 14px;
+    color: #031018;
     font-family: inherit;
     font-size: 11px;
+    font-weight: 700;
     cursor: pointer;
     display: flex;
     align-items: center;
@@ -202,7 +556,7 @@
   .health-panel {
     display: none;
     padding: 8px 12px;
-    background: rgba(17,24,39,0.8);
+    background: rgba(9,17,27,0.86);
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
   }
@@ -210,11 +564,11 @@
   .health-toggle {
     background: none;
     border: 1px solid var(--border);
-    border-radius: 4px;
+    border-radius: 999px;
     color: var(--muted);
     font-family: inherit;
     font-size: 9px;
-    padding: 2px 8px;
+    padding: 3px 8px;
     cursor: pointer;
     margin-left: 8px;
     transition: color 0.2s, border-color 0.2s;
@@ -349,12 +703,60 @@
     .msg { font-size: 11px; }
     .health-grid { grid-template-columns: 1fr 1fr; }
   }
+  @media (max-width: 620px) {
+    .header .assistant-line { display: none; }
+    .header { gap: 8px; padding-right: 76px; }
+    .header .status {
+      position: fixed;
+      right: 14px;
+      top: 10px;
+      padding: 4px 7px;
+      z-index: 8;
+    }
+    .assistant-deck { grid-template-columns: 1fr; }
+    .hud-shell { grid-template-columns: 1fr; }
+    .hud-items,
+    .action-tape { max-height: 132px; }
+    .hud-card {
+      grid-template-columns: 24px minmax(0, 1fr);
+    }
+    .hud-actions {
+      grid-column: 1 / -1;
+      justify-content: flex-start;
+      padding-left: 32px;
+    }
+    .presence-panel { grid-template-columns: 58px minmax(0, 1fr); }
+    .assistant-core { width: 52px; }
+    .presence-title { font-size: 15px; }
+    .chat-bar {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      z-index: 8;
+      display: flex;
+      align-items: center;
+      width: 100vw;
+    }
+    .feed { padding-bottom: 72px; }
+    .chat-bar input { flex: 1 1 auto; width: auto; }
+    .chat-bar button {
+      order: -1;
+      position: static;
+      width: 42px;
+      height: 36px;
+      justify-content: center;
+      padding: 0;
+    }
+    .chat-bar button span { display: none; }
+  }
 </style>
 </head>
 <body>
 
 <div class="header">
-  <span class="logo"><i class="fa-solid fa-brain"></i> M.A.R.C.U.S. LIVE</span>
+  <span class="logo"><i class="fa-solid fa-circle-nodes"></i> M.A.R.C.U.S. LIVE</span>
+  <span class="assistant-line" id="assistant-line">Personal operations layer online</span>
   <span class="status disconnected" id="status"><span class="pulse off"></span>Connecting...</span>
 </div>
 
@@ -364,6 +766,50 @@
   <span class="ctx-pill" id="ctx-app"><i class="fa-solid fa-window-maximize"></i> <span>-</span></span>
   <span class="ctx-pill" id="ctx-files"><i class="fa-solid fa-file-pen"></i> <span>-</span></span>
   <button class="health-toggle" id="health-toggle" title="System Health"><i class="fa-solid fa-heartbeat"></i> SYS</button>
+</div>
+
+<div class="assistant-deck">
+  <section class="presence-panel" aria-label="Assistant status">
+    <div class="assistant-core" id="assistant-core"></div>
+    <div class="presence-copy">
+      <div class="presence-kicker">Personal Assistant</div>
+      <div class="presence-title">Standing by, Mark.</div>
+      <div class="presence-status" id="presence-status">Watching the workspace for useful signals.</div>
+    </div>
+  </section>
+  <section class="readout-panel" aria-label="Current readout">
+    <div class="readout-top">
+      <span class="readout-label">Current Readout</span>
+      <span class="readout-signal"></span>
+    </div>
+    <div class="readout-main" id="readout-main">Waiting for live workspace context.</div>
+    <div class="quick-actions">
+      <button class="quick-action" type="button" data-command="Give me the current readout. What matters right now?"><i class="fa-solid fa-crosshairs"></i> Readout</button>
+      <button class="quick-action" type="button" data-command="Scan the current workspace for risks, blockers, and the next best move."><i class="fa-solid fa-radar"></i> Scan</button>
+      <button class="quick-action" type="button" data-command="What should I do next? Keep it short and decisive."><i class="fa-solid fa-route"></i> Next Move</button>
+    </div>
+  </section>
+</div>
+
+<div class="hud-shell">
+  <section class="hud-lane" aria-label="Adaptive HUD items">
+    <div class="hud-lane-header">
+      <span class="hud-lane-title">HUD Stack</span>
+      <span class="hud-count" id="hud-count">0 active</span>
+    </div>
+    <div class="hud-items" id="hud-items">
+      <div class="hud-empty">Waiting for live signals.</div>
+    </div>
+  </section>
+  <section class="hud-lane" aria-label="Action history">
+    <div class="hud-lane-header">
+      <span class="hud-lane-title">Action Tape</span>
+      <span class="hud-count" id="action-count">0 logged</span>
+    </div>
+    <div class="action-tape" id="action-tape">
+      <div class="hud-empty">Actions you take here will feed back into Marcus.</div>
+    </div>
+  </section>
 </div>
 
 <div class="health-panel" id="health-panel">
@@ -398,12 +844,12 @@
 </div>
 
 <div class="feed" id="feed">
-  <div class="msg system">Connecting to M.A.R.C.U.S. Live feed...</div>
+  <div class="msg system">Initializing live assistant feed...</div>
 </div>
 
 <div class="chat-bar">
-  <input type="text" id="chat-input" placeholder="Talk to Marcus about what you're working on..." autocomplete="off" />
-  <button id="chat-send"><i class="fa-solid fa-paper-plane"></i> Send</button>
+  <input type="text" id="chat-input" placeholder="Ask for a readout, a risk scan, or the next move..." autocomplete="off" />
+  <button id="chat-send"><i class="fa-solid fa-paper-plane"></i> <span>Send</span></button>
 </div>
 
 <script>
@@ -412,13 +858,29 @@
   const input = document.getElementById('chat-input');
   const sendBtn = document.getElementById('chat-send');
   const statusEl = document.getElementById('status');
+  const assistantLine = document.getElementById('assistant-line');
+  const presenceStatus = document.getElementById('presence-status');
+  const readoutMain = document.getElementById('readout-main');
+  const assistantCore = document.getElementById('assistant-core');
   const ctxWorkspace = document.querySelector('#ctx-workspace span');
   const ctxBranch = document.querySelector('#ctx-branch span');
   const ctxApp = document.querySelector('#ctx-app span');
   const ctxFiles = document.querySelector('#ctx-files span');
   const healthToggle = document.getElementById('health-toggle');
   const healthPanel = document.getElementById('health-panel');
+  const hudItemsEl = document.getElementById('hud-items');
+  const hudCountEl = document.getElementById('hud-count');
+  const actionTapeEl = document.getElementById('action-tape');
+  const actionCountEl = document.getElementById('action-count');
   const BASE = window.location.origin;
+  const liveState = {
+    context: {},
+    health: null,
+    observations: [],
+    actions: [],
+    dismissed: loadStoredSet('marcusLiveHudDismissed'),
+    resolved: loadStoredSet('marcusLiveHudResolved'),
+  };
 
   // Health panel toggle
   healthToggle.addEventListener('click', () => {
@@ -460,10 +922,26 @@
     return headers;
   }
 
+  function loadStoredSet(key) {
+    try {
+      return new Set(JSON.parse(localStorage.getItem(key) || '[]'));
+    } catch {
+      return new Set();
+    }
+  }
+
+  function saveStoredSet(key, set) {
+    try {
+      localStorage.setItem(key, JSON.stringify([...set].slice(-200)));
+    } catch {}
+  }
+
   function setStatus(kind, label) {
     const connected = kind === 'connected';
     statusEl.className = `status ${connected ? 'connected' : 'disconnected'}`;
     statusEl.innerHTML = `<span class="pulse${connected ? '' : ' off'}"></span>${esc(label)}`;
+    presenceStatus.textContent = connected ? 'Listening for changes and watching for useful openings.' : label;
+    assistantLine.textContent = connected ? 'Situational awareness active' : 'Trying to re-establish the live feed';
   }
 
   function esc(s) {
@@ -496,8 +974,258 @@
     div.innerHTML = metaHtml + esc(text);
     feed.appendChild(div);
 
+    if (type === 'chat-marcus' || type === 'observation') {
+      presenceStatus.textContent = type === 'observation' ? 'New signal surfaced.' : 'Response delivered.';
+      readoutMain.textContent = text.length > 180 ? text.slice(0, 177) + '...' : text;
+    }
+    assistantCore.classList.toggle('thinking', type === 'thinking');
+
     // Auto-scroll to bottom
     feed.scrollTop = feed.scrollHeight;
+  }
+
+  function rememberAction(action) {
+    if (!action || !action.id) return;
+    if (liveState.actions.some(a => a.id === action.id)) return;
+    liveState.actions.push(action);
+    liveState.actions = liveState.actions.slice(-40);
+    renderActionTape();
+  }
+
+  async function recordHudAction(item, action) {
+    const payload = {
+      itemId: item.id,
+      action,
+      label: item.title,
+      kind: item.kind,
+      target: item.target || '',
+    };
+    try {
+      const resp = await fetch(`${BASE}/api/marcus/live/action`, {
+        method: 'POST',
+        headers: buildAuthHeaders({ 'Content-Type': 'application/json' }),
+        credentials: 'include',
+        body: JSON.stringify(payload),
+      });
+      const data = await resp.json();
+      if (data?.action) rememberAction(data.action);
+    } catch {
+      rememberAction({ id: 'local-' + Date.now(), ...payload, ts: Date.now() });
+    }
+  }
+
+  function normalizeFilePath(path) {
+    return String(path || '').replace(/\\/g, '/').replace(/^\/+/, '');
+  }
+
+  function toVsCodeUrl(path) {
+    const normalized = String(path || '').replace(/\\/g, '/');
+    if (!normalized) return '';
+    return 'vscode://file/' + encodeURI(normalized);
+  }
+
+  function workspaceFilePath(relPath) {
+    const base = String(liveState.context.workspacePath || '').trim();
+    const rel = normalizeFilePath(relPath);
+    if (!base) return rel;
+    if (/^[A-Za-z]:\//.test(rel) || rel.startsWith('//')) return rel;
+    return base.replace(/[\\/]+$/, '') + '/' + rel;
+  }
+
+  function openHudItem(item) {
+    if (item.targetType === 'health') {
+      healthPanel.classList.add('visible');
+      healthToggle.classList.add('active');
+    } else if (item.targetType === 'file' && item.target) {
+      window.open(toVsCodeUrl(workspaceFilePath(item.target)), '_blank');
+    } else if (item.targetType === 'workspace') {
+      window.open(toVsCodeUrl(liveState.context.workspacePath || ''), '_blank');
+    } else if (item.prompt) {
+      input.value = item.prompt;
+      input.focus();
+      sendChat();
+    }
+    recordHudAction(item, 'open');
+  }
+
+  function resolveHudItem(item) {
+    liveState.resolved.add(item.id);
+    saveStoredSet('marcusLiveHudResolved', liveState.resolved);
+    recordHudAction(item, 'done');
+    addMsg('system', 'Action logged: ' + item.title);
+    renderHud();
+  }
+
+  function dismissHudItem(item) {
+    liveState.dismissed.add(item.id);
+    saveStoredSet('marcusLiveHudDismissed', liveState.dismissed);
+    recordHudAction(item, 'dismiss');
+    renderHud();
+  }
+
+  function severityRank(priority) {
+    return { critical: 0, warning: 1, active: 2, normal: 3 }[priority] ?? 4;
+  }
+
+  function buildHealthHudItems(h) {
+    if (!h) return [];
+    const items = [];
+    const cpu = typeof h.cpu === 'number' ? h.cpu : (h.cpuPercent || 0);
+    const ram = typeof h.ram === 'number' ? h.ram : (h.memoryPercent || 0);
+    const disks = Array.isArray(h.disks) ? h.disks : [];
+    const threatList = Array.isArray(h.recentThreats) ? h.recentThreats : [];
+    const failedLogins = Array.isArray(h.failedLogins) ? h.failedLogins : [];
+    const fwOff = (Array.isArray(h.firewall) ? h.firewall : []).filter(f => !f.enabled);
+    const defenderOk = h.defenderOk !== undefined ? h.defenderOk : (h.defender?.enabled && h.defender?.realTimeProtection);
+
+    if (threatList.length) items.push({ id: 'health-threats', kind: 'security', priority: 'critical', icon: 'fa-bug', title: `${threatList.length} threat signal${threatList.length === 1 ? '' : 's'}`, detail: 'Open system health and deal with this before normal work.', targetType: 'health' });
+    if (failedLogins.length) items.push({ id: 'health-logins', kind: 'security', priority: 'critical', icon: 'fa-user-xmark', title: `${failedLogins.length} failed login attempt${failedLogins.length === 1 ? '' : 's'}`, detail: 'Marcus flagged this as a possible security issue.', targetType: 'health' });
+    if (!defenderOk) items.push({ id: 'health-defender', kind: 'security', priority: 'critical', icon: 'fa-shield-halved', title: 'Defender needs attention', detail: 'Protection is disabled, stale, or not reporting cleanly.', targetType: 'health' });
+    if (fwOff.length) items.push({ id: 'health-firewall', kind: 'security', priority: 'critical', icon: 'fa-shield-halved', title: 'Firewall profile disabled', detail: `${fwOff.map(f => f.profile).join(', ')} profile${fwOff.length === 1 ? '' : 's'} off.`, targetType: 'health' });
+    if (cpu > 85) items.push({ id: 'health-cpu', kind: 'system', priority: cpu > 92 ? 'critical' : 'warning', icon: 'fa-microchip', title: `CPU at ${cpu}%`, detail: 'Open health to see top processes before the machine drags.', targetType: 'health' });
+    if (ram > 88) items.push({ id: 'health-ram', kind: 'system', priority: ram > 94 ? 'critical' : 'warning', icon: 'fa-memory', title: `RAM at ${ram}%`, detail: 'Memory pressure is high enough to affect work.', targetType: 'health' });
+    if (disks[0]?.usedPercent > 88) items.push({ id: 'health-disk', kind: 'system', priority: disks[0].usedPercent > 94 ? 'critical' : 'warning', icon: 'fa-hard-drive', title: `${disks[0].drive || 'Disk'} ${disks[0].usedPercent}% full`, detail: `${disks[0].freeGB || '?'} GB free.`, targetType: 'health' });
+    return items;
+  }
+
+  function buildHudItems() {
+    const c = liveState.context || {};
+    const items = [];
+    const workspace = String(c.workspace || '').trim();
+    const activeFile = String(c.activeFile || '').trim();
+    const changedFiles = Array.isArray(c.changedFiles) ? c.changedFiles : [];
+
+    items.push(...buildHealthHudItems(liveState.health));
+
+    if (workspace) {
+      items.push({
+        id: 'workspace-' + workspace,
+        kind: 'workspace',
+        priority: 'active',
+        icon: 'fa-crosshairs',
+        title: 'Current workspace: ' + workspace,
+        detail: c.branch ? `Branch ${c.branch}${changedFiles.length ? `, ${changedFiles.length} changed` : ''}` : 'Live workspace context is active.',
+        targetType: c.workspacePath ? 'workspace' : '',
+        target: c.workspacePath || '',
+      });
+    }
+
+    if (activeFile) {
+      items.push({
+        id: 'file-' + activeFile,
+        kind: 'file',
+        priority: 'active',
+        icon: 'fa-file-pen',
+        title: 'Active file: ' + activeFile,
+        detail: 'Open it, ask Marcus for a scan, or mark handled when you have acted.',
+        targetType: 'file',
+        target: activeFile,
+        prompt: `Scan ${activeFile}. What matters right now and what should I do next?`,
+      });
+    }
+
+    changedFiles.slice(0, 5).forEach((raw, idx) => {
+      const file = String(raw || '').replace(/^\S+\s+/, '').trim();
+      if (!file) return;
+      items.push({
+        id: 'changed-' + file,
+        kind: 'change',
+        priority: idx === 0 ? 'active' : 'normal',
+        icon: 'fa-code-compare',
+        title: file,
+        detail: 'Uncommitted change in the current workspace.',
+        targetType: 'file',
+        target: file,
+        prompt: `Review the uncommitted change in ${file}. Any risk or next move?`,
+      });
+    });
+
+    liveState.observations.slice(-4).reverse().forEach(obs => {
+      items.push({
+        id: 'obs-' + obs.id,
+        kind: 'observation',
+        priority: /threat|defender|firewall|failed login|security|critical|bug|risk/i.test(obs.text || '') ? 'warning' : 'normal',
+        icon: 'fa-satellite-dish',
+        title: 'Marcus observation',
+        detail: obs.text || '',
+        targetType: '',
+        prompt: `Expand this Marcus Live observation into the next concrete action: "${obs.text || ''}"`,
+      });
+    });
+
+    return items
+      .filter(item => item.id && !liveState.dismissed.has(item.id) && !liveState.resolved.has(item.id))
+      .sort((a, b) => severityRank(a.priority) - severityRank(b.priority))
+      .slice(0, 12);
+  }
+
+  function renderHud() {
+    const items = buildHudItems();
+    hudCountEl.textContent = `${items.length} active`;
+    if (!items.length) {
+      hudItemsEl.innerHTML = '<div class="hud-empty">No active HUD items. Marcus will surface the next useful signal.</div>';
+      readoutMain.textContent = 'No urgent HUD items. Watching for the next useful signal.';
+      return;
+    }
+
+    const top = items[0];
+    readoutMain.textContent = `${top.title} - ${top.detail || 'Ready.'}`;
+    hudItemsEl.innerHTML = items.map(item => `
+      <article class="hud-card priority-${esc(item.priority || 'normal')}" data-id="${esc(item.id)}">
+        <div class="hud-icon"><i class="fa-solid ${esc(item.icon || 'fa-circle-dot')}"></i></div>
+        <div class="hud-body">
+          <div class="hud-title">${esc(item.title)}</div>
+          <div class="hud-detail">${esc(item.detail || '')}</div>
+        </div>
+        <div class="hud-actions">
+          <button class="hud-btn primary" type="button" data-hud-action="open" title="Open or focus"><i class="fa-solid fa-arrow-up-right-from-square"></i></button>
+          <button class="hud-btn" type="button" data-hud-action="done" title="Mark action taken"><i class="fa-solid fa-check"></i></button>
+          <button class="hud-btn" type="button" data-hud-action="dismiss" title="Remove from HUD"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+      </article>
+    `).join('');
+
+    hudItemsEl.querySelectorAll('[data-hud-action]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const card = btn.closest('.hud-card');
+        const item = items.find(i => i.id === card?.dataset.id);
+        if (!item) return;
+        const action = btn.dataset.hudAction;
+        if (action === 'open') openHudItem(item);
+        if (action === 'done') resolveHudItem(item);
+        if (action === 'dismiss') dismissHudItem(item);
+      });
+    });
+  }
+
+  function renderActionTape() {
+    const actions = liveState.actions.slice(-10).reverse();
+    actionCountEl.textContent = `${liveState.actions.length} logged`;
+    if (!actions.length) {
+      actionTapeEl.innerHTML = '<div class="hud-empty">Actions you take here will feed back into Marcus.</div>';
+      return;
+    }
+    actionTapeEl.innerHTML = actions.map(a => `
+      <div class="action-row">
+        <span class="action-time">${esc(timeStr(a.ts || Date.now()))}</span>
+        <span class="action-label">${esc(String(a.action || 'action').toUpperCase())}: ${esc(a.label || a.itemId || 'HUD item')}</span>
+      </div>
+    `).join('');
+  }
+
+  function setReadoutFromContext(data) {
+    const workspace = data.workspace || ctxWorkspace.textContent || '';
+    const branch = data.branch || ctxBranch.textContent || '';
+    const app = data.processName || ctxApp.textContent || '';
+    const activeFile = data.activeFile || '';
+    const parts = [];
+    if (workspace && workspace !== 'No workspace') parts.push(workspace);
+    if (activeFile) parts.push(activeFile);
+    else if (app && app !== '-') parts.push(app);
+    if (branch && branch !== '-') parts.push('branch ' + branch);
+    readoutMain.textContent = parts.length
+      ? 'Tracking ' + parts.join(' - ') + '.'
+      : 'Live connection is open. Waiting for workspace activity.';
   }
 
   // SSE Connection
@@ -571,7 +1299,7 @@
     es.onopen = () => {
       setStatus('connected', 'Live');
       lastConnectionIssue = '';
-      addMsg('system', 'Connected to M.A.R.C.U.S. Live');
+      addMsg('system', 'Live assistant connected.');
     };
 
     es.onmessage = (e) => {
@@ -592,18 +1320,27 @@
   function handleEvent(data) {
     switch (data.type) {
       case 'init':
+        if (Array.isArray(data.actions)) {
+          data.actions.forEach(rememberAction);
+        }
         if (data.observations?.length) {
           for (const obs of data.observations) {
+            if (!liveState.observations.some(o => o.id === obs.id)) {
+              liveState.observations.push(obs);
+            }
             addMsg('observation', obs.text, {
               tag: 'observation',
               time: timeStr(obs.ts),
               workspace: obs.workspace,
             });
           }
+          liveState.observations = liveState.observations.slice(-30);
         }
+        renderHud();
         break;
 
       case 'context':
+        liveState.context = { ...liveState.context, ...data };
         if (data.workspace) {
           ctxWorkspace.textContent = data.workspace;
           document.getElementById('ctx-workspace').classList.add('active');
@@ -623,14 +1360,21 @@
           document.getElementById('ctx-files').classList.add('active');
         }
         if (data.systemHealth) updateHealthUI(data.systemHealth);
+        setReadoutFromContext(data);
+        renderHud();
         break;
 
       case 'observation':
+        if (!liveState.observations.some(o => o.id === data.id)) {
+          liveState.observations.push(data);
+          liveState.observations = liveState.observations.slice(-30);
+        }
         addMsg('observation', data.text, {
           tag: 'observation',
           time: timeStr(data.ts),
           workspace: data.workspace,
         });
+        renderHud();
         break;
 
       case 'chat':
@@ -640,10 +1384,24 @@
         break;
 
       case 'thinking':
-        addMsg('thinking', 'Marcus is analyzing your workspace...');
+        presenceStatus.textContent = 'Analyzing workspace changes.';
+        assistantLine.textContent = 'Analysis in progress';
+        addMsg('thinking', 'M.A.R.C.U.S. is analyzing the workspace...');
+        break;
+
+      case 'action':
+        rememberAction(data);
         break;
     }
   }
+
+  document.querySelectorAll('.quick-action').forEach(btn => {
+    btn.addEventListener('click', () => {
+      input.value = btn.dataset.command || '';
+      input.focus();
+      sendChat();
+    });
+  });
 
   // Chat
   async function sendChat() {
@@ -686,6 +1444,7 @@
 
   // System health UI updater
   function updateHealthUI(h) {
+    liveState.health = h;
     // CPU
     const cpuCard = document.querySelector('#hc-cpu .hc-value');
     const cpuBar = document.getElementById('hb-cpu');
@@ -829,6 +1588,7 @@
     // Update toggle button color based on alerts
     const hasCrit = alerts.some(a => a.cls === 'danger');
     healthToggle.classList.toggle('alert', hasCrit);
+    renderHud();
   }
 
   function buildDetailSection(icon, title, titleCls, rowsHtml, startOpen) {
@@ -843,6 +1603,8 @@
   }
 
   // Initial connect
+  renderHud();
+  renderActionTape();
   connect();
   input.focus();
 })();
