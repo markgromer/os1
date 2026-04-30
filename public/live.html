@@ -344,40 +344,64 @@
   .command-core-panel .assistant-core {
     width: 96px;
     background:
-      radial-gradient(circle, rgba(237,247,255,1) 0 5%, rgba(125,211,252,0.96) 6% 11%, rgba(45,212,191,0.26) 12% 30%, transparent 31%),
-      repeating-conic-gradient(from 12deg, rgba(56,189,248,0.08) 0 12deg, rgba(45,212,191,0.68) 13deg 17deg, rgba(167,139,250,0.24) 18deg 23deg, rgba(56,189,248,0.08) 24deg 37deg);
-    box-shadow: 0 0 42px rgba(56,189,248,0.36), inset 0 0 30px rgba(237,247,255,0.12);
+      radial-gradient(circle at 42% 38%, rgba(237,247,255,0.98) 0 3%, rgba(56,189,248,0.42) 4% 12%, transparent 13%),
+      radial-gradient(circle at 58% 56%, rgba(45,212,191,0.42), transparent 34%),
+      radial-gradient(circle at 50% 50%, rgba(2,6,12,0.88), rgba(1,4,9,0.98) 68%);
+    box-shadow: 0 0 48px rgba(56,189,248,0.25), inset 0 0 24px rgba(237,247,255,0.08);
+    border: 1px solid rgba(125,211,252,0.32);
   }
-  .core-reticle,
-  .core-scan {
+  .command-core-panel .assistant-core::before,
+  .command-core-panel .assistant-core::after {
+    border-color: rgba(125,211,252,0.18);
+    animation-duration: 11s;
+  }
+  .brain-link,
+  .brain-node {
     position: absolute;
-    inset: 50%;
     pointer-events: none;
   }
-  .core-reticle::before,
-  .core-reticle::after {
-    content: "";
-    position: absolute;
-    background: rgba(237,247,255,0.46);
-  }
-  .core-reticle::before {
-    width: 96px;
-    height: 1px;
-    transform: translate(-50%, -50%);
-  }
-  .core-reticle::after {
-    width: 1px;
-    height: 96px;
-    transform: translate(-50%, -50%);
-  }
-  .core-scan {
-    width: 58px;
-    height: 58px;
+  .brain-node {
+    width: 8px;
+    height: 8px;
     border-radius: 50%;
-    border-top: 2px solid rgba(45,212,191,0.85);
-    transform: translate(-50%, -50%);
-    animation: coreSpin 1.8s linear infinite;
-    filter: drop-shadow(0 0 10px rgba(45,212,191,0.55));
+    background: rgba(237,247,255,0.92);
+    box-shadow: 0 0 12px rgba(45,212,191,0.78);
+    animation: brainPulse 2.8s ease-in-out infinite;
+  }
+  .brain-node.n1 { left: 31%; top: 24%; animation-delay: 0s; }
+  .brain-node.n2 { left: 58%; top: 19%; animation-delay: 0.28s; }
+  .brain-node.n3 { left: 69%; top: 46%; animation-delay: 0.56s; }
+  .brain-node.n4 { left: 48%; top: 69%; animation-delay: 0.84s; }
+  .brain-node.n5 { left: 24%; top: 55%; animation-delay: 1.12s; }
+  .brain-node.n6 { left: 45%; top: 43%; width: 11px; height: 11px; animation-delay: 1.4s; }
+  .brain-link {
+    left: 50%;
+    top: 50%;
+    width: 54px;
+    height: 1px;
+    transform-origin: left center;
+    background: linear-gradient(90deg, rgba(45,212,191,0.05), rgba(45,212,191,0.72), rgba(125,211,252,0.1));
+    box-shadow: 0 0 10px rgba(56,189,248,0.2);
+    animation: linkBreathe 3.2s ease-in-out infinite;
+  }
+  .brain-link.l1 { transform: rotate(22deg) translateX(-22px); }
+  .brain-link.l2 { transform: rotate(94deg) translateX(-18px); animation-delay: 0.35s; }
+  .brain-link.l3 { transform: rotate(154deg) translateX(-23px); animation-delay: 0.7s; }
+  .brain-link.l4 { transform: rotate(222deg) translateX(-20px); animation-delay: 1.05s; }
+  .brain-link.l5 { transform: rotate(304deg) translateX(-21px); animation-delay: 1.4s; }
+  .brain-link.l6 { transform: rotate(338deg) translateX(-10px); width: 38px; animation-delay: 1.75s; }
+  body.speaking .brain-node,
+  body.listening .brain-node,
+  .assistant-core.thinking .brain-node {
+    animation-duration: 1.1s;
+  }
+  @keyframes brainPulse {
+    0%, 100% { transform: scale(0.82); opacity: 0.48; }
+    45% { transform: scale(1.22); opacity: 1; }
+  }
+  @keyframes linkBreathe {
+    0%, 100% { opacity: 0.22; filter: brightness(0.9); }
+    48% { opacity: 0.85; filter: brightness(1.4); }
   }
   .voice-wave {
     position: absolute;
@@ -492,7 +516,7 @@
   /* Adaptive HUD */
   .hud-shell {
     display: grid;
-    grid-template-columns: minmax(280px, 1fr);
+    grid-template-columns: minmax(360px, 1fr) minmax(320px, 0.85fr);
     gap: 10px;
     padding: 0 14px 10px;
     border-bottom: 1px solid var(--border);
@@ -617,6 +641,87 @@
     text-align: center;
     overflow-wrap: anywhere;
   }
+  .next-move-lane {
+    min-width: 0;
+    border: 1px solid rgba(125,211,252,0.16);
+    border-radius: 8px;
+    background: rgba(3,9,15,0.56);
+    overflow: hidden;
+  }
+  .next-moves {
+    display: grid;
+    gap: 8px;
+    padding: 10px;
+    max-height: 238px;
+    overflow-y: auto;
+  }
+  .next-move-card {
+    display: grid;
+    gap: 7px;
+    padding: 9px;
+    border: 1px solid rgba(125,211,252,0.14);
+    border-radius: 8px;
+    background: rgba(255,255,255,0.025);
+  }
+  .next-move-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .next-move-title {
+    min-width: 0;
+    color: var(--text);
+    font-size: 11px;
+    font-weight: 760;
+    line-height: 1.25;
+    overflow-wrap: anywhere;
+  }
+  .next-move-actions {
+    display: inline-flex;
+    gap: 5px;
+    flex: 0 0 auto;
+  }
+  .next-move-copy {
+    width: 100%;
+    min-height: 66px;
+    resize: vertical;
+    border: 1px solid rgba(125,211,252,0.13);
+    border-radius: 7px;
+    background: rgba(2,6,12,0.72);
+    color: #b7c7da;
+    font-family: inherit;
+    font-size: 10px;
+    line-height: 1.45;
+    padding: 8px;
+    outline: none;
+  }
+  .next-move-copy:focus {
+    border-color: rgba(56,189,248,0.42);
+    box-shadow: 0 0 0 3px rgba(56,189,248,0.08);
+  }
+  .tiny-btn {
+    min-height: 24px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: rgba(255,255,255,0.03);
+    color: var(--muted);
+    font-family: inherit;
+    font-size: 9px;
+    font-weight: 700;
+    padding: 3px 8px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    white-space: nowrap;
+  }
+  .tiny-btn:hover {
+    color: var(--text);
+    border-color: var(--border-strong);
+    background: rgba(56,189,248,0.08);
+  }
+  .tiny-btn.primary { color: var(--accent); }
   .action-tape {
     display: flex;
     flex-direction: column;
@@ -979,9 +1084,7 @@
       text-align: center;
     }
     .core-stack { min-height: 92px; }
-    .command-core-panel .assistant-core { width: 74px; }
-    .core-reticle::before { width: 62px; }
-    .core-reticle::after { height: 62px; }
+    .command-core-panel .assistant-core { width: 82px; }
     .command-core-panel .presence-title {
       font-size: 24px;
       line-height: 1.08;
@@ -1009,6 +1112,7 @@
     .hud-shell { grid-template-columns: 1fr; }
     .drawer-body { grid-template-columns: 1fr; max-height: 260px; overflow-y: auto; }
     .hud-items,
+    .next-moves,
     .action-tape { max-height: 132px; }
     .hud-card {
       grid-template-columns: 24px minmax(0, 1fr);
@@ -1065,8 +1169,18 @@
   <section class="command-core-panel" aria-label="MARCUS command field">
     <div class="core-stack">
       <div class="assistant-core" id="assistant-core">
-        <span class="core-reticle"></span>
-        <span class="core-scan"></span>
+        <span class="brain-link l1"></span>
+        <span class="brain-link l2"></span>
+        <span class="brain-link l3"></span>
+        <span class="brain-link l4"></span>
+        <span class="brain-link l5"></span>
+        <span class="brain-link l6"></span>
+        <span class="brain-node n1"></span>
+        <span class="brain-node n2"></span>
+        <span class="brain-node n3"></span>
+        <span class="brain-node n4"></span>
+        <span class="brain-node n5"></span>
+        <span class="brain-node n6"></span>
       </div>
       <div class="voice-wave" id="voice-meter">
         <span></span><span></span><span></span><span></span><span></span>
@@ -1078,7 +1192,7 @@
       <div class="presence-status" id="presence-status">I’ll interrupt you only when there is a clear next move.</div>
       <div class="quick-actions">
         <button class="quick-action" type="button" data-command="Give me the current readout. What matters right now?"><i class="fa-solid fa-crosshairs"></i> Readout</button>
-        <button class="quick-action" type="button" data-command="Scan the current workspace for risks, blockers, and the next best move."><i class="fa-solid fa-radar"></i> Scan</button>
+        <button class="quick-action" type="button" data-command="Scan the current workspace for risks, blockers, and the next best move."><i class="fa-solid fa-brain"></i> Scan</button>
         <button class="quick-action" type="button" data-command="What should I do next? Keep it short and decisive."><i class="fa-solid fa-route"></i> Next Move</button>
         <button class="quick-action" type="button" id="voice-brief"><i class="fa-solid fa-volume-high"></i> Voice Brief</button>
       </div>
@@ -1121,6 +1235,15 @@
     </div>
     <div class="hud-items" id="hud-items">
       <div class="hud-empty">Waiting for live signals.</div>
+    </div>
+  </section>
+  <section class="next-move-lane" aria-label="Saved next moves">
+    <div class="hud-lane-header">
+      <span class="hud-lane-title">Saved Next Moves</span>
+      <span class="hud-count" id="next-move-count">0 saved</span>
+    </div>
+    <div class="next-moves" id="next-moves">
+      <div class="hud-empty">Copy boxes will appear here when Marcus has a useful next move.</div>
     </div>
   </section>
 </div>
@@ -1200,6 +1323,8 @@
   const healthPanel = document.getElementById('health-panel');
   const hudItemsEl = document.getElementById('hud-items');
   const hudCountEl = document.getElementById('hud-count');
+  const nextMovesEl = document.getElementById('next-moves');
+  const nextMoveCountEl = document.getElementById('next-move-count');
   const actionTapeEl = document.getElementById('action-tape');
   const actionCountEl = document.getElementById('action-count');
   const secondaryDrawer = document.getElementById('secondary-drawer');
@@ -1221,6 +1346,7 @@
     actions: [],
     activeBrief: null,
     observationDigest: null,
+    nextMoves: loadStoredArray('marcusLiveNextMoves'),
     dismissed: loadStoredSet('marcusLiveHudDismissed'),
     resolved: loadStoredSet('marcusLiveHudResolved'),
   };
@@ -1284,6 +1410,21 @@
   function saveStoredSet(key, set) {
     try {
       localStorage.setItem(key, JSON.stringify([...set].slice(-200)));
+    } catch {}
+  }
+
+  function loadStoredArray(key) {
+    try {
+      const value = JSON.parse(localStorage.getItem(key) || '[]');
+      return Array.isArray(value) ? value : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function saveStoredArray(key, value, limit = 12) {
+    try {
+      localStorage.setItem(key, JSON.stringify((Array.isArray(value) ? value : []).slice(0, limit)));
     } catch {}
   }
 
@@ -1626,6 +1767,105 @@
     if (!copied) input.value = prompt;
   }
 
+  function buildNextMoveFromItem(item) {
+    if (!item || item.kind === 'workspace') return null;
+    const body = String(item.codexPrompt || item.prompt || `${item.title || ''}\n\n${item.detail || ''}`).trim();
+    if (!body) return null;
+    const title = item.codexPrompt
+      ? `Send this to Codex: ${currentHumanProjectName()}`
+      : item.kind === 'conversation'
+        ? 'Draft the reply or handoff'
+        : item.kind === 'draft'
+          ? 'Send the team handoff'
+          : item.kind === 'project'
+            ? `Brief ${String(item.title || currentHumanProjectName()).replace(/\.$/, '')}`
+            : 'Use this next move';
+    return {
+      id: 'move-' + item.id,
+      sourceId: item.id,
+      title,
+      body,
+      mode: item.codexPrompt ? 'codex' : 'marcus',
+      ts: Date.now(),
+    };
+  }
+
+  function mergeNextMoves(items) {
+    const generated = (Array.isArray(items) ? items : []).map(buildNextMoveFromItem).filter(Boolean);
+    const seen = new Set();
+    const merged = [];
+    for (const move of [...generated, ...liveState.nextMoves]) {
+      const id = String(move?.id || '').trim();
+      const body = String(move?.body || '').trim();
+      if (!id || !body || seen.has(id)) continue;
+      seen.add(id);
+      merged.push({
+        id,
+        sourceId: String(move.sourceId || id),
+        title: String(move.title || 'Next move').trim(),
+        body,
+        mode: move.mode === 'codex' ? 'codex' : 'marcus',
+        ts: Number(move.ts) || Date.now(),
+      });
+    }
+    liveState.nextMoves = merged.slice(0, 4);
+    saveStoredArray('marcusLiveNextMoves', liveState.nextMoves, 8);
+  }
+
+  function renderNextMoves(items) {
+    mergeNextMoves(items);
+    nextMoveCountEl.textContent = `${liveState.nextMoves.length} saved`;
+    if (!liveState.nextMoves.length) {
+      nextMovesEl.innerHTML = '<div class="hud-empty">Copy boxes will appear here when Marcus has a useful next move.</div>';
+      return;
+    }
+    nextMovesEl.innerHTML = liveState.nextMoves.map(move => `
+      <article class="next-move-card" data-move-id="${esc(move.id)}">
+        <div class="next-move-top">
+          <div class="next-move-title">${esc(move.title)}</div>
+          <div class="next-move-actions">
+            <button class="tiny-btn primary" type="button" data-move-action="copy"><i class="fa-solid fa-copy"></i> Copy</button>
+            <button class="tiny-btn" type="button" data-move-action="${esc(move.mode === 'codex' ? 'codex' : 'ask')}"><i class="fa-solid ${move.mode === 'codex' ? 'fa-code' : 'fa-paper-plane'}"></i> ${move.mode === 'codex' ? 'Codex' : 'Ask'}</button>
+            <button class="tiny-btn" type="button" data-move-action="remove" title="Remove"><i class="fa-solid fa-xmark"></i></button>
+          </div>
+        </div>
+        <textarea class="next-move-copy" readonly>${esc(move.body)}</textarea>
+      </article>
+    `).join('');
+
+    nextMovesEl.querySelectorAll('[data-move-action]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const card = btn.closest('.next-move-card');
+        const move = liveState.nextMoves.find(m => m.id === card?.dataset.moveId);
+        if (!move) return;
+        const action = btn.dataset.moveAction;
+        if (action === 'remove') {
+          liveState.nextMoves = liveState.nextMoves.filter(m => m.id !== move.id);
+          saveStoredArray('marcusLiveNextMoves', liveState.nextMoves, 8);
+          renderNextMoves([]);
+          return;
+        }
+        if (action === 'copy') {
+          await copyTextToClipboard(move.body);
+          recordHudAction({ id: move.id, title: move.title, kind: 'next-move', target: move.mode }, 'copy_next_move');
+          addMsg('system', 'Copied next move: ' + move.title);
+          return;
+        }
+        if (action === 'codex') {
+          await copyTextToClipboard(move.body);
+          try { window.open('https://chatgpt.com/codex', '_blank', 'noopener'); } catch {}
+          recordHudAction({ id: move.id, title: move.title, kind: 'next-move', target: 'codex-cloud' }, 'codex_handoff');
+          addMsg('chat-marcus', 'I copied that Codex prompt and opened Codex Cloud.', { tag: 'codex', time: timeStr(Date.now()) });
+          return;
+        }
+        input.value = move.body;
+        input.focus();
+        recordHudAction({ id: move.id, title: move.title, kind: 'next-move', target: 'marcus-chat' }, 'open_next_move');
+        sendChat();
+      });
+    });
+  }
+
   async function recordHudAction(item, action) {
     const payload = {
       itemId: item.id,
@@ -1864,7 +2104,7 @@
 
   function renderHud() {
     const items = buildHudItems();
-    const visibleItems = items.slice(0, 1);
+    const visibleItems = items.slice(0, 2);
     hudCountEl.textContent = items.length ? 'Now' : 'Quiet';
     const critical = items.filter(i => i.priority === 'critical').length;
     const warning = items.filter(i => i.priority === 'warning').length;
@@ -1881,6 +2121,7 @@
       hudItemsEl.innerHTML = '<div class="hud-empty">Quiet right now. I’m watching, but nothing deserves your attention.</div>';
       readoutMain.textContent = 'Quiet right now. I’m watching, but nothing deserves your attention.';
       presenceStatus.textContent = 'Quiet right now. I’m watching, but nothing deserves your attention.';
+      renderNextMoves([]);
       updateDrawerSummary();
       return;
     }
@@ -1914,6 +2155,7 @@
         if (action === 'dismiss') dismissHudItem(item);
       });
     });
+    renderNextMoves(items);
     updateDrawerSummary();
   }
 
