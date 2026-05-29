@@ -58,6 +58,10 @@ This repo now includes a Render blueprint file: `render.yaml`.
 - `IMAP_HOST`, `IMAP_PORT`, `IMAP_SECURE`, `IMAP_USERNAME`, `IMAP_PASSWORD`
 - `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM_ADDRESS`
 - `OPENAI_API_KEY`, `OPENAI_MODEL`
+- `ELEVENLABS_API_KEY` = ElevenLabs API key for Marcus voice output
+- `ELEVENLABS_VOICE_ID` = ElevenLabs voice ID to use for Marcus
+- `ELEVENLABS_MODEL_ID` = optional, defaults to `eleven_flash_v2_5`
+- `ELEVENLABS_OUTPUT_FORMAT` = optional, defaults to `mp3_44100_128`
 - `QDRANT_URL`, `QDRANT_COLLECTION`, `QDRANT_API_KEY` (Marcus knowledge base)
 - `QDRANT_EMBEDDING_MODEL` (optional, default `text-embedding-3-small`)
 - `QDRANT_VECTOR_SIZE` (optional, default matches embedding model)
@@ -279,9 +283,54 @@ Each project has two optional link fields in the **Project** panel:
 
 - **VS Code folder (optional)**: paste the local folder path (example: `C:\Users\markg\OneDrive\Documents\Client Project`).
    - This enables a **VS Code** button in the project list and an **Open in VS Code** button in the workspace.
-   - Your browser may prompt you to allow opening the external `vscode://` link.
+   - When the app is running locally on Windows, the server launches VS Code directly with `code <folder>`.
+   - When the app is hosted, the server queues an `open-vscode` desktop action for the local desktop agent.
 - **Airtable link (optional)**: paste any Airtable URL (base/table/view/record).
    - This enables an **Airtable** button in the project list and an **Open Airtable** button in the workspace.
+
+### Desktop agent local actions
+
+Run the desktop agent on the machine that should open projects:
+
+```powershell
+node desktop-agent.cjs https://your-app.onrender.com yourAdminToken
+```
+
+The agent already relays active editor context. It now also polls for approved local desktop actions, validates the requested folder exists, opens it in VS Code, and reports the result back to Marcus.
+
+Supported local desktop actions:
+
+- `open-vscode`: open a saved project workspace in VS Code.
+- `prepare-publish`: inspect the local git repo before publishing, including branch, origin, changed files, recent commits, and available npm scripts.
+- `run-project-script`: run a named npm script from `package.json`, such as `build`, `test`, or `lint`.
+- `clone-github-project`: clone a GitHub repo into a local projects folder and optionally open it in VS Code.
+- `publish-project-changes`: after explicit approval, optionally run npm scripts, commit local changes, and push the current branch.
+
+Example Marcus requests:
+
+```text
+Open the Acme website project in VS Code.
+Prepare Acme website for publish.
+Run build for the Acme website.
+Clone https://github.com/example/acme-site and open it locally.
+Publish the approved Acme changes with commit message "Update homepage revision".
+Run build before publishing the Acme changes.
+```
+
+Marcus should still ask before high-impact actions like deploys, merges, production publishes, billing changes, deletes, or client sends.
+Commit/push/publish actions are also server-guarded: Marcus can prepare them, but the publish tool will not queue unless your message explicitly approves the publish/push/commit action.
+
+## Marcus Live
+
+Marcus Live is the live operations cockpit for:
+
+- system performance from the desktop agent
+- one-click performance profiles: optimize, performance, balanced, and power saver
+- current focus projects based on desktop activity, recent work, urgent tasks, and pending communications
+- pending communication pills linked to accounts/projects when possible
+- stale active website projects that are likely done and should stop polluting current context
+
+Marcus chat also uses the same freshness logic so old website work is excluded from current project context unless it has recent activity, a pending communication, an urgent task, or is the active desktop workspace.
 
 ## AI help (optional)
 

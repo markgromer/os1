@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
-import { exec } from 'node:child_process';
+import { exec, execFile } from 'node:child_process';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -11708,17 +11708,111 @@ app.post('/api/projects/:id/auto-suggest-tasks', async (req, res) => {
   await writeLock;
 });
 
-app.post('/api/launch', (req, res) => {
-  const { path: projectPath } = req.body;
-  if (!projectPath) return res.status(400).json({ error: 'Path required' });
-  
-  exec(`code "${projectPath}"`, (error) => {
-    if (error) {
-      console.error(`exec error: ${error}`);
-      return res.status(500).json({ error: 'Failed to launch code' });
+let pendingDesktopActions = [];     // [{id,type,payload,requestedAt,requestedBy}]
+let desktopActionResults = [];      // [{id,type,ok,error?,completedAt}]
+const DESKTOP_ACTION_RESULT_TTL_MS = 10 * 60_000;
+
+function pruneDesktopActionResults() {
+  const cutoff = Date.now() - DESKTOP_ACTION_RESULT_TTL_MS;
+  desktopActionResults = desktopActionResults.filter((r) => Number(r?.completedAt || 0) >= cutoff);
+}
+
+function queueDesktopAction(action) {
+  const entry = {
+    id: makeId(),
+    type: String(action?.type || '').trim(),
+    payload: action?.payload && typeof action.payload === 'object' ? action.payload : {},
+    requestedAt: Date.now(),
+    requestedBy: String(action?.requestedBy || 'marcus').slice(0, 80),
+  };
+  pendingDesktopActions.push(entry);
+  return entry;
+}
+
+function messageHasExplicitPublishApproval(messageText) {
+  const text = String(messageText || '').toLowerCase();
+  const hasApproval = /\b(approve|approved|approval granted|go ahead|ship it|publish it|push it|send it|do it)\b/.test(text);
+  const hasPublishIntent = /\b(publish|push|commit|deploy|ship|release)\b/.test(text);
+  return hasApproval && hasPublishIntent;
+}
+
+function launchVsCodeNative(projectPath, cb) {
+  const commands = ['code', 'code.cmd'];
+  const tryNext = () => {
+    const cmd = commands.shift();
+    if (!cmd) {
+      cb(new Error('VS Code command not found. Make sure the code command is installed.'));
+      return;
     }
-    res.json({ success: true });
+    try {
+      execFile(cmd, [projectPath], { windowsHide: true }, (error) => {
+        if (!error) {
+          cb(null);
+          return;
+        }
+        tryNext();
+      });
+    } catch {
+      tryNext();
+    }
+  };
+  tryNext();
+}
+
+app.post('/api/launch', (req, res) => {
+  const projectPath = typeof req.body?.path === 'string' ? req.body.path.trim() : '';
+  if (!projectPath) return res.status(400).json({ error: 'Path required' });
+
+  if (process.platform === 'win32') {
+    launchVsCodeNative(projectPath, (error) => {
+      if (error) {
+        console.error(`launch error: ${error}`);
+        return res.status(500).json({ error: 'Failed to launch VS Code. Make sure the code command is installed.' });
+      }
+      res.json({ ok: true, success: true, mode: 'native' });
+    });
+    return;
+  }
+
+  const action = queueDesktopAction({
+    type: 'open-vscode',
+    payload: { path: projectPath },
+    requestedBy: 'ui',
   });
+  res.status(202).json({ ok: true, queued: true, mode: 'desktop-agent', actionId: action.id });
+});
+
+app.get('/api/desktop-context/actions', (req, res) => {
+  const actions = pendingDesktopActions.splice(0);
+  res.json({ ok: true, actions });
+});
+
+app.post('/api/desktop-context/action-results', (req, res) => {
+  const results = Array.isArray(req.body?.results) ? req.body.results : [];
+  const now = Date.now();
+  let count = 0;
+  for (const raw of results) {
+    if (!raw || typeof raw !== 'object') continue;
+    const id = typeof raw.id === 'string' ? raw.id.trim().slice(0, 80) : '';
+    const type = typeof raw.type === 'string' ? raw.type.trim().slice(0, 80) : '';
+    if (!id || !type) continue;
+    desktopActionResults.push({
+      id,
+      type,
+      ok: raw.ok !== false,
+      error: typeof raw.error === 'string' ? raw.error.trim().slice(0, 500) : '',
+      details: raw.details && typeof raw.details === 'object' ? raw.details : null,
+      completedAt: now,
+    });
+    count++;
+  }
+  pruneDesktopActionResults();
+  res.json({ ok: true, received: count });
+});
+
+app.get('/api/desktop-context/action-results', (req, res) => {
+  pruneDesktopActionResults();
+  res.json({ ok: true, results: desktopActionResults.slice(-50) });
 });
 
 app.post('/api/pick-folder', async (req, res) => {
@@ -12090,6 +12184,184 @@ function buildMarcusLiveContextEvent() {
   return evt;
 }
 
+function isWebsiteLikeProject(project) {
+  const text = `${project?.name || ''} ${project?.type || ''} ${project?.agentBrief || ''}`.toLowerCase();
+  return /\b(website|web site|site|homepage|landing page|wordpress|webflow|shopify|seo|build|rebuild|revision)\b/.test(text);
+}
+
+function buildMarcusLiveProjectFocus(store, desktopData, nowMs = Date.now()) {
+  const s = store && typeof store === 'object' ? store : EMPTY_STORE;
+  const projects = Array.isArray(s.projects) ? s.projects : [];
+  const activeProject = findProjectForDesktopContext(s, desktopData);
+  const activeProjectId = String(activeProject?.id || '').trim();
+  const cutoffMs = nowMs - (14 * MS_PER_DAY);
+  const today = new Date(nowMs).toISOString().slice(0, 10);
+  const focus = [];
+  const staleWebsite = [];
+
+  for (const project of projects) {
+    if (isClosedProjectStatus(project?.status)) continue;
+    const linkedTasks = getLinkedProjectTasks(s, project).filter((task) => !isClosedTaskStatus(task?.status));
+    const linkedInbox = getLinkedProjectInboxItems(s, project).filter((item) => {
+      const status = String(item?.status || '').trim().toLowerCase();
+      return status === 'new' || status === 'triaged' || !status;
+    });
+    const lastActivityMs = computeProjectLastActivityMs(s, project, linkedTasks, linkedInbox);
+    const createdMs = parseTrackerTime(project?.createdAt);
+    const dueDate = normalizeTrackerDueDate(project?.dueDate);
+    const isDesktop = activeProjectId && String(project?.id || '') === activeProjectId;
+    const fresh = lastActivityMs >= cutoffMs || createdMs >= cutoffMs;
+    const urgent = linkedTasks.some((task) => {
+      const due = normalizeTrackerDueDate(task?.dueDate);
+      return Number(task?.priority) === 1 || (due && due <= today);
+    });
+    const openComms = linkedInbox.length > 0;
+    const websiteLike = isWebsiteLikeProject(project);
+    const current = isDesktop || fresh || openComms || urgent;
+    const ageDays = lastActivityMs > 0 ? Math.max(0, Math.floor((nowMs - lastActivityMs) / MS_PER_DAY)) : null;
+
+    const row = {
+      id: String(project?.id || ''),
+      name: String(project?.name || '').trim(),
+      type: String(project?.type || '').trim(),
+      status: String(project?.status || '').trim(),
+      dueDate,
+      workspacePath: String(project?.workspacePath || '').trim(),
+      repoUrl: String(project?.repoUrl || '').trim(),
+      lastActivityAt: lastActivityMs ? new Date(lastActivityMs).toISOString() : '',
+      ageDays,
+      openTaskCount: linkedTasks.length,
+      pendingCommCount: linkedInbox.length,
+      reason: isDesktop ? 'Active desktop workspace' : openComms ? 'Pending communication' : urgent ? 'Urgent task' : fresh ? 'Recent activity' : 'Stale',
+      websiteLike,
+    };
+
+    if (current) focus.push(row);
+    else if (websiteLike) staleWebsite.push(row);
+  }
+
+  focus.sort((a, b) => {
+    const ar = a.reason === 'Active desktop workspace' ? 0 : a.pendingCommCount ? 1 : a.openTaskCount ? 2 : 3;
+    const br = b.reason === 'Active desktop workspace' ? 0 : b.pendingCommCount ? 1 : b.openTaskCount ? 2 : 3;
+    if (ar !== br) return ar - br;
+    return String(b.lastActivityAt || '').localeCompare(String(a.lastActivityAt || ''));
+  });
+  staleWebsite.sort((a, b) => Number(b.ageDays || 9999) - Number(a.ageDays || 9999));
+
+  return { focus: focus.slice(0, 12), staleWebsite: staleWebsite.slice(0, 40), activeProjectId };
+}
+
+function buildMarcusLivePendingCommunications(store, settings, limit = 24) {
+  const s = store && typeof store === 'object' ? store : EMPTY_STORE;
+  const visible = getVisibleInboxItemsFromSettings(s.inboxItems, settings);
+  const projects = Array.isArray(s.projects) ? s.projects : [];
+  const projectById = new Map(projects.map((p) => [String(p?.id || ''), p]));
+  const items = visible
+    .filter((item) => {
+      const status = String(item?.status || '').trim().toLowerCase();
+      if (status === 'done' || status === 'archived' || status === 'dismissed') return false;
+      const source = String(item?.source || item?.channel || '').trim().toLowerCase();
+      const text = String(item?.text || item?.body || item?.subject || '').trim();
+      return text && (!source || ['email', 'slack', 'sms', 'quo', 'openphone', 'fireflies', 'other', 'inbox'].includes(source));
+    })
+    .sort((a, b) => String(b?.updatedAt || b?.createdAt || '').localeCompare(String(a?.updatedAt || a?.createdAt || '')))
+    .slice(0, limit)
+    .map((item) => {
+      const projectId = String(item?.projectId || '').trim();
+      const project = projectById.get(projectId) || null;
+      const text = String(item?.text || item?.body || '').replace(/\s+/g, ' ').trim();
+      const from = String(item?.from || item?.sender || item?.contactName || item?.clientName || item?.projectName || project?.clientName || project?.name || '').trim();
+      return {
+        id: String(item?.id || ''),
+        person: from || 'Unknown',
+        source: String(item?.source || item?.channel || 'inbox').trim(),
+        status: String(item?.status || 'New').trim(),
+        description: previewTextServer(text, 150),
+        projectId,
+        projectName: String(item?.projectName || project?.name || '').trim(),
+        contactId: String(item?.contactId || '').trim(),
+        createdAt: String(item?.createdAt || '').trim(),
+        updatedAt: String(item?.updatedAt || '').trim(),
+        actionHint: projectId ? 'Linked to project' : 'Needs account/project link',
+      };
+    });
+  return items;
+}
+
+async function sendMarcusLiveDashboardSnapshot(req, res) {
+  try {
+    const [store, settings] = await Promise.all([readStore(), readSettings()]);
+    const nowMs = Date.now();
+    const dc = desktopRelayCache?.data || desktopContextCache?.data || null;
+    const health = dc?.systemHealth || null;
+    const projects = buildMarcusLiveProjectFocus(store, dc, nowMs);
+    const pendingCommunications = buildMarcusLivePendingCommunications(store, settings, 30);
+    res.json({
+      ok: true,
+      generatedAt: new Date(nowMs).toISOString(),
+      desktop: dc ? {
+        windowTitle: dc.windowTitle || '',
+        processName: dc.processName || '',
+        idleSeconds: dc.idleSeconds || 0,
+        source: dc.source || '',
+        workspace: dc.workspace ? {
+          folderName: dc.workspace.folderName || '',
+          workspacePath: dc.workspace.workspacePath || '',
+          gitBranch: dc.workspace.gitBranch || '',
+          activeFile: dc.workspace.activeFile || '',
+          gitStatus: dc.workspace.gitStatus || [],
+        } : null,
+      } : null,
+      systemHealth: health ? {
+        cpuPercent: health.cpuPercent,
+        memoryPercent: health.memoryPercent,
+        memoryUsedGB: health.memoryUsedGB,
+        memoryTotalGB: health.memoryTotalGB,
+        disks: health.disks || [],
+        topProcesses: health.topProcesses || [],
+        topMemProcesses: health.topMemProcesses || [],
+        defender: health.defender || {},
+        recentThreats: health.recentThreats || [],
+        unusualListeners: health.unusualListeners || [],
+        uptimeHours: health.uptimeHours,
+        collectedAt: health.collectedAt || '',
+      } : null,
+      currentFocus: projects.focus,
+      staleWebsiteProjects: projects.staleWebsite,
+      pendingCommunications,
+      counts: {
+        currentFocus: projects.focus.length,
+        staleWebsiteProjects: projects.staleWebsite.length,
+        pendingCommunications: pendingCommunications.length,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message || 'Failed to build Marcus Live snapshot' });
+  }
+}
+
+app.get('/api/marcus/live/dashboard', sendMarcusLiveDashboardSnapshot);
+
+function queueMarcusLivePerformanceAction(req, res) {
+  const mode = String(req.body?.mode || '').trim().toLowerCase();
+  const allowed = new Set(['balanced', 'performance', 'power-saver', 'optimize']);
+  if (!allowed.has(mode)) return res.status(400).json({ ok: false, error: 'Invalid performance mode' });
+  const action = queueDesktopAction({
+    type: 'set-performance-profile',
+    payload: { mode },
+    requestedBy: 'marcus-live',
+  });
+  rememberMarcusLiveAction({
+    action: 'performance',
+    label: `Marcus Live performance: ${mode}`,
+    kind: 'system',
+    target: mode,
+  });
+  res.status(202).json({ ok: true, queued: true, actionId: action.id, mode });
+}
+
+app.post('/api/marcus/live/performance', queueMarcusLivePerformanceAction);
+
 app.post('/api/marcus/live/action', (req, res) => {
   const entry = rememberMarcusLiveAction(req.body || {});
   pushLiveEvent({ type: 'action', ...entry });
@@ -12375,7 +12647,7 @@ RULES:
 - Generate 1-3 brief observations (1-3 sentences each). Separate with |||
 - Write for Mark first, not for the codebase. Say the project/work area, the plain-English issue, the consequence, and the next move.
 - Do NOT lead with full file paths, API routes, line patterns, or function names. Keep technical specifics implicit unless the issue cannot be understood without one short reference.
-- Prefer wording like: "There's an issue in WARREN. If we ignore it, the admin screen may fail after deploy. Want me to prep a dev prompt?"
+- Prefer wording like: "There's an issue in Marcus Live. If we ignore it, the admin screen may fail after deploy. Want me to prep a dev prompt?"
 - Types of observations worth recording:
   * Bugs or logic errors in the core application code
   * Security risks in production code paths
@@ -14109,10 +14381,27 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
 
       context += `CURRENT PROJECT CONTEXT (JSON):\n${JSON.stringify(ctxObj, null, 2).slice(0, 24000)}\n\n`;
     } else {
+      const liveProjectShape = buildMarcusLiveProjectFocus(store, desktopRelayCache?.data || desktopContextCache?.data || null, Date.now());
+      const currentProjectIds = new Set((Array.isArray(liveProjectShape.focus) ? liveProjectShape.focus : []).map((p) => String(p?.id || '')).filter(Boolean));
+      const staleWebsiteIds = new Set((Array.isArray(liveProjectShape.staleWebsite) ? liveProjectShape.staleWebsite : []).map((p) => String(p?.id || '')).filter(Boolean));
       const projectsOverview = (store.projects || [])
         .filter((p) => !isClosedProjectStatus(p?.status))
-        .map((p) => ({ id: p.id, name: p.name, type: p.type, status: p.status, dueDate: p.dueDate }));
+        .filter((p) => currentProjectIds.has(String(p?.id || '')) || !staleWebsiteIds.has(String(p?.id || '')))
+        .map((p) => ({
+          id: p.id,
+          name: p.name,
+          type: p.type,
+          status: p.status,
+          dueDate: p.dueDate,
+          owner: p.owner,
+          workspacePath: p.workspacePath,
+          repoUrl: p.repoUrl,
+          docsUrl: p.docsUrl,
+        }));
       context += `ALL PROJECTS (JSON): ${JSON.stringify(projectsOverview).slice(0, 24000)}\n\n`;
+      if (staleWebsiteIds.size) {
+        context += `STALE WEBSITE PROJECTS EXCLUDED FROM CURRENT CONTEXT: ${Array.from(staleWebsiteIds).slice(0, 80).join(', ')}\n\n`;
+      }
     }
 
     const routeKey = effectiveThreadId === 'operator_bio' ? 'operatorBio' : 'marcusChat';
@@ -14353,6 +14642,101 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
               required: ["directoryPath"]
             }
           }
+        },
+        {
+          type: "function",
+          function: {
+            name: "open_project_in_vscode",
+            description: "Open a registered project workspace in VS Code by project id/name or direct workspace path. Use when Mark asks to open, work on, or pull up a project locally.",
+            parameters: {
+              type: "object",
+              properties: {
+                projectId: { type: "string", description: "Preferred when known" },
+                projectName: { type: "string", description: "Case-insensitive project name match if id is not known" },
+                workspacePath: { type: "string", description: "Absolute local folder path if the project is not registered yet" }
+              }
+            }
+          }
+        },
+        {
+          type: "function",
+          function: {
+            name: "prepare_project_publish",
+            description: "Queue a local desktop-agent review of a project repo before publishing. Use before commit/push/deploy work to inspect branch, changes, remotes, scripts, and risk.",
+            parameters: {
+              type: "object",
+              properties: {
+                projectId: { type: "string", description: "Preferred when known" },
+                projectName: { type: "string", description: "Case-insensitive project name match if id is not known" },
+                workspacePath: { type: "string", description: "Absolute local folder path if not registered" }
+              }
+            }
+          }
+        },
+        {
+          type: "function",
+          function: {
+            name: "publish_project_changes",
+            description: "Queue an explicitly approved local git publish action: optionally run npm scripts, commit current changes, and push the branch. Only use after Mark has explicitly approved publishing/pushing.",
+            parameters: {
+              type: "object",
+              properties: {
+                projectId: { type: "string", description: "Preferred when known" },
+                projectName: { type: "string", description: "Case-insensitive project name match if id is not known" },
+                workspacePath: { type: "string", description: "Absolute local folder path if not registered" },
+                commitMessage: { type: "string", description: "Commit message for the approved changes" },
+                buildScript: { type: "string", description: "Optional npm script to run before committing, usually build" },
+                testScript: { type: "string", description: "Optional npm script to run before committing, usually test" },
+                push: { type: "boolean", description: "Whether to push the current branch after committing. Default true." }
+              },
+              required: ["commitMessage"]
+            }
+          }
+        },
+        {
+          type: "function",
+          function: {
+            name: "run_project_script",
+            description: "Queue a safe npm script from package.json on a local project through the desktop agent. Use for preview/build/test/lint style scripts, not arbitrary shell commands.",
+            parameters: {
+              type: "object",
+              properties: {
+                projectId: { type: "string", description: "Preferred when known" },
+                projectName: { type: "string", description: "Case-insensitive project name match if id is not known" },
+                workspacePath: { type: "string", description: "Absolute local folder path if not registered" },
+                scriptName: { type: "string", description: "npm script name from package.json, for example build, test, lint" }
+              },
+              required: ["scriptName"]
+            }
+          }
+        },
+        {
+          type: "function",
+          function: {
+            name: "clone_github_project",
+            description: "Queue a local git clone for a GitHub repo, then optionally open it in VS Code. Use when Mark asks to pull up a repo that is not yet registered locally.",
+            parameters: {
+              type: "object",
+              properties: {
+                repoUrl: { type: "string", description: "GitHub HTTPS or SSH clone URL" },
+                parentPath: { type: "string", description: "Parent folder to clone into. Optional." },
+                folderName: { type: "string", description: "Optional destination folder name." },
+                openInVsCode: { type: "boolean", description: "Open after cloning. Default true." }
+              },
+              required: ["repoUrl"]
+            }
+          }
+        },
+        {
+          type: "function",
+          function: {
+            name: "get_desktop_action_results",
+            description: "Read recent desktop-agent action results, including queued publish/open actions. Use when Mark asks whether a local action finished or failed.",
+            parameters: {
+              type: "object",
+              properties: {}
+            }
+          }
         }
       );
     }
@@ -14438,7 +14822,7 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
             systemPrompt +
             (effectiveThreadId === 'operator_bio'
               ? "\n\nIMPORTANT: Use set_operator_bio to persist changes to the bio."
-              : "\n\nIMPORTANT: When the user asks to create or update a project (due date, links, invoice, repo, docs, value, status, account manager), you MUST use tool calls (create_project / update_project / create_tasks). If you need external data, use MCP tools when available."),
+              : "\n\nIMPORTANT: When Mark asks for an internal/admin action, use tools instead of only describing the action. For project updates use create_project / update_project / create_tasks. For local project work use open_project_in_vscode when a workspace path is available. If Mark names a GitHub repo that is not local, use clone_github_project. For build/test/lint/preview requests, use run_project_script with a package.json script name. For publish requests, use prepare_project_publish first unless Mark has already explicitly approved committing/pushing. publish_project_changes is server-guarded and requires explicit approval in Mark's message. For high-impact external actions like publish/deploy/merge/send/billing/delete, prepare the action and ask for explicit approval before executing. When Mark asks whether a queued local action finished, use get_desktop_action_results."),
         },
       ];
 
@@ -14476,6 +14860,29 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
     };
 
     const execTool = async (toolName, args) => {
+      const resolveProjectWorkspace = () => {
+        const projectIdArg = typeof args?.projectId === 'string' ? args.projectId.trim() : '';
+        const projectNameArg = typeof args?.projectName === 'string' ? args.projectName.trim() : '';
+        let workspacePath = typeof args?.workspacePath === 'string' ? args.workspacePath.trim() : '';
+        let project = null;
+
+        const projects = Array.isArray(store?.projects) ? store.projects : [];
+        if (projectIdArg) {
+          project = projects.find((p) => String(p?.id || '') === projectIdArg) || null;
+        }
+        if (!project && projectNameArg) {
+          const key = projectNameArg.toLowerCase();
+          project = projects.find((p) => String(p?.name || '').trim().toLowerCase() === key) || null;
+        }
+        if (!project && effectiveProject) {
+          project = effectiveProject;
+        }
+        if (!workspacePath && project) {
+          workspacePath = typeof project.workspacePath === 'string' ? project.workspacePath.trim() : '';
+        }
+        return { project, workspacePath };
+      };
+
       if (toolName === 'set_operator_bio') {
         const nextBio = typeof args?.operatorBio === 'string' ? args.operatorBio.trimEnd() : '';
         const saved = await readSettings();
@@ -14487,6 +14894,159 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
       if (toolName === 'create_project') return doCreateProject(args);
       if (toolName === 'update_project') return doUpdateProject(args);
       if (toolName === 'create_tasks') return doCreateTasks(args);
+      if (toolName === 'open_project_in_vscode') {
+        const { project, workspacePath } = resolveProjectWorkspace();
+        if (!workspacePath) {
+          return {
+            ok: false,
+            error: project
+              ? `No workspacePath is saved for ${project.name || 'that project'}.`
+              : 'Project not found and no workspacePath was provided.',
+          };
+        }
+
+        if (process.platform === 'win32') {
+          const result = await new Promise((resolve) => {
+            launchVsCodeNative(workspacePath, (error) => {
+              resolve(error ? { ok: false, error: error.message } : { ok: true, mode: 'native' });
+            });
+          });
+          return {
+            ...result,
+            projectId: project?.id || '',
+            projectName: project?.name || '',
+            workspacePath,
+          };
+        }
+
+        const action = queueDesktopAction({
+          type: 'open-vscode',
+          payload: { path: workspacePath },
+          requestedBy: 'marcus-chat',
+        });
+        return {
+          ok: true,
+          queued: true,
+          mode: 'desktop-agent',
+          actionId: action.id,
+          projectId: project?.id || '',
+          projectName: project?.name || '',
+          workspacePath,
+        };
+      }
+      if (toolName === 'prepare_project_publish') {
+        const { project, workspacePath } = resolveProjectWorkspace();
+        if (!workspacePath) {
+          return {
+            ok: false,
+            error: project
+              ? `No workspacePath is saved for ${project.name || 'that project'}.`
+              : 'Project not found and no workspacePath was provided.',
+          };
+        }
+        const action = queueDesktopAction({
+          type: 'prepare-publish',
+          payload: { path: workspacePath },
+          requestedBy: 'marcus-chat',
+        });
+        return {
+          ok: true,
+          queued: true,
+          actionId: action.id,
+          projectId: project?.id || '',
+          projectName: project?.name || '',
+          workspacePath,
+        };
+      }
+      if (toolName === 'publish_project_changes') {
+        if (!messageHasExplicitPublishApproval(message)) {
+          return {
+            ok: false,
+            approvalRequired: true,
+            error: 'Explicit approval is required before committing, pushing, deploying, or publishing. Ask Mark to approve the exact publish action.',
+          };
+        }
+        const { project, workspacePath } = resolveProjectWorkspace();
+        const commitMessage = typeof args?.commitMessage === 'string' ? args.commitMessage.trim() : '';
+        if (!commitMessage) return { ok: false, error: 'commitMessage is required.' };
+        if (!workspacePath) {
+          return {
+            ok: false,
+            error: project
+              ? `No workspacePath is saved for ${project.name || 'that project'}.`
+              : 'Project not found and no workspacePath was provided.',
+          };
+        }
+        const action = queueDesktopAction({
+          type: 'publish-project-changes',
+          payload: {
+            path: workspacePath,
+            commitMessage,
+            buildScript: typeof args?.buildScript === 'string' ? args.buildScript.trim() : '',
+            testScript: typeof args?.testScript === 'string' ? args.testScript.trim() : '',
+            push: args?.push !== false,
+          },
+          requestedBy: 'marcus-chat',
+        });
+        return {
+          ok: true,
+          queued: true,
+          actionId: action.id,
+          projectId: project?.id || '',
+          projectName: project?.name || '',
+          workspacePath,
+        };
+      }
+      if (toolName === 'run_project_script') {
+        const { project, workspacePath } = resolveProjectWorkspace();
+        const scriptName = typeof args?.scriptName === 'string' ? args.scriptName.trim() : '';
+        if (!scriptName) return { ok: false, error: 'scriptName is required.' };
+        if (!workspacePath) {
+          return {
+            ok: false,
+            error: project
+              ? `No workspacePath is saved for ${project.name || 'that project'}.`
+              : 'Project not found and no workspacePath was provided.',
+          };
+        }
+        const action = queueDesktopAction({
+          type: 'run-project-script',
+          payload: { path: workspacePath, scriptName },
+          requestedBy: 'marcus-chat',
+        });
+        return {
+          ok: true,
+          queued: true,
+          actionId: action.id,
+          projectId: project?.id || '',
+          projectName: project?.name || '',
+          workspacePath,
+          scriptName,
+        };
+      }
+      if (toolName === 'clone_github_project') {
+        const repoUrl = typeof args?.repoUrl === 'string' ? args.repoUrl.trim() : '';
+        if (!/^((https:\/\/github\.com\/[^/\s]+\/[^/\s]+?(\.git)?)|(git@github\.com:[^/\s]+\/[^/\s]+?(\.git)?))$/i.test(repoUrl)) {
+          return { ok: false, error: 'A GitHub HTTPS or SSH clone URL is required.' };
+        }
+        const parentPath = typeof args?.parentPath === 'string' ? args.parentPath.trim() : '';
+        const folderName = typeof args?.folderName === 'string' ? args.folderName.trim() : '';
+        const action = queueDesktopAction({
+          type: 'clone-github-project',
+          payload: {
+            repoUrl,
+            parentPath,
+            folderName,
+            openInVsCode: args?.openInVsCode !== false,
+          },
+          requestedBy: 'marcus-chat',
+        });
+        return { ok: true, queued: true, actionId: action.id, repoUrl };
+      }
+      if (toolName === 'get_desktop_action_results') {
+        pruneDesktopActionResults();
+        return { ok: true, results: desktopActionResults.slice(-20) };
+      }
       if (toolName === 'mcp_list_tools') {
         if (!mcpAvailable) return { ok: false, error: 'MCP is not configured' };
         const toolsList = await mcpListToolsAll(settings);

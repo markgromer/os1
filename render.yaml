@@ -42,6 +42,14 @@ services:
         sync: false
       - key: OPENAI_MODEL
         value: gpt-4.1-mini
+      - key: ELEVENLABS_API_KEY
+        sync: false
+      - key: ELEVENLABS_VOICE_ID
+        sync: false
+      - key: ELEVENLABS_MODEL_ID
+        value: eleven_flash_v2_5
+      - key: ELEVENLABS_OUTPUT_FORMAT
+        value: mp3_44100_128
     disk:
       name: task-tracker-data
       mountPath: /var/data/task-tracker

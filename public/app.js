@@ -35,6 +35,7 @@ const state = {
     dashboardCalls: { loading: false, fetchedAt: 0, error: '', events: [] },
     dashboardGhl: { loading: false, fetchedAt: 0, error: '', snapshot: null },
     dashboardAiPreviews: { loading: false, fetchedAt: 0, error: '', ai: false, tasks: {}, inbox: {} },
+    marcusLiveDashboard: { loading: false, fetchedAt: 0, error: '', snapshot: null, selectedCommId: '' },
 
     chatHistory: [],
     globalChatHistory: [],
@@ -400,18 +401,76 @@ function pulseMarcusAmbient(mode = 'active', durationMs = 1400) {
 
 function stopMarcusSpeech() {
     try {
+        if (state.__marcusAudio) {
+            try { state.__marcusAudio.pause(); } catch {}
+            try { state.__marcusAudio.currentTime = 0; } catch {}
+            state.__marcusAudio = null;
+        }
+        if (state.__marcusAudioUrl) {
+            try { URL.revokeObjectURL(state.__marcusAudioUrl); } catch {}
+            state.__marcusAudioUrl = '';
+        }
         if ('speechSynthesis' in window) window.speechSynthesis.cancel();
     } catch {
         // ignore
     }
 }
 
-function speakMarcus(text, { condensed = true } = {}) {
+async function getMarcusVoiceStatus() {
+    const now = Date.now();
+    const cached = state.__marcusVoiceStatus;
+    if (cached && (now - Number(cached.fetchedAt || 0)) < 60_000) return cached;
+    try {
+        const data = await apiJson('/api/marcus/live/voice/status');
+        const next = {
+            provider: safeText(data?.provider).trim() || 'browser',
+            elevenLabsConfigured: !!data?.elevenLabsConfigured,
+            model: safeText(data?.model).trim(),
+            fetchedAt: now,
+        };
+        state.__marcusVoiceStatus = next;
+        return next;
+    } catch {
+        return { provider: 'browser', elevenLabsConfigured: false, model: '', fetchedAt: now };
+    }
+}
+
+async function speakMarcusWithElevenLabs(spoken) {
+    const resp = await apiFetch('/api/marcus/live/voice/speak', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: spoken }),
+    });
+    if (!resp.ok) throw new Error('ElevenLabs speech failed');
+    const blob = await resp.blob();
+    stopMarcusSpeech();
+    const url = URL.createObjectURL(blob);
+    const audio = new Audio(url);
+    state.__marcusAudio = audio;
+    state.__marcusAudioUrl = url;
+    audio.onended = () => {
+        if (state.__marcusAudio === audio) state.__marcusAudio = null;
+        if (state.__marcusAudioUrl === url) state.__marcusAudioUrl = '';
+        try { URL.revokeObjectURL(url); } catch {}
+    };
+    await audio.play();
+}
+
+async function speakMarcus(text, { condensed = true } = {}) {
     pulseMarcusAmbient('responding', 1800);
     if (!state.marcusVoiceOut) return;
     try {
         const spoken = condensed ? condenseForSpeech(text) : stripForSpeech(text);
         if (!spoken) return;
+        const status = await getMarcusVoiceStatus();
+        if (status.elevenLabsConfigured) {
+            try {
+                await speakMarcusWithElevenLabs(spoken.slice(0, 900));
+                return;
+            } catch {
+                // Fall back to browser speech below.
+            }
+        }
         if (!('speechSynthesis' in window)) return;
         window.speechSynthesis.cancel();
         const u = new SpeechSynthesisUtterance(spoken.slice(0, 600));
@@ -2237,6 +2296,42 @@ async function refreshDashboardGhl({ force = false } = {}) {
     renderMain();
 }
 
+async function refreshMarcusLiveDashboard({ force = false } = {}) {
+    const age = Date.now() - Number(state.marcusLiveDashboard?.fetchedAt || 0);
+    if (!force && age < 15_000 && state.marcusLiveDashboard?.snapshot) return state.marcusLiveDashboard.snapshot;
+    state.marcusLiveDashboard = { ...(state.marcusLiveDashboard || {}), loading: true, error: '' };
+    if (state.currentView === 'marcus-live') renderMain();
+    try {
+        const data = await apiJson('/api/marcus/live/dashboard');
+        state.marcusLiveDashboard = {
+            ...(state.marcusLiveDashboard || {}),
+            loading: false,
+            error: '',
+            fetchedAt: Date.now(),
+            snapshot: data,
+        };
+        if (state.currentView === 'marcus-live') renderMain();
+        return data;
+    } catch (e) {
+        state.marcusLiveDashboard = {
+            ...(state.marcusLiveDashboard || {}),
+            loading: false,
+            error: e?.message || 'Failed to load Marcus Live',
+            fetchedAt: Date.now(),
+        };
+        if (state.currentView === 'marcus-live') renderMain();
+        return null;
+    }
+}
+
+async function setMarcusPerformanceMode(mode) {
+    return await apiJson('/api/marcus/live/performance', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode }),
+    });
+}
+
 function setNewProjectDraft(patch) {
     const next = { ...(state.newProjectDraft || {}) };
     const p = (patch && typeof patch === 'object') ? patch : {};
@@ -2770,7 +2865,7 @@ async function saveProjectLinks(projectId, { workspacePath, airtableUrl }) {
 async function launchVsCodeFolder(path) {
     const p = safeText(path).trim();
     if (!p) throw new Error('Workspace path is empty. Add it first.');
-    await apiJson('/api/launch', {
+    return await apiJson('/api/launch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ path: p })
@@ -3318,6 +3413,7 @@ function renderNav() {
     nav.appendChild(bizSep);
     
     nav.appendChild(createNavIcon("fa-grip", "Dashboard", () => openDashboard(), state.currentView === "dashboard"));
+    nav.appendChild(createNavIcon("fa-wave-square", "Marcus Live", () => openMarcusLive(), state.currentView === "marcus-live"));
     nav.appendChild(createNavIcon("fa-inbox", "Inbox", () => openInbox(), state.currentView === "inbox"));
     nav.appendChild(createNavIcon("fa-rotate", "Revisions", () => openRevisions(), state.currentView === "revisions"));
     nav.appendChild(createNavIcon("fa-address-book", "Clients", () => openClients(), state.currentView === "clients" || state.currentView === "client"));
@@ -3358,6 +3454,18 @@ async function openDashboard() {
     presencePromise.then(() => {
         if (state.currentView === 'dashboard') rerenderMainPreservingUi();
     });
+}
+
+async function openMarcusLive() {
+    state.currentView = 'marcus-live';
+    state.currentProjectId = null;
+    state.currentClientName = null;
+    await loadChatHistory();
+    renderNav();
+    renderMain();
+    renderChat();
+    broadcastMarcusContext();
+    refreshMarcusLiveDashboard({ force: true }).catch(() => {});
 }
 
 async function openInbox() {
@@ -3551,7 +3659,7 @@ function renderMain() {
     }
 
     // Reduce full-page scrolling: scroll inside panes for data-heavy views.
-    if (state.currentView === 'project' || state.currentView === 'projects' || state.currentView === 'revisions' || state.currentView === 'dashboard' || state.currentView === 'godview' || state.currentView === 'inbox' || state.currentView === 'calendar' || state.currentView === 'team') {
+    if (state.currentView === 'project' || state.currentView === 'projects' || state.currentView === 'revisions' || state.currentView === 'dashboard' || state.currentView === 'marcus-live' || state.currentView === 'godview' || state.currentView === 'inbox' || state.currentView === 'calendar' || state.currentView === 'team') {
         setMainPortScrolling(false);
     } else {
         setMainPortScrolling(true);
@@ -3573,6 +3681,17 @@ function renderMain() {
             const stack = safeText(e?.stack).trim();
             const detail = `Dashboard render failed: ${msg}${stack ? `\n\n${stack}` : ''}`;
             showError(detail.slice(0, 4000));
+        }
+    } else if (state.currentView === "marcus-live") {
+        dockMarcusToPersistentSlot();
+        container.className = 'min-h-0 overflow-y-auto';
+        try {
+            renderMarcusLive(container);
+        } catch (e) {
+            console.error('Marcus Live render failed', e);
+            const msg = safeText(e?.message || 'Unknown Marcus Live error').trim();
+            const stack = safeText(e?.stack).trim();
+            showError(`Marcus Live render failed: ${msg}${stack ? `\n\n${stack}` : ''}`.slice(0, 4000));
         }
     } else if (state.currentView === "inbox") {
         // All other views keep M.A.R.C.U.S. docked on the right.
@@ -3646,6 +3765,215 @@ function buildClientsIndexFromProjects(projects) {
     const out = Array.from(byKey.values());
     out.sort((a, b) => a.name.localeCompare(b.name));
     return out;
+}
+
+function renderMarcusLive(container) {
+    const live = state.marcusLiveDashboard || {};
+    const snapshot = live.snapshot || null;
+    const health = snapshot?.systemHealth || null;
+    const comms = Array.isArray(snapshot?.pendingCommunications) ? snapshot.pendingCommunications : [];
+    const focus = Array.isArray(snapshot?.currentFocus) ? snapshot.currentFocus : [];
+    const stale = Array.isArray(snapshot?.staleWebsiteProjects) ? snapshot.staleWebsiteProjects : [];
+    const desktop = snapshot?.desktop || null;
+    const selectedCommId = safeText(live.selectedCommId).trim();
+    const selectedComm = comms.find((c) => safeText(c?.id).trim() === selectedCommId) || null;
+
+    const pctTone = (value) => {
+        const n = Number(value);
+        if (!Number.isFinite(n) || n < 0) return 'text-zinc-500';
+        if (n >= 90) return 'text-red-300';
+        if (n >= 75) return 'text-amber-300';
+        return 'text-emerald-300';
+    };
+    const barTone = (value) => {
+        const n = Number(value);
+        if (!Number.isFinite(n) || n < 0) return 'bg-zinc-700';
+        if (n >= 90) return 'bg-red-400';
+        if (n >= 75) return 'bg-amber-300';
+        return 'bg-emerald-400';
+    };
+    const metric = (label, value, suffix = '%') => {
+        const n = Number(value);
+        const shown = Number.isFinite(n) && n >= 0 ? `${Math.round(n)}${suffix}` : 'n/a';
+        const width = Number.isFinite(n) && n >= 0 ? Math.max(2, Math.min(100, n)) : 0;
+        return `
+            <div class="rounded border border-zinc-800 bg-zinc-950/40 p-3">
+                <div class="text-[10px] font-mono uppercase tracking-widest text-zinc-500">${escapeHtml(label)}</div>
+                <div class="mt-1 text-2xl font-light ${pctTone(n)}">${escapeHtml(shown)}</div>
+                <div class="mt-2 h-1.5 rounded bg-zinc-900 overflow-hidden">
+                    <div class="h-full rounded ${barTone(n)}" style="width:${width}%"></div>
+                </div>
+            </div>
+        `;
+    };
+    const commPill = (item) => {
+        const id = safeText(item?.id).trim();
+        const active = id && id === selectedCommId;
+        const linked = safeText(item?.projectId).trim();
+        return `
+            <button type="button" data-live-comm="${escapeHtml(id)}" class="text-left rounded-full border ${active ? 'border-blue-400/60 bg-blue-500/15' : 'border-zinc-800 bg-zinc-950/50 hover:border-zinc-600'} px-3 py-2 transition-colors max-w-full">
+                <span class="inline-flex items-center gap-2 max-w-full">
+                    <span class="text-xs text-white truncate max-w-[160px]">${escapeHtml(safeText(item?.person) || 'Unknown')}</span>
+                    <span class="text-[9px] font-mono ${linked ? 'text-emerald-300' : 'text-amber-300'}">${linked ? 'linked' : 'unlinked'}</span>
+                </span>
+                <span class="block mt-0.5 text-[10px] text-zinc-400 truncate max-w-[320px]">${escapeHtml(safeText(item?.description))}</span>
+            </button>
+        `;
+    };
+    const projectRow = (project) => `
+        <div class="rounded border border-zinc-800 bg-zinc-950/40 p-3">
+            <div class="flex items-start justify-between gap-3">
+                <div class="min-w-0">
+                    <div class="text-sm text-white truncate">${escapeHtml(safeText(project?.name) || 'Unnamed project')}</div>
+                    <div class="mt-1 text-[10px] font-mono text-zinc-500">${escapeHtml(safeText(project?.reason))}${project?.ageDays !== null && project?.ageDays !== undefined ? ` • ${escapeHtml(String(project.ageDays))}d` : ''}</div>
+                </div>
+                ${safeText(project?.id) ? `<button data-live-open-project="${escapeHtml(project.id)}" class="shrink-0 px-2 py-1 rounded border border-zinc-700 text-[10px] font-mono text-zinc-300 hover:text-white">Open</button>` : ''}
+            </div>
+            <div class="mt-2 flex flex-wrap gap-1.5">
+                <span class="px-2 py-0.5 rounded border border-zinc-800 text-[9px] font-mono text-zinc-400">${escapeHtml(safeText(project?.type) || 'Project')}</span>
+                <span class="px-2 py-0.5 rounded border border-zinc-800 text-[9px] font-mono text-zinc-400">${Number(project?.openTaskCount) || 0} tasks</span>
+                <span class="px-2 py-0.5 rounded border border-zinc-800 text-[9px] font-mono text-zinc-400">${Number(project?.pendingCommCount) || 0} comms</span>
+            </div>
+        </div>
+    `;
+
+    container.innerHTML = `
+        <div class="p-6 lg:p-8 space-y-5">
+            <div class="flex items-start justify-between gap-4">
+                <div>
+                    <div class="text-[11px] font-mono uppercase tracking-[0.25em] text-blue-300">Marcus Live</div>
+                    <h1 class="mt-2 text-3xl text-white font-light">Operations Cockpit</h1>
+                    <div class="mt-1 text-sm text-zinc-400">System load, current focus, pending communications, and project freshness.</div>
+                </div>
+                <button id="btn-live-refresh" class="px-3 py-2 rounded border border-zinc-700 bg-zinc-950/50 text-xs font-mono text-zinc-300 hover:text-white">Refresh</button>
+            </div>
+
+            ${live.error ? `<div class="rounded border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200">${escapeHtml(live.error)}</div>` : ''}
+            ${live.loading && !snapshot ? `<div class="rounded border border-zinc-800 bg-zinc-950/40 p-4 text-sm text-zinc-400">Loading Marcus Live...</div>` : ''}
+
+            <div class="grid grid-cols-1 xl:grid-cols-3 gap-4">
+                <section class="xl:col-span-2 rounded border border-zinc-800 bg-zinc-900/30 p-4">
+                    <div class="flex items-center justify-between gap-3">
+                        <div>
+                            <div class="text-sm text-white">System Performance</div>
+                            <div class="text-[11px] text-zinc-500 font-mono">${health?.collectedAt ? `Collected ${escapeHtml(health.collectedAt)}` : 'Waiting for desktop agent health'}</div>
+                        </div>
+                        <div class="flex flex-wrap gap-2 justify-end">
+                            <button data-live-performance="optimize" class="px-2.5 py-1.5 rounded border border-emerald-600/40 bg-emerald-600/15 text-[10px] font-mono text-emerald-200 hover:bg-emerald-600/25">Optimize</button>
+                            <button data-live-performance="performance" class="px-2.5 py-1.5 rounded border border-blue-600/40 bg-blue-600/15 text-[10px] font-mono text-blue-200 hover:bg-blue-600/25">Performance</button>
+                            <button data-live-performance="balanced" class="px-2.5 py-1.5 rounded border border-zinc-700 bg-zinc-950/50 text-[10px] font-mono text-zinc-300 hover:text-white">Balanced</button>
+                            <button data-live-performance="power-saver" class="px-2.5 py-1.5 rounded border border-zinc-700 bg-zinc-950/50 text-[10px] font-mono text-zinc-300 hover:text-white">Saver</button>
+                        </div>
+                    </div>
+                    <div class="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        ${metric('CPU', health?.cpuPercent)}
+                        ${metric('RAM', health?.memoryPercent)}
+                        ${metric('Uptime', health?.uptimeHours, 'h')}
+                    </div>
+                    <div class="mt-4 rounded border border-zinc-800 bg-zinc-950/30 p-3">
+                        <div class="text-[10px] font-mono uppercase tracking-widest text-zinc-500">Desktop Focus</div>
+                        <div class="mt-2 text-xs text-zinc-300 truncate">${escapeHtml(safeText(desktop?.windowTitle) || 'No desktop context')}</div>
+                        <div class="mt-1 text-[10px] font-mono text-zinc-500 truncate">${escapeHtml(safeText(desktop?.workspace?.folderName || desktop?.processName))}</div>
+                    </div>
+                </section>
+
+                <section class="rounded border border-zinc-800 bg-zinc-900/30 p-4">
+                    <div class="text-sm text-white">Current Focus</div>
+                    <div class="text-[11px] text-zinc-500 font-mono">${focus.length} live project${focus.length === 1 ? '' : 's'}</div>
+                    <div class="mt-3 space-y-2 max-h-[420px] overflow-y-auto pr-1">${focus.map(projectRow).join('') || '<div class="text-sm text-zinc-500">No current focus detected yet.</div>'}</div>
+                </section>
+            </div>
+
+            <div class="grid grid-cols-1 xl:grid-cols-3 gap-4">
+                <section class="xl:col-span-2 rounded border border-zinc-800 bg-zinc-900/30 p-4">
+                    <div class="flex items-center justify-between gap-3">
+                        <div>
+                            <div class="text-sm text-white">Pending Communications</div>
+                            <div class="text-[11px] text-zinc-500 font-mono">${comms.length} item${comms.length === 1 ? '' : 's'} needing attention</div>
+                        </div>
+                        <button data-live-open-inbox class="px-2.5 py-1.5 rounded border border-zinc-700 bg-zinc-950/50 text-[10px] font-mono text-zinc-300 hover:text-white">Inbox</button>
+                    </div>
+                    <div class="mt-3 flex flex-wrap gap-2">${comms.map(commPill).join('') || '<div class="text-sm text-zinc-500">No pending communications.</div>'}</div>
+                    ${selectedComm ? `
+                        <div class="mt-4 rounded border border-blue-500/30 bg-blue-500/10 p-4">
+                            <div class="flex items-start justify-between gap-3">
+                                <div>
+                                    <div class="text-white text-sm">${escapeHtml(selectedComm.person)}</div>
+                                    <div class="mt-1 text-xs text-zinc-300">${escapeHtml(selectedComm.description)}</div>
+                                    <div class="mt-2 text-[10px] font-mono text-zinc-500">${escapeHtml(selectedComm.source)} • ${escapeHtml(selectedComm.status)} • ${escapeHtml(selectedComm.actionHint)}</div>
+                                </div>
+                                <button data-live-clear-comm class="text-zinc-500 hover:text-white"><i class="fa-solid fa-xmark"></i></button>
+                            </div>
+                            <div class="mt-3 flex flex-wrap gap-2">
+                                <button data-live-open-inbox class="px-3 py-1.5 rounded border border-zinc-700 text-[11px] font-mono text-zinc-200 hover:text-white">Open Inbox</button>
+                                ${selectedComm.projectId ? `<button data-live-open-project="${escapeHtml(selectedComm.projectId)}" class="px-3 py-1.5 rounded border border-zinc-700 text-[11px] font-mono text-zinc-200 hover:text-white">Open Project</button>` : ''}
+                                <button data-live-comm-status="${escapeHtml(selectedComm.id)}" data-status="Triaged" class="px-3 py-1.5 rounded border border-blue-600/40 bg-blue-600/15 text-[11px] font-mono text-blue-200">Triaged</button>
+                                <button data-live-comm-status="${escapeHtml(selectedComm.id)}" data-status="Done" class="px-3 py-1.5 rounded border border-emerald-600/40 bg-emerald-600/15 text-[11px] font-mono text-emerald-200">Done</button>
+                                <button data-live-comm-status="${escapeHtml(selectedComm.id)}" data-status="Archived" class="px-3 py-1.5 rounded border border-zinc-700 text-[11px] font-mono text-zinc-300">Archive</button>
+                            </div>
+                        </div>
+                    ` : ''}
+                </section>
+
+                <section class="rounded border border-zinc-800 bg-zinc-900/30 p-4">
+                    <div class="text-sm text-white">Likely Completed Website Work</div>
+                    <div class="text-[11px] text-zinc-500 font-mono">${stale.length} stale active project${stale.length === 1 ? '' : 's'}</div>
+                    <div class="mt-3 space-y-2 max-h-[420px] overflow-y-auto pr-1">${stale.slice(0, 12).map(projectRow).join('') || '<div class="text-sm text-zinc-500">No stale website projects detected.</div>'}</div>
+                </section>
+            </div>
+        </div>
+    `;
+
+    if (!snapshot && !live.loading) refreshMarcusLiveDashboard({ force: true }).catch(() => {});
+    container.querySelector('#btn-live-refresh')?.addEventListener('click', () => refreshMarcusLiveDashboard({ force: true }));
+    container.querySelectorAll('[data-live-performance]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+            const mode = safeText(btn.getAttribute('data-live-performance')).trim();
+            btn.disabled = true;
+            try {
+                await setMarcusPerformanceMode(mode);
+                alert(`Queued ${mode} mode for the desktop agent.`);
+            } catch (e) {
+                alert(e?.message || 'Failed to queue performance action');
+            } finally {
+                btn.disabled = false;
+            }
+        });
+    });
+    container.querySelectorAll('[data-live-comm]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            state.marcusLiveDashboard = { ...(state.marcusLiveDashboard || {}), selectedCommId: safeText(btn.getAttribute('data-live-comm')).trim() };
+            renderMain();
+        });
+    });
+    container.querySelectorAll('[data-live-open-inbox]').forEach((btn) => btn.addEventListener('click', () => openInbox()));
+    container.querySelectorAll('[data-live-open-project]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            const pid = safeText(btn.getAttribute('data-live-open-project')).trim();
+            if (pid) openProject(pid);
+        });
+    });
+    container.querySelector('[data-live-clear-comm]')?.addEventListener('click', () => {
+        state.marcusLiveDashboard = { ...(state.marcusLiveDashboard || {}), selectedCommId: '' };
+        renderMain();
+    });
+    container.querySelectorAll('[data-live-comm-status]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+            const id = safeText(btn.getAttribute('data-live-comm-status')).trim();
+            const status = safeText(btn.getAttribute('data-status')).trim();
+            if (!id || !status) return;
+            btn.disabled = true;
+            try {
+                await patchInboxItem(id, { status });
+                await fetchState().catch(() => {});
+                await refreshMarcusLiveDashboard({ force: true });
+            } catch (e) {
+                alert(e?.message || 'Failed to update communication');
+            } finally {
+                btn.disabled = false;
+            }
+        });
+    });
 }
 
 function buildClientsIndexFromStore({ projects, clients }) {
@@ -13049,7 +13377,8 @@ function renderProjectView(container) {
                 openCodeBtn.onclick = async () => {
                     openCodeBtn.disabled = true;
                     try {
-                        await launchVsCodeFolder(wsInput?.value);
+                        const result = await launchVsCodeFolder(wsInput?.value);
+                        if (result?.queued) alert('Queued for the desktop agent. VS Code will open locally when the agent checks in.');
                     } catch (e) {
                         alert(e?.message || 'Failed to open VS Code');
                     } finally {
@@ -13539,7 +13868,8 @@ function renderProjectView(container) {
         quickOpenCode.onclick = async () => {
             quickOpenCode.disabled = true;
             try {
-                await launchVsCodeFolder(ws);
+                const result = await launchVsCodeFolder(ws);
+                if (result?.queued) alert('Queued for the desktop agent. VS Code will open locally when the agent checks in.');
             } catch (e) {
                 alert(e?.message || 'Failed to open VS Code');
             } finally {

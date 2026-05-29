@@ -168,6 +168,248 @@ function gitCmd(cwd, args) {
   });
 }
 
+function runLocalCommand(cwd, command, args, timeout = 60_000) {
+  return new Promise((resolve) => {
+    execFile(command, args, { cwd, windowsHide: true, timeout }, (err, stdout, stderr) => {
+      resolve({
+        ok: !err,
+        code: err?.code ?? 0,
+        stdout: String(stdout || '').slice(-8000),
+        stderr: String(stderr || err?.message || '').slice(-8000),
+      });
+    });
+  });
+}
+
+function readPackageScripts(cwd) {
+  try {
+    const packagePath = path.join(cwd, 'package.json');
+    if (!fs.existsSync(packagePath)) return {};
+    const pkg = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+    return pkg && typeof pkg.scripts === 'object' && pkg.scripts ? pkg.scripts : {};
+  } catch {
+    return {};
+  }
+}
+
+function validateWorkspaceFolder(projectPath) {
+  const target = String(projectPath || '').trim();
+  if (!target) return { ok: false, error: 'Path required' };
+  try {
+    const stat = fs.statSync(target);
+    if (!stat.isDirectory()) return { ok: false, error: 'Path is not a folder' };
+  } catch {
+    return { ok: false, error: 'Path does not exist' };
+  }
+  return { ok: true, path: target };
+}
+
+async function preparePublish(projectPath) {
+  const valid = validateWorkspaceFolder(projectPath);
+  if (!valid.ok) return valid;
+  const cwd = valid.path;
+
+  const inside = await gitCmd(cwd, ['rev-parse', '--is-inside-work-tree']);
+  if (inside !== 'true') return { ok: false, error: 'Folder is not a git repository' };
+
+  const branch = await gitCmd(cwd, ['rev-parse', '--abbrev-ref', 'HEAD']);
+  const upstream = await gitCmd(cwd, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
+  const remote = await gitCmd(cwd, ['remote', 'get-url', 'origin']);
+  const statusRaw = await gitCmd(cwd, ['status', '--porcelain', '-u']);
+  const diffStat = await gitCmd(cwd, ['diff', '--stat', 'HEAD']);
+  const recentCommitsRaw = await gitCmd(cwd, ['log', '--oneline', '-5', '--no-decorate']);
+  const scripts = readPackageScripts(cwd);
+
+  const changes = statusRaw
+    ? statusRaw.split('\n').slice(0, 80).map((line) => ({ status: line.slice(0, 2), file: line.slice(3) }))
+    : [];
+
+  return {
+    ok: true,
+    details: {
+      path: cwd,
+      branch,
+      upstream,
+      remote,
+      hasChanges: changes.length > 0,
+      changes,
+      diffStat,
+      packageScripts: Object.keys(scripts),
+      recentCommits: recentCommitsRaw ? recentCommitsRaw.split('\n') : [],
+      recommended: {
+        buildScript: scripts.build ? 'build' : '',
+        testScript: scripts.test ? 'test' : '',
+      },
+    },
+  };
+}
+
+async function runNpmScript(cwd, scriptName) {
+  const clean = String(scriptName || '').trim();
+  if (!clean) return { ok: true, skipped: true };
+  if (!/^[A-Za-z0-9:_-]+$/.test(clean)) return { ok: false, stderr: 'Invalid npm script name' };
+  const scripts = readPackageScripts(cwd);
+  if (!scripts[clean]) return { ok: false, stderr: `package.json has no "${clean}" script` };
+  return await runLocalCommand(cwd, 'npm.cmd', ['run', clean], 120_000);
+}
+
+async function publishProjectChanges(payload) {
+  const valid = validateWorkspaceFolder(payload?.path);
+  if (!valid.ok) return valid;
+  const cwd = valid.path;
+
+  const inside = await gitCmd(cwd, ['rev-parse', '--is-inside-work-tree']);
+  if (inside !== 'true') return { ok: false, error: 'Folder is not a git repository' };
+
+  const commitMessage = String(payload?.commitMessage || '').trim();
+  if (!commitMessage) return { ok: false, error: 'Commit message required' };
+
+  const before = await preparePublish(cwd);
+  if (!before.ok) return before;
+  if (!before.details.hasChanges) {
+    return { ok: false, error: 'No local changes to commit', details: before.details };
+  }
+
+  const testResult = await runNpmScript(cwd, payload?.testScript);
+  if (!testResult.ok) return { ok: false, error: 'Test script failed', details: { before: before.details, testResult } };
+
+  const buildResult = await runNpmScript(cwd, payload?.buildScript);
+  if (!buildResult.ok) return { ok: false, error: 'Build script failed', details: { before: before.details, testResult, buildResult } };
+
+  const addResult = await runLocalCommand(cwd, 'git', ['add', '-A'], 30_000);
+  if (!addResult.ok) return { ok: false, error: 'git add failed', details: { before: before.details, addResult } };
+
+  const commitResult = await runLocalCommand(cwd, 'git', ['commit', '-m', commitMessage], 60_000);
+  if (!commitResult.ok) return { ok: false, error: 'git commit failed', details: { before: before.details, testResult, buildResult, commitResult } };
+
+  const branch = await gitCmd(cwd, ['rev-parse', '--abbrev-ref', 'HEAD']);
+  let pushResult = { ok: true, skipped: true };
+  if (payload?.push !== false) {
+    pushResult = await runLocalCommand(cwd, 'git', ['push', '-u', 'origin', branch], 120_000);
+    if (!pushResult.ok) return { ok: false, error: 'git push failed', details: { before: before.details, testResult, buildResult, commitResult, pushResult, branch } };
+  }
+
+  const after = await preparePublish(cwd);
+  return {
+    ok: true,
+    details: {
+      before: before.details,
+      after: after.details,
+      testResult,
+      buildResult,
+      commitResult,
+      pushResult,
+      branch,
+    },
+  };
+}
+
+async function runProjectScript(payload) {
+  const valid = validateWorkspaceFolder(payload?.path);
+  if (!valid.ok) return valid;
+  const cwd = valid.path;
+  const scriptName = String(payload?.scriptName || '').trim();
+  if (!scriptName) return { ok: false, error: 'scriptName is required' };
+
+  const result = await runNpmScript(cwd, scriptName);
+  return {
+    ok: result.ok,
+    error: result.ok ? '' : `npm script "${scriptName}" failed`,
+    details: {
+      path: cwd,
+      scriptName,
+      result,
+    },
+  };
+}
+
+function defaultCloneParentPath() {
+  const docs = path.join(os.homedir(), 'OneDrive', 'Documents');
+  if (fs.existsSync(docs)) return docs;
+  return path.join(os.homedir(), 'Documents');
+}
+
+function deriveRepoFolderName(repoUrl) {
+  const raw = String(repoUrl || '').trim().replace(/\.git$/i, '');
+  const parts = raw.split(/[/:\\]/).filter(Boolean);
+  const last = parts[parts.length - 1] || 'repo';
+  return last.replace(/[^A-Za-z0-9._-]+/g, '-').slice(0, 80) || 'repo';
+}
+
+async function cloneGithubProject(payload) {
+  const repoUrl = String(payload?.repoUrl || '').trim();
+  if (!/^((https:\/\/github\.com\/[^/\s]+\/[^/\s]+?(\.git)?)|(git@github\.com:[^/\s]+\/[^/\s]+?(\.git)?))$/i.test(repoUrl)) {
+    return { ok: false, error: 'A GitHub HTTPS or SSH clone URL is required' };
+  }
+
+  const parentRaw = String(payload?.parentPath || '').trim();
+  const parentPath = parentRaw || defaultCloneParentPath();
+  let parentStat = null;
+  try {
+    parentStat = fs.statSync(parentPath);
+  } catch {
+    return { ok: false, error: `Parent folder does not exist: ${parentPath}` };
+  }
+  if (!parentStat.isDirectory()) return { ok: false, error: 'Parent path is not a folder' };
+
+  const folderNameRaw = String(payload?.folderName || '').trim();
+  const folderName = (folderNameRaw || deriveRepoFolderName(repoUrl)).replace(/[^A-Za-z0-9._ -]+/g, '-').trim();
+  const destination = path.resolve(parentPath, folderName);
+  if (!destination.startsWith(path.resolve(parentPath))) return { ok: false, error: 'Invalid destination folder' };
+
+  if (fs.existsSync(destination)) {
+    const gitDir = path.join(destination, '.git');
+    const alreadyRepo = fs.existsSync(gitDir);
+    const openResult = payload?.openInVsCode === false ? { ok: true, skipped: true } : await openVsCode(destination);
+    return {
+      ok: alreadyRepo && openResult.ok,
+      error: alreadyRepo ? (openResult.ok ? '' : openResult.error) : 'Destination exists and is not a git repository',
+      details: { repoUrl, destination, alreadyExisted: true, openResult },
+    };
+  }
+
+  const cloneResult = await runLocalCommand(parentPath, 'git', ['clone', repoUrl, folderName], 180_000);
+  if (!cloneResult.ok) {
+    return { ok: false, error: 'git clone failed', details: { repoUrl, destination, cloneResult } };
+  }
+
+  const prep = await preparePublish(destination);
+  const openResult = payload?.openInVsCode === false ? { ok: true, skipped: true } : await openVsCode(destination);
+  return {
+    ok: openResult.ok,
+    error: openResult.ok ? '' : openResult.error,
+    details: { repoUrl, destination, cloneResult, prepare: prep.details || null, openResult },
+  };
+}
+
+async function setPerformanceProfile(payload) {
+  const mode = String(payload?.mode || '').trim().toLowerCase();
+  const powerSchemeByMode = {
+    balanced: 'SCHEME_BALANCED',
+    performance: 'SCHEME_MIN',
+    'power-saver': 'SCHEME_MAX',
+    optimize: 'SCHEME_BALANCED',
+  };
+  const scheme = powerSchemeByMode[mode];
+  if (!scheme) return { ok: false, error: 'Invalid performance mode' };
+
+  const details = { mode, scheme, steps: [] };
+  const power = await runLocalCommand(process.cwd(), 'powercfg', ['/setactive', scheme], 20_000);
+  details.steps.push({ name: 'powercfg', ...power });
+
+  if (mode === 'optimize') {
+    const dns = await runLocalCommand(process.cwd(), 'powershell.exe', ['-NoProfile', '-Command', 'Clear-DnsClientCache'], 20_000);
+    details.steps.push({ name: 'dns-cache', ...dns });
+  }
+
+  const ok = details.steps.every((s) => s.ok);
+  return {
+    ok,
+    error: ok ? '' : 'One or more performance actions failed',
+    details,
+  };
+}
+
 // ── Scan a workspace directory for structure + git info ─────────
 async function scanWorkspace(wsPath) {
   if (!wsPath || !fs.existsSync(wsPath)) return null;
@@ -355,6 +597,74 @@ function httpGet(urlPath) {
 }
 
 // ── Fulfil file-read requests from Marcus (exploring deeper) ────
+function openVsCode(projectPath) {
+  return new Promise((resolve) => {
+    const target = String(projectPath || '').trim();
+    if (!target) return resolve({ ok: false, error: 'Path required' });
+
+    let stat = null;
+    try {
+      stat = fs.statSync(target);
+    } catch {
+      return resolve({ ok: false, error: 'Path does not exist' });
+    }
+    if (!stat.isDirectory()) return resolve({ ok: false, error: 'Path is not a folder' });
+
+    const tryLaunch = (cmds) => {
+      const cmd = cmds.shift();
+      if (!cmd) return resolve({ ok: false, error: 'VS Code command not found. Install the code command or add it to PATH.' });
+      try {
+        execFile(cmd, [target], { windowsHide: false, timeout: 5000 }, (err) => {
+          if (!err) return resolve({ ok: true });
+          tryLaunch(cmds);
+        });
+      } catch {
+        tryLaunch(cmds);
+      }
+    };
+
+    tryLaunch(['code', 'code.cmd']);
+  });
+}
+
+async function checkDesktopActions() {
+  try {
+    const result = await httpGet('/api/desktop-context/actions');
+    const actions = Array.isArray(result?.actions) ? result.actions : [];
+    if (!actions.length) return;
+
+    const responses = [];
+    for (const action of actions) {
+      const id = String(action?.id || '').trim();
+      const type = String(action?.type || '').trim();
+      if (!id || !type) continue;
+
+      let outcome = { ok: false, error: `Unsupported desktop action: ${type}` };
+      if (type === 'open-vscode') {
+        outcome = await openVsCode(action?.payload?.path);
+      } else if (type === 'prepare-publish') {
+        outcome = await preparePublish(action?.payload?.path);
+      } else if (type === 'publish-project-changes') {
+        outcome = await publishProjectChanges(action?.payload || {});
+      } else if (type === 'run-project-script') {
+        outcome = await runProjectScript(action?.payload || {});
+      } else if (type === 'clone-github-project') {
+        outcome = await cloneGithubProject(action?.payload || {});
+      } else if (type === 'set-performance-profile') {
+        outcome = await setPerformanceProfile(action?.payload || {});
+      }
+
+      responses.push({ id, type, ...outcome });
+      const ts = new Date().toLocaleTimeString();
+      console.log(`[${ts}] Desktop action ${type}: ${outcome.ok ? 'ok' : outcome.error}`);
+    }
+
+    if (responses.length) {
+      await relay({ results: responses }, '/api/desktop-context/action-results');
+    }
+  } catch {}
+}
+
 async function checkFileRequests(wsPath) {
   if (!wsPath) return;
   try {
@@ -616,6 +926,8 @@ let consecutive = 0;
 let lastTitle = '';
 
 async function tick() {
+  await checkDesktopActions();
+
   const ctx = await captureDesktop();
   if (!ctx) {
     if (++consecutive >= 3) {
