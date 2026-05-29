@@ -478,6 +478,8 @@ function isMarcusLiveSessionRoute(req) {
     || p === '/api/marcus/live/action'
     || p === '/api/marcus/active-brief'
     || p === '/api/marcus/live/chat'
+    || p === '/api/marcus/live/dashboard'
+    || p === '/api/marcus/live/performance'
     || p === '/api/marcus/live/session-status'
     || p === '/api/marcus/live/voice/status'
     || p === '/api/marcus/live/voice/speak'

@@ -1150,6 +1150,109 @@
     }
     .chat-bar button span { display: none; }
   }
+  .simple-shell {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 14px;
+    background: #050a10;
+  }
+  .simple-panel {
+    max-width: 560px;
+    margin: 0 auto;
+    border: 1px solid rgba(56,189,248,0.18);
+    border-radius: 14px;
+    background: #07111b;
+    box-shadow: 0 18px 50px rgba(0,0,0,0.32);
+    overflow: hidden;
+  }
+  .simple-inner { padding: 14px; display: grid; gap: 10px; }
+  .simple-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+  .simple-title { font-size: 18px; font-weight: 800; color: #f8fafc; letter-spacing: 0.02em; }
+  .simple-sub { margin-top: 2px; color: #7b8ca3; font-size: 12px; }
+  .simple-voice { display: flex; gap: 7px; }
+  .simple-card {
+    border: 1px solid rgba(56,189,248,0.16);
+    border-radius: 10px;
+    background: #09131d;
+    overflow: hidden;
+  }
+  .simple-card-head {
+    min-height: 34px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 10px;
+    border-bottom: 1px solid rgba(56,189,248,0.1);
+  }
+  .simple-card-title { font-size: 10px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: #cbd5e1; }
+  .simple-card-count { min-width: 22px; height: 20px; padding: 0 6px; border-radius: 999px; background: #122235; color: #cbd5e1; font-size: 10px; display: grid; place-items: center; }
+  .simple-card-body { padding: 10px; }
+  .simple-ask {
+    width: 100%;
+    border: 1px solid rgba(56,189,248,0.16);
+    border-radius: 8px;
+    background: #0b1722;
+    color: #8aa0b7;
+    padding: 9px 10px;
+    text-align: left;
+    font-size: 13px;
+  }
+  .simple-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+  .simple-action {
+    border: 1px solid rgba(56,189,248,0.14);
+    border-radius: 8px;
+    background: #111f2d;
+    color: #dbeafe;
+    padding: 8px 6px;
+    font-size: 11px;
+    cursor: pointer;
+  }
+  .simple-action:hover { background: #172b3e; }
+  .simple-rings { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  .simple-modes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; margin-top: 8px; }
+  .simple-mode {
+    border: 1px solid rgba(56,189,248,0.16);
+    border-radius: 7px;
+    background: #0f1b28;
+    color: #cbd5e1;
+    padding: 7px 6px;
+    font-size: 11px;
+    cursor: pointer;
+  }
+  .simple-primary { width: 100%; margin-top: 9px; border: 0; border-radius: 8px; background: #2563eb; color: white; padding: 9px; font-size: 12px; font-weight: 700; cursor: pointer; }
+  .simple-comm { border: 1px solid rgba(56,189,248,0.12); border-radius: 8px; background: #0c1824; padding: 9px; margin-bottom: 8px; }
+  .simple-comm-top { display: flex; gap: 8px; align-items: flex-start; }
+  .simple-avatar { width: 30px; height: 30px; border-radius: 50%; background: linear-gradient(135deg,#2563eb,#334155); color: white; display: grid; place-items: center; flex: 0 0 auto; font-size: 12px; }
+  .simple-name { color: white; font-size: 13px; font-weight: 700; line-height: 1.2; }
+  .simple-desc { margin-top: 2px; color: #93a4b8; font-size: 12px; line-height: 1.35; }
+  .simple-comm-actions { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 6px; margin-top: 8px; }
+  .simple-comm-actions button { border: 0; border-radius: 6px; background: #152230; color: #dbeafe; padding: 6px 4px; font-size: 10px; cursor: pointer; }
+  .simple-focus-row { display: grid; grid-template-columns: minmax(0,1fr) 46px; gap: 8px; align-items: center; padding: 6px 0; border-bottom: 1px solid rgba(56,189,248,0.08); }
+  .simple-focus-row:last-child { border-bottom: 0; }
+  .simple-focus-name { color: #dbeafe; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .simple-focus-meta { color: #64748b; font-size: 10px; margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .simple-score { color: #cbd5e1; font-size: 11px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; text-align: right; }
+  .simple-context { display: grid; gap: 5px; }
+  .simple-context div { color: #cbd5e1; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .simple-hidden { display: none !important; }
+  body.simple-cockpit .context-bar,
+  body.simple-cockpit .command-stage,
+  body.simple-cockpit .hud-shell,
+  body.simple-cockpit .health-panel,
+  body.simple-cockpit .secondary-drawer {
+    display: none !important;
+  }
+  body.simple-cockpit {
+    overflow: hidden;
+  }
+  #simple-live-root {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 14px;
+    display: block;
+  }
 </style>
 </head>
 <body>
@@ -1167,6 +1270,8 @@
   <span class="ctx-pill" id="ctx-files"><i class="fa-solid fa-file-pen"></i> <span>-</span></span>
   <button class="health-toggle" id="health-toggle" title="System Health"><i class="fa-solid fa-heartbeat"></i> SYS</button>
 </div>
+
+<div id="simple-live-root"></div>
 
 <div class="command-stage">
   <section class="command-core-panel" aria-label="MARCUS command field">
@@ -2397,6 +2502,7 @@
           updateObservationDigest();
         }
         renderHud();
+        renderSimpleCockpit({});
         break;
 
       case 'context':
@@ -2424,6 +2530,7 @@
         setReadoutFromContext(data);
         scheduleActiveBriefLoad(500);
         renderHud();
+        renderSimpleCockpit({});
         break;
 
       case 'observation':
@@ -2434,6 +2541,7 @@
         addMsg('observation', data.text, { tag: 'observation', time: timeStr(data.ts), workspace: data.workspace });
         updateObservationDigest();
         renderHud();
+        renderSimpleCockpit({});
         break;
 
       case 'chat':
@@ -2699,11 +2807,154 @@
     </div>`;
   }
 
+  function renderSimpleCockpit(data) {
+    const root = document.getElementById('simple-live-root');
+    if (!root) return;
+    document.body.classList.add('simple-cockpit');
+    const health = data?.systemHealth || liveState.context?.systemHealth || {};
+    const comms = Array.isArray(data?.pendingCommunications) ? data.pendingCommunications : [];
+    const focus = Array.isArray(data?.currentFocus) ? data.currentFocus : liveState.recentProjects.map((project) => ({
+      name: project.workspace || project.name || 'Current workspace',
+      reason: project.branch ? `Branch: ${project.branch}` : 'Current',
+      type: project.processName || '',
+    }));
+    const desktop = data?.desktop || liveState.context || {};
+    const pct = (v) => Number.isFinite(Number(v)) ? Math.round(Number(v)) : '--';
+    const healthCard = (label, value, detail) => `
+      <div class="health-card">
+        <div class="hc-label">${esc(label)}</div>
+        <div class="hc-value">${esc(String(value))}${value === '--' ? '' : '%'}</div>
+        <div class="health-bar"><div class="health-bar-fill" style="width:${Number(value) || 0}%"></div></div>
+        ${detail ? `<div class="hc-detail">${esc(detail)}</div>` : ''}
+      </div>`;
+    const commRows = comms.slice(0, 3).map((item) => {
+      const person = String(item.person || 'Unknown').trim();
+      const initial = person.slice(0, 1).toUpperCase() || '?';
+      return `
+        <div class="simple-comm">
+          <div class="simple-comm-top">
+            <div class="simple-avatar">${esc(initial)}</div>
+            <div>
+              <div class="simple-name">${esc(person)}</div>
+              <div class="simple-desc">${esc(item.description || '')}</div>
+            </div>
+          </div>
+          <div class="simple-comm-actions">
+            <button data-command="Open this communication: ${esc(item.description || '')}">Open</button>
+            <button data-command="Draft a response to ${esc(person)} about: ${esc(item.description || '')}">Draft</button>
+            <button data-command="What action should I take for ${esc(person)}? ${esc(item.description || '')}">Action</button>
+          </div>
+        </div>`;
+    }).join('');
+    const focusRows = focus.slice(0, 5).map((project, idx) => `
+      <div class="simple-focus-row">
+        <div>
+          <div class="simple-focus-name">${esc(project.name || 'Unnamed project')}</div>
+          <div class="simple-focus-meta">${esc(project.reason || project.type || 'Current')}</div>
+        </div>
+        <div class="simple-score">${Math.max(40, 92 - idx * 9)}%</div>
+      </div>`).join('');
+    root.innerHTML = `
+      <div class="simple-panel">
+        <div class="simple-inner">
+          <div class="simple-head">
+            <div>
+              <div class="simple-title">MARCUS</div>
+              <div class="simple-sub">Aware • Watching current work</div>
+            </div>
+            <div class="simple-voice">
+              <button class="voice-btn" type="button" data-simple-voice="toggle"><i class="fa-solid ${voiceState.enabled ? 'fa-volume-high' : 'fa-volume-xmark'}"></i></button>
+              <button class="voice-btn" type="button" data-simple-voice="listen"><i class="fa-solid fa-microphone"></i></button>
+            </div>
+          </div>
+          <button class="simple-ask" type="button" data-command="Give me the current readout. What matters right now?">Ask Marcus...</button>
+          <div class="simple-actions">
+            <button class="simple-action" type="button" data-command="Capture the current context and tell me what matters.">Capture</button>
+            <button class="simple-action" type="button" data-command="Summarize pending communications and current focus.">Summarize</button>
+            <button class="simple-action" type="button" data-command="What should I do next? Keep it short and decisive.">Next</button>
+          </div>
+          <section class="simple-card">
+            <div class="simple-card-head"><span class="simple-card-title">System Performance</span></div>
+            <div class="simple-card-body">
+              <div class="simple-rings">
+                ${healthCard('CPU', pct(health.cpuPercent), '')}
+                ${healthCard('RAM', pct(health.memoryPercent), `${health.memoryUsedGB || '--'} / ${health.memoryTotalGB || '--'} GB`)}
+                ${healthCard('Disk', pct(Array.isArray(health.disks) && health.disks[0]?.percent ? health.disks[0].percent : 0), '')}
+              </div>
+              <button class="simple-primary" type="button" data-performance="optimize">Optimize Resources</button>
+              <div class="simple-modes">
+                <button class="simple-mode" type="button" data-performance="performance">Code</button>
+                <button class="simple-mode" type="button" data-performance="balanced">Balanced</button>
+                <button class="simple-mode" type="button" data-performance="power-saver">Focus</button>
+              </div>
+            </div>
+          </section>
+          <section class="simple-card">
+            <div class="simple-card-head"><span class="simple-card-title">Pending Communications</span><span class="simple-card-count">${comms.length}</span></div>
+            <div class="simple-card-body">${commRows || '<div class="hud-empty">No pending communications.</div>'}</div>
+          </section>
+          <section class="simple-card">
+            <div class="simple-card-head"><span class="simple-card-title">Current Focus</span><span class="simple-card-count">${focus.length}</span></div>
+            <div class="simple-card-body">
+              ${focusRows || '<div class="hud-empty">No current focus detected.</div>'}
+              <div class="simple-context" style="margin-top:8px">
+                <div>${esc(desktop.windowTitle || 'No desktop context')}</div>
+                <div>${esc(desktop.workspace?.folderName || desktop.processName || '')}</div>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>`;
+    root.querySelectorAll('[data-command]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        input.value = btn.getAttribute('data-command') || '';
+        sendChat();
+      });
+    });
+    root.querySelectorAll('[data-performance]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const mode = btn.getAttribute('data-performance') || 'optimize';
+        try {
+          const token = getToken();
+          const qs = token ? `?token=${encodeURIComponent(token)}` : '';
+          await fetch(`${BASE}/api/marcus/live/performance${qs}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...buildAuthHeaders() },
+            credentials: 'include',
+            body: JSON.stringify({ mode }),
+          });
+          addMsg('system', `Queued performance mode: ${mode}.`);
+        } catch {
+          addMsg('system', 'Could not queue performance action.');
+        }
+      });
+    });
+    root.querySelector('[data-simple-voice="toggle"]')?.addEventListener('click', () => voiceToggle.click());
+    root.querySelector('[data-simple-voice="listen"]')?.addEventListener('click', () => voiceListen.click());
+  }
+
+  async function loadSimpleCockpit() {
+    try {
+      const token = getToken();
+      const qs = token ? `?token=${encodeURIComponent(token)}` : '';
+      const resp = await fetch(`${BASE}/api/marcus/live/dashboard${qs}`, {
+        headers: buildAuthHeaders(),
+        credentials: 'include',
+        cache: 'no-store',
+      });
+      const data = await resp.json();
+      if (data?.ok) renderSimpleCockpit(data);
+    } catch {}
+  }
+
   // Initial connect
   renderHud();
   renderActionTape();
   initVoiceLayer();
   loadActiveBrief();
+  renderSimpleCockpit({});
+  loadSimpleCockpit();
+  setInterval(loadSimpleCockpit, 15_000);
   setInterval(loadActiveBrief, 12_000);
   connect();
   input.focus();
