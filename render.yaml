@@ -50,6 +50,18 @@ services:
         value: eleven_flash_v2_5
       - key: ELEVENLABS_OUTPUT_FORMAT
         value: mp3_44100_128
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: GITHUB_OWNER
+        sync: false
+      - key: CLOUDFLARE_API_TOKEN
+        sync: false
+      - key: CLOUDFLARE_ACCOUNT_ID
+        sync: false
+      - key: CLOUDFLARE_DEFAULT_ZONE_ID
+        sync: false
+      - key: RENDER_API_KEY
+        sync: false
     disk:
       name: task-tracker-data
       mountPath: /var/data/task-tracker

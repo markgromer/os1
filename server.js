@@ -940,6 +940,81 @@ function maskSecretHint(value) {
   return `••••${raw.slice(-4)}`;
 }
 
+function getGitHubCloudConfig() {
+  const token = typeof process.env.GITHUB_TOKEN === 'string' ? process.env.GITHUB_TOKEN.trim() : '';
+  const owner = typeof process.env.GITHUB_OWNER === 'string' ? process.env.GITHUB_OWNER.trim() : '';
+  return { token, owner, configured: Boolean(token), tokenHint: maskSecretHint(token) };
+}
+
+function getCloudflareConfig() {
+  const token = typeof process.env.CLOUDFLARE_API_TOKEN === 'string' ? process.env.CLOUDFLARE_API_TOKEN.trim() : '';
+  const accountId = typeof process.env.CLOUDFLARE_ACCOUNT_ID === 'string' ? process.env.CLOUDFLARE_ACCOUNT_ID.trim() : '';
+  const defaultZoneId = typeof process.env.CLOUDFLARE_DEFAULT_ZONE_ID === 'string' ? process.env.CLOUDFLARE_DEFAULT_ZONE_ID.trim() : '';
+  return { token, accountId, defaultZoneId, configured: Boolean(token), tokenHint: maskSecretHint(token) };
+}
+
+function getRenderCloudConfig() {
+  const token = typeof process.env.RENDER_API_KEY === 'string' ? process.env.RENDER_API_KEY.trim() : '';
+  return { token, configured: Boolean(token), tokenHint: maskSecretHint(token) };
+}
+
+async function githubApi(pathPart, { method = 'GET', body, timeoutMs = 20_000 } = {}) {
+  const cfg = getGitHubCloudConfig();
+  if (!cfg.token) throw new Error('GITHUB_TOKEN is not configured.');
+  const cleanPath = String(pathPart || '').startsWith('/') ? pathPart : `/${pathPart || ''}`;
+  const { resp, data } = await fetchJsonWithTimeout(`https://api.github.com${cleanPath}`, {
+    timeoutMs,
+    method,
+    headers: {
+      Authorization: `Bearer ${cfg.token}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+      ...(body ? { 'Content-Type': 'application/json' } : {}),
+    },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  });
+  if (!resp.ok) throw new Error(data?.message || `GitHub API failed (${resp.status}).`);
+  return data;
+}
+
+async function cloudflareApi(pathPart, { method = 'GET', body, timeoutMs = 20_000 } = {}) {
+  const cfg = getCloudflareConfig();
+  if (!cfg.token) throw new Error('CLOUDFLARE_API_TOKEN is not configured.');
+  const cleanPath = String(pathPart || '').startsWith('/') ? pathPart : `/${pathPart || ''}`;
+  const { resp, data } = await fetchJsonWithTimeout(`https://api.cloudflare.com/client/v4${cleanPath}`, {
+    timeoutMs,
+    method,
+    headers: {
+      Authorization: `Bearer ${cfg.token}`,
+      'Content-Type': 'application/json',
+    },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  });
+  if (!resp.ok || data?.success === false) {
+    const msg = Array.isArray(data?.errors) && data.errors[0]?.message ? data.errors[0].message : `Cloudflare API failed (${resp.status}).`;
+    throw new Error(msg);
+  }
+  return data;
+}
+
+async function renderApi(pathPart, { method = 'GET', body, timeoutMs = 20_000 } = {}) {
+  const cfg = getRenderCloudConfig();
+  if (!cfg.token) throw new Error('RENDER_API_KEY is not configured.');
+  const cleanPath = String(pathPart || '').startsWith('/') ? pathPart : `/${pathPart || ''}`;
+  const { resp, data } = await fetchJsonWithTimeout(`https://api.render.com/v1${cleanPath}`, {
+    timeoutMs,
+    method,
+    headers: {
+      Authorization: `Bearer ${cfg.token}`,
+      Accept: 'application/json',
+      ...(body ? { 'Content-Type': 'application/json' } : {}),
+    },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  });
+  if (!resp.ok) throw new Error(data?.message || `Render API failed (${resp.status}).`);
+  return data;
+}
+
 function normalizeNetworkPort(value, fallback) {
   const n = Number(value);
   if (!Number.isFinite(n)) return fallback;
@@ -12100,6 +12175,146 @@ app.get('/api/marcus/live/session', (req, res) => {
   });
 });
 
+app.get('/api/integrations/github/status', async (req, res) => {
+  const cfg = getGitHubCloudConfig();
+  res.json({
+    ok: true,
+    configured: Boolean(cfg.configured),
+    owner: cfg.owner,
+    tokenHint: cfg.tokenHint,
+  });
+});
+
+app.get('/api/integrations/github/repos', async (req, res) => {
+  try {
+    const cfg = getGitHubCloudConfig();
+    const owner = String(req.query?.owner || cfg.owner || '').trim();
+    const limit = Math.max(1, Math.min(100, Number(req.query?.limit) || 30));
+    const pathPart = owner
+      ? `/users/${encodeURIComponent(owner)}/repos?per_page=${limit}&sort=updated`
+      : `/user/repos?per_page=${limit}&sort=updated&affiliation=owner,collaborator,organization_member`;
+    const repos = await githubApi(pathPart);
+    res.json({
+      ok: true,
+      repos: (Array.isArray(repos) ? repos : []).map((repo) => ({
+        id: repo.id,
+        name: repo.name,
+        fullName: repo.full_name,
+        private: Boolean(repo.private),
+        defaultBranch: repo.default_branch,
+        htmlUrl: repo.html_url,
+        updatedAt: repo.updated_at,
+        pushedAt: repo.pushed_at,
+      })),
+    });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: err?.message || 'Failed to list GitHub repos' });
+  }
+});
+
+app.get('/api/integrations/github/repo-file', async (req, res) => {
+  try {
+    const owner = String(req.query?.owner || '').trim();
+    const repo = String(req.query?.repo || '').trim();
+    const filePath = String(req.query?.path || '').trim();
+    const ref = String(req.query?.ref || '').trim();
+    if (!owner || !repo || !filePath) return res.status(400).json({ ok: false, error: 'owner, repo, and path are required.' });
+    const qs = ref ? `?ref=${encodeURIComponent(ref)}` : '';
+    const data = await githubApi(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${filePath.split('/').map(encodeURIComponent).join('/')}${qs}`);
+    if (Array.isArray(data)) {
+      return res.json({ ok: true, type: 'dir', entries: data.map((item) => ({ name: item.name, path: item.path, type: item.type, size: item.size })) });
+    }
+    const encoded = String(data?.content || '').replace(/\s+/g, '');
+    const content = encoded ? Buffer.from(encoded, 'base64').toString('utf8') : '';
+    res.json({ ok: true, type: data?.type || 'file', name: data?.name || '', path: data?.path || filePath, size: data?.size || 0, encoding: data?.encoding || '', content: content.slice(0, 80_000) });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: err?.message || 'Failed to read GitHub repo file' });
+  }
+});
+
+app.get('/api/integrations/cloudflare/status', async (req, res) => {
+  const cfg = getCloudflareConfig();
+  res.json({
+    ok: true,
+    configured: Boolean(cfg.configured),
+    accountIdConfigured: Boolean(cfg.accountId),
+    defaultZoneIdConfigured: Boolean(cfg.defaultZoneId),
+    tokenHint: cfg.tokenHint,
+  });
+});
+
+app.get('/api/integrations/cloudflare/zones', async (req, res) => {
+  try {
+    const data = await cloudflareApi('/zones?per_page=50');
+    res.json({
+      ok: true,
+      zones: (Array.isArray(data?.result) ? data.result : []).map((zone) => ({
+        id: zone.id,
+        name: zone.name,
+        status: zone.status,
+        paused: Boolean(zone.paused),
+        type: zone.type,
+      })),
+    });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: err?.message || 'Failed to list Cloudflare zones' });
+  }
+});
+
+app.get('/api/integrations/cloudflare/dns-records', async (req, res) => {
+  try {
+    const cfg = getCloudflareConfig();
+    const zoneId = String(req.query?.zoneId || cfg.defaultZoneId || '').trim();
+    if (!zoneId) return res.status(400).json({ ok: false, error: 'zoneId is required or CLOUDFLARE_DEFAULT_ZONE_ID must be configured.' });
+    const data = await cloudflareApi(`/zones/${encodeURIComponent(zoneId)}/dns_records?per_page=100`);
+    res.json({
+      ok: true,
+      zoneId,
+      records: (Array.isArray(data?.result) ? data.result : []).map((record) => ({
+        id: record.id,
+        type: record.type,
+        name: record.name,
+        content: record.content,
+        proxied: Boolean(record.proxied),
+        ttl: record.ttl,
+        modifiedOn: record.modified_on,
+      })),
+    });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: err?.message || 'Failed to list Cloudflare DNS records' });
+  }
+});
+
+app.get('/api/integrations/render/status', async (req, res) => {
+  const cfg = getRenderCloudConfig();
+  res.json({ ok: true, configured: Boolean(cfg.configured), tokenHint: cfg.tokenHint });
+});
+
+app.get('/api/integrations/render/services', async (req, res) => {
+  try {
+    const limit = Math.max(1, Math.min(100, Number(req.query?.limit) || 50));
+    const data = await renderApi(`/services?limit=${limit}`);
+    const rows = Array.isArray(data) ? data : Array.isArray(data?.services) ? data.services : [];
+    res.json({
+      ok: true,
+      services: rows.map((row) => {
+        const service = row.service || row;
+        return {
+          id: service.id,
+          name: service.name,
+          type: service.type,
+          repo: service.repo,
+          branch: service.branch,
+          serviceDetails: service.serviceDetails ? { plan: service.serviceDetails.plan, region: service.serviceDetails.region } : undefined,
+          updatedAt: service.updatedAt || service.updated_at,
+        };
+      }),
+    });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: err?.message || 'Failed to list Render services' });
+  }
+});
+
 app.get('/api/marcus/live/session-status', (req, res) => {
   const token = extractBearerToken(req);
   const authenticated = Boolean(token && (
@@ -14823,6 +15038,74 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
       );
     }
 
+    tools.push(
+      {
+        type: 'function',
+        function: {
+          name: 'github_list_repos',
+          description: 'List GitHub repositories available to the hosted Marcus cloud credentials. Read-only.',
+          parameters: {
+            type: 'object',
+            properties: {
+              owner: { type: 'string', description: 'Optional GitHub owner/user/org. Defaults to GITHUB_OWNER or authenticated user repos.' },
+              limit: { type: 'number', description: 'Max repos, 1-100. Default 30.' },
+            },
+          },
+        },
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'github_get_repo_file',
+          description: 'Read a file or directory listing from a GitHub repo through hosted cloud credentials. Read-only.',
+          parameters: {
+            type: 'object',
+            properties: {
+              owner: { type: 'string' },
+              repo: { type: 'string' },
+              path: { type: 'string', description: 'File path or directory path in repo.' },
+              ref: { type: 'string', description: 'Optional branch, tag, or SHA.' },
+            },
+            required: ['owner', 'repo', 'path'],
+          },
+        },
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'cloudflare_list_zones',
+          description: 'List Cloudflare zones available to hosted Marcus credentials. Read-only.',
+          parameters: { type: 'object', properties: {} },
+        },
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'cloudflare_list_dns_records',
+          description: 'List DNS records for a Cloudflare zone. Read-only.',
+          parameters: {
+            type: 'object',
+            properties: {
+              zoneId: { type: 'string', description: 'Cloudflare zone id. Defaults to CLOUDFLARE_DEFAULT_ZONE_ID.' },
+            },
+          },
+        },
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'render_list_services',
+          description: 'List Render services available to hosted Marcus credentials. Read-only.',
+          parameters: {
+            type: 'object',
+            properties: {
+              limit: { type: 'number', description: 'Max services, 1-100. Default 50.' },
+            },
+          },
+        },
+      },
+    );
+
     if (mcpAvailable) {
       tools.push({
         type: 'function',
@@ -14904,7 +15187,7 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
             systemPrompt +
             (effectiveThreadId === 'operator_bio'
               ? "\n\nIMPORTANT: Use set_operator_bio to persist changes to the bio."
-              : "\n\nIMPORTANT: When Mark asks for an internal/admin action, use tools instead of only describing the action. For project updates use create_project / update_project / create_tasks. For local project work use open_project_in_vscode when a workspace path is available. If Mark names a GitHub repo that is not local, use clone_github_project. For build/test/lint/preview requests, use run_project_script with a package.json script name. For publish requests, use prepare_project_publish first unless Mark has already explicitly approved committing/pushing. publish_project_changes is server-guarded and requires explicit approval in Mark's message. For high-impact external actions like publish/deploy/merge/send/billing/delete, prepare the action and ask for explicit approval before executing. When Mark asks whether a queued local action finished, use get_desktop_action_results."),
+              : "\n\nIMPORTANT: When Mark asks for an internal/admin action, use tools instead of only describing the action. For project updates use create_project / update_project / create_tasks. For local project work use open_project_in_vscode when a workspace path is available. If Mark names a GitHub repo that is not local and the desktop agent is available, use clone_github_project; if Mark is remote or the desktop is offline, use the GitHub cloud tools to inspect repos/files. For Cloudflare and Render questions, use the cloud read tools when configured. For build/test/lint/preview requests, use run_project_script with a package.json script name. For publish requests, use prepare_project_publish first unless Mark has already explicitly approved committing/pushing. publish_project_changes is server-guarded and requires explicit approval in Mark's message. For high-impact external actions like publish/deploy/merge/send/billing/delete/DNS changes, prepare the action and ask for explicit approval before executing. When Mark asks whether a queued local action finished, use get_desktop_action_results."),
         },
       ];
 
@@ -15128,6 +15411,93 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
       if (toolName === 'get_desktop_action_results') {
         pruneDesktopActionResults();
         return { ok: true, results: desktopActionResults.slice(-20) };
+      }
+      if (toolName === 'github_list_repos') {
+        const cfg = getGitHubCloudConfig();
+        const owner = typeof args?.owner === 'string' && args.owner.trim() ? args.owner.trim() : cfg.owner;
+        const limit = Math.max(1, Math.min(100, Number(args?.limit) || 30));
+        const pathPart = owner
+          ? `/users/${encodeURIComponent(owner)}/repos?per_page=${limit}&sort=updated`
+          : `/user/repos?per_page=${limit}&sort=updated&affiliation=owner,collaborator,organization_member`;
+        const repos = await githubApi(pathPart);
+        return {
+          ok: true,
+          repos: (Array.isArray(repos) ? repos : []).map((repo) => ({
+            name: repo.name,
+            fullName: repo.full_name,
+            private: Boolean(repo.private),
+            defaultBranch: repo.default_branch,
+            htmlUrl: repo.html_url,
+            updatedAt: repo.updated_at,
+            pushedAt: repo.pushed_at,
+          })),
+        };
+      }
+      if (toolName === 'github_get_repo_file') {
+        const owner = typeof args?.owner === 'string' ? args.owner.trim() : '';
+        const repo = typeof args?.repo === 'string' ? args.repo.trim() : '';
+        const filePath = typeof args?.path === 'string' ? args.path.trim() : '';
+        const ref = typeof args?.ref === 'string' ? args.ref.trim() : '';
+        if (!owner || !repo || !filePath) return { ok: false, error: 'owner, repo, and path are required.' };
+        const qs = ref ? `?ref=${encodeURIComponent(ref)}` : '';
+        const data = await githubApi(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${filePath.split('/').map(encodeURIComponent).join('/')}${qs}`);
+        if (Array.isArray(data)) {
+          return { ok: true, type: 'dir', entries: data.map((item) => ({ name: item.name, path: item.path, type: item.type, size: item.size })).slice(0, 100) };
+        }
+        const encoded = String(data?.content || '').replace(/\s+/g, '');
+        const content = encoded ? Buffer.from(encoded, 'base64').toString('utf8') : '';
+        return { ok: true, type: data?.type || 'file', name: data?.name || '', path: data?.path || filePath, size: data?.size || 0, content: content.slice(0, 40_000) };
+      }
+      if (toolName === 'cloudflare_list_zones') {
+        const data = await cloudflareApi('/zones?per_page=50');
+        return {
+          ok: true,
+          zones: (Array.isArray(data?.result) ? data.result : []).map((zone) => ({
+            id: zone.id,
+            name: zone.name,
+            status: zone.status,
+            paused: Boolean(zone.paused),
+            type: zone.type,
+          })),
+        };
+      }
+      if (toolName === 'cloudflare_list_dns_records') {
+        const cfg = getCloudflareConfig();
+        const zoneId = typeof args?.zoneId === 'string' && args.zoneId.trim() ? args.zoneId.trim() : cfg.defaultZoneId;
+        if (!zoneId) return { ok: false, error: 'zoneId is required or CLOUDFLARE_DEFAULT_ZONE_ID must be configured.' };
+        const data = await cloudflareApi(`/zones/${encodeURIComponent(zoneId)}/dns_records?per_page=100`);
+        return {
+          ok: true,
+          zoneId,
+          records: (Array.isArray(data?.result) ? data.result : []).map((record) => ({
+            id: record.id,
+            type: record.type,
+            name: record.name,
+            content: record.content,
+            proxied: Boolean(record.proxied),
+            ttl: record.ttl,
+            modifiedOn: record.modified_on,
+          })),
+        };
+      }
+      if (toolName === 'render_list_services') {
+        const limit = Math.max(1, Math.min(100, Number(args?.limit) || 50));
+        const data = await renderApi(`/services?limit=${limit}`);
+        const rows = Array.isArray(data) ? data : Array.isArray(data?.services) ? data.services : [];
+        return {
+          ok: true,
+          services: rows.map((row) => {
+            const service = row.service || row;
+            return {
+              id: service.id,
+              name: service.name,
+              type: service.type,
+              repo: service.repo,
+              branch: service.branch,
+              updatedAt: service.updatedAt || service.updated_at,
+            };
+          }),
+        };
       }
       if (toolName === 'mcp_list_tools') {
         if (!mcpAvailable) return { ok: false, error: 'MCP is not configured' };
