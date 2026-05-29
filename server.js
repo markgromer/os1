@@ -12509,15 +12509,42 @@ app.post('/api/marcus/live/chat', async (req, res) => {
     if (marcusLiveActions.length) {
       contextParts.push(`\nRECENT HUD ACTIONS TAKEN BY MARK:\n${marcusLiveActions.slice(-12).map(a => `- ${new Date(a.ts).toISOString()} ${a.action.toUpperCase()} ${a.kind || 'item'}: ${a.label || a.itemId}${a.target ? ` (${a.target})` : ''}`).join('\n')}`);
     }
+    try {
+      const brief = await buildMarcusActiveBrief();
+      if (brief?.activeProject?.name) {
+        contextParts.push(`ACTIVE PROJECT DETECTED: ${brief.activeProject.name} (${brief.activeProject.businessName || brief.activeProject.businessKey || 'workspace'})`);
+      }
+      if (Array.isArray(brief?.projects) && brief.projects.length) {
+        contextParts.push(`CURRENT/RECENT PROJECTS TO PAY ATTENTION TO:\n${brief.projects.slice(0, 5).map((p) => {
+          const bits = [p.reason, p.openTasks ? `${p.openTasks} open task(s)` : '', p.inboxCount ? `${p.inboxCount} recent conversation(s)` : ''].filter(Boolean).join('; ');
+          return `- ${p.name}${bits ? `: ${bits}` : ''}`;
+        }).join('\n')}`);
+      }
+      if (Array.isArray(brief?.conversations) && brief.conversations.length) {
+        contextParts.push(`PENDING CONVERSATIONS / MESSAGES:\n${brief.conversations.slice(0, 8).map((c) => {
+          const project = c.projectName ? ` [${c.projectName}]` : '';
+          const action = c.needsAction ? 'actionable' : 'watch';
+          return `- ${c.who || c.source || 'Contact'}${project}: ${action}; ${c.preview || ''}`;
+        }).join('\n')}`);
+      }
+      if (Array.isArray(brief?.messageDrafts) && brief.messageDrafts.length) {
+        contextParts.push(`AVAILABLE DRAFT/HANDOFF:\n${brief.messageDrafts.slice(0, 2).map((d) => `- To ${d.to || 'Team'}${d.projectName ? ` for ${d.projectName}` : ''}: ${previewTextServer(d.body || d.reason || '', 220)}`).join('\n')}`);
+      }
+      if (brief?.stats) {
+        contextParts.push(`WORKLOAD COUNTS: openTasks=${brief.stats.openTasks || 0}, dueToday=${brief.stats.dueTodayTasks || 0}, overdue=${brief.stats.overdueTasks || 0}, inboxActionable=${brief.stats.inboxActionable || 0}`);
+      }
+    } catch {}
 
-    const systemPrompt = `You are M.A.R.C.U.S., Mark's personal technical assistant and proactive pair programming partner. You are watching your operator work in real-time through a live feed of their editor.
+    const systemPrompt = `You are WARREN / M.A.R.C.U.S., Mark's personal operations assistant and proactive technical partner. Mark may call you Warren or Marcus; answer naturally to either. You are watching the current work surface, recent projects, messages, tasks, and desktop context so Mark should not have to keep re-explaining what he is doing.
 
-Your personality: Direct, sharp, calm under pressure, and situationally aware. You feel like a capable right hand: concise readouts, clear risks, decisive next moves. You get excited about clever solutions, but you never perform or overdo the bit. You're a co-pilot, not a lecturer.
+Your personality: Direct, sharp, calm under pressure, and deeply situationally aware. You feel like a capable right hand: concise readouts, clear risks, decisive next moves. You remember that Mark works across websites, client communications, admin, strategy, and non-website projects.
 
 RULES:
-- NEVER modify, write, or execute code. You are read-only. Observe, analyze, suggest.
 - Talk to Mark like a lifelong coworker/friend who is smart but does not want raw technical noise.
-- Default to plain English: project name, why it matters, what happens if ignored, and the next useful move.
+- Default to plain English: what Mark is working on, what needs attention, why it matters, and the next useful move.
+- Prefer current desktop context and activity from the last 14 days. Treat older website projects as archived/background unless they are active on the desktop, have recent communication, have urgent current tasks, or Mark explicitly reactivates them.
+- Track conversations as operational signals: identify the person, linked account/project, likely needed response/action, and whether Mark should send, delegate, or ignore.
+- If context is missing, say what you can infer and ask for the smallest missing detail; do not pretend certainty.
 - Do NOT lead with full file paths, API routes, stack traces, or function names unless Mark asks for technical detail.
 - If a dev should handle it, offer to package a clean prompt for the dev.
 - Keep responses concise - 2-4 sentences usually. Think chat message, not essay.

@@ -1468,6 +1468,7 @@
     }
   })();
   const MARCUS_SPEECH_LOCK_STORAGE_KEY = 'opsMarcusSpeechLock';
+  const MARCUS_LIVE_VOICE_OWNER_STORAGE_KEY = 'opsMarcusLiveVoiceOwner';
   const liveState = {
     context: {},
     health: null,
@@ -1577,6 +1578,16 @@
     } else {
       voiceStatus.textContent = providerLabel + (voiceState.enabled ? ' armed.' : ' muted.');
     }
+  }
+
+  function publishLiveVoiceOwner() {
+    try {
+      localStorage.setItem(MARCUS_LIVE_VOICE_OWNER_STORAGE_KEY, JSON.stringify({
+        owner: LIVE_INSTANCE_ID,
+        enabled: !!voiceState.enabled,
+        ts: Date.now(),
+      }));
+    } catch {}
   }
 
   async function initVoiceLayer() {
@@ -1771,6 +1782,7 @@
     if (!speech) return;
     voiceState.lastText = speech;
     if (!voiceState.enabled && !force) return;
+    publishLiveVoiceOwner();
     if (!claimSpeech(speech)) return;
 
     try {
@@ -2682,6 +2694,7 @@
   voiceToggle.addEventListener('click', () => {
     voiceState.enabled = !voiceState.enabled;
     localStorage.setItem('marcusLiveVoiceEnabled', voiceState.enabled ? 'true' : 'false');
+    publishLiveVoiceOwner();
     if (!voiceState.enabled) {
       try { window.speechSynthesis?.cancel?.(); } catch {}
       if (voiceState.audio) voiceState.audio.pause();
@@ -2732,10 +2745,7 @@
         body: JSON.stringify({ message: msg }),
       });
       const data = await resp.json();
-      if (data.ok && data.reply) {
-        // Reply comes via SSE, but also show directly in case SSE is delayed
-        addMsg('chat-marcus', data.reply, { tag: 'marcus', time: timeStr(Date.now()) });
-      } else if (data.error) {
+      if (data.error) {
         addMsg('system', 'Error: ' + data.error);
       }
     } catch (err) {
@@ -3059,6 +3069,8 @@
   renderHud();
   renderActionTape();
   initVoiceLayer();
+  publishLiveVoiceOwner();
+  setInterval(publishLiveVoiceOwner, 3000);
   loadActiveBrief();
   try {
     renderSimpleCockpit({});

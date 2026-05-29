@@ -249,6 +249,7 @@ const MARCUS_SYNC_STORAGE_KEY = 'opsMarcusSyncEvent';
 const MARCUS_VOICE_IN_STORAGE_KEY = 'opsMarcusVoiceIn';
 const MARCUS_VOICE_OUT_STORAGE_KEY = 'opsMarcusVoiceOut';
 const MARCUS_SPEECH_LOCK_STORAGE_KEY = 'opsMarcusSpeechLock';
+const MARCUS_LIVE_VOICE_OWNER_STORAGE_KEY = 'opsMarcusLiveVoiceOwner';
 const MARCUS_FOCUS_NUDGE_LAST_TS_KEY = 'opsMarcusFocusNudgeLastTs';
 
 const MARCUS_PANEL_MIN_WIDTH = 320;
@@ -439,6 +440,16 @@ function claimMarcusSpeech(spoken) {
     }
 }
 
+function isMarcusLiveVoiceOwnerActive() {
+    try {
+        const raw = localStorage.getItem(MARCUS_LIVE_VOICE_OWNER_STORAGE_KEY);
+        const owner = raw ? JSON.parse(raw) : null;
+        return Boolean(owner?.enabled && (Date.now() - Number(owner.ts || 0)) < 6000);
+    } catch {
+        return false;
+    }
+}
+
 async function getMarcusVoiceStatus() {
     const now = Date.now();
     const cached = state.__marcusVoiceStatus;
@@ -482,6 +493,7 @@ async function speakMarcusWithElevenLabs(spoken) {
 async function speakMarcus(text, { condensed = true } = {}) {
     pulseMarcusAmbient('responding', 1800);
     if (!state.marcusVoiceOut) return;
+    if (isMarcusLiveVoiceOwnerActive()) return;
     try {
         const spoken = condensed ? condenseForSpeech(text) : stripForSpeech(text);
         if (!spoken) return;
