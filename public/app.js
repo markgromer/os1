@@ -444,7 +444,7 @@ function isMarcusLiveVoiceOwnerActive() {
     try {
         const raw = localStorage.getItem(MARCUS_LIVE_VOICE_OWNER_STORAGE_KEY);
         const owner = raw ? JSON.parse(raw) : null;
-        return Boolean(owner?.enabled && (Date.now() - Number(owner.ts || 0)) < 6000);
+        return Boolean(owner?.open && (Date.now() - Number(owner.ts || 0)) < 10_000);
     } catch {
         return false;
     }
@@ -497,8 +497,10 @@ async function speakMarcus(text, { condensed = true } = {}) {
     try {
         const spoken = condensed ? condenseForSpeech(text) : stripForSpeech(text);
         if (!spoken) return;
+        if (isMarcusLiveVoiceOwnerActive()) return;
         if (!claimMarcusSpeech(spoken)) return;
         const status = await getMarcusVoiceStatus();
+        if (isMarcusLiveVoiceOwnerActive()) return;
         if (status.elevenLabsConfigured) {
             try {
                 await speakMarcusWithElevenLabs(spoken.slice(0, 900));

@@ -1585,6 +1585,7 @@
     try {
       localStorage.setItem(MARCUS_LIVE_VOICE_OWNER_STORAGE_KEY, JSON.stringify({
         owner: LIVE_INSTANCE_ID,
+        open: true,
         enabled: !!voiceState.enabled,
         ts: Date.now(),
       }));
