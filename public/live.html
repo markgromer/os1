@@ -1488,6 +1488,10 @@
     lastText: '',
     audio: null,
     recognition: null,
+    mediaRecorder: null,
+    mediaStream: null,
+    mediaChunks: [],
+    recordingTimer: null,
     listening: false,
   };
 
@@ -1616,11 +1620,111 @@
         document.body.classList.remove('listening');
         updateVoiceUi();
       };
-    } else {
+    } else if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
       voiceListen.disabled = true;
-      voiceListen.title = 'Speech recognition is not available in this browser';
+      voiceListen.title = 'Speech input is not available in this browser';
     }
     updateVoiceUi();
+  }
+
+  function getPreferredAudioMimeType() {
+    const candidates = [
+      'audio/webm;codecs=opus',
+      'audio/webm',
+      'audio/mp4',
+      'audio/ogg;codecs=opus',
+    ];
+    return candidates.find((type) => {
+      try { return window.MediaRecorder?.isTypeSupported?.(type); } catch { return false; }
+    }) || '';
+  }
+
+  function stopMarcusRecording() {
+    clearTimeout(voiceState.recordingTimer);
+    voiceState.recordingTimer = null;
+    try {
+      if (voiceState.mediaRecorder && voiceState.mediaRecorder.state !== 'inactive') {
+        voiceState.mediaRecorder.stop();
+      }
+    } catch {}
+  }
+
+  async function transcribeMarcusAudio(blob) {
+    const token = getToken();
+    const qs = token ? `?token=${encodeURIComponent(token)}` : '';
+    const resp = await fetch(`${BASE}/api/marcus/transcribe${qs}`, {
+      method: 'POST',
+      headers: buildAuthHeaders({ 'Content-Type': blob.type || 'audio/webm' }),
+      credentials: 'include',
+      body: blob,
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || !data?.ok) throw new Error(data?.error || `Transcription failed (${resp.status})`);
+    return String(data.text || '').trim();
+  }
+
+  async function startMarcusRecording() {
+    if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
+      if (voiceState.recognition) voiceState.recognition.start();
+      return;
+    }
+    try {
+      if (voiceState.audio) voiceState.audio.pause();
+      try { window.speechSynthesis?.cancel?.(); } catch {}
+      voiceState.mediaChunks = [];
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      voiceState.mediaStream = stream;
+      const mimeType = getPreferredAudioMimeType();
+      const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+      voiceState.mediaRecorder = recorder;
+      recorder.ondataavailable = (evt) => {
+        if (evt.data && evt.data.size > 0) voiceState.mediaChunks.push(evt.data);
+      };
+      recorder.onstart = () => {
+        voiceState.listening = true;
+        document.body.classList.add('listening');
+        updateVoiceUi();
+      };
+      recorder.onerror = () => {
+        voiceState.listening = false;
+        document.body.classList.remove('listening');
+        updateVoiceUi();
+        addMsg('system', 'Microphone recording failed.');
+      };
+      recorder.onstop = async () => {
+        clearTimeout(voiceState.recordingTimer);
+        voiceState.recordingTimer = null;
+        voiceState.listening = false;
+        document.body.classList.remove('listening');
+        updateVoiceUi();
+        try { stream.getTracks().forEach((track) => track.stop()); } catch {}
+        voiceState.mediaStream = null;
+        const blob = new Blob(voiceState.mediaChunks, { type: recorder.mimeType || 'audio/webm' });
+        voiceState.mediaChunks = [];
+        if (!blob.size) return;
+        try {
+          voiceStatus.textContent = 'Transcribing with OpenAI.';
+          const transcript = await transcribeMarcusAudio(blob);
+          updateVoiceUi();
+          if (transcript) {
+            input.value = transcript;
+            sendChat();
+          } else {
+            addMsg('system', 'I did not catch any speech.');
+          }
+        } catch (err) {
+          updateVoiceUi();
+          addMsg('system', err?.message || 'Transcription failed.');
+        }
+      };
+      recorder.start();
+      voiceState.recordingTimer = setTimeout(stopMarcusRecording, 12_000);
+    } catch (err) {
+      voiceState.listening = false;
+      document.body.classList.remove('listening');
+      updateVoiceUi();
+      addMsg('system', err?.message || 'Microphone permission is blocked.');
+    }
   }
 
   function cleanSpeechText(text) {
@@ -2589,12 +2693,15 @@
   });
 
   voiceListen.addEventListener('click', () => {
-    if (!voiceState.recognition) return;
     try {
       if (voiceState.listening) {
-        voiceState.recognition.stop();
+        if (voiceState.mediaRecorder && voiceState.mediaRecorder.state !== 'inactive') {
+          stopMarcusRecording();
+        } else {
+          voiceState.recognition?.stop?.();
+        }
       } else {
-        voiceState.recognition.start();
+        startMarcusRecording();
       }
     } catch {}
   });

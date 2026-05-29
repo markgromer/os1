@@ -1757,6 +1757,10 @@ function flushDeferredRerenderIfSafe() {
 }
 
 let marcusSpeechRecognition = null;
+let marcusMediaRecorder = null;
+let marcusMediaStream = null;
+let marcusMediaChunks = [];
+let marcusRecordingTimer = null;
 
 function getSpeechRecognitionCtor() {
     try {
@@ -1782,6 +1786,13 @@ function syncMarcusVoiceUi() {
 
 function stopMarcusListening() {
     state.marcusVoiceListening = false;
+    clearTimeout(marcusRecordingTimer);
+    marcusRecordingTimer = null;
+    try {
+        if (marcusMediaRecorder && marcusMediaRecorder.state !== 'inactive') marcusMediaRecorder.stop();
+    } catch {
+        // ignore
+    }
     try {
         marcusSpeechRecognition?.stop?.();
     } catch {
@@ -1790,7 +1801,87 @@ function stopMarcusListening() {
     syncMarcusVoiceUi();
 }
 
+function getPreferredMarcusAudioMimeType() {
+    const candidates = [
+        'audio/webm;codecs=opus',
+        'audio/webm',
+        'audio/mp4',
+        'audio/ogg;codecs=opus',
+    ];
+    return candidates.find((type) => {
+        try { return window.MediaRecorder?.isTypeSupported?.(type); } catch { return false; }
+    }) || '';
+}
+
+async function transcribeMarcusBlob(blob) {
+    const resp = await apiFetch('/api/marcus/transcribe', {
+        method: 'POST',
+        headers: { 'Content-Type': blob.type || 'audio/webm' },
+        body: blob,
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || !data?.ok) throw new Error(data?.error || `Transcription failed (${resp.status})`);
+    return safeText(data.text).trim();
+}
+
+async function startMarcusMediaRecording() {
+    // Interrupt any ongoing speech when user starts talking
+    stopMarcusSpeech();
+    const input = document.getElementById('cmd-input');
+
+    try {
+        marcusMediaChunks = [];
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        marcusMediaStream = stream;
+        const mimeType = getPreferredMarcusAudioMimeType();
+        marcusMediaRecorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+        marcusMediaRecorder.ondataavailable = (evt) => {
+            if (evt.data && evt.data.size > 0) marcusMediaChunks.push(evt.data);
+        };
+        marcusMediaRecorder.onstart = () => {
+            state.marcusVoiceListening = true;
+            syncMarcusVoiceUi();
+        };
+        marcusMediaRecorder.onerror = () => {
+            state.marcusVoiceListening = false;
+            syncMarcusVoiceUi();
+        };
+        marcusMediaRecorder.onstop = async () => {
+            clearTimeout(marcusRecordingTimer);
+            marcusRecordingTimer = null;
+            state.marcusVoiceListening = false;
+            syncMarcusVoiceUi();
+            try { stream.getTracks().forEach((track) => track.stop()); } catch {}
+            marcusMediaStream = null;
+            const blob = new Blob(marcusMediaChunks, { type: marcusMediaRecorder?.mimeType || 'audio/webm' });
+            marcusMediaChunks = [];
+            if (!blob.size) return;
+            try {
+                const transcript = await transcribeMarcusBlob(blob);
+                if (transcript) {
+                    if (input) input.value = transcript;
+                    handleChatSubmit();
+                }
+            } catch (err) {
+                alert(err?.message || 'Transcription failed.');
+            }
+        };
+        marcusMediaRecorder.start();
+        marcusRecordingTimer = setTimeout(stopMarcusListening, 12_000);
+        if (input) input.focus?.();
+    } catch (err) {
+        state.marcusVoiceListening = false;
+        syncMarcusVoiceUi();
+        alert(err?.message || 'Microphone permission is blocked. Allow mic access and try again.');
+    }
+}
+
 function startMarcusListening() {
+    if (navigator.mediaDevices?.getUserMedia && window.MediaRecorder) {
+        startMarcusMediaRecording();
+        return;
+    }
+
     // Interrupt any ongoing speech when user starts talking
     stopMarcusSpeech();
 

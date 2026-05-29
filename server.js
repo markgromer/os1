@@ -483,6 +483,7 @@ function isMarcusLiveSessionRoute(req) {
     || p === '/api/marcus/live/session-status'
     || p === '/api/marcus/live/voice/status'
     || p === '/api/marcus/live/voice/speak'
+    || p === '/api/marcus/transcribe'
     || p === '/api/desktop-context/health';
 }
 
@@ -12377,6 +12378,58 @@ app.get('/api/marcus/live/voice/status', (req, res) => {
     elevenLabsConfigured: Boolean(ELEVENLABS_API_KEY && ELEVENLABS_VOICE_ID),
     model: ELEVENLABS_API_KEY && ELEVENLABS_VOICE_ID ? ELEVENLABS_MODEL_ID : '',
   });
+});
+
+app.post('/api/marcus/transcribe', express.raw({
+  type: ['audio/*', 'video/webm', 'application/octet-stream'],
+  limit: '25mb',
+}), async (req, res) => {
+  try {
+    const audio = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+    if (!audio.length) return res.status(400).json({ ok: false, error: 'No audio received.' });
+    if (audio.length > 25 * 1024 * 1024) return res.status(413).json({ ok: false, error: 'Audio is too large.' });
+
+    const settings = await readSettings();
+    const openai = getOpenAiSecrets(settings);
+    if (!openai.apiKey) return res.status(400).json({ ok: false, error: 'OpenAI API key is not configured.' });
+
+    const contentType = String(req.headers['content-type'] || 'audio/webm').split(';')[0].trim().toLowerCase() || 'audio/webm';
+    const extension = contentType.includes('mp4') ? 'mp4'
+      : contentType.includes('mpeg') || contentType.includes('mp3') ? 'mp3'
+        : contentType.includes('wav') ? 'wav'
+          : contentType.includes('ogg') ? 'ogg'
+            : 'webm';
+    const model = String(process.env.OPENAI_TRANSCRIPTION_MODEL || '').trim() || 'whisper-1';
+    const form = new FormData();
+    form.append('model', model);
+    form.append('language', 'en');
+    form.append('file', new Blob([audio], { type: contentType }), `marcus.${extension}`);
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 45_000);
+    let upstream;
+    let data;
+    try {
+      upstream = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${openai.apiKey}` },
+        body: form,
+        signal: controller.signal,
+      });
+      data = await upstream.json().catch(() => ({}));
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!upstream?.ok) {
+      const msg = data?.error?.message || data?.message || `OpenAI transcription failed (${upstream?.status || 'unknown'}).`;
+      return res.status(upstream?.status || 502).json({ ok: false, error: msg });
+    }
+    const text = String(data?.text || '').trim();
+    res.json({ ok: true, text, model });
+  } catch (err) {
+    const aborted = err?.name === 'AbortError';
+    res.status(aborted ? 504 : 500).json({ ok: false, error: aborted ? 'Transcription timed out.' : (err?.message || 'Transcription failed.') });
+  }
 });
 
 app.post('/api/marcus/live/voice/speak', async (req, res) => {
