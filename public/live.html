@@ -2813,7 +2813,8 @@
     document.body.classList.add('simple-cockpit');
     const health = data?.systemHealth || liveState.context?.systemHealth || {};
     const comms = Array.isArray(data?.pendingCommunications) ? data.pendingCommunications : [];
-    const focus = Array.isArray(data?.currentFocus) ? data.currentFocus : liveState.recentProjects.map((project) => ({
+    const fallbackFocus = Array.isArray(liveState.recentContexts) ? liveState.recentContexts : [];
+    const focus = Array.isArray(data?.currentFocus) ? data.currentFocus : fallbackFocus.map((project) => ({
       name: project.workspace || project.name || 'Current workspace',
       reason: project.branch ? `Branch: ${project.branch}` : 'Current',
       type: project.processName || '',
@@ -2952,7 +2953,12 @@
   renderActionTape();
   initVoiceLayer();
   loadActiveBrief();
-  renderSimpleCockpit({});
+  try {
+    renderSimpleCockpit({});
+  } catch (err) {
+    console.error('Marcus Live cockpit render failed', err);
+    document.body.classList.remove('simple-cockpit');
+  }
   loadSimpleCockpit();
   setInterval(loadSimpleCockpit, 15_000);
   setInterval(loadActiveBrief, 12_000);
