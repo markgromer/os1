@@ -1494,6 +1494,7 @@
     mediaChunks: [],
     recordingTimer: null,
     listening: false,
+    pushToTalkActive: false,
   };
 
   // Health panel toggle
@@ -1572,7 +1573,7 @@
       : '<i class="fa-solid fa-volume-xmark"></i>';
     const providerLabel = voiceState.provider === 'elevenlabs' ? 'ElevenLabs voice' : 'Browser voice';
     if (voiceState.listening) {
-      voiceStatus.textContent = 'Listening. Speak your command.';
+      voiceStatus.textContent = voiceState.pushToTalkActive ? 'Push-to-talk active. Release Ctrl+Space to send.' : 'Listening. Speak your command.';
     } else if (document.body.classList.contains('speaking')) {
       voiceStatus.textContent = providerLabel + ' speaking.';
     } else {
@@ -2719,6 +2720,34 @@
     } catch {}
   });
 
+  function isTypingTarget(target) {
+    const el = target && target.nodeType === 1 ? target : null;
+    if (!el) return false;
+    const tag = String(el.tagName || '').toLowerCase();
+    return tag === 'input' || tag === 'textarea' || tag === 'select' || el.isContentEditable;
+  }
+
+  window.addEventListener('keydown', (e) => {
+    if (!(e.ctrlKey && e.code === 'Space')) return;
+    if (isTypingTarget(e.target)) return;
+    e.preventDefault();
+    if (voiceState.pushToTalkActive || voiceState.listening) return;
+    voiceState.pushToTalkActive = true;
+    startMarcusRecording();
+  });
+
+  window.addEventListener('keyup', (e) => {
+    if (e.code !== 'Space' || !voiceState.pushToTalkActive) return;
+    e.preventDefault();
+    voiceState.pushToTalkActive = false;
+    if (voiceState.mediaRecorder && voiceState.mediaRecorder.state !== 'inactive') {
+      stopMarcusRecording();
+    } else {
+      voiceState.recognition?.stop?.();
+    }
+    updateVoiceUi();
+  });
+
   voiceReplay.addEventListener('click', () => {
     speakText(voiceState.lastText || readoutMain.textContent || 'No voice brief is available yet.', { force: true });
   });
@@ -2978,11 +3007,11 @@
           <div class="simple-head">
             <div>
               <div class="simple-title">MARCUS</div>
-              <div class="simple-sub">Aware • Watching current work</div>
+              <div class="simple-sub">Aware • Hold Ctrl+Space to talk</div>
             </div>
             <div class="simple-voice">
               <button class="voice-btn" type="button" data-simple-voice="toggle"><i class="fa-solid ${voiceState.enabled ? 'fa-volume-high' : 'fa-volume-xmark'}"></i></button>
-              <button class="voice-btn" type="button" data-simple-voice="listen"><i class="fa-solid fa-microphone"></i></button>
+              <button class="voice-btn" type="button" data-simple-voice="listen" title="Hold Ctrl+Space to talk"><i class="fa-solid fa-microphone"></i></button>
             </div>
           </div>
           <button class="simple-ask" type="button" data-command="Give me the current readout. What matters right now?">Ask Marcus...</button>
