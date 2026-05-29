@@ -1350,6 +1350,19 @@
   const voiceBrief = document.getElementById('voice-brief');
   const voiceStatus = document.getElementById('voice-status');
   const BASE = window.location.origin;
+  const LIVE_INSTANCE_ID = (() => {
+    try {
+      const k = 'marcusLiveInstanceId';
+      const existing = String(sessionStorage.getItem(k) || '').trim();
+      if (existing) return existing;
+      const id = `live_${Math.random().toString(16).slice(2)}_${Date.now().toString(16)}`;
+      sessionStorage.setItem(k, id);
+      return id;
+    } catch {
+      return `live_${Math.random().toString(16).slice(2)}_${Date.now().toString(16)}`;
+    }
+  })();
+  const MARCUS_SPEECH_LOCK_STORAGE_KEY = 'opsMarcusSpeechLock';
   const liveState = {
     context: {},
     health: null,
@@ -1513,6 +1526,28 @@
       .slice(0, 520);
   }
 
+  function claimSpeech(text) {
+    try {
+      const normalized = String(text || '').replace(/\s+/g, ' ').trim().slice(0, 500);
+      if (!normalized) return false;
+      let hash = 0;
+      for (let i = 0; i < normalized.length; i += 1) {
+        hash = ((hash << 5) - hash + normalized.charCodeAt(i)) | 0;
+      }
+      const key = String(hash);
+      const now = Date.now();
+      const raw = localStorage.getItem(MARCUS_SPEECH_LOCK_STORAGE_KEY);
+      const existing = raw ? JSON.parse(raw) : null;
+      if (existing && existing.key === key && existing.owner !== LIVE_INSTANCE_ID && (now - Number(existing.ts || 0)) < 8000) {
+        return false;
+      }
+      localStorage.setItem(MARCUS_SPEECH_LOCK_STORAGE_KEY, JSON.stringify({ key, owner: LIVE_INSTANCE_ID, ts: now }));
+      return true;
+    } catch {
+      return true;
+    }
+  }
+
   function chooseBrowserVoice() {
     if (!('speechSynthesis' in window)) return null;
     const voices = window.speechSynthesis.getVoices();
@@ -1527,6 +1562,7 @@
     if (!speech) return;
     voiceState.lastText = speech;
     if (!voiceState.enabled && !force) return;
+    if (!claimSpeech(speech)) return;
 
     try {
       if (voiceState.audio) {
