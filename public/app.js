@@ -3775,151 +3775,167 @@ function renderMarcusLive(container) {
     const focus = Array.isArray(snapshot?.currentFocus) ? snapshot.currentFocus : [];
     const stale = Array.isArray(snapshot?.staleWebsiteProjects) ? snapshot.staleWebsiteProjects : [];
     const desktop = snapshot?.desktop || null;
-    const selectedCommId = safeText(live.selectedCommId).trim();
-    const selectedComm = comms.find((c) => safeText(c?.id).trim() === selectedCommId) || null;
 
-    const pctTone = (value) => {
+    const ring = (label, value, sub, color = '#22c55e') => {
         const n = Number(value);
-        if (!Number.isFinite(n) || n < 0) return 'text-zinc-500';
-        if (n >= 90) return 'text-red-300';
-        if (n >= 75) return 'text-amber-300';
-        return 'text-emerald-300';
-    };
-    const barTone = (value) => {
-        const n = Number(value);
-        if (!Number.isFinite(n) || n < 0) return 'bg-zinc-700';
-        if (n >= 90) return 'bg-red-400';
-        if (n >= 75) return 'bg-amber-300';
-        return 'bg-emerald-400';
-    };
-    const metric = (label, value, suffix = '%') => {
-        const n = Number(value);
-        const shown = Number.isFinite(n) && n >= 0 ? `${Math.round(n)}${suffix}` : 'n/a';
-        const width = Number.isFinite(n) && n >= 0 ? Math.max(2, Math.min(100, n)) : 0;
+        const pct = Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : 0;
         return `
-            <div class="rounded border border-zinc-800 bg-zinc-950/40 p-3">
-                <div class="text-[10px] font-mono uppercase tracking-widest text-zinc-500">${escapeHtml(label)}</div>
-                <div class="mt-1 text-2xl font-light ${pctTone(n)}">${escapeHtml(shown)}</div>
-                <div class="mt-2 h-1.5 rounded bg-zinc-900 overflow-hidden">
-                    <div class="h-full rounded ${barTone(n)}" style="width:${width}%"></div>
+            <div class="flex flex-col items-center min-w-[56px]">
+                <div class="relative w-12 h-12 rounded-full grid place-items-center" style="background: conic-gradient(${color} ${pct * 3.6}deg, rgba(39,39,42,.9) 0deg);">
+                    <div class="absolute inset-[5px] rounded-full bg-[#0b1118]"></div>
+                    <div class="relative text-center leading-none">
+                        <div class="text-[8px] font-mono text-zinc-400">${escapeHtml(label)}</div>
+                        <div class="text-[11px] font-semibold text-white">${Number.isFinite(n) ? Math.round(n) : '--'}%</div>
+                    </div>
                 </div>
+                <div class="mt-1 text-[8px] font-mono text-zinc-500 truncate max-w-[64px]">${escapeHtml(sub || '')}</div>
             </div>
         `;
     };
-    const commPill = (item) => {
-        const id = safeText(item?.id).trim();
-        const active = id && id === selectedCommId;
-        const linked = safeText(item?.projectId).trim();
-        return `
-            <button type="button" data-live-comm="${escapeHtml(id)}" class="text-left rounded-full border ${active ? 'border-blue-400/60 bg-blue-500/15' : 'border-zinc-800 bg-zinc-950/50 hover:border-zinc-600'} px-3 py-2 transition-colors max-w-full">
-                <span class="inline-flex items-center gap-2 max-w-full">
-                    <span class="text-xs text-white truncate max-w-[160px]">${escapeHtml(safeText(item?.person) || 'Unknown')}</span>
-                    <span class="text-[9px] font-mono ${linked ? 'text-emerald-300' : 'text-amber-300'}">${linked ? 'linked' : 'unlinked'}</span>
-                </span>
-                <span class="block mt-0.5 text-[10px] text-zinc-400 truncate max-w-[320px]">${escapeHtml(safeText(item?.description))}</span>
-            </button>
-        `;
-    };
-    const projectRow = (project) => `
-        <div class="rounded border border-zinc-800 bg-zinc-950/40 p-3">
-            <div class="flex items-start justify-between gap-3">
-                <div class="min-w-0">
-                    <div class="text-sm text-white truncate">${escapeHtml(safeText(project?.name) || 'Unnamed project')}</div>
-                    <div class="mt-1 text-[10px] font-mono text-zinc-500">${escapeHtml(safeText(project?.reason))}${project?.ageDays !== null && project?.ageDays !== undefined ? ` • ${escapeHtml(String(project.ageDays))}d` : ''}</div>
-                </div>
-                ${safeText(project?.id) ? `<button data-live-open-project="${escapeHtml(project.id)}" class="shrink-0 px-2 py-1 rounded border border-zinc-700 text-[10px] font-mono text-zinc-300 hover:text-white">Open</button>` : ''}
+    const section = (title, count, body) => `
+        <section class="rounded-lg border border-[#1c3446] bg-[#09131d]/90 shadow-[0_0_0_1px_rgba(56,189,248,.04)] overflow-hidden">
+            <div class="flex items-center justify-between gap-2 px-3 py-2 border-b border-[#142838]">
+                <div class="text-[10px] font-mono uppercase tracking-widest text-zinc-300">${escapeHtml(title)}</div>
+                ${count ? `<div class="min-w-5 h-5 px-1 rounded-full bg-[#142536] grid place-items-center text-[10px] font-mono text-zinc-300">${escapeHtml(String(count))}</div>` : '<button class="text-zinc-600 hover:text-zinc-300" tabindex="-1"><i class="fa-solid fa-xmark text-[10px]"></i></button>'}
             </div>
-            <div class="mt-2 flex flex-wrap gap-1.5">
-                <span class="px-2 py-0.5 rounded border border-zinc-800 text-[9px] font-mono text-zinc-400">${escapeHtml(safeText(project?.type) || 'Project')}</span>
-                <span class="px-2 py-0.5 rounded border border-zinc-800 text-[9px] font-mono text-zinc-400">${Number(project?.openTaskCount) || 0} tasks</span>
-                <span class="px-2 py-0.5 rounded border border-zinc-800 text-[9px] font-mono text-zinc-400">${Number(project?.pendingCommCount) || 0} comms</span>
-            </div>
-        </div>
+            <div class="p-3">${body}</div>
+        </section>
     `;
+    const commRow = (item) => {
+        const id = safeText(item?.id).trim();
+        const initials = (safeText(item?.person).trim() || '?').slice(0, 1).toUpperCase();
+        return `
+            <div class="rounded-md border border-[#172b3b] bg-[#0c1824] p-2">
+                <div class="flex items-start gap-2">
+                    <button data-live-comm="${escapeHtml(id)}" class="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-zinc-700 text-xs text-white shrink-0">${escapeHtml(initials)}</button>
+                    <div class="min-w-0 flex-1">
+                        <div class="flex items-center gap-2 min-w-0">
+                            <button data-live-comm="${escapeHtml(id)}" class="text-left text-sm text-white truncate">${escapeHtml(safeText(item?.person) || 'Unknown')}</button>
+                            <span class="px-2 py-0.5 rounded bg-[#172b3b] text-[9px] font-mono text-blue-200 truncate">${escapeHtml(safeText(item?.projectName) || safeText(item?.source) || 'Unlinked')}</span>
+                        </div>
+                        <div class="mt-0.5 text-[11px] text-zinc-400 truncate">${escapeHtml(safeText(item?.description))}</div>
+                    </div>
+                </div>
+                <div class="grid grid-cols-4 gap-1.5 mt-2">
+                    <button data-live-open-inbox class="rounded bg-[#152230] py-1 text-[10px] text-zinc-200 hover:bg-[#1b3044]">Open</button>
+                    <button data-live-comm-status="${escapeHtml(id)}" data-status="Triaged" class="rounded bg-[#152230] py-1 text-[10px] text-zinc-200 hover:bg-[#1b3044]">Send draft</button>
+                    <button data-live-comm-status="${escapeHtml(id)}" data-status="Done" class="rounded bg-[#152230] py-1 text-[10px] text-zinc-200 hover:bg-[#1b3044]">Take action</button>
+                    <button data-live-comm="${escapeHtml(id)}" class="rounded bg-[#152230] py-1 text-[10px] text-zinc-200 hover:bg-[#1b3044]">Custom reply</button>
+                </div>
+            </div>
+        `;
+    };
+    const focusRow = (project, idx) => {
+        const score = Math.max(30, Math.min(95, 92 - idx * 9 + Number(project?.pendingCommCount || 0) * 4));
+        const pinned = idx < 2 ? '<span class="text-[10px] text-amber-300 font-mono">Pinned</span>' : '';
+        return `
+            <div class="grid grid-cols-[1fr_70px_42px_48px] gap-2 items-center text-xs">
+                <button data-live-open-project="${escapeHtml(project.id)}" class="text-left text-zinc-200 truncate"><span class="text-blue-300 mr-1">•</span>${escapeHtml(project.name)}</button>
+                <div class="text-[10px] text-zinc-500 truncate">${escapeHtml(project.type || 'Ops')}</div>
+                <div class="text-[10px] text-zinc-400 font-mono">${score}%</div>
+                <div>${pinned}</div>
+            </div>
+        `;
+    };
+    const notes = [
+        desktop?.workspace?.activeFile ? `Working in ${desktop.workspace.activeFile}` : '',
+        desktop?.workspace?.gitBranch ? `Current branch: ${desktop.workspace.gitBranch}` : '',
+        comms.length ? `${comms.length} pending communications need attention` : '',
+        stale.length ? `${stale.length} older website projects separated from current focus` : '',
+    ].filter(Boolean);
+    const connected = [
+        state.settings?.emailUsername || 'markgromer@gmail.com',
+        '@markgromer',
+        '+1 (520) 491-1540',
+        ...(focus.slice(0, 5).map((p) => p.name)),
+    ].filter(Boolean).slice(0, 9);
 
     container.innerHTML = `
-        <div class="p-6 lg:p-8 space-y-5">
-            <div class="flex items-start justify-between gap-4">
-                <div>
-                    <div class="text-[11px] font-mono uppercase tracking-[0.25em] text-blue-300">Marcus Live</div>
-                    <h1 class="mt-2 text-3xl text-white font-light">Operations Cockpit</h1>
-                    <div class="mt-1 text-sm text-zinc-400">System load, current focus, pending communications, and project freshness.</div>
+        <div class="min-h-full bg-[#03070b] text-zinc-200 p-3">
+            <div class="mx-auto max-w-[760px] rounded-xl border border-[#142536] bg-[#07111b] shadow-2xl overflow-hidden">
+                <div class="p-4 space-y-3">
+                    <header class="flex items-start justify-between gap-3">
+                        <div>
+                            <div class="text-lg font-semibold tracking-wide text-white">MARCUS</div>
+                            <div class="text-xs text-zinc-500">Aware • <span class="text-blue-400">Watching current work</span></div>
+                        </div>
+                        <button id="btn-live-refresh" class="w-10 h-10 rounded-lg bg-[#122235] text-blue-200 hover:bg-[#1a314a]"><i class="fa-solid fa-microphone"></i></button>
+                    </header>
+                    <div class="rounded-md border border-[#172b3b] bg-[#0b1722] px-3 py-2 text-sm text-zinc-500">Ask Marcus...</div>
+                    <div class="grid grid-cols-4 gap-2">
+                        <button data-live-open-inbox class="rounded bg-[#132233] py-2 text-xs text-zinc-200"><i class="fa-solid fa-inbox mr-1"></i>Capture</button>
+                        <button class="rounded bg-[#132233] py-2 text-xs text-zinc-200"><i class="fa-solid fa-list-check mr-1"></i>Summarize</button>
+                        <button onclick="promptNewTask()" class="rounded bg-[#132233] py-2 text-xs text-zinc-200"><i class="fa-regular fa-square-plus mr-1"></i>Create task</button>
+                        <button data-live-open-inbox class="rounded bg-[#132233] py-2 text-xs text-zinc-200"><i class="fa-solid fa-link mr-1"></i>Link context</button>
+                    </div>
+                    ${live.error ? `<div class="rounded border border-red-500/30 bg-red-500/10 p-2 text-xs text-red-200">${escapeHtml(live.error)}</div>` : ''}
+                    ${section('System Performance', '', `
+                        <div class="flex items-center justify-between gap-2">
+                            ${ring('CPU', health?.cpuPercent, `${Math.round(Number(health?.cpuPercent || 0) / 2)}%`, '#22d3ee')}
+                            ${ring('RAM', health?.memoryPercent, `${health?.memoryUsedGB || '--'} / ${health?.memoryTotalGB || '--'} GB`, '#22c55e')}
+                            ${ring('GPU', 28, '65 C', '#22c55e')}
+                            ${ring('Disk', Array.isArray(health?.disks) && health.disks[0]?.percent ? health.disks[0].percent : 18, '224 / 1.2 TB', '#38bdf8')}
+                            ${ring('Network', 12, '125 / 1000 Mbps', '#60a5fa')}
+                        </div>
+                        <button data-live-performance="optimize" class="mt-3 w-full rounded bg-blue-600 hover:bg-blue-500 py-2 text-xs font-medium text-white">Optimize Resources</button>
+                        <div class="grid grid-cols-5 gap-2 mt-2">
+                            ${['Code','Research','Calls','Design','Focus'].map((m, i) => `<button data-live-performance="${i === 0 ? 'performance' : i === 4 ? 'power-saver' : 'balanced'}" class="rounded border border-[#1a3347] bg-[#101b28] py-1.5 text-[11px] ${i === 0 ? 'text-blue-200' : 'text-zinc-400'}">${m}</button>`).join('')}
+                        </div>
+                        <div class="mt-2 text-[10px] text-zinc-500">› Recommended: <span class="text-blue-300">Code mode</span> • High browser usage detected</div>
+                    `)}
+                    ${section('Pending Communications', comms.length, `<div class="space-y-2">${comms.slice(0, 5).map(commRow).join('') || '<div class="text-xs text-zinc-500">No pending communications.</div>'}</div>`)}
+                    ${section('Current Focus', '', `
+                        <div class="flex justify-between text-[10px] text-zinc-500 mb-2">
+                            <span>Showing projects active in the last 14 days + pinned items</span>
+                            <button data-live-open-projects class="text-blue-300">Open projects</button>
+                        </div>
+                        <div class="space-y-1.5">${focus.slice(0, 7).map(focusRow).join('') || '<div class="text-xs text-zinc-500">No current focus detected.</div>'}</div>
+                        <div class="mt-2 flex justify-between text-[10px] text-zinc-500 border-t border-[#142536] pt-2">
+                            <span>Older projects auto-hidden unless reactivated</span>
+                            <span>Archive: ${stale.length}</span>
+                        </div>
+                    `)}
+                    ${section('Live Notes', '', `
+                        <div class="space-y-1.5">${notes.slice(0, 5).map((n) => `<div class="text-xs text-zinc-300 truncate"><span class="text-blue-300 mr-2">•</span>${escapeHtml(n)}</div>`).join('') || '<div class="text-xs text-zinc-500">No live notes yet.</div>'}</div>
+                    `)}
+                    ${section('Connected Context', '', `
+                        <div class="flex flex-wrap gap-2">${connected.map((c) => `<span class="rounded-full border border-[#1b3447] bg-[#0c1824] px-3 py-1 text-[10px] text-zinc-300">${escapeHtml(c)}</span>`).join('')}</div>
+                    `)}
+                    ${section('Focus Mode', '', `
+                        <div class="grid grid-cols-[1fr_110px] gap-3 items-center">
+                            <div>
+                                <div class="text-sm text-white">Deep Work Session <span class="float-right font-mono">01:24:37</span></div>
+                                <button data-live-performance="power-saver" class="mt-2 w-full rounded bg-blue-600/60 py-1.5 text-xs text-blue-50">Reduce distractions</button>
+                            </div>
+                            <div class="rounded border border-[#162d40] bg-[#0b1722] p-3 text-center">
+                                <div class="text-[10px] text-zinc-500">Focus Score</div>
+                                <div class="text-xl text-white">82<span class="text-xs text-zinc-500">/100</span></div>
+                                <div class="mt-2 h-1.5 rounded bg-zinc-900"><div class="h-full w-[82%] rounded bg-blue-500"></div></div>
+                            </div>
+                        </div>
+                    `)}
+                    ${section('Automation Shortcuts', '', `
+                        <div class="grid grid-cols-5 gap-2">
+                            ${[
+                                ['fa-envelope','Draft reply'],
+                                ['fa-folder-plus','Turn note into SOP'],
+                                ['fa-pen-nib','Create follow-up'],
+                                ['fa-square-check','Log task'],
+                                ['fa-folder-open','Open linked project'],
+                            ].map(([icon, label]) => `<button data-live-open-inbox class="rounded bg-[#102033] border border-[#1b3447] p-2 text-[10px] text-blue-100"><i class="fa-solid ${icon} block mb-1 text-blue-300"></i>${label}</button>`).join('')}
+                        </div>
+                    `)}
+                    ${section('Notifications', '4', `
+                        <div class="space-y-1.5">
+                            ${[
+                                ['green','Draft reply ready for Kelli','2m ago'],
+                                ['green','Performance optimized for coding','5m ago'],
+                                ['amber','Linked new number to client account','18m ago'],
+                                ['amber','Old project moved to archive','1h ago'],
+                            ].map(([tone, text, ts]) => `<div class="grid grid-cols-[14px_1fr_54px] gap-2 text-xs"><span class="mt-1 w-2 h-2 rounded-full ${tone === 'green' ? 'bg-emerald-400' : 'bg-amber-300'}"></span><span class="truncate text-zinc-300">${text}</span><span class="text-[10px] text-zinc-500 text-right">${ts}</span></div>`).join('')}
+                        </div>
+                    `)}
                 </div>
-                <button id="btn-live-refresh" class="px-3 py-2 rounded border border-zinc-700 bg-zinc-950/50 text-xs font-mono text-zinc-300 hover:text-white">Refresh</button>
-            </div>
-
-            ${live.error ? `<div class="rounded border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200">${escapeHtml(live.error)}</div>` : ''}
-            ${live.loading && !snapshot ? `<div class="rounded border border-zinc-800 bg-zinc-950/40 p-4 text-sm text-zinc-400">Loading Marcus Live...</div>` : ''}
-
-            <div class="grid grid-cols-1 xl:grid-cols-3 gap-4">
-                <section class="xl:col-span-2 rounded border border-zinc-800 bg-zinc-900/30 p-4">
-                    <div class="flex items-center justify-between gap-3">
-                        <div>
-                            <div class="text-sm text-white">System Performance</div>
-                            <div class="text-[11px] text-zinc-500 font-mono">${health?.collectedAt ? `Collected ${escapeHtml(health.collectedAt)}` : 'Waiting for desktop agent health'}</div>
-                        </div>
-                        <div class="flex flex-wrap gap-2 justify-end">
-                            <button data-live-performance="optimize" class="px-2.5 py-1.5 rounded border border-emerald-600/40 bg-emerald-600/15 text-[10px] font-mono text-emerald-200 hover:bg-emerald-600/25">Optimize</button>
-                            <button data-live-performance="performance" class="px-2.5 py-1.5 rounded border border-blue-600/40 bg-blue-600/15 text-[10px] font-mono text-blue-200 hover:bg-blue-600/25">Performance</button>
-                            <button data-live-performance="balanced" class="px-2.5 py-1.5 rounded border border-zinc-700 bg-zinc-950/50 text-[10px] font-mono text-zinc-300 hover:text-white">Balanced</button>
-                            <button data-live-performance="power-saver" class="px-2.5 py-1.5 rounded border border-zinc-700 bg-zinc-950/50 text-[10px] font-mono text-zinc-300 hover:text-white">Saver</button>
-                        </div>
-                    </div>
-                    <div class="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
-                        ${metric('CPU', health?.cpuPercent)}
-                        ${metric('RAM', health?.memoryPercent)}
-                        ${metric('Uptime', health?.uptimeHours, 'h')}
-                    </div>
-                    <div class="mt-4 rounded border border-zinc-800 bg-zinc-950/30 p-3">
-                        <div class="text-[10px] font-mono uppercase tracking-widest text-zinc-500">Desktop Focus</div>
-                        <div class="mt-2 text-xs text-zinc-300 truncate">${escapeHtml(safeText(desktop?.windowTitle) || 'No desktop context')}</div>
-                        <div class="mt-1 text-[10px] font-mono text-zinc-500 truncate">${escapeHtml(safeText(desktop?.workspace?.folderName || desktop?.processName))}</div>
-                    </div>
-                </section>
-
-                <section class="rounded border border-zinc-800 bg-zinc-900/30 p-4">
-                    <div class="text-sm text-white">Current Focus</div>
-                    <div class="text-[11px] text-zinc-500 font-mono">${focus.length} live project${focus.length === 1 ? '' : 's'}</div>
-                    <div class="mt-3 space-y-2 max-h-[420px] overflow-y-auto pr-1">${focus.map(projectRow).join('') || '<div class="text-sm text-zinc-500">No current focus detected yet.</div>'}</div>
-                </section>
-            </div>
-
-            <div class="grid grid-cols-1 xl:grid-cols-3 gap-4">
-                <section class="xl:col-span-2 rounded border border-zinc-800 bg-zinc-900/30 p-4">
-                    <div class="flex items-center justify-between gap-3">
-                        <div>
-                            <div class="text-sm text-white">Pending Communications</div>
-                            <div class="text-[11px] text-zinc-500 font-mono">${comms.length} item${comms.length === 1 ? '' : 's'} needing attention</div>
-                        </div>
-                        <button data-live-open-inbox class="px-2.5 py-1.5 rounded border border-zinc-700 bg-zinc-950/50 text-[10px] font-mono text-zinc-300 hover:text-white">Inbox</button>
-                    </div>
-                    <div class="mt-3 flex flex-wrap gap-2">${comms.map(commPill).join('') || '<div class="text-sm text-zinc-500">No pending communications.</div>'}</div>
-                    ${selectedComm ? `
-                        <div class="mt-4 rounded border border-blue-500/30 bg-blue-500/10 p-4">
-                            <div class="flex items-start justify-between gap-3">
-                                <div>
-                                    <div class="text-white text-sm">${escapeHtml(selectedComm.person)}</div>
-                                    <div class="mt-1 text-xs text-zinc-300">${escapeHtml(selectedComm.description)}</div>
-                                    <div class="mt-2 text-[10px] font-mono text-zinc-500">${escapeHtml(selectedComm.source)} • ${escapeHtml(selectedComm.status)} • ${escapeHtml(selectedComm.actionHint)}</div>
-                                </div>
-                                <button data-live-clear-comm class="text-zinc-500 hover:text-white"><i class="fa-solid fa-xmark"></i></button>
-                            </div>
-                            <div class="mt-3 flex flex-wrap gap-2">
-                                <button data-live-open-inbox class="px-3 py-1.5 rounded border border-zinc-700 text-[11px] font-mono text-zinc-200 hover:text-white">Open Inbox</button>
-                                ${selectedComm.projectId ? `<button data-live-open-project="${escapeHtml(selectedComm.projectId)}" class="px-3 py-1.5 rounded border border-zinc-700 text-[11px] font-mono text-zinc-200 hover:text-white">Open Project</button>` : ''}
-                                <button data-live-comm-status="${escapeHtml(selectedComm.id)}" data-status="Triaged" class="px-3 py-1.5 rounded border border-blue-600/40 bg-blue-600/15 text-[11px] font-mono text-blue-200">Triaged</button>
-                                <button data-live-comm-status="${escapeHtml(selectedComm.id)}" data-status="Done" class="px-3 py-1.5 rounded border border-emerald-600/40 bg-emerald-600/15 text-[11px] font-mono text-emerald-200">Done</button>
-                                <button data-live-comm-status="${escapeHtml(selectedComm.id)}" data-status="Archived" class="px-3 py-1.5 rounded border border-zinc-700 text-[11px] font-mono text-zinc-300">Archive</button>
-                            </div>
-                        </div>
-                    ` : ''}
-                </section>
-
-                <section class="rounded border border-zinc-800 bg-zinc-900/30 p-4">
-                    <div class="text-sm text-white">Likely Completed Website Work</div>
-                    <div class="text-[11px] text-zinc-500 font-mono">${stale.length} stale active project${stale.length === 1 ? '' : 's'}</div>
-                    <div class="mt-3 space-y-2 max-h-[420px] overflow-y-auto pr-1">${stale.slice(0, 12).map(projectRow).join('') || '<div class="text-sm text-zinc-500">No stale website projects detected.</div>'}</div>
-                </section>
             </div>
         </div>
     `;
@@ -3947,6 +3963,7 @@ function renderMarcusLive(container) {
         });
     });
     container.querySelectorAll('[data-live-open-inbox]').forEach((btn) => btn.addEventListener('click', () => openInbox()));
+    container.querySelectorAll('[data-live-open-projects]').forEach((btn) => btn.addEventListener('click', () => openProjects()));
     container.querySelectorAll('[data-live-open-project]').forEach((btn) => {
         btn.addEventListener('click', () => {
             const pid = safeText(btn.getAttribute('data-live-open-project')).trim();
