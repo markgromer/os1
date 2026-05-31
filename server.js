@@ -16,6 +16,7 @@ import nodemailer from 'nodemailer';
 
 import { mcpCallTool, mcpListTools } from './mcpClient.js';
 import { buildMarcusSystemPrompt } from './marcus/core/build_system_prompt.js';
+import { buildActiveBrief as buildOperationalActiveBrief } from './marcus/intelligence/active_brief.js';
 
 const app = express();
 // When running behind SiteGround / reverse proxies, trust forwarded headers.
@@ -6224,39 +6225,30 @@ async function buildMarcusActiveBrief() {
     ? cfg.businesses
     : [{ key: DEFAULT_BUSINESS_KEY, name: 'Personal' }];
   const desktopData = desktopRelayCache?.data || desktopContextCache?.data || null;
-  const briefs = [];
+  const stores = [];
   for (const business of businesses) {
     const key = normalizeBusinessKey(business?.key || '') || DEFAULT_BUSINESS_KEY;
     const name = String(business?.name || key).trim();
     try {
       const store = await readStoreForBusiness(key);
-      briefs.push(buildMarcusActiveBriefForStore({ store, settings, businessKey: key, businessName: name, desktopData }));
+      const activeProject = findProjectForDesktopContext(store, desktopData);
+      stores.push({
+        businessKey: key,
+        businessName: name,
+        store,
+        activeProjectId: String(activeProject?.id || '').trim(),
+      });
     } catch {}
   }
 
-  const projects = briefs.flatMap((b) => b.projects || []).sort((a, b) => (b.score - a.score)).slice(0, 3);
-  const conversations = briefs.flatMap((b) => b.conversations || []).sort((a, b) => (b.score - a.score)).slice(0, 6);
-  const tasks = briefs.flatMap((b) => b.tasks || []).slice(0, 4);
-  const messageDrafts = briefs.flatMap((b) => b.messageDrafts || []).slice(0, 1);
-  const active = briefs.find((b) => b.activeProjectId) || null;
-
-  return {
-    ok: true,
-    generatedAt: nowIso(),
-    activeProject: active ? { id: active.activeProjectId, name: active.activeProjectName, businessKey: active.businessKey, businessName: active.businessName } : null,
-    projects,
-    conversations,
-    tasks,
-    messageDrafts,
-    stats: briefs.reduce((acc, b) => {
-      acc.openTasks += Number(b?.stats?.openTasks) || 0;
-      acc.relevantTasks += Number(b?.stats?.relevantTasks) || 0;
-      acc.overdueTasks += Number(b?.stats?.overdueTasks) || 0;
-      acc.dueTodayTasks += Number(b?.stats?.dueTodayTasks) || 0;
-      acc.inboxActionable += Number(b?.stats?.inboxActionable) || 0;
-      return acc;
-    }, { openTasks: 0, relevantTasks: 0, overdueTasks: 0, dueTodayTasks: 0, inboxActionable: 0 }),
-  };
+  // Doctrine guides behavior, but intelligence state drives the UI.
+  // The ActiveBrief is structured first; chat/prompting explains or acts on it afterward.
+  return buildOperationalActiveBrief({
+    stores,
+    settings,
+    desktopData,
+    nowMs: Date.now(),
+  });
 }
 
 function messageNeedsProjectContext(message) {
@@ -12726,6 +12718,15 @@ app.post('/api/marcus/live/chat', async (req, res) => {
     }
     try {
       const brief = await buildMarcusActiveBrief();
+      if (brief?.narrativeSummary) {
+        contextParts.push(`ACTIVE BRIEF:\n${brief.narrativeSummary}`);
+      }
+      if (Array.isArray(brief?.topPriorities) && brief.topPriorities.length) {
+        contextParts.push(`TOP OPERATIONAL PRIORITIES:\n${brief.topPriorities.slice(0, 6).map((p) => `- ${p.title}${p.detail ? `: ${previewTextServer(p.detail, 180)}` : ''}`).join('\n')}`);
+      }
+      if (Array.isArray(brief?.preparedActions) && brief.preparedActions.length) {
+        contextParts.push(`PREPARED ACTIONS WAITING FOR APPROVAL:\n${brief.preparedActions.slice(0, 4).map((a) => `- ${a.title}: ${previewTextServer(a.body || a.summary || '', 220)}${a.requiresApproval ? ' (approval required)' : ''}`).join('\n')}`);
+      }
       if (brief?.activeProject?.name) {
         contextParts.push(`ACTIVE PROJECT DETECTED: ${brief.activeProject.name} (${brief.activeProject.businessName || brief.activeProject.businessKey || 'workspace'})`);
       }

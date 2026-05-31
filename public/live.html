@@ -1342,20 +1342,20 @@
 <div class="hud-shell">
   <section class="hud-lane" aria-label="Adaptive HUD items">
     <div class="hud-lane-header">
-      <span class="hud-lane-title">Marcus Says</span>
+      <span class="hud-lane-title">Active Brief</span>
       <span class="hud-count" id="hud-count">Quiet</span>
     </div>
     <div class="hud-items" id="hud-items">
       <div class="hud-empty">Waiting for live signals.</div>
     </div>
   </section>
-  <section class="next-move-lane" aria-label="Saved next moves">
+  <section class="next-move-lane" aria-label="Prepared actions">
     <div class="hud-lane-header">
-      <span class="hud-lane-title">Saved Next Moves</span>
+      <span class="hud-lane-title">Prepared Actions</span>
       <span class="hud-count" id="next-move-count">0 saved</span>
     </div>
     <div class="next-moves" id="next-moves">
-      <div class="hud-empty">Copy boxes will appear here when Marcus has a useful next move.</div>
+      <div class="hud-empty">Prepared actions will appear here when approval or delegation is useful.</div>
     </div>
   </section>
 </div>
@@ -2070,10 +2070,12 @@
 
   function buildNextMoveFromItem(item) {
     if (!item || item.kind === 'workspace') return null;
-    const body = String(item.codexPrompt || item.prompt || `${item.title || ''}\n\n${item.detail || ''}`).trim();
+    const body = String(item.body || item.codexPrompt || item.prompt || `${item.title || ''}\n\n${item.detail || ''}`).trim();
     if (!body) return null;
     const title = item.codexPrompt
       ? `Send this to Codex: ${currentHumanProjectName()}`
+      : item.kind === 'action'
+        ? item.title || 'Prepared action'
       : item.kind === 'conversation'
         ? 'Draft the reply or handoff'
         : item.kind === 'draft'
@@ -2087,6 +2089,7 @@
       title,
       body,
       mode: item.codexPrompt ? 'codex' : 'marcus',
+      requiresApproval: !!item.requiresApproval,
       ts: Date.now(),
     };
   }
@@ -2103,9 +2106,10 @@
       merged.push({
         id,
         sourceId: String(move.sourceId || id),
-        title: String(move.title || 'Next move').trim(),
+        title: String(move.title || 'Prepared action').trim(),
         body,
         mode: move.mode === 'codex' ? 'codex' : 'marcus',
+        requiresApproval: !!move.requiresApproval,
         ts: Number(move.ts) || Date.now(),
       });
     }
@@ -2115,9 +2119,9 @@
 
   function renderNextMoves(items) {
     mergeNextMoves(items);
-    nextMoveCountEl.textContent = `${liveState.nextMoves.length} saved`;
+    nextMoveCountEl.textContent = `${liveState.nextMoves.length} ready`;
     if (!liveState.nextMoves.length) {
-      nextMovesEl.innerHTML = '<div class="hud-empty">Copy boxes will appear here when Marcus has a useful next move.</div>';
+      nextMovesEl.innerHTML = '<div class="hud-empty">Prepared actions will appear here when approval or delegation is useful.</div>';
       return;
     }
     nextMovesEl.innerHTML = liveState.nextMoves.map(move => `
@@ -2125,7 +2129,7 @@
         <div class="next-move-top">
           <div class="next-move-title">${esc(move.title)}</div>
           <div class="next-move-actions">
-            <button class="tiny-btn primary" type="button" data-move-action="copy"><i class="fa-solid fa-copy"></i> Copy</button>
+            <button class="tiny-btn primary" type="button" data-move-action="copy"><i class="fa-solid fa-copy"></i> ${move.requiresApproval ? 'Review' : 'Copy'}</button>
             <button class="tiny-btn" type="button" data-move-action="${esc(move.mode === 'codex' ? 'codex' : 'ask')}"><i class="fa-solid ${move.mode === 'codex' ? 'fa-code' : 'fa-paper-plane'}"></i> ${move.mode === 'codex' ? 'Codex' : 'Ask'}</button>
             <button class="tiny-btn" type="button" data-move-action="remove" title="Remove"><i class="fa-solid fa-xmark"></i></button>
           </div>
@@ -2218,6 +2222,7 @@
       const data = await resp.json();
       if (data?.ok) {
         liveState.activeBrief = data;
+        assistantLine.textContent = data.narrativeSummary || 'Operational intelligence online';
         renderHud();
       }
     } catch {}
@@ -2334,6 +2339,93 @@
 
     items.push(...buildHealthHudItems(liveState.health));
 
+    if (Array.isArray(brief.topPriorities) || Array.isArray(brief.preparedActions)) {
+      const activeBriefItems = [];
+      (Array.isArray(brief.urgentInterrupts) ? brief.urgentInterrupts : []).slice(0, 2).forEach((item) => {
+        activeBriefItems.push({
+          ...item,
+          id: 'brief-urgent-' + item.id,
+          sourceId: item.id,
+          kind: item.kind || 'priority',
+          priority: item.priority || 'critical',
+          icon: item.icon || 'fa-triangle-exclamation',
+          title: item.title || 'Urgent signal',
+          detail: item.detail || item.summary || 'MARCUS marked this as interruption-worthy.',
+        });
+      });
+      (Array.isArray(brief.topPriorities) ? brief.topPriorities : []).slice(0, 3).forEach((item) => {
+        activeBriefItems.push({
+          ...item,
+          id: 'brief-priority-' + item.id,
+          sourceId: item.id,
+          kind: item.kind || 'priority',
+          priority: item.priority || 'active',
+          icon: item.icon || 'fa-crosshairs',
+          title: item.title || 'Priority',
+          detail: item.detail || item.summary || 'This is in the current operating set.',
+        });
+      });
+      (Array.isArray(brief.waitingOnMark) ? brief.waitingOnMark : []).slice(0, 2).forEach((item) => {
+        activeBriefItems.push({
+          ...item,
+          id: 'brief-mark-' + item.id,
+          sourceId: item.id,
+          kind: item.kind || 'waiting',
+          priority: item.priority || 'warning',
+          icon: item.icon || 'fa-user-clock',
+          title: item.title || 'Waiting on Mark',
+          detail: item.detail || item.summary || 'This needs your decision or approval.',
+        });
+      });
+      (Array.isArray(brief.risks) ? brief.risks : []).slice(0, 2).forEach((item) => {
+        activeBriefItems.push({
+          ...item,
+          id: 'brief-risk-' + item.id,
+          sourceId: item.id,
+          kind: item.kind || 'risk',
+          priority: item.priority || 'warning',
+          icon: item.icon || 'fa-triangle-exclamation',
+          title: item.title || 'Risk signal',
+          detail: item.detail || item.summary || 'Risk is elevated enough to track.',
+        });
+      });
+      (Array.isArray(brief.opportunities) ? brief.opportunities : []).slice(0, 1).forEach((item) => {
+        activeBriefItems.push({
+          ...item,
+          id: 'brief-opportunity-' + item.id,
+          sourceId: item.id,
+          kind: item.kind || 'opportunity',
+          priority: item.priority || 'active',
+          icon: item.icon || 'fa-arrow-trend-up',
+          title: item.title || 'Opportunity',
+          detail: item.detail || item.summary || 'Possible upside signal.',
+        });
+      });
+      (Array.isArray(brief.preparedActions) ? brief.preparedActions : []).slice(0, 3).forEach((action) => {
+        activeBriefItems.push({
+          id: 'brief-action-' + action.id,
+          kind: 'action',
+          priority: action.riskLevel === 'high' ? 'warning' : 'active',
+          icon: 'fa-wand-magic-sparkles',
+          title: action.title || 'Prepared action',
+          detail: action.summary || action.approvalReason || '',
+          body: action.body || action.summary || '',
+          requiresApproval: !!action.requiresApproval,
+          targetType: 'draft',
+          target: action.target || '',
+          prompt: action.body || action.summary || '',
+        });
+      });
+
+      const seen = new Set();
+      for (const item of activeBriefItems) {
+        const dedupeKey = String(item.sourceId || item.id || '');
+        if (!item.id || seen.has(dedupeKey)) continue;
+        seen.add(dedupeKey);
+        items.push(item);
+      }
+    }
+
     if (brief.activeProject?.name) {
       items.push({
         id: 'life-active-' + brief.activeProject.businessKey + '-' + brief.activeProject.id,
@@ -2439,30 +2531,33 @@
 
   function renderHud() {
     const items = buildHudItems();
-    const visibleItems = items.slice(0, 2);
-    hudCountEl.textContent = items.length ? 'Now' : 'Quiet';
+    const visibleItems = items.slice(0, 3);
+    const brief = liveState.activeBrief || {};
+    hudCountEl.textContent = items.length ? `${items.length} live` : 'Quiet';
     updateGlanceSignals(items);
     if (!items.length) {
-      hudItemsEl.innerHTML = '<div class="hud-empty">Quiet right now. I’m watching, but nothing deserves your attention.</div>';
-      readoutMain.textContent = 'Quiet right now. I’m watching, but nothing deserves your attention.';
-      presenceStatus.textContent = 'Quiet right now. I’m watching, but nothing deserves your attention.';
+      const quiet = brief.narrativeSummary || 'Quiet right now. I’m watching, but nothing deserves your attention.';
+      hudItemsEl.innerHTML = `<div class="hud-empty">${esc(quiet)}</div>`;
+      readoutMain.textContent = quiet;
+      presenceStatus.textContent = quiet;
       renderNextMoves([]);
       updateDrawerSummary();
       return;
     }
 
     const top = items[0];
-    readoutMain.textContent = `${top.title} ${top.detail || ''}`.trim();
-    presenceStatus.textContent = `${top.title} ${top.detail || ''}`.trim();
+    readoutMain.textContent = brief.narrativeSummary || `${top.title} ${top.detail || ''}`.trim();
+    presenceStatus.textContent = brief.narrativeSummary || `${top.title} ${top.detail || ''}`.trim();
     hudItemsEl.innerHTML = visibleItems.map(item => `
       <article class="hud-card priority-${esc(item.priority || 'normal')}" data-id="${esc(item.id)}">
         <div class="hud-icon"><i class="fa-solid ${esc(item.icon || 'fa-circle-dot')}"></i></div>
         <div class="hud-body">
           <div class="hud-title">${esc(item.title)}</div>
           <div class="hud-detail">${esc(item.detail || '')}</div>
+          ${Array.isArray(item.reasons) && item.reasons.length ? `<div class="hud-detail">Why: ${esc(item.reasons.slice(0, 2).join(', '))}</div>` : ''}
         </div>
         <div class="hud-actions">
-          <button class="hud-btn primary action-text" type="button" data-hud-action="open" title="${item.codexPrompt ? 'Copy Codex prompt and open Codex Cloud' : 'Open or prep'}"><i class="fa-solid ${item.codexPrompt ? 'fa-code' : 'fa-wand-magic-sparkles'}"></i><span>${item.codexPrompt ? 'Codex' : 'Prep it'}</span></button>
+          <button class="hud-btn primary action-text" type="button" data-hud-action="open" title="${item.codexPrompt ? 'Copy Codex prompt and open Codex Cloud' : 'Open or prep'}"><i class="fa-solid ${item.codexPrompt ? 'fa-code' : item.kind === 'action' ? 'fa-check-double' : 'fa-wand-magic-sparkles'}"></i><span>${item.codexPrompt ? 'Codex' : item.kind === 'action' ? 'Review' : 'Prep'}</span></button>
           <button class="hud-btn action-text" type="button" data-hud-action="done" title="Mark action taken"><i class="fa-solid fa-check"></i><span>Done</span></button>
           <button class="hud-btn" type="button" data-hud-action="dismiss" title="Remove from HUD"><i class="fa-solid fa-xmark"></i></button>
         </div>
@@ -2480,7 +2575,16 @@
         if (action === 'dismiss') dismissHudItem(item);
       });
     });
-    renderNextMoves(items);
+    const prepared = (Array.isArray(brief.preparedActions) ? brief.preparedActions : []).map((action) => ({
+      id: 'prepared-' + action.id,
+      kind: 'action',
+      title: action.title || 'Prepared action',
+      detail: action.summary || action.approvalReason || '',
+      body: action.body || action.summary || '',
+      requiresApproval: !!action.requiresApproval,
+      prompt: action.body || action.summary || '',
+    }));
+    renderNextMoves(prepared.length ? prepared : items);
     updateDrawerSummary();
   }
 
@@ -2957,7 +3061,9 @@
   function renderSimpleCockpit(data) {
     const root = document.getElementById('simple-live-root');
     if (!root) return;
-    document.body.classList.add('simple-cockpit');
+    document.body.classList.remove('simple-cockpit');
+    root.innerHTML = '';
+    return;
     const health = data?.systemHealth || liveState.context?.systemHealth || {};
     const comms = Array.isArray(data?.pendingCommunications) ? data.pendingCommunications : [];
     const fallbackFocus = Array.isArray(liveState.recentContexts) ? liveState.recentContexts : [];
@@ -3102,14 +3208,6 @@
   publishLiveVoiceOwner();
   setInterval(publishLiveVoiceOwner, 3000);
   loadActiveBrief();
-  try {
-    renderSimpleCockpit({});
-  } catch (err) {
-    console.error('Marcus Live cockpit render failed', err);
-    document.body.classList.remove('simple-cockpit');
-  }
-  loadSimpleCockpit();
-  setInterval(loadSimpleCockpit, 15_000);
   setInterval(loadActiveBrief, 12_000);
   connect();
   input.focus();
