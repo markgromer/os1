@@ -7,7 +7,7 @@ const state = {
     revision: 1,
     updatedAt: "",
 
-    currentView: "godview",
+    currentView: "command",
     currentProjectId: null,
     currentClientName: null,
     settingsPane: "",
@@ -15,6 +15,17 @@ const state = {
 
     godViewData: null,
     godViewLoading: false,
+    activeBrief: null,
+    activeBriefLoading: false,
+    activeBriefFetchedAt: 0,
+    activeBriefError: '',
+    operationalControls: {
+        proactiveMode: 'normal',
+        signals: {},
+        memory: {},
+        actions: {},
+        projects: {},
+    },
 
     projects: [],
     clients: [],
@@ -40,7 +51,8 @@ const state = {
     chatHistory: [],
     globalChatHistory: [],
     operatorBioChatHistory: [],
-    isChatOpen: true,
+    isChatOpen: false,
+    marcusRuntimePresence: 'idle',
 
     chatThreadId: 'default',
 
@@ -53,6 +65,7 @@ const state = {
     activeBusinessKey: 'personal',
     uiPrefs: {
         weekStartsOnMonday: false,
+        proactiveMode: 'normal',
     },
 
     auth: {
@@ -251,6 +264,11 @@ const MARCUS_VOICE_OUT_STORAGE_KEY = 'opsMarcusVoiceOut';
 const MARCUS_SPEECH_LOCK_STORAGE_KEY = 'opsMarcusSpeechLock';
 const MARCUS_LIVE_VOICE_OWNER_STORAGE_KEY = 'opsMarcusLiveVoiceOwner';
 const MARCUS_FOCUS_NUDGE_LAST_TS_KEY = 'opsMarcusFocusNudgeLastTs';
+const MARCUS_PROACTIVE_MODE_STORAGE_KEY = 'opsMarcusProactiveMode';
+const MARCUS_SIGNAL_CONTROLS_STORAGE_KEY = 'opsMarcusSignalControls';
+const MARCUS_MEMORY_CONTROLS_STORAGE_KEY = 'opsMarcusMemoryControls';
+const MARCUS_PRESENCE_MUTED_STORAGE_KEY = 'opsMarcusPresenceMuted';
+const MARCUS_PRESENCE_MINIMIZED_STORAGE_KEY = 'opsMarcusPresenceMinimized';
 
 const MARCUS_PANEL_MIN_WIDTH = 320;
 const MARCUS_PANEL_MIN_HEIGHT = 420;
@@ -293,10 +311,45 @@ const MARCUS_INSTANCE_ID = (() => {
 
 let marcusSyncChannel = null;
 let marcusDockRestore = null;
+let marcusPresencePeekCloseTimer = null;
 
 function setStoredMarcusOpen(open) {
     try {
         localStorage.setItem(MARCUS_OPEN_STORAGE_KEY, open ? '1' : '0');
+    } catch {
+        // ignore
+    }
+}
+
+function getStoredMarcusPresenceMuted() {
+    try {
+        const raw = String(localStorage.getItem(MARCUS_PRESENCE_MUTED_STORAGE_KEY) || '').trim().toLowerCase();
+        return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'muted';
+    } catch {
+        return false;
+    }
+}
+
+function setStoredMarcusPresenceMuted(muted) {
+    try {
+        localStorage.setItem(MARCUS_PRESENCE_MUTED_STORAGE_KEY, muted ? '1' : '0');
+    } catch {
+        // ignore
+    }
+}
+
+function getStoredMarcusPresenceMinimized() {
+    try {
+        const raw = String(localStorage.getItem(MARCUS_PRESENCE_MINIMIZED_STORAGE_KEY) || '').trim().toLowerCase();
+        return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'minimized';
+    } catch {
+        return false;
+    }
+}
+
+function setStoredMarcusPresenceMinimized(minimized) {
+    try {
+        localStorage.setItem(MARCUS_PRESENCE_MINIMIZED_STORAGE_KEY, minimized ? '1' : '0');
     } catch {
         // ignore
     }
@@ -524,10 +577,10 @@ async function speakMarcus(text, { condensed = true } = {}) {
 function getStoredMarcusOpen() {
     try {
         const raw = String(localStorage.getItem(MARCUS_OPEN_STORAGE_KEY) || '').trim().toLowerCase();
-        if (!raw) return true;
+        if (!raw) return false;
         return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'open';
     } catch {
-        return true;
+        return false;
     }
 }
 
@@ -565,6 +618,275 @@ function setStoredMarcusFocusNudgeLastTs(ts) {
         localStorage.setItem(MARCUS_FOCUS_NUDGE_LAST_TS_KEY, String(n));
     } catch {
         // ignore
+    }
+}
+
+function normalizeProactiveMode(mode) {
+    const value = safeText(mode).trim().toLowerCase();
+    return ['quiet', 'normal', 'aggressive', 'focus', 'away'].includes(value) ? value : 'normal';
+}
+
+function normalizeActionLifecycle(value) {
+    const normalized = safeText(value).trim().toLowerCase().replace(/[-\s]+/g, '_');
+    return ['suggested_action', 'draft_action', 'approved_action', 'completed_action', 'dismissed_action'].includes(normalized) ? normalized : '';
+}
+
+function getStoredProactiveMode() {
+    try {
+        return normalizeProactiveMode(state.operationalControls?.proactiveMode || localStorage.getItem(MARCUS_PROACTIVE_MODE_STORAGE_KEY) || 'normal');
+    } catch {
+        return 'normal';
+    }
+}
+
+function setStoredProactiveMode(mode, { sync = true } = {}) {
+    const next = normalizeProactiveMode(mode);
+    state.uiPrefs.proactiveMode = next;
+    state.operationalControls = {
+        ...(state.operationalControls || {}),
+        proactiveMode: next,
+    };
+    try {
+        localStorage.setItem(MARCUS_PROACTIVE_MODE_STORAGE_KEY, next);
+    } catch {
+        // ignore
+    }
+    if (sync) {
+        apiJson('/api/marcus/operational-controls/proactive-mode', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mode: next }),
+        }).then((controls) => applyOperationalControls(controls)).catch(() => {});
+    }
+    return next;
+}
+
+function readStoredJsonObject(key) {
+    try {
+        const raw = localStorage.getItem(key);
+        const parsed = raw ? JSON.parse(raw) : {};
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    } catch {
+        return {};
+    }
+}
+
+function writeStoredJsonObject(key, value) {
+    try {
+        localStorage.setItem(key, JSON.stringify(value && typeof value === 'object' ? value : {}));
+    } catch {
+        // ignore
+    }
+}
+
+function getSignalControls() {
+    const now = Date.now();
+    const raw = {
+        ...readStoredJsonObject(MARCUS_SIGNAL_CONTROLS_STORAGE_KEY),
+        ...(state.operationalControls?.signals && typeof state.operationalControls.signals === 'object' ? state.operationalControls.signals : {}),
+    };
+    let changed = false;
+    for (const [id, control] of Object.entries(raw)) {
+        const snoozedUntil = Number(control?.snoozedUntil || 0);
+        if (snoozedUntil && snoozedUntil <= now) {
+            delete raw[id];
+            changed = true;
+        }
+    }
+    if (changed) writeStoredJsonObject(MARCUS_SIGNAL_CONTROLS_STORAGE_KEY, raw);
+    return raw;
+}
+
+function setSignalControl(id, patch, { sync = true } = {}) {
+    const signalId = safeText(id).trim();
+    if (!signalId) return;
+    const controls = getSignalControls();
+    controls[signalId] = {
+        ...(controls[signalId] || {}),
+        ...(patch && typeof patch === 'object' ? patch : {}),
+        updatedAt: new Date().toISOString(),
+    };
+    writeStoredJsonObject(MARCUS_SIGNAL_CONTROLS_STORAGE_KEY, controls);
+    state.operationalControls = {
+        ...(state.operationalControls || {}),
+        signals: controls,
+    };
+    if (sync) {
+        apiJson(`/api/marcus/operational-controls/signals/${encodeURIComponent(signalId)}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ patch }),
+        }).then((next) => applyOperationalControls(next)).catch(() => {});
+    }
+}
+
+function isSignalSuppressed(item, controls = getSignalControls()) {
+    const id = safeText(item?.id).trim();
+    if (!id) return false;
+    const control = controls[id];
+    if (!control) return false;
+    if (control.dismissed || control.convertedToAction) return true;
+    const snoozedUntil = Number(control.snoozedUntil || 0);
+    return snoozedUntil && snoozedUntil > Date.now();
+}
+
+function getMemoryControls() {
+    return {
+        ...readStoredJsonObject(MARCUS_MEMORY_CONTROLS_STORAGE_KEY),
+        ...(state.operationalControls?.memory && typeof state.operationalControls.memory === 'object' ? state.operationalControls.memory : {}),
+    };
+}
+
+function getActionControls() {
+    return state.operationalControls?.actions && typeof state.operationalControls.actions === 'object'
+        ? state.operationalControls.actions
+        : {};
+}
+
+function getProjectControls() {
+    return state.operationalControls?.projects && typeof state.operationalControls.projects === 'object'
+        ? state.operationalControls.projects
+        : {};
+}
+
+function getFocusControls() {
+    return state.operationalControls?.focus && typeof state.operationalControls.focus === 'object'
+        ? state.operationalControls.focus
+        : {};
+}
+
+function setFocusControl(id, patch, { sync = true } = {}) {
+    const focusId = safeText(id).trim();
+    if (!focusId) return;
+    const controls = getFocusControls();
+    controls[focusId] = {
+        ...(controls[focusId] || {}),
+        ...(patch && typeof patch === 'object' ? patch : {}),
+        updatedAt: new Date().toISOString(),
+    };
+    state.operationalControls = {
+        ...(state.operationalControls || {}),
+        focus: controls,
+    };
+    if (sync) {
+        apiJson(`/api/marcus/operational-controls/focus/${encodeURIComponent(focusId)}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ patch }),
+        }).then((next) => applyOperationalControls(next)).catch(() => {});
+    }
+}
+
+function setProjectControl(id, patch, { sync = true } = {}) {
+    const projectId = safeText(id).trim();
+    if (!projectId) return;
+    const controls = getProjectControls();
+    controls[projectId] = {
+        ...(controls[projectId] || {}),
+        ...(patch && typeof patch === 'object' ? patch : {}),
+        updatedAt: new Date().toISOString(),
+    };
+    state.operationalControls = {
+        ...(state.operationalControls || {}),
+        projects: controls,
+    };
+    if (sync) {
+        apiJson(`/api/marcus/operational-controls/projects/${encodeURIComponent(projectId)}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ patch }),
+        }).then((next) => applyOperationalControls(next)).catch(() => {});
+    }
+}
+
+function setActionControl(id, patch, { sync = true } = {}) {
+    const actionId = safeText(id).trim();
+    if (!actionId) return;
+    const controls = getActionControls();
+    controls[actionId] = {
+        ...(controls[actionId] || {}),
+        ...(patch && typeof patch === 'object' ? patch : {}),
+        updatedAt: new Date().toISOString(),
+    };
+    state.operationalControls = {
+        ...(state.operationalControls || {}),
+        actions: controls,
+    };
+    if (sync) {
+        apiJson(`/api/marcus/operational-controls/actions/${encodeURIComponent(actionId)}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ patch }),
+        }).then((next) => applyOperationalControls(next)).catch(() => {});
+    }
+}
+
+function transitionAction(id, lifecycle, patch = {}) {
+    const actionId = safeText(id).trim();
+    const nextLifecycle = safeText(lifecycle).trim();
+    if (!actionId || !nextLifecycle) return;
+    setActionControl(actionId, { ...patch, lifecycle: nextLifecycle }, { sync: false });
+    apiJson(`/api/marcus/actions/${encodeURIComponent(actionId)}/transition`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lifecycle: nextLifecycle, patch }),
+    }).then((next) => applyOperationalControls(next)).catch(() => {
+        setActionControl(actionId, { ...patch, lifecycle: nextLifecycle }, { sync: false });
+    });
+}
+
+function setMemoryControl(id, patch, { sync = true } = {}) {
+    const memoryId = safeText(id).trim();
+    if (!memoryId) return;
+    const controls = getMemoryControls();
+    controls[memoryId] = {
+        ...(controls[memoryId] || {}),
+        ...(patch && typeof patch === 'object' ? patch : {}),
+        updatedAt: new Date().toISOString(),
+    };
+    writeStoredJsonObject(MARCUS_MEMORY_CONTROLS_STORAGE_KEY, controls);
+    state.operationalControls = {
+        ...(state.operationalControls || {}),
+        memory: controls,
+    };
+    if (sync) {
+        apiJson(`/api/marcus/operational-controls/memory/${encodeURIComponent(memoryId)}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ patch }),
+        }).then((next) => applyOperationalControls(next)).catch(() => {});
+    }
+}
+
+function applyOperationalControls(input) {
+    const controls = input && typeof input === 'object' ? input : {};
+    const next = {
+        proactiveMode: normalizeProactiveMode(controls.proactiveMode || state.operationalControls?.proactiveMode || getStoredProactiveMode()),
+        signals: controls.signals && typeof controls.signals === 'object' ? controls.signals : (state.operationalControls?.signals || {}),
+        memory: controls.memory && typeof controls.memory === 'object' ? controls.memory : (state.operationalControls?.memory || {}),
+        actions: controls.actions && typeof controls.actions === 'object' ? controls.actions : (state.operationalControls?.actions || {}),
+        projects: controls.projects && typeof controls.projects === 'object' ? controls.projects : (state.operationalControls?.projects || {}),
+        focus: controls.focus && typeof controls.focus === 'object' ? controls.focus : (state.operationalControls?.focus || {}),
+        updatedAt: safeText(controls.updatedAt),
+    };
+    state.operationalControls = next;
+    state.uiPrefs.proactiveMode = next.proactiveMode;
+    try {
+        localStorage.setItem(MARCUS_PROACTIVE_MODE_STORAGE_KEY, next.proactiveMode);
+        writeStoredJsonObject(MARCUS_SIGNAL_CONTROLS_STORAGE_KEY, next.signals);
+        writeStoredJsonObject(MARCUS_MEMORY_CONTROLS_STORAGE_KEY, next.memory);
+    } catch {
+        // ignore
+    }
+    return next;
+}
+
+async function refreshOperationalControls() {
+    try {
+        const controls = await apiJson('/api/marcus/operational-controls');
+        return applyOperationalControls(controls);
+    } catch {
+        return applyOperationalControls(state.operationalControls || {});
     }
 }
 
@@ -648,7 +970,7 @@ async function setActiveBusinessKey(key, { persistServer = true } = {}) {
     }
 
     state.currentProjectId = null;
-    state.currentView = 'dashboard';
+    state.currentView = 'command';
     showLoading();
     await Promise.all([
         fetchState(),
@@ -719,7 +1041,7 @@ function sameChatEntry(a, b) {
 async function applyMarcusRemoteContext(payload) {
     const p = (payload && typeof payload === 'object') ? payload : {};
     const nextProjectId = safeText(p.currentProjectId || '');
-    const nextView = safeText(p.currentView || 'dashboard') || 'dashboard';
+    const nextView = safeText(p.currentView || 'command') || 'command';
 
     if (safeText(state.currentProjectId) === nextProjectId && safeText(state.currentView) === nextView) return;
 
@@ -780,7 +1102,7 @@ async function handleMarcusSyncEvent(ev) {
     if (type === 'request-sync') {
         publishMarcusSync('sync-state', {
             currentProjectId: safeText(state.currentProjectId || ''),
-            currentView: safeText(state.currentView || 'dashboard'),
+            currentView: safeText(state.currentView || 'command'),
             globalChatHistory: Array.isArray(state.globalChatHistory) ? state.globalChatHistory.slice(-30) : [],
         });
         return;
@@ -842,7 +1164,7 @@ function initMarcusSync() {
 function broadcastMarcusContext() {
     publishMarcusSync('context', {
         currentProjectId: safeText(state.currentProjectId || ''),
-        currentView: safeText(state.currentView || 'dashboard'),
+        currentView: safeText(state.currentView || 'command'),
     });
 }
 
@@ -1120,6 +1442,7 @@ function setMarcusPresence(mode = 'idle') {
     const normalized = String(mode || '').toLowerCase();
     const busy = normalized === 'busy';
     const responding = normalized === 'responding';
+    state.marcusRuntimePresence = busy ? 'busy' : responding ? 'responding' : 'idle';
 
     if (panel) {
         panel.classList.remove('marcus-thinking', 'marcus-responding');
@@ -1145,6 +1468,310 @@ function setMarcusPresence(mode = 'idle') {
             statusText.textContent = 'M.A.R.C.U.S. IDLE • READY FOR ORDERS';
         }
     }
+    updateAmbientPresenceFromBrief();
+}
+
+function updateAmbientPresenceFromBriefLegacy() {
+    const brief = state.activeBrief || {};
+    const topCount = briefList(brief.controlledAttention?.attentionQueue || brief.controlledAttention?.topPriorities || brief.topPriorities).filter((item) => !isSignalSuppressed(item)).length;
+    const approvalCount = briefList(brief.activeActionQueue || brief.actionQueue).filter((item) => item?.approvalRequired || item?.requiresApproval).length;
+    const systemWarnings = Number(brief?.systemHealth?.warningCount || 0) + Number(brief?.systemHealth?.criticalCount || 0);
+    const mode = normalizeProactiveMode(brief?.attentionPolicy?.mode || state.uiPrefs?.proactiveMode || getStoredProactiveMode());
+    const orb = document.getElementById('marcus-orb');
+    const toggle = document.getElementById('toggle-chat');
+    const statusText = document.getElementById('marcus-state');
+    const titleParts = [];
+    if (topCount) titleParts.push(`${topCount} attention item${topCount === 1 ? '' : 's'}`);
+    if (approvalCount) titleParts.push(`${approvalCount} approval draft${approvalCount === 1 ? '' : 's'}`);
+    if (systemWarnings) titleParts.push(`${systemWarnings} system warning${systemWarnings === 1 ? '' : 's'}`);
+    titleParts.push(`${mode} mode`);
+    const title = `MARCUS: ${titleParts.join(' / ')}`;
+
+    if (orb) {
+        orb.title = title;
+    }
+
+    if (toggle) {
+        toggle.title = title;
+        let badge = toggle.querySelector('[data-marcus-presence-badge]');
+        if (!badge) {
+            badge = document.createElement('span');
+            badge.setAttribute('data-marcus-presence-badge', '1');
+            badge.className = 'ml-1 min-w-4 h-4 px-1 rounded-full bg-blue-500/20 border border-blue-500/30 text-[9px] font-mono text-blue-200 inline-flex items-center justify-center';
+            toggle.appendChild(badge);
+        }
+        const badgeCount = Math.min(99, topCount + approvalCount + systemWarnings);
+        badge.textContent = badgeCount ? String(badgeCount) : mode;
+        badge.className = `ml-1 min-w-4 h-4 px-1 rounded-full border text-[9px] font-mono inline-flex items-center justify-center ${systemWarnings ? 'bg-amber-500/20 border-amber-500/30 text-amber-200' : approvalCount ? 'bg-emerald-500/20 border-emerald-500/30 text-emerald-200' : topCount ? 'bg-blue-500/20 border-blue-500/30 text-blue-200' : 'bg-zinc-500/10 border-zinc-500/20 text-zinc-400'}`;
+    }
+
+    if (statusText && !document.getElementById(MARCUS_TYPING_ID)) {
+        statusText.textContent = topCount || approvalCount || systemWarnings
+            ? `M.A.R.C.U.S. WATCHING â€¢ ${titleParts.slice(0, 2).join(' / ')}`
+            : `M.A.R.C.U.S. QUIET â€¢ ${mode.toUpperCase()} MODE`;
+    }
+}
+
+function buildMarcusPresenceSnapshot(brief = state.activeBrief || {}) {
+    const attentionItems = briefList(brief.controlledAttention?.attentionQueue || brief.controlledAttention?.topPriorities || brief.topPriorities)
+        .filter((item) => !isSignalSuppressed(item));
+    const approvalItems = briefList(brief.activeActionQueue || brief.actionQueue).filter((item) => item?.approvalRequired || item?.requiresApproval);
+    const topCount = attentionItems.length;
+    const approvalCount = approvalItems.length;
+    const systemWarnings = Number(brief?.systemHealth?.warningCount || 0) + Number(brief?.systemHealth?.criticalCount || 0);
+    const mode = normalizeProactiveMode(brief?.attentionPolicy?.mode || state.uiPrefs?.proactiveMode || getStoredProactiveMode());
+    const runtime = safeText(state.marcusRuntimePresence || 'idle').trim() || 'idle';
+    const muted = getStoredMarcusPresenceMuted();
+    const minimized = getStoredMarcusPresenceMinimized();
+    const topItem = attentionItems[0] || approvalItems[0] || null;
+    const focus = brief?.currentFocus || brief?.focus || {};
+    const titleParts = [];
+    if (topCount) titleParts.push(`${topCount} attention item${topCount === 1 ? '' : 's'}`);
+    if (approvalCount) titleParts.push(`${approvalCount} approval draft${approvalCount === 1 ? '' : 's'}`);
+    if (systemWarnings) titleParts.push(`${systemWarnings} system warning${systemWarnings === 1 ? '' : 's'}`);
+    titleParts.push(`${mode} mode`);
+    const presenceState = runtime === 'busy'
+        ? 'thinking'
+        : runtime === 'responding'
+            ? 'running'
+            : muted
+                ? 'muted'
+                : systemWarnings
+                    ? 'warning'
+                    : approvalCount
+                        ? 'approval'
+                        : topCount
+                            ? 'signal'
+                            : mode === 'focus'
+                                ? 'focus'
+                                : mode === 'quiet' || mode === 'away'
+                                    ? 'quiet'
+                                    : 'idle';
+    const presenceLabel = {
+        thinking: 'Thinking',
+        running: 'Running',
+        muted: 'Muted',
+        warning: 'Warning',
+        approval: 'Approval',
+        signal: 'Signal',
+        focus: 'Focus',
+        quiet: mode === 'away' ? 'Away' : 'Quiet',
+        idle: 'Command',
+    }[presenceState] || 'Command';
+    const stateLabel = presenceState === 'thinking'
+        ? 'M.A.R.C.U.S. THINKING'
+        : presenceState === 'running'
+            ? 'M.A.R.C.U.S. RUNNING ACTION'
+            : topCount || approvalCount || systemWarnings
+                ? `M.A.R.C.U.S. WATCHING - ${titleParts.slice(0, 2).join(' / ')}`
+                : `M.A.R.C.U.S. QUIET - ${mode.toUpperCase()} MODE`;
+    return {
+        topCount,
+        approvalCount,
+        systemWarnings,
+        mode,
+        runtime,
+        presenceState,
+        presenceLabel,
+        muted,
+        minimized,
+        badgeCount: Math.min(99, topCount + approvalCount + systemWarnings),
+        titleParts,
+        title: `MARCUS: ${titleParts.join(' / ')}`,
+        stateLabel,
+        topItem: topItem ? {
+            id: safeText(topItem?.id || topItem?.target || topItem?.name || topItem?.title).trim(),
+            title: safeText(topItem?.title || topItem?.name || topItem?.question) || 'Operational signal',
+            detail: commandItemDetail(topItem),
+            reason: commandItemReason(topItem),
+        } : null,
+        focusTitle: safeText(focus?.name || focus?.title || focus?.target || ''),
+    };
+}
+
+function ensureMarcusPresencePeek() {
+    let peek = document.getElementById('marcus-presence-peek');
+    if (!peek) {
+        peek = document.createElement('div');
+        peek.id = 'marcus-presence-peek';
+        peek.className = 'marcus-presence-peek';
+        peek.setAttribute('role', 'dialog');
+        peek.setAttribute('aria-label', 'MARCUS presence');
+        document.body.appendChild(peek);
+    }
+    return peek;
+}
+
+function setMarcusPresencePeekOpen(open) {
+    const peek = ensureMarcusPresencePeek();
+    window.clearTimeout(marcusPresencePeekCloseTimer);
+    peek.classList.toggle('open', Boolean(open));
+}
+
+function scheduleMarcusPresencePeekClose() {
+    window.clearTimeout(marcusPresencePeekCloseTimer);
+    marcusPresencePeekCloseTimer = window.setTimeout(() => {
+        const peek = document.getElementById('marcus-presence-peek');
+        if (peek) peek.classList.remove('open');
+    }, 180);
+}
+
+function openMarcusCommandSurface() {
+    state.currentView = 'command';
+    renderNav();
+    renderMain();
+    applyMarcusOpenState(true);
+    setStoredMarcusOpen(true);
+}
+
+function renderMarcusPresencePeek(snapshot) {
+    const peek = ensureMarcusPresencePeek();
+    const s = snapshot || buildMarcusPresenceSnapshot();
+    const modeLabel = s.mode === 'normal' ? 'Normal' : s.mode.charAt(0).toUpperCase() + s.mode.slice(1);
+    const top = s.topItem;
+    peek.classList.toggle('muted', s.muted);
+    peek.classList.toggle('minimized', s.minimized);
+    peek.innerHTML = `
+        <div class="flex items-start justify-between gap-3">
+            <div class="min-w-0">
+                <div class="text-[10px] font-mono uppercase tracking-widest text-blue-300/80">MARCUS presence / ${escapeHtml(s.presenceLabel)}</div>
+                <div class="mt-1 text-sm font-semibold text-white truncate">${escapeHtml(s.muted ? 'Ambient alerts muted' : (top?.title || 'No active interrupt'))}</div>
+            </div>
+            <span class="stat-pill stat-pill--muted shrink-0">${escapeHtml(modeLabel)}</span>
+        </div>
+        <div class="mt-2 text-[11px] leading-relaxed text-ops-light/75">${escapeHtml(top?.detail || (s.focusTitle ? `Focus is pinned to ${s.focusTitle}.` : 'MARCUS is quiet and watching for meaningful changes.'))}</div>
+        ${top?.reason ? `<div class="mt-1 text-[10px] font-mono text-ops-light/50 truncate">${escapeHtml(top.reason)}</div>` : ''}
+        <div class="mt-3 grid grid-cols-3 gap-2 text-center">
+            <div class="rounded border border-ops-border bg-ops-bg/50 px-2 py-1.5">
+                <div class="text-sm font-semibold text-white">${s.topCount}</div>
+                <div class="text-[9px] uppercase tracking-widest text-ops-light/55">signals</div>
+            </div>
+            <div class="rounded border border-ops-border bg-ops-bg/50 px-2 py-1.5">
+                <div class="text-sm font-semibold text-white">${s.approvalCount}</div>
+                <div class="text-[9px] uppercase tracking-widest text-ops-light/55">approve</div>
+            </div>
+            <div class="rounded border border-ops-border bg-ops-bg/50 px-2 py-1.5">
+                <div class="text-sm font-semibold text-white">${s.systemWarnings}</div>
+                <div class="text-[9px] uppercase tracking-widest text-ops-light/55">systems</div>
+            </div>
+        </div>
+        <div class="mt-3 flex flex-wrap gap-2">
+            <button type="button" data-presence-action="open" class="marcus-presence-action"><i class="fa-solid fa-bolt"></i><span>Open</span></button>
+            ${top?.id ? `<button type="button" data-presence-action="inspect" data-item-id="${escapeHtml(top.id)}" class="marcus-presence-action"><i class="fa-solid fa-circle-info"></i><span>Why</span></button>` : ''}
+            <button type="button" data-presence-action="focus" class="marcus-presence-action"><i class="fa-solid fa-bullseye"></i><span>Focus</span></button>
+            <button type="button" data-presence-action="quiet" class="marcus-presence-action"><i class="fa-solid fa-volume-low"></i><span>Quiet</span></button>
+            <button type="button" data-presence-action="mute" class="marcus-presence-action"><i class="fa-solid ${s.muted ? 'fa-bell' : 'fa-bell-slash'}"></i><span>${s.muted ? 'Unmute' : 'Mute'}</span></button>
+            <button type="button" data-presence-action="minimize" class="marcus-presence-action"><i class="fa-solid ${s.minimized ? 'fa-up-right-and-down-left-from-center' : 'fa-down-left-and-up-right-to-center'}"></i><span>${s.minimized ? 'Expand' : 'Minimize'}</span></button>
+        </div>
+    `;
+}
+
+function updateAmbientPresenceFromBrief() {
+    const snapshot = buildMarcusPresenceSnapshot(state.activeBrief || {});
+    const orb = document.getElementById('marcus-orb');
+    const toggle = document.getElementById('toggle-chat');
+    const statusText = document.getElementById('marcus-state');
+
+    if (orb) {
+        const runtimeActive = snapshot.presenceState === 'thinking' || snapshot.presenceState === 'running';
+        orb.title = snapshot.title;
+        orb.classList.toggle('muted', snapshot.muted);
+        orb.classList.toggle('focus-mode', !runtimeActive && !snapshot.muted && snapshot.presenceState === 'focus');
+        orb.classList.toggle('quiet-mode', !runtimeActive && !snapshot.muted && snapshot.presenceState === 'quiet');
+        orb.classList.toggle('needs-approval', !runtimeActive && !snapshot.muted && snapshot.presenceState === 'approval');
+        orb.classList.toggle('has-warning', !runtimeActive && !snapshot.muted && snapshot.presenceState === 'warning');
+        orb.classList.toggle('has-signal', !runtimeActive && !snapshot.muted && snapshot.presenceState === 'signal');
+    }
+
+    if (toggle) {
+        toggle.title = snapshot.title;
+        toggle.setAttribute('aria-label', `${snapshot.presenceLabel}: ${snapshot.title}`);
+        toggle.classList.toggle('marcus-presence-muted', snapshot.muted);
+        toggle.classList.toggle('marcus-presence-minimized', snapshot.minimized);
+        toggle.dataset.marcusPresenceMode = snapshot.mode;
+        toggle.dataset.marcusPresenceState = snapshot.presenceState;
+        const labelEl = toggle.querySelector('[data-marcus-presence-label]');
+        if (labelEl) labelEl.textContent = snapshot.presenceLabel;
+        let badge = toggle.querySelector('[data-marcus-presence-badge]');
+        if (!badge) {
+            badge = document.createElement('span');
+            badge.setAttribute('data-marcus-presence-badge', '1');
+            badge.className = 'ml-1 min-w-4 h-4 px-1 rounded-full bg-blue-500/20 border border-blue-500/30 text-[9px] font-mono text-blue-200 inline-flex items-center justify-center';
+            toggle.appendChild(badge);
+        }
+        badge.textContent = snapshot.presenceState === 'thinking'
+            ? '...'
+            : snapshot.presenceState === 'running'
+                ? 'run'
+                : snapshot.muted
+                    ? 'muted'
+                    : snapshot.badgeCount ? String(snapshot.badgeCount) : snapshot.mode;
+        const badgeTone = snapshot.presenceState === 'warning'
+            ? 'bg-amber-500/20 border-amber-500/30 text-amber-200'
+            : snapshot.presenceState === 'approval' || snapshot.presenceState === 'running'
+                ? 'bg-emerald-500/20 border-emerald-500/30 text-emerald-200'
+                : snapshot.presenceState === 'signal' || snapshot.presenceState === 'thinking'
+                    ? 'bg-blue-500/20 border-blue-500/30 text-blue-200'
+                    : snapshot.muted
+                        ? 'bg-zinc-500/10 border-zinc-500/20 text-zinc-500'
+                        : 'bg-zinc-500/10 border-zinc-500/20 text-zinc-400';
+        badge.className = `ml-1 min-w-4 h-4 px-1 rounded-full border text-[9px] font-mono inline-flex items-center justify-center ${badgeTone}`;
+    }
+
+    if (statusText && !document.getElementById(MARCUS_TYPING_ID)) {
+        statusText.textContent = snapshot.stateLabel;
+    }
+
+    renderMarcusPresencePeek(snapshot);
+}
+
+function initializeMarcusPresencePeek() {
+    const toggle = document.getElementById('toggle-chat');
+    const peek = ensureMarcusPresencePeek();
+    if (toggle && !toggle.dataset.marcusPresenceBound) {
+        toggle.dataset.marcusPresenceBound = '1';
+        toggle.addEventListener('mouseenter', () => setMarcusPresencePeekOpen(true));
+        toggle.addEventListener('focus', () => setMarcusPresencePeekOpen(true));
+        toggle.addEventListener('mouseleave', scheduleMarcusPresencePeekClose);
+        toggle.addEventListener('blur', scheduleMarcusPresencePeekClose);
+        toggle.addEventListener('click', () => {
+            renderMarcusPresencePeek(buildMarcusPresenceSnapshot());
+            setMarcusPresencePeekOpen(true);
+        });
+    }
+    if (!peek.dataset.marcusPresenceBound) {
+        peek.dataset.marcusPresenceBound = '1';
+        peek.addEventListener('mouseenter', () => setMarcusPresencePeekOpen(true));
+        peek.addEventListener('mouseleave', scheduleMarcusPresencePeekClose);
+        peek.addEventListener('click', async (e) => {
+            const btn = e.target?.closest?.('[data-presence-action]');
+            if (!btn) return;
+            const action = safeText(btn.getAttribute('data-presence-action')).trim();
+            if (action === 'open') {
+                openMarcusCommandSurface();
+                setMarcusPresencePeekOpen(false);
+            } else if (action === 'inspect') {
+                const id = safeText(btn.getAttribute('data-item-id')).trim();
+                if (id) await inspectOperationalItem(id);
+                setMarcusPresencePeekOpen(false);
+            } else if (action === 'focus') {
+                setStoredProactiveMode('focus');
+                updateAmbientPresenceFromBrief();
+            } else if (action === 'quiet') {
+                setStoredProactiveMode('quiet');
+                updateAmbientPresenceFromBrief();
+            } else if (action === 'mute') {
+                setStoredMarcusPresenceMuted(!getStoredMarcusPresenceMuted());
+                updateAmbientPresenceFromBrief();
+                setMarcusPresencePeekOpen(true);
+            } else if (action === 'minimize') {
+                setStoredMarcusPresenceMinimized(!getStoredMarcusPresenceMinimized());
+                updateAmbientPresenceFromBrief();
+                setMarcusPresencePeekOpen(true);
+            }
+        });
+    }
+    updateAmbientPresenceFromBrief();
 }
 
 function removeMarcusTypingIndicator() {
@@ -1198,6 +1825,7 @@ function initializeMarcusWidget() {
     applyMarcusOpenState(getStoredMarcusOpen());
     syncMarcusModelUi();
     setMarcusPresence('idle');
+    initializeMarcusPresencePeek();
 
     state.marcusVoiceIn = getStoredMarcusVoiceIn();
     state.marcusVoiceOut = getStoredMarcusVoiceOut();
@@ -1475,13 +2103,164 @@ function closeCommandPalette() {
 function getCommandPaletteItems() {
     const projects = Array.isArray(state.projects) ? state.projects.slice(0, 12) : [];
     const currentProject = projects.find((p) => safeText(p?.id) === safeText(state.currentProjectId));
+    const brief = state.activeBrief && typeof state.activeBrief === 'object' ? state.activeBrief : {};
+    const attentionItems = briefList(brief.controlledAttention?.attentionQueue).length
+        ? briefList(brief.controlledAttention.attentionQueue)
+        : briefList(brief.topPriorities);
+    const decisionItems = briefList(brief.decisionQueue);
+    const actionItems = briefList(brief.activeActionQueue).length
+        ? briefList(brief.activeActionQueue)
+        : (briefList(brief.actionQueue).length ? briefList(brief.actionQueue) : briefList(brief.preparedActions));
     const actions = [
         {
-            id: 'go-dashboard',
-            label: 'Go to Dashboard',
+            id: 'go-command',
+            label: 'Go to Command',
             hint: 'Navigation',
-            keywords: 'dashboard home overview',
+            keywords: 'command home now attention briefing overview',
+            run: async () => { await openCommand(); },
+        },
+        {
+            id: 'go-dashboard',
+            label: 'Go to Legacy Dashboard',
+            hint: 'Navigation',
+            keywords: 'dashboard legacy overview',
             run: async () => { await openDashboard(); },
+        },
+        {
+            id: 'go-now',
+            label: 'Go to Now',
+            hint: 'Navigation',
+            keywords: 'now attention today briefing',
+            run: async () => { await openNow(); },
+        },
+        {
+            id: 'go-focus',
+            label: 'Go to Focus',
+            hint: 'Navigation',
+            keywords: 'focus current work lanes blockers',
+            run: async () => { await openFocus(); },
+        },
+        {
+            id: 'go-signals',
+            label: 'Go to Signals',
+            hint: 'Navigation',
+            keywords: 'signals alerts risks opportunities',
+            run: async () => { await openSignals(); },
+        },
+        {
+            id: 'go-people',
+            label: 'Go to People',
+            hint: 'Navigation',
+            keywords: 'people clients contacts leads vendors relationships world model',
+            run: async () => { await openPeople(); },
+        },
+        {
+            id: 'go-work',
+            label: 'Go to Work',
+            hint: 'Navigation',
+            keywords: 'work active projects known history dormant current',
+            run: async () => { await openWork(); },
+        },
+        {
+            id: 'go-actions',
+            label: 'Go to Actions',
+            hint: 'Navigation',
+            keywords: 'actions approvals drafts suggested approved complete dismissed lifecycle',
+            run: async () => { await openActions(); },
+        },
+        {
+            id: 'go-systems',
+            label: 'Go to Systems',
+            hint: 'Navigation',
+            keywords: 'systems health integrations tools operations',
+            run: async () => { await openSystems(); },
+        },
+        {
+            id: 'go-memory',
+            label: 'Go to Memory',
+            hint: 'Navigation',
+            keywords: 'memory knowledge source confidence stale',
+            run: async () => { await openMemory(); },
+        },
+        {
+            id: 'go-control',
+            label: 'Go to Control',
+            hint: 'Navigation',
+            keywords: 'settings control permissions proactive memory rules notification rules',
+            run: async () => { await openControl(); },
+        },
+        {
+            id: 'cmd-what-matters',
+            label: 'What matters right now?',
+            hint: 'Command',
+            keywords: 'attention priority priorities what matters today right now',
+            run: async () => { runCommandSurfaceDirective('What matters today?'); },
+        },
+        {
+            id: 'cmd-decisions',
+            label: 'What needs a decision?',
+            hint: 'Command',
+            keywords: 'decision decide approval approvals choose blocker',
+            run: async () => { runCommandSurfaceDirective('What needs a decision?'); },
+        },
+        {
+            id: 'cmd-can-wait',
+            label: 'What can wait?',
+            hint: 'Command',
+            keywords: 'ignore can wait deprioritized not important suppress',
+            run: async () => { runCommandSurfaceDirective('What can I ignore for now?'); },
+        },
+        {
+            id: 'cmd-forgetting',
+            label: 'What am I forgetting?',
+            hint: 'Command',
+            keywords: 'forget forgetting blind spot stale memory missing',
+            run: async () => { runCommandSurfaceDirective('What am I forgetting?'); },
+        },
+        {
+            id: 'cmd-waiting-on-me',
+            label: 'Who is waiting on Mark?',
+            hint: 'Command',
+            keywords: 'waiting on me waiting on mark blocker needs me',
+            run: async () => { runCommandSurfaceDirective('Who is waiting on me?'); },
+        },
+        {
+            id: 'cmd-confidence',
+            label: 'Explain ranking and sources',
+            hint: 'Command',
+            keywords: 'confidence why ranked ranking score source evidence',
+            run: async () => { runCommandSurfaceDirective('Explain your confidence and sources.'); },
+        },
+        {
+            id: 'cmd-brief-me',
+            label: 'Brief me',
+            hint: 'Command',
+            keywords: 'brief briefing session changed since last check in',
+            run: async () => { runCommandSurfaceDirective('Brief me with what changed, what needs attention, top 3 actions, systems, opportunities, and what I can ignore.'); },
+        },
+        {
+            id: 'mode-focus',
+            label: 'Set Focus Mode',
+            hint: 'Mode',
+            keywords: 'focus mode proactive blockers current work',
+            run: async () => { runCommandSurfaceDirective('Set focus mode.'); },
+        },
+        {
+            id: 'mode-quiet',
+            label: 'Go Quiet',
+            hint: 'Mode',
+            keywords: 'quiet mode do not disturb only critical',
+            run: async () => { runCommandSurfaceDirective('Go quiet.'); },
+        },
+        {
+            id: 'entity-search',
+            label: 'Search Entity Context',
+            hint: 'Command',
+            keywords: 'entity world model people clients projects related context search',
+            run: async () => {
+                const q = safeText(window.prompt('Entity, person, client, project, or system to inspect:') || '').trim();
+                if (q) runCommandSurfaceDirective(`Show me everything related to ${q}`);
+            },
         },
         {
             id: 'go-inbox',
@@ -1492,17 +2271,15 @@ function getCommandPaletteItems() {
         },
         {
             id: 'new-project',
-            label: 'Create New Project',
-            hint: 'Action',
-            keywords: 'new project intake create',
-            run: async () => { await createNewProjectPrompt(); },
+            label: 'Draft Project Creation',
+            hint: 'Command',
+            keywords: 'new project intake create draft turn this into project',
+            run: async () => {
+                const name = safeText(window.prompt('Project draft name or idea:') || '').trim();
+                if (name) runCommandSurfaceDirective(`Create a project for ${name}`);
+            },
         },
         {
-
-        // M.A.R.C.U.S. voice
-        marcusVoiceIn: false,
-        marcusVoiceOut: false,
-        marcusVoiceListening: false,
             id: 'new-inbox-item',
             label: 'Capture Inbox Item',
             hint: 'Action',
@@ -1539,6 +2316,46 @@ function getCommandPaletteItems() {
             run: async () => { await promptNewTask(currentProject); },
         });
     }
+
+    attentionItems.slice(0, 5).forEach((item, idx) => {
+        const id = safeText(item?.id).trim();
+        const title = safeText(item?.title || item?.name || id);
+        if (!id || !title) return;
+        actions.push({
+            id: `inspect-attention-${idx}-${id}`,
+            label: `Why: ${title}`,
+            hint: 'Attention',
+            keywords: `why inspect source confidence attention signal ${title.toLowerCase()}`,
+            run: async () => { inspectOperationalItem(id); },
+        });
+    });
+
+    decisionItems.slice(0, 5).forEach((item, idx) => {
+        const id = safeText(item?.id).trim();
+        const label = safeText(item?.question || item?.title || id);
+        if (!id || !label) return;
+        actions.push({
+            id: `inspect-decision-${idx}-${id}`,
+            label: `Decision: ${label}`,
+            hint: 'Decision',
+            keywords: `decision approve dismiss decide ${label.toLowerCase()}`,
+            run: async () => { inspectOperationalItem(id); },
+        });
+    });
+
+    actionItems.slice(0, 6).forEach((item, idx) => {
+        const id = safeText(item?.id).trim();
+        const label = safeText(item?.title || item?.summary || id);
+        if (!id || !label) return;
+        const lifecycle = normalizeActionLifecycle(item?.lifecycle) || 'suggested_action';
+        actions.push({
+            id: `inspect-action-${idx}-${id}`,
+            label: `Action: ${label}`,
+            hint: lifecycle.replace('_', ' '),
+            keywords: `action approval draft approve complete dismiss lifecycle ${label.toLowerCase()}`,
+            run: async () => { inspectOperationalItem(id); },
+        });
+    });
 
     for (const p of projects) {
         const pid = safeText(p?.id);
@@ -1579,8 +2396,8 @@ function renderCommandPaletteOverlay() {
     overlay.innerHTML = `
         <div class="w-full max-w-2xl border border-zinc-800 rounded-xl bg-zinc-950 shadow-2xl overflow-hidden">
             <div class="px-4 py-3 border-b border-zinc-800 bg-zinc-900/50">
-                <input id="command-palette-input" type="text" value="${escapeHtml(state.commandPaletteQuery)}" placeholder="Type a command… (Dashboard, Inbox, Project, Task)" class="w-full bg-zinc-950/40 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-blue-500/30 focus:border-blue-500/40" />
-                <div class="text-[10px] text-zinc-500 font-mono mt-1">Enter: run • ↑/↓: navigate • Esc: close • /: open</div>
+                <input id="command-palette-input" type="text" value="${escapeHtml(state.commandPaletteQuery)}" placeholder="Ask, inspect, decide, focus, search entities…" class="w-full bg-zinc-950/40 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-blue-500/30 focus:border-blue-500/40" />
+                <div class="text-[10px] text-zinc-500 font-mono mt-1">Enter: run • ↑/↓: navigate • Esc: close • /: command layer</div>
             </div>
             <div class="max-h-[55vh] overflow-y-auto p-2">
                 ${filtered.length ? filtered.map((item, idx) => `
@@ -2570,11 +3387,23 @@ function applyInitialDeepLinkFromUrl() {
         const params = new URLSearchParams(window.location.search);
         const view = safeText(params.get('view') || '').trim().toLowerCase();
         const pane = safeText(params.get('pane') || '').trim().toLowerCase();
+        const allowedViews = new Set([
+            'command', 'now', 'focus', 'signals', 'people', 'work', 'actions', 'systems', 'memory', 'control',
+            'dashboard', 'inbox', 'projects', 'clients', 'settings', 'godview', 'marcus-live',
+        ]);
+        if (allowedViews.has(view)) {
+            state.currentView = view === 'settings' ? 'settings' : view;
+            state.currentProjectId = null;
+            state.currentClientName = null;
+        }
         if (view === 'settings') {
             state.currentView = 'settings';
             state.settingsPane = pane;
             state.currentProjectId = null;
             state.currentClientName = null;
+        } else if (view === 'control') {
+            state.currentView = 'control';
+            state.settingsPane = pane;
         }
     } catch {
         // ignore
@@ -2597,6 +3426,7 @@ async function init() {
         state.lastInteractionAt = Date.now();
         applyTheme(getStoredTheme() || 'dark');
         applyLayout(getStoredLayout() || 'standard');
+        state.uiPrefs.proactiveMode = getStoredProactiveMode();
         showLoading();
 
         // Auth status is a public endpoint; check early so we can avoid a broken/empty UI.
@@ -2614,6 +3444,7 @@ async function init() {
         // Initial Fetch (best-effort; these functions already swallow most errors)
         await step('fetchState', async () => { await fetchState(); });
         await step('fetchSettings', async () => { await fetchSettings(); });
+        await step('refreshOperationalControls', async () => { await refreshOperationalControls(); });
 
         // Optional deep link routing (used for Settings panes opened in a new tab).
         await step('applyInitialDeepLinkFromUrl', async () => { applyInitialDeepLinkFromUrl(); });
@@ -2914,7 +3745,7 @@ async function deleteProjectsByIdList(projectIds) {
     applyStore(nextStore);
     if (ids.includes(String(state.currentProjectId || ''))) {
         state.currentProjectId = null;
-        state.currentView = 'dashboard';
+        state.currentView = 'work';
     }
 }
 
@@ -2949,7 +3780,7 @@ async function moveProjectToBusiness(projectId, destinationBusinessKey) {
     }
 
     state.currentProjectId = null;
-    state.currentView = 'dashboard';
+    state.currentView = 'work';
     await fetchBusinesses().catch(() => {});
     renderNav();
     renderMain();
@@ -2974,7 +3805,7 @@ async function moveProjectsToBusiness(projectIds, destinationBusinessKey) {
 
     if (ids.includes(String(state.currentProjectId || ''))) {
         state.currentProjectId = null;
-        state.currentView = 'dashboard';
+        state.currentView = 'work';
     }
 
     await fetchBusinesses().catch(() => {});
@@ -3397,6 +4228,30 @@ async function refreshGodView() {
     }
 }
 
+async function refreshActiveBrief({ force = false } = {}) {
+    const now = Date.now();
+    if (state.activeBriefLoading) return state.activeBrief;
+    if (!force && state.activeBrief && (now - Number(state.activeBriefFetchedAt || 0) < 45_000)) {
+        return state.activeBrief;
+    }
+
+    state.activeBriefLoading = true;
+    state.activeBriefError = '';
+    try {
+        const brief = await apiJson('/api/marcus/active-brief');
+        if (brief?.operationalControls) applyOperationalControls(brief.operationalControls);
+        state.activeBrief = brief && typeof brief === 'object' ? brief : null;
+        state.activeBriefFetchedAt = Date.now();
+        updateAmbientPresenceFromBrief();
+        return state.activeBrief;
+    } catch (e) {
+        state.activeBriefError = safeText(e?.message || 'Failed to load active brief');
+        return state.activeBrief;
+    } finally {
+        state.activeBriefLoading = false;
+    }
+}
+
 async function fetchState({ background = false } = {}) {
     try {
         const prevRevision = Number(state.revision) || 0;
@@ -3514,6 +4369,128 @@ function updateSystemStatus(online) {
 
 /* --- Rendering: Navigation --- */
 
+async function openCommand() {
+    state.currentView = 'command';
+    state.currentProjectId = null;
+    state.currentClientName = null;
+    await refreshActiveBrief({ force: true }).catch(() => {});
+    await loadChatHistory();
+    renderNav();
+    renderMain();
+    renderChat();
+    broadcastMarcusContext();
+}
+
+async function openNow() {
+    state.currentView = 'now';
+    state.currentProjectId = null;
+    state.currentClientName = null;
+    await refreshActiveBrief({ force: true }).catch(() => {});
+    await loadChatHistory();
+    renderNav();
+    renderMain();
+    renderChat();
+    broadcastMarcusContext();
+}
+
+async function openFocus() {
+    state.currentView = 'focus';
+    state.currentProjectId = null;
+    state.currentClientName = null;
+    await refreshActiveBrief({ force: true }).catch(() => {});
+    await loadChatHistory();
+    renderNav();
+    renderMain();
+    renderChat();
+    broadcastMarcusContext();
+}
+
+async function openSignals() {
+    state.currentView = 'signals';
+    state.currentProjectId = null;
+    state.currentClientName = null;
+    await refreshActiveBrief({ force: true }).catch(() => {});
+    await loadChatHistory();
+    renderNav();
+    renderMain();
+    renderChat();
+    broadcastMarcusContext();
+}
+
+async function openPeople() {
+    state.currentView = 'people';
+    state.currentProjectId = null;
+    state.currentClientName = null;
+    await refreshActiveBrief({ force: true }).catch(() => {});
+    await loadChatHistory();
+    renderNav();
+    renderMain();
+    renderChat();
+    broadcastMarcusContext();
+}
+
+async function openWork() {
+    state.currentView = 'work';
+    state.currentProjectId = null;
+    state.currentClientName = null;
+    await refreshActiveBrief({ force: true }).catch(() => {});
+    await loadChatHistory();
+    renderNav();
+    renderMain();
+    renderChat();
+    broadcastMarcusContext();
+}
+
+async function openActions() {
+    state.currentView = 'actions';
+    state.currentProjectId = null;
+    state.currentClientName = null;
+    await refreshActiveBrief({ force: true }).catch(() => {});
+    await refreshOperationalControls().catch(() => {});
+    await loadChatHistory();
+    renderNav();
+    renderMain();
+    renderChat();
+    broadcastMarcusContext();
+}
+
+async function openSystems() {
+    state.currentView = 'systems';
+    state.currentProjectId = null;
+    state.currentClientName = null;
+    await refreshActiveBrief({ force: true }).catch(() => {});
+    await loadChatHistory();
+    renderNav();
+    renderMain();
+    renderChat();
+    broadcastMarcusContext();
+}
+
+async function openMemory() {
+    state.currentView = 'memory';
+    state.currentProjectId = null;
+    state.currentClientName = null;
+    await refreshActiveBrief({ force: true }).catch(() => {});
+    await loadChatHistory();
+    renderNav();
+    renderMain();
+    renderChat();
+    broadcastMarcusContext();
+}
+
+async function openControl() {
+    state.currentView = 'control';
+    state.currentProjectId = null;
+    state.currentClientName = null;
+    await refreshActiveBrief({ force: true }).catch(() => {});
+    await refreshOperationalControls().catch(() => {});
+    await loadChatHistory();
+    renderNav();
+    renderMain();
+    renderChat();
+    broadcastMarcusContext();
+}
+
 function renderNav() {
     const nav = document.getElementById("primary-nav");
     if (!nav) return;
@@ -3521,7 +4498,7 @@ function renderNav() {
     // Preserve Create Button if it exists? No, rebuild.
     nav.innerHTML = "";
 
-    nav.appendChild(createNavIcon("fa-satellite-dish", "God View", () => openGodView(), state.currentView === "godview"));
+    nav.appendChild(createNavIcon("fa-terminal", "Command", () => openCommand(), state.currentView === "command"));
 
     const bizSepTop = document.createElement('div');
     bizSepTop.className = 'h-px w-8 bg-zinc-800 mx-auto my-2';
@@ -3541,20 +4518,32 @@ function renderNav() {
     bizSep.className = 'h-px w-8 bg-zinc-800 mx-auto my-2';
     nav.appendChild(bizSep);
     
-    nav.appendChild(createNavIcon("fa-grip", "Dashboard", () => openDashboard(), state.currentView === "dashboard"));
-    nav.appendChild(createNavIcon("fa-wave-square", "Marcus Live", () => openMarcusLive(), state.currentView === "marcus-live"));
-    nav.appendChild(createNavIcon("fa-inbox", "Inbox", () => openInbox(), state.currentView === "inbox"));
-    nav.appendChild(createNavIcon("fa-rotate", "Revisions", () => openRevisions(), state.currentView === "revisions"));
-    nav.appendChild(createNavIcon("fa-address-book", "Clients", () => openClients(), state.currentView === "clients" || state.currentView === "client"));
-    nav.appendChild(createNavIcon("fa-folder", "Projects", () => openProjects(), state.currentView === "projects" || state.currentView === "project"));
-    nav.appendChild(createNavIcon("fa-calendar-days", "Calendar", () => openCalendar(), state.currentView === "calendar"));
-    nav.appendChild(createNavIcon("fa-user-group", "Team", () => openTeam(), state.currentView === "team"));
+    nav.appendChild(createNavIcon("fa-bolt", "Now", () => openNow(), state.currentView === "now"));
+    nav.appendChild(createNavIcon("fa-crosshairs", "Focus", () => openFocus(), state.currentView === "focus"));
+    nav.appendChild(createNavIcon("fa-wave-square", "Signals", () => openSignals(), state.currentView === "signals"));
+    nav.appendChild(createNavIcon("fa-address-book", "People", () => openPeople(), state.currentView === "people" || state.currentView === "clients" || state.currentView === "client"));
+    nav.appendChild(createNavIcon("fa-briefcase", "Work", () => openWork(), state.currentView === "work" || state.currentView === "projects" || state.currentView === "project"));
+    nav.appendChild(createNavIcon("fa-list-check", "Actions", () => openActions(), state.currentView === "actions"));
+    nav.appendChild(createNavIcon("fa-server", "Systems", () => openSystems(), state.currentView === "systems"));
+    nav.appendChild(createNavIcon("fa-brain", "Memory", () => openMemory(), state.currentView === "memory"));
 
     const sep = document.createElement("div");
     sep.className = "h-px w-8 bg-zinc-800 mx-auto my-2";
     nav.appendChild(sep);
 
-    nav.appendChild(createNavIcon("fa-gear", "Settings", () => openSettings(), state.currentView === "settings"));
+    nav.appendChild(createNavIcon("fa-sliders", "Control", () => openControl(), state.currentView === "control" || state.currentView === "settings"));
+}
+
+function isOperationalCommandView(view = state.currentView) {
+    return ["command", "now", "focus", "signals", "people", "work", "actions", "systems", "memory", "control"].includes(safeText(view));
+}
+
+function updateHeaderOperationalChrome() {
+    const sendSummaryBtn = document.getElementById("send-summary-btn");
+    if (!sendSummaryBtn) return;
+    const showLegacyUtility = !isOperationalCommandView();
+    sendSummaryBtn.classList.toggle("hidden", !showLegacyUtility);
+    sendSummaryBtn.classList.toggle("flex", showLegacyUtility);
 }
 
 async function openGodView() {
@@ -3729,6 +4718,8 @@ function createNavIcon(iconClass, tooltip, onClick, active, textLabel) {
 /* --- Rendering: Main Views --- */
 
 function renderMain() {
+    updateHeaderOperationalChrome();
+
     if (IS_MARCUS_POPOUT) {
         preserveMarcusDrawerDuringRerender();
         const drawer = document.getElementById('neural-drawer');
@@ -3788,13 +4779,24 @@ function renderMain() {
     }
 
     // Reduce full-page scrolling: scroll inside panes for data-heavy views.
-    if (state.currentView === 'project' || state.currentView === 'projects' || state.currentView === 'revisions' || state.currentView === 'dashboard' || state.currentView === 'marcus-live' || state.currentView === 'godview' || state.currentView === 'inbox' || state.currentView === 'calendar' || state.currentView === 'team') {
+    if (state.currentView === 'command' || state.currentView === 'now' || state.currentView === 'focus' || state.currentView === 'signals' || state.currentView === 'people' || state.currentView === 'work' || state.currentView === 'actions' || state.currentView === 'systems' || state.currentView === 'memory' || state.currentView === 'control' || state.currentView === 'project' || state.currentView === 'projects' || state.currentView === 'revisions' || state.currentView === 'dashboard' || state.currentView === 'marcus-live' || state.currentView === 'godview' || state.currentView === 'inbox' || state.currentView === 'calendar' || state.currentView === 'team') {
         setMainPortScrolling(false);
     } else {
         setMainPortScrolling(true);
     }
 
-    if (state.currentView === "godview") {
+    if (state.currentView === "command" || state.currentView === "now" || state.currentView === "focus" || state.currentView === "signals" || state.currentView === "people" || state.currentView === "work" || state.currentView === "actions" || state.currentView === "systems" || state.currentView === "memory" || state.currentView === "control") {
+        dockMarcusToPersistentSlot();
+        container.className = 'min-h-0 overflow-y-auto';
+        try {
+            renderCommandSurface(container, side);
+        } catch (e) {
+            console.error('Command surface render failed', e);
+            const msg = safeText(e?.message || 'Unknown command surface error').trim();
+            const stack = safeText(e?.stack).trim();
+            showError(`Command surface render failed: ${msg}${stack ? `\n\n${stack}` : ''}`.slice(0, 4000));
+        }
+    } else if (state.currentView === "godview") {
         dockMarcusToPersistentSlot();
         container.className = 'min-h-0 overflow-y-auto';
         renderGodView(container);
@@ -3875,6 +4877,1732 @@ function renderMain() {
 function normalizeClientLabel(name) {
     const n = safeText(name).trim();
     return n || 'Unnamed Client';
+}
+
+function briefList(value) {
+    return Array.isArray(value) ? value : [];
+}
+
+function commandItemReason(item) {
+    const reasons = Array.isArray(item?.reasons) ? item.reasons : Array.isArray(item?.scoreReasons) ? item.scoreReasons : [];
+    if (reasons.length) return safeText(reasons[0]) || 'ranked by attention score';
+    if (Number.isFinite(Number(item?.score))) return `attention score ${Number(item.score)}`;
+    return 'ranked by operational relevance';
+}
+
+function commandItemDetail(item) {
+    return safeText(item?.detail) || safeText(item?.summary) || safeText(item?.nextAction) || 'No detail available yet.';
+}
+
+function priorityTone(score, priority) {
+    const s = Number(score);
+    const p = safeText(priority).toLowerCase();
+    if (p === 'critical' || s >= 78) return 'border-red-500/35 bg-red-500/10 text-red-200';
+    if (p === 'warning' || s >= 55) return 'border-amber-500/35 bg-amber-500/10 text-amber-200';
+    if (p === 'active' || s >= 35) return 'border-blue-500/30 bg-blue-500/10 text-blue-200';
+    return 'border-ops-border bg-ops-bg/40 text-ops-light';
+}
+
+function runCommandSurfaceDirective(text) {
+    const value = safeText(text).trim();
+    if (!value) return;
+    applyMarcusOpenState(true);
+    setStoredMarcusOpen(true);
+    sendOperationalCommand(value).catch(() => {
+        const input = document.getElementById('cmd-input');
+        if (input) {
+            input.value = value;
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            input.focus();
+        }
+        const send = document.getElementById('cmd-send');
+        if (send) send.click();
+    });
+}
+
+async function inspectOperationalItem(id) {
+    const itemId = safeText(id).trim();
+    if (!itemId) return;
+    applyMarcusOpenState(true);
+    setStoredMarcusOpen(true);
+    setMarcusPresence('busy');
+    try {
+        const data = await apiJson(`/api/marcus/items/inspect?id=${encodeURIComponent(itemId)}`);
+        const explanation = data?.explanation && typeof data.explanation === 'object' ? data.explanation : {};
+        const related = data?.relatedContext && typeof data.relatedContext === 'object' ? data.relatedContext : {};
+        const cards = [
+            data?.item,
+            ...briefList(related.relatedDecisions),
+            ...briefList(related.relatedActions),
+            ...briefList(related.relatedSignals),
+            ...briefList(related.relatedSystems),
+            ...briefList(related.relatedMemory),
+            ...briefList(related.relatedEntities),
+        ].filter(Boolean).slice(0, 10);
+        addOperationalChatMessage({
+            ok: true,
+            handled: true,
+            intent: 'item_inspect',
+            title: explanation.title ? `Why this: ${explanation.title}` : 'Item inspection',
+            reply: [
+                explanation.summary || '',
+                explanation.why ? `Why: ${explanation.why}` : '',
+                explanation.recommendedAction ? `Recommended: ${explanation.recommendedAction}` : '',
+                explanation.source ? `Source: ${explanation.source}` : '',
+            ].filter(Boolean).join('\n'),
+            cards,
+            suggestedActions: [],
+            evidence: data?.evidence || {},
+            generatedAt: data?.generatedAt || new Date().toISOString(),
+        });
+    } catch (err) {
+        addChatMessage('ai', `Error: ${safeText(err?.message || 'Item inspection failed')}`);
+    } finally {
+        setMarcusPresence('idle');
+    }
+}
+
+function renderOperationalDirectorySurface(container, sidePort, view) {
+    const brief = state.activeBrief || {};
+    const worldModel = brief.worldModel && typeof brief.worldModel === 'object' ? brief.worldModel : {};
+    const entities = worldModel.entities && typeof worldModel.entities === 'object' ? worldModel.entities : {};
+    const projectActivity = briefList(brief.projectActivity);
+    const activeStateSet = new Set(['idea', 'active', 'waiting_on_mark', 'waiting_on_client', 'waiting_on_team', 'blocked', 'review']);
+    const historyStateSet = new Set(['launched', 'complete', 'dormant', 'archived']);
+    const projectOperationalState = (project) => safeText(project?.projectState || project?.state || project?.activityStatus || project?.status).toLowerCase();
+    const activeProjects = projectActivity.filter((p) => activeStateSet.has(projectOperationalState(p)) || ['active', 'waiting', 'warming'].includes(safeText(p?.activityStatus || p?.status).toLowerCase()));
+    const recentProjects = projectActivity.filter((p) => ['review', 'launched'].includes(projectOperationalState(p)) || ['recent', 'review', 'launched'].includes(safeText(p?.activityStatus || p?.status).toLowerCase()));
+    const knownHistory = projectActivity.filter((p) => historyStateSet.has(projectOperationalState(p)) || ['parked', 'historical', 'archived', 'dormant', 'complete'].includes(safeText(p?.activityStatus || p?.status).toLowerCase()));
+    const controls = state.operationalControls || {};
+    const signalControls = controls.signals && typeof controls.signals === 'object' ? controls.signals : {};
+    const memoryControls = controls.memory && typeof controls.memory === 'object' ? controls.memory : {};
+    const actionControls = controls.actions && typeof controls.actions === 'object' ? controls.actions : {};
+    const projectControls = controls.projects && typeof controls.projects === 'object' ? controls.projects : {};
+    const attentionPolicy = brief.attentionPolicy && typeof brief.attentionPolicy === 'object' ? brief.attentionPolicy : {};
+    const mode = normalizeProactiveMode(attentionPolicy.mode || controls.proactiveMode || getStoredProactiveMode());
+    const memoryPulse = brief.memoryPulse && typeof brief.memoryPulse === 'object' ? brief.memoryPulse : {};
+    const actionQueue = briefList(brief.activeActionQueue || brief.actionQueue);
+    const signals = briefList(brief.operationalSignals);
+    const comms = brief.communicationIntelligence && typeof brief.communicationIntelligence === 'object' ? brief.communicationIntelligence : {};
+
+    const entityRows = [
+        ...briefList(entities.people),
+        ...briefList(entities.clients),
+        ...briefList(entities.leads),
+        ...briefList(entities.companies),
+    ].filter((entity) => safeText(entity?.id || entity?.name || entity?.title));
+    const relationshipEdges = briefList(worldModel.relationships);
+    const relationshipEdgeCount = (id) => relationshipEdges.filter((rel) => rel?.from === id || rel?.to === id).length;
+    const relatedSignalCount = (id) => signals.filter((signal) => {
+        const hay = `${safeText(signal?.id)} ${safeText(signal?.target)} ${safeText(signal?.targetId)} ${safeText(signal?.relatedClientId)} ${safeText(signal?.relatedProjectId)} ${JSON.stringify(signal?.relatedEntities || [])}`;
+        return id && hay.includes(id);
+    }).length;
+    const relatedActionCount = (id) => actionQueue.filter((action) => {
+        const hay = `${safeText(action?.id)} ${safeText(action?.target)} ${safeText(action?.targetId)} ${safeText(action?.sourceSignalId)} ${JSON.stringify(action?.relatedEntities || [])}`;
+        return id && hay.includes(id);
+    }).length;
+    const relationshipWaitingRows = briefList(comms.waitingOnMark).length ? briefList(comms.waitingOnMark) : briefList(brief.waitingOnMark);
+    const relationshipWaitingElsewhereRows = briefList(comms.waitingOnOthers);
+    const relationshipFollowUpRows = briefList(comms.followUpsDue);
+    const relationshipSilenceRows = briefList(comms.unusualSilence);
+    const relationshipOpportunityRows = briefList(comms.highValueMissedOpportunities);
+    const relationshipRiskSignals = signals.filter((signal) => /relationship|client|lead|contact|reply|follow|silence|waiting/i.test(`${signal?.title || ''} ${signal?.summary || ''} ${signal?.reason || ''} ${signal?.recommendedAction || ''}`)).slice(0, 10);
+
+    const panel = (title, body, extra = '') => `
+        <section class="border border-ops-border rounded-lg bg-ops-surface/45 p-4 ${extra}">
+            <div class="text-[10px] font-mono uppercase tracking-widest text-ops-light">${escapeHtml(title)}</div>
+            <div class="mt-3">${body}</div>
+        </section>
+    `;
+    const empty = (text) => `<div class="border border-dashed border-ops-border rounded-lg p-4 text-[12px] text-ops-light/55">${escapeHtml(text)}</div>`;
+    const miniRows = (rows, emptyText, limit = 5) => {
+        const list = briefList(rows).slice(0, limit);
+        if (!list.length) return empty(emptyText);
+        return `<div class="space-y-2">${list.map((item) => `
+            <div class="border border-ops-border rounded bg-ops-bg/35 px-2.5 py-2">
+                <div class="text-[11px] text-white truncate">${escapeHtml(safeText(item?.title || item?.name) || 'Item')}</div>
+                <div class="mt-0.5 text-[10px] text-ops-light/60 truncate">${escapeHtml(commandItemDetail(item))}</div>
+            </div>
+        `).join('')}</div>`;
+    };
+    const entityCard = (entity) => {
+        const id = safeText(entity?.id || entity?.name || entity?.title).trim();
+        const name = safeText(entity?.name || entity?.title || id) || 'Unknown entity';
+        const type = safeText(entity?.type || entity?.group || 'person');
+        const confidence = Number.isFinite(Number(entity?.confidence)) ? `${Math.round(Number(entity.confidence) * 100)}%` : 'n/a';
+        const last = safeText(entity?.lastActivityAt || entity?.updatedAt || entity?.createdAt);
+        const edges = relationshipEdgeCount(id);
+        const signalCount = relatedSignalCount(id);
+        const actionCount = relatedActionCount(id);
+        return `
+            <div class="border border-ops-border rounded-lg bg-ops-bg/35 px-3 py-3">
+                <div class="flex items-start justify-between gap-3">
+                    <div class="min-w-0">
+                        <div class="text-sm font-semibold text-white truncate">${escapeHtml(name)}</div>
+                        <div class="mt-1 text-[11px] text-ops-light/65 truncate">${escapeHtml(type)}${last ? ` / last ${escapeHtml(last)}` : ''}</div>
+                    </div>
+                    <span class="stat-pill stat-pill--muted shrink-0">${escapeHtml(confidence)}</span>
+                </div>
+                <div class="mt-2 flex flex-wrap gap-1.5">
+                    <span class="stat-pill stat-pill--muted">${edges} relation${edges === 1 ? '' : 's'}</span>
+                    <span class="stat-pill stat-pill--muted">${signalCount} signal${signalCount === 1 ? '' : 's'}</span>
+                    <span class="stat-pill stat-pill--muted">${actionCount} action${actionCount === 1 ? '' : 's'}</span>
+                </div>
+                <div class="mt-2 flex flex-wrap gap-1.5">
+                    <button type="button" data-entity-inspect="${escapeHtml(id)}" class="stat-pill stat-pill--accent">Inspect</button>
+                    <button type="button" data-command="Show communication obligations related to ${escapeHtml(name)}." class="stat-pill stat-pill--muted">Obligations</button>
+                    <button type="button" data-command="Show me everything related to ${escapeHtml(name)}." class="stat-pill stat-pill--muted">Related</button>
+                </div>
+            </div>
+        `;
+    };
+    const projectRow = (project, tone = 'normal') => {
+        const id = safeText(project?.id || project?.target || project?.name).trim();
+        const name = safeText(project?.name || project?.title || id) || 'Untitled work';
+        const status = safeText(project?.projectState || project?.state || project?.activityStatus || project?.status || 'unknown');
+        const activity = safeText(project?.activityStatus || project?.status || '');
+        const next = safeText(project?.nextAction || project?.detail || project?.summary || '');
+        const toneClass = tone === 'history' ? 'border-zinc-700/60' : tone === 'active' ? 'border-blue-500/30 bg-blue-500/10' : 'border-ops-border';
+        return `
+            <div class="border ${toneClass} rounded-lg px-3 py-3">
+                <div class="flex items-start justify-between gap-3">
+                    <div class="min-w-0">
+                        <div class="text-sm font-semibold text-white truncate">${escapeHtml(name)}</div>
+                        <div class="mt-1 text-[11px] text-ops-light/65 truncate">${escapeHtml(status)}${activity && activity !== status ? ` / ${escapeHtml(activity)}` : ''}${project?.lastActivityAt ? ` / last ${escapeHtml(safeText(project.lastActivityAt))}` : ''}</div>
+                        ${next ? `<div class="mt-1 text-[11px] text-ops-light/80">${escapeHtml(previewText(next, 180))}</div>` : ''}
+                    </div>
+                    ${Number.isFinite(Number(project?.score)) ? `<span class="stat-pill stat-pill--muted shrink-0">${Math.round(Number(project.score))}</span>` : ''}
+                </div>
+                <div class="mt-2 flex flex-wrap gap-1.5">
+                    ${id ? `<button type="button" data-entity-inspect="${escapeHtml(id)}" class="stat-pill stat-pill--accent">Context</button>` : ''}
+                    <button type="button" data-command="Explain the current state and next action for ${escapeHtml(name)}." class="stat-pill stat-pill--muted">Explain</button>
+                    ${id ? `<button type="button" data-project-control="active" data-project-id="${escapeHtml(id)}" class="stat-pill stat-pill--muted">Keep active</button>` : ''}
+                    ${id ? `<button type="button" data-project-control="known_history" data-project-id="${escapeHtml(id)}" class="stat-pill stat-pill--muted">History</button>` : ''}
+                    ${id ? `<button type="button" data-project-control="complete" data-project-id="${escapeHtml(id)}" class="stat-pill stat-pill--muted">Done</button>` : ''}
+                </div>
+            </div>
+        `;
+    };
+
+    let title = 'People';
+    let eyebrow = 'Relationship Context';
+    let body = '';
+    if (view === 'people') {
+        const relationshipMetric = (value, label) => `
+            <div class="border border-ops-border rounded bg-ops-bg/35 px-3 py-2">
+                <div class="text-lg font-semibold text-white">${escapeHtml(String(value))}</div>
+                <div class="text-[10px] font-mono text-ops-light/55">${escapeHtml(label)}</div>
+            </div>
+        `;
+        const relationshipPanel = (title, rows, emptyText, limit = 4) => panel(title, miniRows(rows, emptyText, limit));
+        const edgeRows = relationshipEdges.slice(0, 12).map((edge) => ({
+            title: `${safeText(edge?.from) || 'unknown'} -> ${safeText(edge?.to) || 'unknown'}`,
+            summary: `${safeText(edge?.type) || 'relationship'} / source ${safeText(edge?.source) || 'unknown'} / confidence ${Number.isFinite(Number(edge?.confidence)) ? `${Math.round(Number(edge.confidence) * 100)}%` : 'n/a'}`,
+        }));
+        body = `
+            <div class="h-full min-h-0 overflow-y-auto p-4 space-y-4">
+                <div class="border border-rose-500/20 bg-rose-500/10 rounded-lg px-4 py-3">
+                    <div class="flex flex-col lg:flex-row lg:items-start justify-between gap-3">
+                        <div>
+                            <div class="text-[10px] font-mono uppercase tracking-widest text-rose-200/75">People</div>
+                            <div class="mt-1 text-xl font-semibold text-white tracking-tight">Connected context for people, clients, leads, vendors, and companies.</div>
+                            <div class="mt-2 text-[12px] text-ops-light/80">People are operational relationships, not a CRM list. Use context to inspect obligations, related work, and signals.</div>
+                        </div>
+                        <div class="flex flex-wrap gap-1.5 shrink-0">
+                            <button type="button" data-command="Who is waiting on me?" class="stat-pill stat-pill--accent">Waiting on me</button>
+                            <button type="button" data-command="Which clients are stale?" class="stat-pill stat-pill--muted">Stale clients</button>
+                            <button type="button" data-command="Show relationship risks, unusual silence, and missed opportunities." class="stat-pill stat-pill--muted">Relationship risk</button>
+                            <button type="button" data-open-legacy="clients" class="stat-pill stat-pill--muted">Legacy clients</button>
+                        </div>
+                    </div>
+                    <div class="mt-4 grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-2">
+                        ${relationshipMetric(entityRows.length, 'entities')}
+                        ${relationshipMetric(relationshipEdges.length, 'relationships')}
+                        ${relationshipMetric(relationshipWaitingRows.length, 'waiting on Mark')}
+                        ${relationshipMetric(relationshipWaitingElsewhereRows.length, 'waiting elsewhere')}
+                        ${relationshipMetric(relationshipFollowUpRows.length, 'follow-ups')}
+                        ${relationshipMetric(relationshipSilenceRows.length, 'silence')}
+                        ${relationshipMetric(relationshipOpportunityRows.length, 'opportunities')}
+                        ${relationshipMetric(relationshipRiskSignals.length, 'signals')}
+                    </div>
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+                    ${relationshipPanel('Waiting On Mark', relationshipWaitingRows, 'No relationship is waiting on Mark above threshold.', 4)}
+                    ${relationshipPanel('Follow-Ups Due', relationshipFollowUpRows, 'No relationship follow-up is aging right now.', 4)}
+                    ${relationshipPanel('Unusual Silence', relationshipSilenceRows, 'No relationship silence crossed the current threshold.', 4)}
+                    ${relationshipPanel('Missed Opportunities', relationshipOpportunityRows, 'No missed relationship or revenue opportunities surfaced.', 4)}
+                </div>
+                <div class="grid grid-cols-1 xl:grid-cols-[1.2fr_0.8fr] gap-4">
+                    ${panel('Relationship Directory', entityRows.length ? `<div class="grid grid-cols-1 md:grid-cols-2 gap-3">${entityRows.slice(0, 24).map(entityCard).join('')}</div>` : empty('No people or company entities are present in the current world model.'), 'min-h-[420px]')}
+                    <div class="space-y-4">
+                        ${panel('Relationship Signals', miniRows(relationshipRiskSignals, 'No relationship-specific signal is above threshold.', 6))}
+                        ${panel('Relationship Graph', miniRows(edgeRows, 'No relationship graph edges are available yet.', 8))}
+                        ${panel('World Model Counts', Object.entries(worldModel.counts || {}).slice(0, 8).map(([key, value]) => `<div class="flex items-center justify-between border-b border-ops-border/60 py-1.5 text-[11px]"><span class="text-ops-light/70">${escapeHtml(key)}</span><span class="font-mono text-white">${escapeHtml(String(value ?? 0))}</span></div>`).join('') || empty('No world model counts available.'))}
+                    </div>
+                </div>
+            </div>
+        `;
+    } else if (view === 'work') {
+        title = 'Work';
+        eyebrow = 'Active Work vs Known History';
+        body = `
+            <div class="h-full min-h-0 overflow-y-auto p-4 space-y-4">
+                <div class="border border-blue-500/25 bg-blue-500/10 rounded-lg px-4 py-3">
+                    <div class="flex flex-col lg:flex-row lg:items-start justify-between gap-3">
+                        <div>
+                            <div class="text-[10px] font-mono uppercase tracking-widest text-blue-200/75">Work</div>
+                            <div class="mt-1 text-xl font-semibold text-white tracking-tight">Only live work should compete for attention.</div>
+                            <div class="mt-2 text-[12px] text-ops-light/80">MARCUS separates active work from dormant knowledge so old projects remain searchable without polluting the current operating layer.</div>
+                        </div>
+                        <div class="flex flex-wrap gap-1.5 shrink-0">
+                            <button type="button" data-command="Find blocked projects and tell me the next action." class="stat-pill stat-pill--accent">Blocked work</button>
+                            <button type="button" data-command="Show active work versus known history." class="stat-pill stat-pill--muted">Explain split</button>
+                            <button type="button" data-open-legacy="projects" class="stat-pill stat-pill--muted">Legacy projects</button>
+                        </div>
+                    </div>
+                    <div class="mt-3 grid grid-cols-3 gap-2">
+                        <div class="border border-ops-border rounded bg-ops-bg/35 px-3 py-2"><div class="text-lg font-semibold text-white">${activeProjects.length}</div><div class="text-[10px] font-mono text-ops-light/55">active</div></div>
+                        <div class="border border-ops-border rounded bg-ops-bg/35 px-3 py-2"><div class="text-lg font-semibold text-white">${recentProjects.length}</div><div class="text-[10px] font-mono text-ops-light/55">recent/review</div></div>
+                        <div class="border border-ops-border rounded bg-ops-bg/35 px-3 py-2"><div class="text-lg font-semibold text-white">${knownHistory.length}</div><div class="text-[10px] font-mono text-ops-light/55">known history</div></div>
+                    </div>
+                </div>
+                <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                    ${panel('Active Work', activeProjects.length ? `<div class="space-y-3">${activeProjects.slice(0, 14).map((p) => projectRow(p, 'active')).join('')}</div>` : empty('No active work lanes are above threshold.'), 'min-h-[360px]')}
+                    ${panel('Known History', knownHistory.length ? `<div class="space-y-3">${knownHistory.slice(0, 14).map((p) => projectRow(p, 'history')).join('')}</div>` : empty('No dormant or historical projects surfaced.'), 'min-h-[360px]')}
+                </div>
+                ${recentProjects.length ? panel('Recent / Review', `<div class="grid grid-cols-1 md:grid-cols-2 gap-3">${recentProjects.slice(0, 8).map((p) => projectRow(p)).join('')}</div>`) : ''}
+            </div>
+        `;
+    } else {
+        title = 'Control';
+        eyebrow = 'Permissions, Proactive Mode, Memory Rules';
+        const controlCounts = {
+            signals: Object.keys(signalControls).length,
+            memory: Object.keys(memoryControls).length,
+            actions: Object.keys(actionControls).length,
+            projects: Object.keys(projectControls).length,
+            queued: actionQueue.length,
+        };
+        body = `
+            <div class="h-full min-h-0 overflow-y-auto p-4 space-y-4">
+                <div class="border border-blue-500/25 bg-blue-500/10 rounded-lg px-4 py-3">
+                    <div class="flex flex-col lg:flex-row lg:items-start justify-between gap-3">
+                        <div>
+                            <div class="text-[10px] font-mono uppercase tracking-widest text-blue-200/75">Control</div>
+                            <div class="mt-1 text-xl font-semibold text-white tracking-tight">Tune how MARCUS behaves before execution systems are attached.</div>
+                            <div class="mt-2 text-[12px] text-ops-light/80">${escapeHtml(safeText(attentionPolicy.description) || 'Controls affect active attention, memory visibility, and action lifecycle overlays.')}</div>
+                        </div>
+                        <div class="flex flex-wrap gap-1.5 shrink-0">
+                            <button type="button" data-open-legacy="settings" class="stat-pill stat-pill--muted">Legacy settings</button>
+                            <button type="button" data-refresh-brief class="stat-pill stat-pill--muted">Refresh</button>
+                        </div>
+                    </div>
+                    <div class="mt-3 flex flex-wrap items-center gap-1.5">
+                        <span class="text-[10px] font-mono uppercase tracking-widest text-ops-light/55 mr-1">Proactive</span>
+                        ${['quiet', 'normal', 'aggressive', 'focus', 'away'].map((m) => `<button type="button" data-proactive-mode="${m}" class="stat-pill ${mode === m ? 'stat-pill--accent' : 'stat-pill--muted'}">${m}</button>`).join('')}
+                    </div>
+                </div>
+                <div class="grid grid-cols-2 md:grid-cols-5 gap-2">
+                    ${Object.entries(controlCounts).map(([key, value]) => `<div class="border border-ops-border rounded bg-ops-surface/45 px-3 py-2"><div class="text-lg font-semibold text-white">${escapeHtml(String(value))}</div><div class="text-[10px] font-mono text-ops-light/55">${escapeHtml(key)}</div></div>`).join('')}
+                </div>
+                <div class="grid grid-cols-1 xl:grid-cols-4 gap-4">
+                    ${panel('Signal Controls', Object.keys(signalControls).length ? Object.entries(signalControls).slice(0, 10).map(([id, control]) => `<div class="border border-ops-border rounded bg-ops-bg/35 px-2.5 py-2 text-[11px]"><div class="text-white truncate">${escapeHtml(id)}</div><div class="text-ops-light/60 truncate">${escapeHtml(Object.keys(control || {}).filter((k) => k !== 'updatedAt').join(', ') || 'controlled')}</div></div>`).join('') : empty('No signal controls are saved.'))}
+                    ${panel('Memory Rules', Object.keys(memoryControls).length ? Object.entries(memoryControls).slice(0, 10).map(([id, control]) => `<div class="border border-ops-border rounded bg-ops-bg/35 px-2.5 py-2 text-[11px]"><div class="text-white truncate">${escapeHtml(id)}</div><div class="text-ops-light/60 truncate">${escapeHtml(control?.forgotten ? 'forgotten' : control?.archived ? 'archived' : control?.outdated ? 'outdated' : control?.important ? 'important' : control?.pinned ? 'pinned' : 'controlled')}</div></div>`).join('') : empty('No memory rules are saved.'))}
+                    ${panel('Work State', Object.keys(projectControls).length ? Object.entries(projectControls).slice(0, 10).map(([id, control]) => `<div class="border border-ops-border rounded bg-ops-bg/35 px-2.5 py-2 text-[11px]"><div class="text-white truncate">${escapeHtml(id)}</div><div class="text-ops-light/60 truncate">${escapeHtml(safeText(control?.state || control?.activityStatus || control?.status) || 'controlled')}</div></div>`).join('') : empty('No work-state controls are saved.'))}
+                    ${panel('Action Lifecycle', Object.keys(actionControls).length ? Object.entries(actionControls).slice(0, 10).map(([id, control]) => `<div class="border border-ops-border rounded bg-ops-bg/35 px-2.5 py-2 text-[11px]"><div class="text-white truncate">${escapeHtml(id)}</div><div class="text-ops-light/60 truncate">${escapeHtml(safeText(control?.lifecycle) || 'controlled')}</div></div>`).join('') : empty('No action lifecycle controls are saved.'))}
+                </div>
+                ${panel('Memory Transparency', miniRows(briefList(memoryPulse.records), 'No memory records are visible in the current brief.', 6))}
+            </div>
+        `;
+    }
+
+    const titleEl = document.getElementById('page-title');
+    if (titleEl) titleEl.innerText = title;
+    container.innerHTML = body;
+    if (sidePort) {
+        sidePort.innerHTML = `
+            <div class="h-full min-h-0 overflow-y-auto p-4 space-y-4">
+                ${panel(eyebrow, '<div class="text-[12px] text-ops-light/75 leading-relaxed">This section is backed by the MARCUS active brief and world model, not the legacy database table view.</div>')}
+                ${panel('Fast Commands', `
+                    <div class="space-y-2">
+                        <button type="button" data-command="What matters today?" class="w-full text-left border border-ops-border rounded bg-ops-bg/35 px-3 py-2 text-[11px] text-white">What matters today?</button>
+                        <button type="button" data-command="What am I forgetting?" class="w-full text-left border border-ops-border rounded bg-ops-bg/35 px-3 py-2 text-[11px] text-white">What am I forgetting?</button>
+                        <button type="button" data-command="Explain your confidence and sources." class="w-full text-left border border-ops-border rounded bg-ops-bg/35 px-3 py-2 text-[11px] text-white">Explain confidence</button>
+                    </div>
+                `)}
+            </div>
+        `;
+    }
+    const bindRoot = (root) => {
+        root?.querySelectorAll?.('[data-command]')?.forEach((el) => {
+            el.addEventListener('click', () => runCommandSurfaceDirective(el.getAttribute('data-command')));
+        });
+        root?.querySelectorAll?.('[data-entity-inspect]')?.forEach((el) => {
+            el.addEventListener('click', () => {
+                const id = safeText(el.getAttribute('data-entity-inspect')).trim();
+                if (id) runCommandSurfaceDirective(`Show me everything related to ${id}`);
+            });
+        });
+        root?.querySelectorAll?.('[data-proactive-mode]')?.forEach((btn) => {
+            btn.addEventListener('click', () => {
+                setStoredProactiveMode(btn.getAttribute('data-proactive-mode'));
+                refreshActiveBrief({ force: true }).then(() => renderMain()).catch(() => renderMain());
+            });
+        });
+        root?.querySelectorAll?.('[data-project-control]')?.forEach((btn) => {
+            btn.addEventListener('click', async (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const id = safeText(btn.getAttribute('data-project-id')).trim();
+                const state = safeText(btn.getAttribute('data-project-control')).trim();
+                if (!id || !state) return;
+                setProjectControl(id, { state, changedBy: 'work-surface' });
+                await refreshActiveBrief({ force: true }).catch(() => {});
+                renderMain();
+            });
+        });
+        root?.querySelector?.('[data-refresh-brief]')?.addEventListener('click', async () => {
+            await refreshOperationalControls();
+            await refreshActiveBrief({ force: true });
+            renderMain();
+        });
+        root?.querySelectorAll?.('[data-open-legacy]')?.forEach((btn) => {
+            btn.addEventListener('click', async () => {
+                const target = safeText(btn.getAttribute('data-open-legacy')).trim();
+                if (target === 'clients') await openClients();
+                if (target === 'projects') await openProjects();
+                if (target === 'settings') await openSettings();
+            });
+        });
+    };
+    bindRoot(container);
+    bindRoot(sidePort);
+}
+
+function renderActionsSurface(container, sidePort, brief, actionControls) {
+    const controls = actionControls && typeof actionControls === 'object' ? actionControls : {};
+    const sourceRows = [
+        ...briefList(brief?.activeActionQueue),
+        ...briefList(brief?.actionQueue),
+        ...briefList(brief?.preparedActions),
+    ];
+    const byId = new Map();
+    for (const row of sourceRows) {
+        const id = safeText(row?.id || row?.sourceActionId || row?.title || row?.summary).trim();
+        if (!id || byId.has(id)) continue;
+        const control = controls[id] || {};
+        byId.set(id, {
+            ...row,
+            ...control,
+            id,
+            lifecycle: normalizeActionLifecycle(control.lifecycle || row?.lifecycle) || (row?.requiresApproval || row?.approvalRequired ? 'draft_action' : 'suggested_action'),
+        });
+    }
+    for (const [id, control] of Object.entries(controls)) {
+        if (byId.has(id)) continue;
+        const c = control && typeof control === 'object' ? control : {};
+        byId.set(id, {
+            ...c,
+            id,
+            title: safeText(c.title || (c.sourceSignalId ? `Review converted signal: ${c.sourceSignalId}` : id)),
+            summary: safeText(c.summary || c.body || c.sourceText || 'Action lifecycle overlay.'),
+            source: safeText(c.source || 'operational-controls'),
+            lifecycle: normalizeActionLifecycle(c.lifecycle) || 'suggested_action',
+            requiresApproval: c.requiresApproval !== false,
+        });
+    }
+
+    const rows = Array.from(byId.values()).sort((a, b) => {
+        const order = { draft_action: 0, suggested_action: 1, approved_action: 2, completed_action: 3, dismissed_action: 4 };
+        const al = normalizeActionLifecycle(a.lifecycle) || 'suggested_action';
+        const bl = normalizeActionLifecycle(b.lifecycle) || 'suggested_action';
+        if ((order[al] ?? 9) !== (order[bl] ?? 9)) return (order[al] ?? 9) - (order[bl] ?? 9);
+        return safeText(b.updatedAt || b.createdAt).localeCompare(safeText(a.updatedAt || a.createdAt));
+    });
+    const laneKeys = ['draft_action', 'suggested_action', 'approved_action', 'completed_action', 'dismissed_action'];
+    const grouped = Object.fromEntries(laneKeys.map((key) => [key, rows.filter((row) => (normalizeActionLifecycle(row.lifecycle) || 'suggested_action') === key)]));
+    const activeRows = rows.filter((row) => !['completed_action', 'dismissed_action'].includes(normalizeActionLifecycle(row.lifecycle)));
+    const approvalRows = activeRows.filter((row) => row?.requiresApproval || row?.approvalRequired || normalizeActionLifecycle(row.lifecycle) === 'draft_action');
+    const sourceSignals = activeRows.filter((row) => safeText(row?.sourceSignalId).trim()).length;
+
+    const labelFor = (key) => ({
+        draft_action: 'Draft',
+        suggested_action: 'Suggested',
+        approved_action: 'Approved',
+        completed_action: 'Completed',
+        dismissed_action: 'Dismissed',
+    }[key] || key);
+    const descriptionFor = (key) => ({
+        draft_action: 'Prepared, approval required, no external side effect.',
+        suggested_action: 'Potential next moves for Mark to accept or ignore.',
+        approved_action: 'Approved intent, waiting for future execution tooling or manual completion.',
+        completed_action: 'Closed as done.',
+        dismissed_action: 'Closed as not useful now.',
+    }[key] || '');
+    const actionCard = (action) => {
+        const id = safeText(action?.id).trim();
+        const lifecycle = normalizeActionLifecycle(action?.lifecycle) || 'suggested_action';
+        const title = safeText(action?.title || action?.name || 'Action');
+        const detail = safeText(action?.summary || action?.body || action?.recommendedAction || action?.sourceText || 'No action detail available.');
+        const sourceSignalId = safeText(action?.sourceSignalId).trim();
+        const source = safeText(action?.source || action?.type || 'action-queue');
+        const executionStatus = safeText(action?.executionStatus || (lifecycle === 'approved_action' ? 'approved_pending_execution' : lifecycle === 'completed_action' ? 'manually_completed' : 'not_executable'));
+        const needsApproval = action?.requiresApproval || action?.approvalRequired || lifecycle === 'draft_action';
+        return `
+            <div class="border border-ops-border rounded-lg bg-ops-bg/35 px-3 py-3">
+                <div class="flex items-start justify-between gap-3">
+                    <div class="min-w-0">
+                        <div class="text-sm font-semibold text-white truncate">${escapeHtml(title || id)}</div>
+                        <div class="mt-1 text-[11px] text-ops-light/75 leading-relaxed">${escapeHtml(previewText(detail, 220))}</div>
+                    </div>
+                    <span class="stat-pill ${needsApproval ? 'stat-pill--accent' : 'stat-pill--muted'} shrink-0">${escapeHtml(needsApproval ? 'approval' : lifecycle.replace('_action', ''))}</span>
+                </div>
+                <div class="mt-2 flex flex-wrap gap-1.5">
+                    <span class="stat-pill stat-pill--muted">${escapeHtml(source)}</span>
+                    <span class="stat-pill ${lifecycle === 'approved_action' ? 'stat-pill--accent' : 'stat-pill--muted'}">${escapeHtml(executionStatus.replace(/_/g, ' '))}</span>
+                    ${sourceSignalId ? `<button type="button" data-item-inspect="${escapeHtml(sourceSignalId)}" class="stat-pill stat-pill--muted">Source signal</button>` : ''}
+                    ${id ? `<button type="button" data-item-inspect="${escapeHtml(id)}" class="stat-pill stat-pill--accent">Why</button>` : ''}
+                    ${id && lifecycle !== 'approved_action' && lifecycle !== 'completed_action' && lifecycle !== 'dismissed_action' ? `<button type="button" data-action-transition="approved_action" data-action-id="${escapeHtml(id)}" class="stat-pill stat-pill--muted">Approve</button>` : ''}
+                    ${id && lifecycle !== 'completed_action' && lifecycle !== 'dismissed_action' ? `<button type="button" data-action-transition="completed_action" data-action-id="${escapeHtml(id)}" class="stat-pill stat-pill--muted">Complete</button>` : ''}
+                    ${id && lifecycle !== 'dismissed_action' ? `<button type="button" data-action-transition="dismissed_action" data-action-id="${escapeHtml(id)}" class="stat-pill stat-pill--muted">Dismiss</button>` : ''}
+                </div>
+            </div>
+        `;
+    };
+
+    const titleEl = document.getElementById('page-title');
+    if (titleEl) titleEl.innerText = 'Actions';
+    container.innerHTML = `
+        <div class="h-full min-h-0 overflow-y-auto p-4 space-y-4">
+            <div class="border border-blue-500/25 bg-blue-500/10 rounded-lg px-4 py-3">
+                <div class="flex flex-col lg:flex-row lg:items-start justify-between gap-3">
+                    <div class="min-w-0">
+                        <div class="text-[10px] font-mono uppercase tracking-widest text-blue-200/75">Actions</div>
+                        <div class="mt-1 text-xl font-semibold text-white tracking-tight">Prepared moves, approvals, and lifecycle state.</div>
+                        <div class="mt-2 text-[12px] text-ops-light/80 leading-relaxed">MARCUS can scaffold action intent here. Approval records Mark's decision as approved_pending_execution; external execution remains a future integration.</div>
+                    </div>
+                    <div class="flex flex-wrap gap-1.5 shrink-0">
+                        <button type="button" data-command="Create a follow-up action from the current context." class="stat-pill stat-pill--accent">Create follow-up</button>
+                        <button type="button" data-command="Draft a reply but do not send it." class="stat-pill stat-pill--muted">Draft reply</button>
+                        <button type="button" data-command="Show action queue." class="stat-pill stat-pill--muted">Ask MARCUS</button>
+                        <button type="button" data-refresh-brief class="stat-pill stat-pill--muted">Refresh</button>
+                    </div>
+                </div>
+                <div class="mt-3 grid grid-cols-2 md:grid-cols-5 gap-2">
+                    <div class="border border-ops-border rounded bg-ops-bg/35 px-3 py-2"><div class="text-lg font-semibold text-white">${activeRows.length}</div><div class="text-[10px] font-mono text-ops-light/55">active</div></div>
+                    <div class="border border-ops-border rounded bg-ops-bg/35 px-3 py-2"><div class="text-lg font-semibold text-white">${approvalRows.length}</div><div class="text-[10px] font-mono text-ops-light/55">need approval</div></div>
+                    <div class="border border-ops-border rounded bg-ops-bg/35 px-3 py-2"><div class="text-lg font-semibold text-white">${grouped.approved_action.length}</div><div class="text-[10px] font-mono text-ops-light/55">approved</div></div>
+                    <div class="border border-ops-border rounded bg-ops-bg/35 px-3 py-2"><div class="text-lg font-semibold text-white">${sourceSignals}</div><div class="text-[10px] font-mono text-ops-light/55">from signals</div></div>
+                    <div class="border border-ops-border rounded bg-ops-bg/35 px-3 py-2"><div class="text-lg font-semibold text-white">${rows.length}</div><div class="text-[10px] font-mono text-ops-light/55">tracked</div></div>
+                </div>
+            </div>
+            <div class="grid grid-cols-1 xl:grid-cols-5 gap-4">
+                ${laneKeys.map((key) => `
+                    <section class="border border-ops-border rounded-lg bg-ops-surface/45 p-3 min-h-[320px]">
+                        <div class="flex items-start justify-between gap-2">
+                            <div>
+                                <div class="text-[10px] font-mono uppercase tracking-widest text-ops-light">${escapeHtml(labelFor(key))}</div>
+                                <div class="mt-1 text-[10px] text-ops-light/55 leading-relaxed">${escapeHtml(descriptionFor(key))}</div>
+                            </div>
+                            <span class="stat-pill stat-pill--muted shrink-0">${grouped[key].length}</span>
+                        </div>
+                        <div class="mt-3 space-y-3">
+                            ${grouped[key].length ? grouped[key].slice(0, 12).map(actionCard).join('') : `<div class="border border-dashed border-ops-border rounded-lg p-4 text-[11px] text-ops-light/50">No ${escapeHtml(labelFor(key).toLowerCase())} actions.</div>`}
+                        </div>
+                    </section>
+                `).join('')}
+            </div>
+        </div>
+    `;
+    if (sidePort) {
+        sidePort.innerHTML = `
+            <div class="h-full min-h-0 overflow-y-auto p-4 space-y-4">
+                <section class="border border-ops-border rounded-lg bg-ops-surface/45 p-4">
+                    <div class="text-[10px] font-mono uppercase tracking-widest text-ops-light">Action Contract</div>
+                    <div class="mt-3 space-y-2 text-[11px] text-ops-light/75 leading-relaxed">
+                        <div>Actions are suggestions, drafts, approvals, completions, or dismissals.</div>
+                        <div>Approving an action does not send, archive, bill, deploy, or mutate external systems yet.</div>
+                        <div>Converted signals remain linked so Mark can inspect why the action exists.</div>
+                    </div>
+                </section>
+                <section class="border border-ops-border rounded-lg bg-ops-surface/45 p-4">
+                    <div class="text-[10px] font-mono uppercase tracking-widest text-ops-light">Fast Commands</div>
+                    <div class="mt-3 space-y-2">
+                        <button type="button" data-command="What actions need approval?" class="w-full text-left border border-ops-border rounded bg-ops-bg/35 px-3 py-2 text-[11px] text-white">What needs approval?</button>
+                        <button type="button" data-command="Create a reminder from the current focus." class="w-full text-left border border-ops-border rounded bg-ops-bg/35 px-3 py-2 text-[11px] text-white">Create reminder</button>
+                        <button type="button" data-command="What can MARCUS prepare without executing?" class="w-full text-left border border-ops-border rounded bg-ops-bg/35 px-3 py-2 text-[11px] text-white">Preparation only</button>
+                    </div>
+                </section>
+            </div>
+        `;
+    }
+
+    const bindRoot = (root) => {
+        root?.querySelectorAll?.('[data-command]')?.forEach((el) => {
+            el.addEventListener('click', () => runCommandSurfaceDirective(el.getAttribute('data-command')));
+        });
+        root?.querySelectorAll?.('[data-item-inspect]')?.forEach((el) => {
+            el.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                inspectOperationalItem(el.getAttribute('data-item-inspect'));
+            });
+        });
+        root?.querySelectorAll?.('[data-action-transition]')?.forEach((btn) => {
+            btn.addEventListener('click', async (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const id = safeText(btn.getAttribute('data-action-id')).trim();
+                const lifecycle = safeText(btn.getAttribute('data-action-transition')).trim();
+                if (!id || !lifecycle) return;
+                transitionAction(id, lifecycle, { changedBy: 'actions-surface' });
+                await refreshActiveBrief({ force: true }).catch(() => {});
+                renderMain();
+            });
+        });
+        root?.querySelector?.('[data-refresh-brief]')?.addEventListener('click', async () => {
+            await refreshActiveBrief({ force: true });
+            renderMain();
+        });
+    };
+    bindRoot(container);
+    bindRoot(sidePort);
+}
+
+function renderCommandSurface(container, sidePort) {
+    const view = safeText(state.currentView) || 'command';
+    const titleByView = {
+        command: 'Command',
+        now: 'Now',
+        focus: 'Focus',
+        signals: 'Signals',
+        people: 'People',
+        work: 'Work',
+        actions: 'Actions',
+        systems: 'Systems',
+        memory: 'Memory',
+        control: 'Control',
+    };
+    const titleEl = document.getElementById('page-title');
+    if (titleEl) titleEl.innerText = titleByView[view] || 'Command';
+
+    const brief = state.activeBrief || {};
+    const attentionPolicy = brief.attentionPolicy && typeof brief.attentionPolicy === 'object' ? brief.attentionPolicy : {};
+    const topPriorities = briefList(brief.controlledAttention?.topPriorities || brief.topPriorities);
+    const urgentInterrupts = briefList(brief.controlledAttention?.urgentInterrupts || brief.urgentInterrupts);
+    const waitingOnMark = briefList(brief.waitingOnMark);
+    const waitingOnClients = briefList(brief.waitingOnClients);
+    const waitingOnTeam = briefList(brief.waitingOnTeam);
+    const risks = briefList(brief.risks);
+    const opportunities = briefList(brief.opportunities);
+    const preparedActions = briefList(brief.preparedActions);
+    const signalControls = getSignalControls();
+    const memoryControls = getMemoryControls();
+    const actionControls = getActionControls();
+    const activeActionQueue = (briefList(brief.activeActionQueue).length ? briefList(brief.activeActionQueue) : (briefList(brief.actionQueue).length ? briefList(brief.actionQueue) : preparedActions))
+        .filter((item) => !['completed_action', 'dismissed_action'].includes(normalizeActionLifecycle(safeText(item?.lifecycle || actionControls[safeText(item?.id)]?.lifecycle))));
+    const actionQueue = activeActionQueue;
+    const decisionQueue = briefList(brief.decisionQueue);
+    const ignoreQueue = briefList(brief.ignoreQueue);
+    const operationalSignals = briefList(brief.operationalSignals);
+    const projectActivity = briefList(brief.projectActivity);
+    const memoryPulse = brief.memoryPulse && typeof brief.memoryPulse === 'object' ? brief.memoryPulse : {};
+    const systemHealth = brief.systemHealth && typeof brief.systemHealth === 'object' ? brief.systemHealth : {};
+    const worldModel = brief.worldModel && typeof brief.worldModel === 'object' ? brief.worldModel : {};
+    const sessionBriefing = brief.sessionBriefing && typeof brief.sessionBriefing === 'object' ? brief.sessionBriefing : {};
+    const sessionContext = brief.sessionContext && typeof brief.sessionContext === 'object' ? brief.sessionContext : {};
+    const communicationIntelligence = brief.communicationIntelligence && typeof brief.communicationIntelligence === 'object' ? brief.communicationIntelligence : {};
+    const activeProjects = projectActivity.filter((p) => ['idea', 'active', 'waiting_on_mark', 'waiting_on_client', 'waiting_on_team', 'blocked', 'review', 'waiting', 'warming'].includes(safeText(p?.projectState || p?.activityStatus || p?.status).toLowerCase()));
+    const dormantProjects = projectActivity.filter((p) => ['launched', 'complete', 'dormant', 'archived', 'parked', 'historical'].includes(safeText(p?.projectState || p?.activityStatus || p?.status).toLowerCase()));
+    const focusLanes = briefList(brief.focusLanes).length ? briefList(brief.focusLanes) : activeProjects;
+    const focus = brief.activeProject || brief.currentFocus || activeProjects[0] || topPriorities[0] || null;
+    const focusPolicy = brief.focusPolicy && typeof brief.focusPolicy === 'object' ? brief.focusPolicy : {};
+    const confidence = Number.isFinite(Number(brief.confidence)) ? Math.round(Number(brief.confidence) * 100) : null;
+    const proactiveMode = normalizeProactiveMode(attentionPolicy.mode || state.uiPrefs?.proactiveMode || getStoredProactiveMode());
+
+    if (!state.activeBrief && !state.activeBriefLoading) {
+        setTimeout(async () => {
+            await refreshActiveBrief({ force: true });
+            if (['command', 'now', 'focus', 'signals', 'people', 'work', 'actions', 'systems', 'memory', 'control'].includes(state.currentView)) renderMain();
+        }, 0);
+    }
+
+    container.innerHTML = '';
+    if (sidePort) sidePort.innerHTML = '';
+    updateAmbientPresenceFromBrief();
+
+    if (view === 'people' || view === 'work' || view === 'control') {
+        renderOperationalDirectorySurface(container, sidePort, view);
+        return;
+    }
+    if (view === 'actions') {
+        renderActionsSurface(container, sidePort, brief, actionControls);
+        return;
+    }
+
+    const rawAttentionItems = view === 'signals'
+        ? operationalSignals.slice(0, 14)
+        : view === 'systems'
+            ? briefList(systemHealth.items).map((item) => ({
+                id: item.id,
+                title: item.title,
+                detail: item.summary,
+                confidence: item.confidence,
+                score: item.status === 'critical' ? 90 : item.status === 'needs_credentials' || item.status === 'warning' ? 62 : 28,
+                priority: item.status === 'critical' ? 'critical' : item.status === 'needs_credentials' || item.status === 'warning' ? 'warning' : 'normal',
+                reasons: [item.source || 'system health'],
+                prompt: `Inspect system health item: ${item.title}. Recommended action: ${item.recommendedAction || 'Monitor.'}`,
+                businessKey: '',
+            }))
+        : view === 'memory'
+            ? [...briefList(memoryPulse.staleAssumptions), ...briefList(memoryPulse.uncertain), ...briefList(memoryPulse.newFacts)].slice(0, 14).map((item, idx) => ({
+                id: item.id || `memory-pulse:${idx}`,
+                title: item.title,
+                detail: item.summary,
+                confidence: item.confidence,
+                score: Number(item.confidence) < 0.6 ? 58 : 36,
+                priority: Number(item.confidence) < 0.6 ? 'warning' : 'normal',
+                reasons: [item.source || 'memory pulse'],
+                prompt: `Inspect memory: ${item.title}. Show source, confidence, related entities, and correction options.`,
+                businessKey: '',
+            }))
+        : view === 'focus'
+            ? [...topPriorities.filter((item) => safeText(item?.target || item?.targetType).includes(safeText(focus?.id || focus?.target))), ...topPriorities].slice(0, 8)
+            : briefList(brief.controlledAttention?.attentionQueue).length ? briefList(brief.controlledAttention.attentionQueue).slice(0, 8) : topPriorities.slice(0, 8);
+    const attentionItems = rawAttentionItems.filter((item) => !isSignalSuppressed(item, signalControls));
+    const suppressedControlCount = Number(attentionPolicy.suppressedByControlsCount || (rawAttentionItems.length - attentionItems.length));
+    const suppressedModeCount = Number(attentionPolicy.suppressedByModeCount || 0);
+
+    const itemCard = (item, index = 0) => {
+        const score = Number(item?.score);
+        const tone = priorityTone(score, item?.priority);
+        const title = safeText(item?.title) || 'Operational signal';
+        const detail = commandItemDetail(item);
+        const reason = commandItemReason(item);
+        const confidenceText = Number.isFinite(Number(item?.confidence)) ? `${Math.round(Number(item.confidence) * 100)}%` : 'n/a';
+        const action = safeText(item?.prompt) || `Brief me on ${title}. Explain why it matters and what I should do next.`;
+        const id = safeText(item?.id).trim();
+        return `
+            <div class="border ${tone} rounded-lg px-3 py-3" data-signal-card="${escapeHtml(id)}">
+                <div class="flex items-start justify-between gap-3">
+                    <div class="min-w-0">
+                        <div class="flex items-center gap-2">
+                            <span class="text-[10px] font-mono text-ops-light/60">${String(index + 1).padStart(2, '0')}</span>
+                            <div class="text-sm font-semibold text-white truncate">${escapeHtml(title)}</div>
+                        </div>
+                        <div class="mt-1 text-[11px] text-ops-light/85 leading-relaxed">${escapeHtml(previewText(detail, 240))}</div>
+                    </div>
+                    <div class="shrink-0 text-right">
+                        <div class="text-[11px] font-mono text-white">${Number.isFinite(score) ? Math.round(score) : '--'}</div>
+                        <div class="text-[9px] font-mono text-ops-light/50">score</div>
+                    </div>
+                </div>
+                <div class="mt-2 flex flex-wrap items-center gap-1.5">
+                    <span class="stat-pill stat-pill--muted">why: ${escapeHtml(previewText(reason, 80))}</span>
+                    <span class="stat-pill stat-pill--muted">confidence ${escapeHtml(confidenceText)}</span>
+                    ${safeText(item?.businessKey) ? `<span class="stat-pill stat-pill--muted">${escapeHtml(safeText(item.businessKey))}</span>` : ''}
+                    <button type="button" data-item-inspect="${escapeHtml(id)}" class="stat-pill stat-pill--accent">Why</button>
+                    <button type="button" data-signal-control="snooze" data-signal-id="${escapeHtml(id)}" class="stat-pill stat-pill--muted">Snooze</button>
+                    <button type="button" data-signal-control="convert" data-signal-id="${escapeHtml(id)}" class="stat-pill stat-pill--muted">Action</button>
+                    <button type="button" data-signal-control="dismiss" data-signal-id="${escapeHtml(id)}" class="stat-pill stat-pill--muted">Dismiss</button>
+                </div>
+            </div>
+        `;
+    };
+
+    const miniRows = (rows, empty, limit = 4) => {
+        const list = briefList(rows).slice(0, limit);
+        if (!list.length) return `<div class="text-[11px] text-ops-light/50">${escapeHtml(empty)}</div>`;
+        return list.map((item) => `
+            <div class="flex items-start gap-2 border border-ops-border rounded bg-ops-bg/35 px-2.5 py-2">
+                <i class="fa-solid ${safeText(item?.icon) || 'fa-circle-dot'} text-[10px] text-blue-300 mt-0.5 shrink-0"></i>
+                <div class="min-w-0">
+                    <div class="text-[11px] text-white truncate">${escapeHtml(safeText(item?.title) || 'Item')}</div>
+                    <div class="text-[10px] text-ops-light/60 truncate">${escapeHtml(commandItemDetail(item))}</div>
+                </div>
+            </div>
+        `).join('');
+    };
+
+    const nowBriefingStrip = view === 'now' ? (() => {
+        const changedRows = briefList(sessionBriefing.changedSinceLastTime || sessionContext.changedSinceLastCheckIn);
+        const attentionRows = briefList(sessionBriefing.needsAttention).length ? briefList(sessionBriefing.needsAttention) : topPriorities;
+        const waitingMarkRows = briefList(sessionBriefing.waitingOnMark).length ? briefList(sessionBriefing.waitingOnMark) : waitingOnMark;
+        const waitingOtherRows = briefList(sessionBriefing.waitingOnOthers).length ? briefList(sessionBriefing.waitingOnOthers) : [...waitingOnClients, ...waitingOnTeam];
+        const actionRows = briefList(sessionBriefing.topActions).length ? briefList(sessionBriefing.topActions) : actionQueue;
+        const systemRows = briefList(sessionBriefing.systems).length ? briefList(sessionBriefing.systems) : briefList(systemHealth.items).filter((item) => safeText(item?.status) !== 'ok');
+        const opportunityRows = briefList(sessionBriefing.opportunities).length ? briefList(sessionBriefing.opportunities) : opportunities;
+        const ignoreRows = briefList(sessionBriefing.ignoreQueue).length ? briefList(sessionBriefing.ignoreQueue) : ignoreQueue;
+        const briefCell = (title, rows, empty, limit = 3) => `
+            <section class="border border-ops-border rounded-lg bg-ops-surface/45 p-3 min-h-[9rem]">
+                <div class="flex items-center justify-between gap-2">
+                    <div class="text-[10px] font-mono uppercase tracking-widest text-ops-light">${escapeHtml(title)}</div>
+                    <span class="stat-pill stat-pill--muted shrink-0">${briefList(rows).length}</span>
+                </div>
+                <div class="mt-3 space-y-2">${miniRows(rows, empty, limit)}</div>
+            </section>
+        `;
+        return `
+            <div class="border border-emerald-500/20 bg-emerald-500/10 rounded-lg px-4 py-3">
+                <div class="flex flex-col xl:flex-row xl:items-start justify-between gap-3">
+                    <div class="min-w-0">
+                        <div class="text-[10px] font-mono uppercase tracking-widest text-emerald-200/75">Now Briefing</div>
+                        <div class="mt-1 text-lg font-semibold text-white tracking-tight">${escapeHtml(safeText(sessionBriefing.changedSummary || sessionContext.briefingLine) || 'Live operating brief for this session.')}</div>
+                        <div class="mt-1 text-[12px] text-ops-light/75">This is the current attention layer: what changed, what needs Mark, what can be prepared, and what can stay quiet.</div>
+                    </div>
+                    <div class="flex flex-wrap gap-1.5 shrink-0">
+                        <button type="button" data-command="Brief me with what changed, what needs attention, top 3 actions, systems, opportunities, and what I can ignore." class="stat-pill stat-pill--accent">Brief me</button>
+                        <button type="button" data-session-check-in class="stat-pill stat-pill--muted">Check in</button>
+                        <button type="button" data-command="What can I ignore for now?" class="stat-pill stat-pill--muted">Can wait</button>
+                    </div>
+                </div>
+                <div class="mt-4 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+                    ${briefCell('Changed', changedRows, 'No prior changed-since-check-in records yet.', 3)}
+                    ${briefCell('Needs Mark', waitingMarkRows, 'No high-confidence item is waiting on Mark.', 3)}
+                    ${briefCell('Waiting Elsewhere', waitingOtherRows, 'No meaningful waiting-on-others queue surfaced.', 3)}
+                    ${briefCell('Top Actions', actionRows, 'No prepared action drafts queued.', 3)}
+                    ${briefCell('Systems', systemRows, 'No system issues above threshold.', 3)}
+                    ${briefCell('Opportunities', opportunityRows, 'No strong opportunity signals right now.', 3)}
+                    ${briefCell('Attention', attentionRows, 'No attention items crossed threshold.', 3)}
+                    ${briefCell('Can Ignore', ignoreRows, 'No explicit can-wait queue returned.', 3)}
+                </div>
+            </div>
+        `;
+    })() : '';
+
+    const focusLaneStrip = view === 'focus' ? (() => {
+        const focusId = safeText(focus?.id || focus?.target || focus?.name || focus?.title).toLowerCase();
+        const focusTitle = safeText(focus?.name || focus?.title) || 'No focus pinned';
+        const focusMatches = (item) => {
+            const hay = `${safeText(item?.id)} ${safeText(item?.target)} ${safeText(item?.targetId)} ${safeText(item?.title)} ${safeText(item?.summary)} ${safeText(item?.detail)} ${JSON.stringify(item?.relatedEntities || [])}`.toLowerCase();
+            return focusId && hay.includes(focusId);
+        };
+        const blockerRows = [
+            ...decisionQueue.filter((item) => focusMatches(item) || /block|blocked|stuck|waiting|approval/i.test(`${item?.title || ''} ${item?.summary || ''} ${item?.question || ''}`)),
+            ...urgentInterrupts.filter((item) => focusMatches(item)),
+            ...topPriorities.filter((item) => focusMatches(item) && /block|waiting|risk|urgent|deadline/i.test(`${item?.title || ''} ${item?.summary || ''} ${item?.detail || ''}`)),
+        ].slice(0, 6);
+        const nextActionRows = [
+            ...actionQueue.filter((item) => focusMatches(item)),
+            ...topPriorities.filter((item) => focusMatches(item)),
+        ].slice(0, 6);
+        const focusSignalRows = attentionItems.filter((item) => focusMatches(item)).slice(0, 6);
+        const ignoredRows = ignoreQueue.slice(0, 6);
+        const laneCell = (title, rows, empty, limit = 4) => `
+            <section class="border border-ops-border rounded-lg bg-ops-surface/45 p-3 min-h-[10rem]">
+                <div class="flex items-center justify-between gap-2">
+                    <div class="text-[10px] font-mono uppercase tracking-widest text-ops-light">${escapeHtml(title)}</div>
+                    <span class="stat-pill stat-pill--muted shrink-0">${briefList(rows).length}</span>
+                </div>
+                <div class="mt-3 space-y-2">${miniRows(rows, empty, limit)}</div>
+            </section>
+        `;
+        return `
+            <div class="border border-sky-500/20 bg-sky-500/10 rounded-lg px-4 py-3">
+                <div class="flex flex-col xl:flex-row xl:items-start justify-between gap-3">
+                    <div class="min-w-0">
+                        <div class="text-[10px] font-mono uppercase tracking-widest text-sky-200/75">Focus Lane</div>
+                        <div class="mt-1 text-lg font-semibold text-white tracking-tight">${escapeHtml(focusTitle)}</div>
+                        <div class="mt-1 text-[12px] text-ops-light/75">${escapeHtml(safeText(focus?.summary || focus?.detail || focus?.businessName || focus?.businessKey) || 'MARCUS is constraining attention to the current lane and meaningful blockers.')}</div>
+                    </div>
+                    <div class="flex flex-wrap gap-1.5 shrink-0">
+                        <button type="button" data-proactive-mode="focus" class="stat-pill ${proactiveMode === 'focus' ? 'stat-pill--accent' : 'stat-pill--muted'}">Focus mode</button>
+                        <button type="button" data-command="What should I focus on right now?" class="stat-pill stat-pill--accent">What next?</button>
+                        <button type="button" data-command="What should I ignore while focused?" class="stat-pill stat-pill--muted">Ignore</button>
+                        ${focusPolicy.source === 'operational-controls' ? '<button type="button" data-command="Clear current focus." class="stat-pill stat-pill--muted">Clear</button>' : ''}
+                    </div>
+                </div>
+                <div class="mt-4 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+                    ${laneCell('Active Lanes', focusLanes, 'No focus lanes are currently active.', 4)}
+                    ${laneCell('Blockers', blockerRows, 'No blocker is linked to the current focus.', 4)}
+                    ${laneCell('Next Actions', nextActionRows, 'No prepared focus-specific actions are queued.', 4)}
+                    ${laneCell('Ignore While Focused', ignoredRows, 'No explicit ignore queue returned.', 4)}
+                </div>
+                <div class="mt-3 flex flex-wrap gap-1.5">
+                    ${focusSignalRows.slice(0, 4).map((item) => `<button type="button" data-item-inspect="${escapeHtml(safeText(item?.id))}" class="stat-pill stat-pill--muted">${escapeHtml(previewText(safeText(item?.title || item?.name), 32))}</button>`).join('')}
+                </div>
+            </div>
+        `;
+    })() : '';
+
+    const signalsStreamStrip = view === 'signals' ? (() => {
+        const signalRows = attentionItems;
+        const bucketOrder = ['interrupt_now', 'today', 'soon', 'waiting', 'delegated', 'monitor', 'archive/noise'];
+        const bucketLabel = (bucket) => ({
+            interrupt_now: 'Interrupt',
+            today: 'Today',
+            soon: 'Soon',
+            waiting: 'Waiting',
+            delegated: 'Delegated',
+            monitor: 'Monitor',
+            'archive/noise': 'Noise',
+        })[bucket] || (safeText(bucket) || 'Other').replace(/[_/]+/g, ' ');
+        const bucketCounts = bucketOrder.map((bucket) => ({
+            bucket,
+            count: signalRows.filter((item) => safeText(item?.bucket || item?.attentionBucket).toLowerCase() === bucket).length,
+        }));
+        const sourceCounts = signalRows.reduce((acc, item) => {
+            const source = safeText(item?.source || item?.sourceType || item?.type || 'unknown').toLowerCase() || 'unknown';
+            acc[source] = (acc[source] || 0) + 1;
+            return acc;
+        }, {});
+        const topSources = Object.entries(sourceCounts).sort((a, b) => b[1] - a[1]).slice(0, 4);
+        const controlledSignals = Object.values(signalControls || {}).filter((control) => control && typeof control === 'object');
+        const dismissedCount = controlledSignals.filter((control) => control.dismissed).length;
+        const snoozedCount = controlledSignals.filter((control) => Number(control.snoozedUntil || 0) > Date.now()).length;
+        const convertedCount = controlledSignals.filter((control) => control.convertedToAction).length;
+        const confidenceRows = signalRows.filter((item) => Number.isFinite(Number(item?.confidence)));
+        const averageConfidence = confidenceRows.length
+            ? Math.round((confidenceRows.reduce((sum, item) => sum + Number(item.confidence), 0) / confidenceRows.length) * 100)
+            : null;
+        const highImpactRows = signalRows.filter((item) => ['high', 'critical'].includes(safeText(item?.importance || item?.moneyImpact || item?.relationshipImpact || item?.riskImpact || item?.priority).toLowerCase()));
+        const topSignal = signalRows[0] || null;
+        const signalCell = (title, value, label) => `
+            <div class="border border-ops-border rounded bg-ops-bg/35 px-3 py-2">
+                <div class="text-lg font-semibold text-white">${escapeHtml(String(value))}</div>
+                <div class="text-[10px] font-mono text-ops-light/55">${escapeHtml(label || title)}</div>
+            </div>
+        `;
+        return `
+            <div class="border border-amber-500/20 bg-amber-500/10 rounded-lg px-4 py-3">
+                <div class="flex flex-col xl:flex-row xl:items-start justify-between gap-3">
+                    <div class="min-w-0">
+                        <div class="text-[10px] font-mono uppercase tracking-widest text-amber-200/75">Signal Stream</div>
+                        <div class="mt-1 text-lg font-semibold text-white tracking-tight">${escapeHtml(safeText(topSignal?.title) || 'No active signal is above threshold.')}</div>
+                        <div class="mt-1 text-[12px] text-ops-light/75">${escapeHtml(safeText(commandItemDetail(topSignal)) || 'Signals are grouped by urgency, source, confidence, and whether they should become action, memory, or silence.')}</div>
+                    </div>
+                    <div class="flex flex-wrap gap-1.5 shrink-0">
+                        <button type="button" data-command="Explain how you ranked my signal stream by urgency, confidence, source, and impact." class="stat-pill stat-pill--accent">Explain</button>
+                        ${topSignal ? `<button type="button" data-signal-control="convert" data-signal-id="${escapeHtml(safeText(topSignal?.id))}" class="stat-pill stat-pill--muted">Action top</button>` : ''}
+                        <button type="button" data-command="What can I ignore for now?" class="stat-pill stat-pill--muted">Can wait</button>
+                        <button type="button" data-refresh-brief class="stat-pill stat-pill--muted">Refresh</button>
+                    </div>
+                </div>
+                <div class="mt-4 grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-2">
+                    ${bucketCounts.map((entry) => signalCell(entry.bucket, entry.count, bucketLabel(entry.bucket))).join('')}
+                    ${signalCell('confidence', averageConfidence === null ? '--' : `${averageConfidence}%`, 'confidence')}
+                </div>
+                <div class="mt-3 grid grid-cols-1 lg:grid-cols-3 gap-3">
+                    <section class="border border-ops-border rounded-lg bg-ops-surface/45 p-3">
+                        <div class="text-[10px] font-mono uppercase tracking-widest text-ops-light">Source Mix</div>
+                        <div class="mt-3 flex flex-wrap gap-1.5">
+                            ${topSources.length ? topSources.map(([source, count]) => `<span class="stat-pill stat-pill--muted">${escapeHtml(source)} ${count}</span>`).join('') : '<span class="text-[11px] text-ops-light/50">No source mix available.</span>'}
+                        </div>
+                    </section>
+                    <section class="border border-ops-border rounded-lg bg-ops-surface/45 p-3">
+                        <div class="text-[10px] font-mono uppercase tracking-widest text-ops-light">Impact</div>
+                        <div class="mt-3 flex flex-wrap gap-1.5">
+                            <span class="stat-pill stat-pill--muted">${highImpactRows.length} high impact</span>
+                            <span class="stat-pill stat-pill--muted">${risks.length} risks</span>
+                            <span class="stat-pill stat-pill--muted">${opportunities.length} opportunities</span>
+                            <span class="stat-pill stat-pill--muted">${waitingOnMark.length} waiting on Mark</span>
+                        </div>
+                    </section>
+                    <section class="border border-ops-border rounded-lg bg-ops-surface/45 p-3">
+                        <div class="text-[10px] font-mono uppercase tracking-widest text-ops-light">Operator Controls</div>
+                        <div class="mt-3 flex flex-wrap gap-1.5">
+                            <span class="stat-pill stat-pill--muted">${dismissedCount} dismissed</span>
+                            <span class="stat-pill stat-pill--muted">${snoozedCount} snoozed</span>
+                            <span class="stat-pill stat-pill--muted">${convertedCount} converted</span>
+                            ${suppressedControlCount ? `<span class="stat-pill stat-pill--muted">${suppressedControlCount} hidden</span>` : ''}
+                        </div>
+                    </section>
+                </div>
+            </div>
+        `;
+    })() : '';
+
+    const memoryTransparencyStrip = view === 'memory' ? (() => {
+        const records = briefList(memoryPulse.records);
+        const newFacts = briefList(memoryPulse.newFacts);
+        const staleAssumptions = briefList(memoryPulse.staleAssumptions);
+        const uncertain = briefList(memoryPulse.uncertain);
+        const conflicts = briefList(memoryPulse.conflicts);
+        const controlledRecords = briefList(memoryPulse.controlledRecords);
+        const memoryControlRows = Object.values(memoryControls || {}).filter((control) => control && typeof control === 'object');
+        const pinnedCount = memoryControlRows.filter((control) => control.pinned).length;
+        const importantCount = memoryControlRows.filter((control) => control.important).length;
+        const outdatedCount = memoryControlRows.filter((control) => control.outdated).length;
+        const forgottenCount = memoryControlRows.filter((control) => control.forgotten).length;
+        const archivedCount = memoryControlRows.filter((control) => control.archived).length;
+        const confidenceRows = records.filter((record) => Number.isFinite(Number(record?.confidence)));
+        const averageMemoryConfidence = confidenceRows.length
+            ? Math.round((confidenceRows.reduce((sum, record) => sum + Number(record.confidence), 0) / confidenceRows.length) * 100)
+            : null;
+        const sourceCounts = records.reduce((acc, record) => {
+            const source = safeText(record?.source || 'unknown').trim() || 'unknown';
+            acc[source] = (acc[source] || 0) + 1;
+            return acc;
+        }, {});
+        const sourcePills = Object.entries(sourceCounts).sort((a, b) => b[1] - a[1]).slice(0, 5);
+        const memoryMetric = (value, label) => `
+            <div class="border border-ops-border rounded bg-ops-bg/35 px-3 py-2">
+                <div class="text-lg font-semibold text-white">${escapeHtml(String(value))}</div>
+                <div class="text-[10px] font-mono text-ops-light/55">${escapeHtml(label)}</div>
+            </div>
+        `;
+        const pulseRows = (label, rows, empty, limit = 3) => `
+            <section class="border border-ops-border rounded-lg bg-ops-surface/45 p-3 min-h-[10rem]">
+                <div class="flex items-center justify-between gap-2">
+                    <div class="text-[10px] font-mono uppercase tracking-widest text-ops-light">${escapeHtml(label)}</div>
+                    <span class="stat-pill stat-pill--muted shrink-0">${briefList(rows).length}</span>
+                </div>
+                <div class="mt-3 space-y-2">${miniRows(rows, empty, limit)}</div>
+            </section>
+        `;
+        const memoryRecordCard = (record) => {
+            const id = safeText(record?.id).trim();
+            const control = memoryControls[id] || {};
+            const stateLabel = control.forgotten ? 'forgotten' : control.archived ? 'archived' : control.outdated ? 'outdated' : control.important ? 'important' : control.pinned ? 'pinned' : safeText(record?.status) || 'active';
+            const confidenceText = Number.isFinite(Number(record?.confidence)) ? `${Math.round(Number(record.confidence) * 100)}%` : 'n/a';
+            const related = briefList(record?.relatedEntities).slice(0, 3);
+            return `
+                <div class="border border-ops-border rounded-lg bg-ops-bg/35 px-3 py-3">
+                    <div class="flex items-start justify-between gap-3">
+                        <div class="min-w-0">
+                            <div class="text-sm font-semibold text-white truncate">${escapeHtml(safeText(record?.title) || 'Memory record')}</div>
+                            <div class="mt-1 text-[11px] text-ops-light/75 leading-relaxed">${escapeHtml(previewText(safeText(record?.summary), 220) || 'No summary stored.')}</div>
+                        </div>
+                        <span class="stat-pill ${control.important || control.pinned ? 'stat-pill--accent' : 'stat-pill--muted'} shrink-0">${escapeHtml(stateLabel)}</span>
+                    </div>
+                    <div class="mt-2 flex flex-wrap gap-1.5">
+                        <span class="stat-pill stat-pill--muted">source ${escapeHtml(safeText(record?.source) || 'unknown')}</span>
+                        <span class="stat-pill stat-pill--muted">confidence ${escapeHtml(confidenceText)}</span>
+                        ${safeText(record?.lastConfirmedAt || record?.createdAt) ? `<span class="stat-pill stat-pill--muted">confirmed ${escapeHtml(safeText(record.lastConfirmedAt || record.createdAt))}</span>` : ''}
+                        ${related.map((entity) => `<button type="button" data-entity-inspect="${escapeHtml(safeText(entity))}" class="stat-pill stat-pill--muted">${escapeHtml(previewText(safeText(entity), 30))}</button>`).join('')}
+                    </div>
+                    ${id ? `<div class="mt-2 flex flex-wrap gap-1.5">
+                        <button type="button" data-memory-control="pin" data-memory-id="${escapeHtml(id)}" class="stat-pill stat-pill--muted">Pin</button>
+                        <button type="button" data-memory-control="important" data-memory-id="${escapeHtml(id)}" class="stat-pill stat-pill--muted">Important</button>
+                        <button type="button" data-memory-control="archive" data-memory-id="${escapeHtml(id)}" class="stat-pill stat-pill--muted">Archive</button>
+                        <button type="button" data-memory-control="outdated" data-memory-id="${escapeHtml(id)}" class="stat-pill stat-pill--muted">Outdated</button>
+                        <button type="button" data-memory-control="forget" data-memory-id="${escapeHtml(id)}" class="stat-pill stat-pill--muted">Forget</button>
+                        <button type="button" data-command="That memory is wrong: ${escapeHtml(safeText(record?.title || id))}" class="stat-pill stat-pill--muted">Correct</button>
+                    </div>` : ''}
+                </div>
+            `;
+        };
+        return `
+            <div class="border border-teal-500/20 bg-teal-500/10 rounded-lg px-4 py-3">
+                <div class="flex flex-col xl:flex-row xl:items-start justify-between gap-3">
+                    <div class="min-w-0">
+                        <div class="text-[10px] font-mono uppercase tracking-widest text-teal-200/75">Memory Transparency</div>
+                        <div class="mt-1 text-lg font-semibold text-white tracking-tight">${records.length ? `${records.length} active memory record${records.length === 1 ? '' : 's'} with source and confidence` : 'No durable memory records are visible yet.'}</div>
+                        <div class="mt-1 text-[12px] text-ops-light/75">Memory is visible, correctable, and kept out of current attention when stale or low confidence.</div>
+                    </div>
+                    <div class="flex flex-wrap gap-1.5 shrink-0">
+                        <button type="button" data-command="What am I forgetting?" class="stat-pill stat-pill--accent">Forgetting?</button>
+                        <button type="button" data-command="Show stale or uncertain memory and why you believe it." class="stat-pill stat-pill--muted">Review stale</button>
+                        <button type="button" data-command="Explain your confidence in current memory." class="stat-pill stat-pill--muted">Confidence</button>
+                        <button type="button" data-refresh-brief class="stat-pill stat-pill--muted">Refresh</button>
+                    </div>
+                </div>
+                <div class="mt-4 grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-2">
+                    ${memoryMetric(records.length, 'records')}
+                    ${memoryMetric(newFacts.length, 'new facts')}
+                    ${memoryMetric(staleAssumptions.length, 'stale')}
+                    ${memoryMetric(uncertain.length, 'uncertain')}
+                    ${memoryMetric(conflicts.length, 'conflicts')}
+                    ${memoryMetric(averageMemoryConfidence === null ? '--' : `${averageMemoryConfidence}%`, 'confidence')}
+                    ${memoryMetric(pinnedCount, 'pinned')}
+                    ${memoryMetric(importantCount, 'important')}
+                    ${memoryMetric(outdatedCount + forgottenCount + archivedCount, 'suppressed')}
+                </div>
+                <div class="mt-3 grid grid-cols-1 xl:grid-cols-[1fr_1.25fr] gap-3">
+                    <div class="space-y-3">
+                        <section class="border border-ops-border rounded-lg bg-ops-surface/45 p-3">
+                            <div class="text-[10px] font-mono uppercase tracking-widest text-ops-light">Sources</div>
+                            <div class="mt-3 flex flex-wrap gap-1.5">
+                                ${sourcePills.length ? sourcePills.map(([source, count]) => `<span class="stat-pill stat-pill--muted">${escapeHtml(source)} ${count}</span>`).join('') : '<span class="text-[11px] text-ops-light/50">No memory sources available.</span>'}
+                                ${controlledRecords.length ? `<span class="stat-pill stat-pill--muted">${controlledRecords.length} controlled</span>` : ''}
+                            </div>
+                        </section>
+                        <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-1 gap-3">
+                            ${pulseRows('New Facts', newFacts, 'No fresh memory facts surfaced.', 3)}
+                            ${pulseRows('Stale Or Uncertain', [...staleAssumptions, ...uncertain], 'No stale or low-confidence memory is visible.', 4)}
+                        </div>
+                    </div>
+                    <section class="border border-ops-border rounded-lg bg-ops-surface/45 p-3">
+                        <div class="flex items-center justify-between gap-2">
+                            <div class="text-[10px] font-mono uppercase tracking-widest text-ops-light">Inspectable Records</div>
+                            <span class="stat-pill stat-pill--muted">${records.length}</span>
+                        </div>
+                        <div class="mt-3 space-y-3">
+                            ${records.slice(0, 6).map(memoryRecordCard).join('') || '<div class="border border-dashed border-ops-border rounded-lg p-4 text-[12px] text-ops-light/60">No memory records are available for inspection or correction.</div>'}
+                        </div>
+                    </section>
+                </div>
+            </div>
+        `;
+    })() : '';
+
+    const systemsHealthStrip = view === 'systems' ? (() => {
+        const systemItems = briefList(systemHealth.items);
+        const criticalRows = systemItems.filter((item) => safeText(item?.status).toLowerCase() === 'critical');
+        const warningRows = systemItems.filter((item) => ['warning', 'needs_credentials'].includes(safeText(item?.status).toLowerCase()));
+        const activeRows = systemItems.filter((item) => ['ok', 'active', 'quiet'].includes(safeText(item?.status).toLowerCase()));
+        const sourceCounts = systemItems.reduce((acc, item) => {
+            const source = safeText(item?.source || 'unknown').trim() || 'unknown';
+            acc[source] = (acc[source] || 0) + 1;
+            return acc;
+        }, {});
+        const topSources = Object.entries(sourceCounts).sort((a, b) => b[1] - a[1]).slice(0, 5);
+        const actionRows = systemItems
+            .filter((item) => safeText(item?.recommendedAction).trim() && safeText(item?.recommendedAction).toLowerCase() !== 'monitor.')
+            .slice(0, 5);
+        const topSystem = [...criticalRows, ...warningRows, ...systemItems][0] || null;
+        const systemMetric = (value, label) => `
+            <div class="border border-ops-border rounded bg-ops-bg/35 px-3 py-2">
+                <div class="text-lg font-semibold text-white">${escapeHtml(String(value))}</div>
+                <div class="text-[10px] font-mono text-ops-light/55">${escapeHtml(label)}</div>
+            </div>
+        `;
+        const systemStatusTone = (status) => {
+            const normalized = safeText(status).toLowerCase();
+            if (normalized === 'critical') return 'border-red-500/30 bg-red-500/10 text-red-200';
+            if (normalized === 'warning' || normalized === 'needs_credentials') return 'border-amber-500/30 bg-amber-500/10 text-amber-200';
+            if (normalized === 'active') return 'border-cyan-500/30 bg-cyan-500/10 text-cyan-200';
+            return 'border-emerald-500/25 bg-emerald-500/10 text-emerald-200';
+        };
+        const systemCard = (item) => {
+            const id = safeText(item?.id).trim();
+            const title = safeText(item?.title) || 'System';
+            const status = safeText(item?.status) || 'unknown';
+            const confidenceText = Number.isFinite(Number(item?.confidence)) ? `${Math.round(Number(item.confidence) * 100)}%` : 'n/a';
+            return `
+                <div class="border border-ops-border rounded-lg bg-ops-bg/35 px-3 py-3">
+                    <div class="flex items-start justify-between gap-3">
+                        <div class="min-w-0">
+                            <div class="text-sm font-semibold text-white truncate">${escapeHtml(title)}</div>
+                            <div class="mt-1 text-[11px] text-ops-light/75 leading-relaxed">${escapeHtml(previewText(safeText(item?.summary), 180) || 'No system detail available.')}</div>
+                        </div>
+                        <span class="stat-pill ${systemStatusTone(status)} shrink-0">${escapeHtml(status)}</span>
+                    </div>
+                    <div class="mt-2 flex flex-wrap gap-1.5">
+                        <span class="stat-pill stat-pill--muted">source ${escapeHtml(safeText(item?.source) || 'unknown')}</span>
+                        <span class="stat-pill stat-pill--muted">confidence ${escapeHtml(confidenceText)}</span>
+                        ${safeText(item?.recommendedAction) ? `<span class="stat-pill stat-pill--muted">${escapeHtml(previewText(safeText(item.recommendedAction), 48))}</span>` : ''}
+                        ${id ? `<button type="button" data-item-inspect="${escapeHtml(id)}" class="stat-pill stat-pill--accent">Inspect</button>` : ''}
+                    </div>
+                </div>
+            `;
+        };
+        return `
+            <div class="border border-cyan-500/20 bg-cyan-500/10 rounded-lg px-4 py-3">
+                <div class="flex flex-col xl:flex-row xl:items-start justify-between gap-3">
+                    <div class="min-w-0">
+                        <div class="text-[10px] font-mono uppercase tracking-widest text-cyan-200/75">Systems Health</div>
+                        <div class="mt-1 text-lg font-semibold text-white tracking-tight">${escapeHtml(safeText(topSystem?.title) || 'Operational systems are quiet.')}</div>
+                        <div class="mt-1 text-[12px] text-ops-light/75">${escapeHtml(safeText(topSystem?.summary) || 'Tools, integrations, websites, desktop context, credentials, and operational infrastructure are tracked separately from projects and messages.')}</div>
+                    </div>
+                    <div class="flex flex-wrap gap-1.5 shrink-0">
+                        <button type="button" data-command="Show system health, warnings, credentials, integrations, and recommended actions." class="stat-pill stat-pill--accent">Health</button>
+                        <button type="button" data-command="Which systems need credentials or setup?" class="stat-pill stat-pill--muted">Credentials</button>
+                        <button type="button" data-command="What system issues can I ignore for now?" class="stat-pill stat-pill--muted">Can wait</button>
+                        <button type="button" data-refresh-brief class="stat-pill stat-pill--muted">Refresh</button>
+                    </div>
+                </div>
+                <div class="mt-4 grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-2">
+                    ${systemMetric(systemItems.length, 'systems')}
+                    ${systemMetric(criticalRows.length || Number(systemHealth.criticalCount || 0), 'critical')}
+                    ${systemMetric(warningRows.length || Number(systemHealth.warningCount || 0), 'warnings')}
+                    ${systemMetric(activeRows.length || Number(systemHealth.okCount || 0), 'ok/active')}
+                    ${systemMetric(actionRows.length, 'actions')}
+                    ${systemMetric(topSources.length, 'sources')}
+                    ${systemMetric(proactiveMode, 'mode')}
+                </div>
+                <div class="mt-3 grid grid-cols-1 xl:grid-cols-[1fr_1.35fr] gap-3">
+                    <div class="space-y-3">
+                        <section class="border border-ops-border rounded-lg bg-ops-surface/45 p-3">
+                            <div class="text-[10px] font-mono uppercase tracking-widest text-ops-light">System Sources</div>
+                            <div class="mt-3 flex flex-wrap gap-1.5">
+                                ${topSources.length ? topSources.map(([source, count]) => `<span class="stat-pill stat-pill--muted">${escapeHtml(source)} ${count}</span>`).join('') : '<span class="text-[11px] text-ops-light/50">No system sources available.</span>'}
+                            </div>
+                        </section>
+                        <section class="border border-ops-border rounded-lg bg-ops-surface/45 p-3">
+                            <div class="flex items-center justify-between gap-2">
+                                <div class="text-[10px] font-mono uppercase tracking-widest text-ops-light">Recommended Actions</div>
+                                <span class="stat-pill stat-pill--muted">${actionRows.length}</span>
+                            </div>
+                            <div class="mt-3 space-y-2">
+                                ${actionRows.length ? actionRows.map((item) => `
+                                    <button type="button" data-command="${escapeHtml(`Create a draft action for system health item ${safeText(item?.title)}: ${safeText(item?.recommendedAction)}`)}" class="w-full text-left border border-ops-border rounded bg-ops-bg/35 px-3 py-2 hover:bg-ops-surface/60 transition-colors">
+                                        <div class="text-[11px] text-white truncate">${escapeHtml(safeText(item?.title) || 'System action')}</div>
+                                        <div class="text-[10px] text-ops-light/60 truncate">${escapeHtml(safeText(item?.recommendedAction))}</div>
+                                    </button>
+                                `).join('') : '<div class="text-[11px] text-ops-light/50">No system action needs drafting right now.</div>'}
+                            </div>
+                        </section>
+                    </div>
+                    <section class="border border-ops-border rounded-lg bg-ops-surface/45 p-3">
+                        <div class="flex items-center justify-between gap-2">
+                            <div class="text-[10px] font-mono uppercase tracking-widest text-ops-light">Operational Systems</div>
+                            <span class="stat-pill stat-pill--muted">${systemItems.length}</span>
+                        </div>
+                        <div class="mt-3 space-y-3">
+                            ${systemItems.length ? systemItems.map(systemCard).join('') : '<div class="border border-dashed border-ops-border rounded-lg p-4 text-[12px] text-ops-light/60">No system health records are available in the current brief.</div>'}
+                        </div>
+                    </section>
+                </div>
+            </div>
+        `;
+    })() : '';
+
+    const communicationIntelligenceStrip = (view === 'command' || view === 'now') ? (() => {
+        const counts = communicationIntelligence?.counts && typeof communicationIntelligence.counts === 'object' ? communicationIntelligence.counts : {};
+        const waitingMarkRows = briefList(communicationIntelligence.waitingOnMark).length ? briefList(communicationIntelligence.waitingOnMark) : waitingOnMark;
+        const waitingOtherRows = briefList(communicationIntelligence.waitingOnOthers).length ? briefList(communicationIntelligence.waitingOnOthers) : [...waitingOnClients, ...waitingOnTeam];
+        const draftRows = briefList(communicationIntelligence.draftableReplies);
+        const followUpRows = briefList(communicationIntelligence.followUpsDue);
+        const silenceRows = briefList(communicationIntelligence.unusualSilence);
+        const opportunityRows = briefList(communicationIntelligence.highValueMissedOpportunities);
+        const topObligation = waitingMarkRows[0] || followUpRows[0] || draftRows[0] || opportunityRows[0] || silenceRows[0] || null;
+        const commMetric = (value, label) => `
+            <div class="border border-ops-border rounded bg-ops-bg/35 px-3 py-2">
+                <div class="text-lg font-semibold text-white">${escapeHtml(String(value))}</div>
+                <div class="text-[10px] font-mono text-ops-light/55">${escapeHtml(label)}</div>
+            </div>
+        `;
+        const commCell = (title, rows, empty, limit = 3) => `
+            <section class="border border-ops-border rounded-lg bg-ops-surface/45 p-3 min-h-[10rem]">
+                <div class="flex items-center justify-between gap-2">
+                    <div class="text-[10px] font-mono uppercase tracking-widest text-ops-light">${escapeHtml(title)}</div>
+                    <span class="stat-pill stat-pill--muted shrink-0">${briefList(rows).length}</span>
+                </div>
+                <div class="mt-3 space-y-2">${miniRows(rows, empty, limit)}</div>
+            </section>
+        `;
+        const draftButtons = draftRows.slice(0, 3).map((item) => {
+            const title = safeText(item?.title || item?.summary || item?.body) || 'Draft reply';
+            const body = safeText(item?.body || item?.summary || item?.title);
+            return `<button type="button" data-command="${escapeHtml(`Draft a reply but do not send: ${body || title}`)}" class="stat-pill stat-pill--muted">${escapeHtml(previewText(title, 34))}</button>`;
+        }).join('');
+        return `
+            <div class="border border-lime-500/20 bg-lime-500/10 rounded-lg px-4 py-3">
+                <div class="flex flex-col xl:flex-row xl:items-start justify-between gap-3">
+                    <div class="min-w-0">
+                        <div class="text-[10px] font-mono uppercase tracking-widest text-lime-200/75">Communication Intelligence</div>
+                        <div class="mt-1 text-lg font-semibold text-white tracking-tight">${escapeHtml(safeText(topObligation?.title) || 'No communication obligation is above threshold.')}</div>
+                        <div class="mt-1 text-[12px] text-ops-light/75">${escapeHtml(safeText(commandItemDetail(topObligation)) || 'This is obligation tracking, not an inbox: waiting states, draftable replies, follow-ups, silence, and missed opportunities.')}</div>
+                    </div>
+                    <div class="flex flex-wrap gap-1.5 shrink-0">
+                        <button type="button" data-command="Show communication intelligence: waiting on me, waiting on others, draftable replies, follow-ups due, unusual silence, and missed opportunities." class="stat-pill stat-pill--accent">Inspect</button>
+                        <button type="button" data-command="What's waiting on me?" class="stat-pill stat-pill--muted">Waiting on me</button>
+                        <button type="button" data-command="Create a follow-up action for the most important communication obligation." class="stat-pill stat-pill--muted">Follow-up</button>
+                        ${draftButtons}
+                    </div>
+                </div>
+                <div class="mt-4 grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-2">
+                    ${commMetric(Number(counts.waitingOnMark ?? waitingMarkRows.length), 'waiting on Mark')}
+                    ${commMetric(Number(counts.waitingOnOthers ?? waitingOtherRows.length), 'waiting elsewhere')}
+                    ${commMetric(Number(counts.draftableReplies ?? draftRows.length), 'draftable')}
+                    ${commMetric(Number(counts.followUpsDue ?? followUpRows.length), 'follow-ups')}
+                    ${commMetric(Number(counts.unusualSilence ?? silenceRows.length), 'silence')}
+                    ${commMetric(Number(counts.highValueMissedOpportunities ?? opportunityRows.length), 'opportunities')}
+                </div>
+                <div class="mt-3 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                    ${commCell('Waiting On Mark', waitingMarkRows, 'No high-confidence communication is waiting on Mark.', 3)}
+                    ${commCell('Follow-Ups Due', followUpRows, 'No aging actionable message needs follow-up.', 3)}
+                    ${commCell('Draftable Replies', draftRows, 'No reply drafts are prepared yet.', 3)}
+                    ${commCell('Waiting Elsewhere', waitingOtherRows, 'No meaningful waiting-on-others communication surfaced.', 3)}
+                    ${commCell('Unusual Silence', silenceRows, 'No relationship silence crossed the current threshold.', 3)}
+                    ${commCell('Missed Opportunities', opportunityRows, 'No possible revenue or relationship opportunities surfaced.', 3)}
+                </div>
+            </div>
+        `;
+    })() : '';
+
+    const main = document.createElement('div');
+    main.className = 'h-full min-h-0 overflow-y-auto p-4 space-y-4';
+    main.innerHTML = `
+        <div class="border border-blue-500/25 bg-blue-500/10 rounded-lg px-4 py-3">
+            <div class="flex flex-col lg:flex-row lg:items-start justify-between gap-3">
+                <div class="min-w-0">
+                    <div class="text-[10px] font-mono uppercase tracking-widest text-blue-200/75">MARCUS Command Surface</div>
+                    <div class="mt-1 text-xl font-semibold text-white tracking-tight">What does Mark need to know, decide, or do right now?</div>
+                    <div class="mt-2 text-[12px] text-ops-light/80 leading-relaxed">${escapeHtml(safeText(brief.narrativeSummary) || (state.activeBriefLoading ? 'Building the current operating brief...' : 'No ranked brief is available yet.'))}</div>
+                </div>
+                <div class="flex flex-wrap gap-1.5 shrink-0">
+                    <button type="button" data-command="What matters today?" class="stat-pill stat-pill--accent">What matters?</button>
+                    <button type="button" data-command="What needs a decision?" class="stat-pill stat-pill--accent">Decisions?</button>
+                    <button type="button" data-command="What am I forgetting?" class="stat-pill stat-pill--accent">Forgetting?</button>
+                    <button type="button" data-refresh-brief class="stat-pill stat-pill--muted">Refresh</button>
+                </div>
+            </div>
+            <div class="mt-3 flex flex-wrap items-center gap-1.5">
+                <span class="text-[10px] font-mono uppercase tracking-widest text-ops-light/55 mr-1">Proactive</span>
+                ${['quiet', 'normal', 'aggressive', 'focus', 'away'].map((mode) => `<button type="button" data-proactive-mode="${mode}" class="stat-pill ${proactiveMode === mode ? 'stat-pill--accent' : 'stat-pill--muted'}">${mode}</button>`).join('')}
+                ${safeText(attentionPolicy.description) ? `<span class="stat-pill stat-pill--muted">${escapeHtml(safeText(attentionPolicy.description))}</span>` : ''}
+            </div>
+            <div class="mt-3 grid grid-cols-2 md:grid-cols-5 gap-2">
+                <div class="border border-ops-border rounded bg-ops-bg/35 px-3 py-2"><div class="text-lg font-semibold text-white">${Number(attentionPolicy.visibleAttentionCount ?? topPriorities.length)}</div><div class="text-[10px] font-mono text-ops-light/55">attention</div></div>
+                <div class="border border-ops-border rounded bg-ops-bg/35 px-3 py-2"><div class="text-lg font-semibold text-white">${decisionQueue.length}</div><div class="text-[10px] font-mono text-ops-light/55">decisions</div></div>
+                <div class="border border-ops-border rounded bg-ops-bg/35 px-3 py-2"><div class="text-lg font-semibold text-white">${urgentInterrupts.length}</div><div class="text-[10px] font-mono text-ops-light/55">interrupts</div></div>
+                <div class="border border-ops-border rounded bg-ops-bg/35 px-3 py-2"><div class="text-lg font-semibold text-white">${dormantProjects.length}</div><div class="text-[10px] font-mono text-ops-light/55">known history</div></div>
+                <div class="border border-ops-border rounded bg-ops-bg/35 px-3 py-2"><div class="text-lg font-semibold text-white">${confidence === null ? '--' : confidence}</div><div class="text-[10px] font-mono text-ops-light/55">confidence</div></div>
+            </div>
+            <form data-command-surface-form class="mt-3 border border-blue-500/25 rounded-lg bg-ops-bg/45 p-2.5">
+                <div class="flex items-end gap-2">
+                    <textarea data-command-surface-input rows="1" class="min-h-[2.5rem] max-h-28 flex-1 bg-black/20 border border-white/10 rounded-lg px-3 py-2 text-white text-xs font-mono resize-none focus:outline-none focus:ring-1 focus:ring-blue-500/35 focus:border-blue-500/50" placeholder="Ask, inspect, decide, draft, update memory, or create an action..."></textarea>
+                    <button type="submit" class="h-10 w-10 shrink-0 rounded-lg border border-blue-500/35 bg-blue-500/15 text-blue-100 hover:bg-blue-500/25 transition-colors" title="Run command">
+                        <i class="fa-solid fa-arrow-turn-up"></i>
+                    </button>
+                </div>
+                <div class="mt-2 flex flex-wrap gap-1.5">
+                    <button type="button" data-command-fill="What changed since my last check-in?" class="stat-pill stat-pill--muted">changed?</button>
+                    <button type="button" data-command-fill="Show me everything related to " class="stat-pill stat-pill--muted">entity</button>
+                    <button type="button" data-command-fill="Create a follow-up action: " class="stat-pill stat-pill--muted">follow-up</button>
+                    <button type="button" data-command-fill="That memory is wrong: " class="stat-pill stat-pill--muted">correct memory</button>
+                    <button type="button" data-command-fill="Draft a reply but do not send: " class="stat-pill stat-pill--muted">draft</button>
+                </div>
+            </form>
+        </div>
+
+        ${nowBriefingStrip}
+        ${focusLaneStrip}
+        ${signalsStreamStrip}
+        ${memoryTransparencyStrip}
+        ${systemsHealthStrip}
+        ${communicationIntelligenceStrip}
+
+        <div class="grid grid-cols-1 xl:grid-cols-[0.9fr_1.4fr] gap-4">
+            <div class="space-y-4">
+                <section class="border border-ops-border rounded-lg bg-ops-surface/45 p-4">
+                    <div class="flex items-center justify-between gap-2">
+                        <div class="text-[10px] font-mono uppercase tracking-widest text-ops-light">Current Focus</div>
+                        <div class="flex flex-wrap gap-1.5">
+                            <button type="button" data-command="Set or explain my current focus." class="stat-pill stat-pill--muted">Adjust</button>
+                            ${focusPolicy.source === 'operational-controls' ? '<button type="button" data-command="Clear current focus." class="stat-pill stat-pill--muted">Clear</button>' : ''}
+                        </div>
+                    </div>
+                    <div class="mt-3 text-base font-semibold text-white">${escapeHtml(safeText(focus?.name || focus?.title) || 'No focus pinned')}</div>
+                    <div class="mt-1 text-[11px] text-ops-light/70">${escapeHtml(safeText(focus?.businessName || focus?.businessKey || focus?.detail || focus?.summary) || 'MARCUS will infer focus from active work, desktop context, and ranked signals.')}</div>
+                    <div class="mt-2 flex flex-wrap gap-1.5">
+                        <span class="stat-pill ${focusPolicy.source === 'operational-controls' ? 'stat-pill--accent' : 'stat-pill--muted'}">${focusPolicy.source === 'operational-controls' ? 'Pinned by Mark' : 'Inferred focus'}</span>
+                        ${Number(focusPolicy.controlledFocusCount || 0) ? `<span class="stat-pill stat-pill--muted">${Number(focusPolicy.controlledFocusCount)} controlled lane${Number(focusPolicy.controlledFocusCount) === 1 ? '' : 's'}</span>` : ''}
+                    </div>
+                    <div class="mt-3 space-y-2">
+                        ${focusLanes.slice(0, 4).map((p) => {
+                            const id = safeText(p?.id || p?.targetId || p?.target || p?.name || p?.title);
+                            const label = safeText(p?.name || p?.title) || 'Active work';
+                            const detail = safeText(p?.businessName || p?.businessKey || p?.activityStatus || p?.status || p?.summary || p?.detail);
+                            const pinned = p?.focusPinned || p?.pinned || p?.primary;
+                            return `<div class="border border-ops-border rounded bg-ops-bg/35 px-3 py-2">
+                                <div class="flex items-center justify-between gap-2">
+                                    <div class="min-w-0">
+                                        <div class="text-[11px] text-white truncate">${escapeHtml(label)}</div>
+                                        <div class="text-[10px] text-ops-light/60 truncate">${escapeHtml(detail || (pinned ? 'Pinned focus lane' : 'Active work lane'))}</div>
+                                    </div>
+                                    ${id ? `<button type="button" data-focus-pin="${escapeHtml(id)}" data-focus-title="${escapeHtml(label)}" data-focus-detail="${escapeHtml(detail)}" class="stat-pill ${pinned ? 'stat-pill--accent' : 'stat-pill--muted'}">${pinned ? 'Pinned' : 'Pin'}</button>` : ''}
+                                </div>
+                            </div>`;
+                        }).join('') || '<div class="text-[11px] text-ops-light/55">No active work lanes</div>'}
+                    </div>
+                    ${dormantProjects.length ? `<div class="mt-3 text-[10px] text-ops-light/55">${dormantProjects.length} dormant or historical projects suppressed from active attention.</div>` : ''}
+                </section>
+
+                <section class="border border-ops-border rounded-lg bg-ops-surface/45 p-4">
+                    <div class="flex items-center justify-between gap-2">
+                        <div class="text-[10px] font-mono uppercase tracking-widest text-ops-light">Decision Queue</div>
+                        <button type="button" data-command="What needs a decision?" class="stat-pill stat-pill--muted">Inspect</button>
+                    </div>
+                    <div class="mt-3 space-y-2">
+                        ${decisionQueue.slice(0, 3).map((item) => {
+                            const question = safeText(item?.question) || 'What should happen next?';
+                            const title = safeText(item?.title) || 'Decision needed';
+                            const summary = safeText(item?.summary || item?.recommendedAction);
+                            const score = Number.isFinite(Number(item?.score)) ? Math.round(Number(item.score)) : null;
+                            const sourceSignalId = safeText(item?.sourceSignalId).trim();
+                            const sourceActionId = safeText(item?.sourceActionId).trim();
+                            return `<div class="border border-ops-border rounded bg-ops-bg/35 px-3 py-2">
+                                <div class="flex items-start justify-between gap-2">
+                                    <div class="min-w-0">
+                                        <div class="text-[11px] text-white">${escapeHtml(question)}</div>
+                                        <div class="mt-0.5 text-[10px] text-ops-light/65 truncate">${escapeHtml(title)}${summary ? ` / ${escapeHtml(summary)}` : ''}</div>
+                                    </div>
+                                    ${score === null ? '' : `<span class="stat-pill stat-pill--muted shrink-0">${score}</span>`}
+                                </div>
+                                <div class="mt-2 flex flex-wrap gap-1.5">
+                                    <button type="button" data-item-inspect="${escapeHtml(safeText(item?.id || sourceSignalId || sourceActionId))}" class="stat-pill stat-pill--accent">Why</button>
+                                    ${sourceActionId ? `<button type="button" data-action-transition="approved_action" data-action-id="${escapeHtml(sourceActionId)}" class="stat-pill stat-pill--muted">Approve</button><button type="button" data-action-transition="dismissed_action" data-action-id="${escapeHtml(sourceActionId)}" class="stat-pill stat-pill--muted">Dismiss</button>` : ''}
+                                    ${sourceSignalId ? `<button type="button" data-signal-control="snooze" data-signal-id="${escapeHtml(sourceSignalId)}" class="stat-pill stat-pill--muted">Snooze</button><button type="button" data-signal-control="convert" data-signal-id="${escapeHtml(sourceSignalId)}" class="stat-pill stat-pill--muted">Action</button><button type="button" data-signal-control="dismiss" data-signal-id="${escapeHtml(sourceSignalId)}" class="stat-pill stat-pill--muted">Dismiss</button>` : ''}
+                                </div>
+                            </div>`;
+                        }).join('') || '<div class="text-[11px] text-ops-light/55">No explicit decision points above threshold.</div>'}
+                    </div>
+                </section>
+
+                <section class="border border-ops-border rounded-lg bg-ops-surface/45 p-4">
+                    <div class="flex items-center justify-between gap-2">
+                        <div class="text-[10px] font-mono uppercase tracking-widest text-ops-light">Can Wait</div>
+                        <button type="button" data-command="What can I ignore for now?" class="stat-pill stat-pill--muted">Inspect</button>
+                    </div>
+                    <div class="mt-3 space-y-2">
+                        ${ignoreQueue.slice(0, 3).map((item) => {
+                            const title = safeText(item?.title) || 'Low-signal item';
+                            const reason = safeText(item?.reason || item?.summary) || 'Below attention threshold.';
+                            const score = Number.isFinite(Number(item?.score)) ? Math.round(Number(item.score)) : null;
+                            return `<div class="border border-ops-border rounded bg-ops-bg/30 px-3 py-2">
+                                <div class="flex items-start justify-between gap-2">
+                                    <div class="min-w-0">
+                                        <div class="text-[11px] text-ops-light/80 truncate">${escapeHtml(title)}</div>
+                                        <div class="mt-0.5 text-[10px] text-ops-light/50 truncate">${escapeHtml(reason)}</div>
+                                    </div>
+                                    ${score === null ? '' : `<span class="stat-pill stat-pill--muted shrink-0">${score}</span>`}
+                                </div>
+                            </div>`;
+                        }).join('') || '<div class="text-[11px] text-ops-light/55">No explicit can-wait items were returned.</div>'}
+                    </div>
+                </section>
+
+                <section class="border border-ops-border rounded-lg bg-ops-surface/45 p-4">
+                    <div class="flex items-center justify-between gap-2">
+                        <div class="text-[10px] font-mono uppercase tracking-widest text-ops-light">Session Briefing</div>
+                        <div class="flex flex-wrap gap-1.5">
+                            <button type="button" data-command="Brief me with what changed, what needs attention, top 3 actions, systems, opportunities, and what I can ignore." class="stat-pill stat-pill--muted">Brief me</button>
+                            <button type="button" data-session-check-in class="stat-pill stat-pill--muted">Check in</button>
+                        </div>
+                    </div>
+                    <div class="mt-3 space-y-2">
+                        <div class="text-[11px] text-ops-light/75">Changed: ${escapeHtml(safeText(sessionBriefing.changedSummary || sessionContext.briefingLine) || 'No prior check-in recorded yet.')}</div>
+                        ${briefList(sessionBriefing.changedSinceLastTime || sessionContext.changedSinceLastCheckIn).slice(0, 3).map((item) => `<div class="text-[11px] text-ops-light/75">Change: ${escapeHtml(previewText(safeText(item?.title || item?.summary), 120))}</div>`).join('')}
+                        ${briefList(sessionBriefing.needsAttention).slice(0, 3).map((item) => `<div class="text-[11px] text-ops-light/75">Attention: ${escapeHtml(previewText(safeText(item?.title || item?.summary), 120))}</div>`).join('') || '<div class="text-[11px] text-ops-light/55">Attention: nothing urgent crossed the threshold.</div>'}
+                        ${briefList(sessionBriefing.decisions).slice(0, 2).map((item) => `<div class="text-[11px] text-ops-light/75">Decision: ${escapeHtml(previewText(safeText(item?.question || item?.title || item?.summary), 120))}</div>`).join('')}
+                        ${briefList(sessionBriefing.topActions).slice(0, 2).map((item) => `<div class="text-[11px] text-ops-light/75">Action: ${escapeHtml(previewText(safeText(item?.title || item?.summary), 120))}</div>`).join('') || '<div class="text-[11px] text-ops-light/55">Action: no prepared approvals queued.</div>'}
+                        ${briefList(sessionBriefing.canIgnore).slice(0, 2).map((item) => `<div class="text-[11px] text-ops-light/60">Ignore: ${escapeHtml(previewText(safeText(item), 120))}</div>`).join('')}
+                    </div>
+                </section>
+
+                <section class="border border-ops-border rounded-lg bg-ops-surface/45 p-4">
+                    <div class="flex items-center justify-between gap-2">
+                        <div class="text-[10px] font-mono uppercase tracking-widest text-ops-light">Communication Intelligence</div>
+                        <button type="button" data-command="Show communication intelligence: waiting on me, waiting on others, draftable replies, follow-ups due, unusual silence, and missed opportunities." class="stat-pill stat-pill--muted">Inspect</button>
+                    </div>
+                    <div class="mt-3 grid grid-cols-2 md:grid-cols-3 gap-2">
+                        <div class="border border-ops-border rounded bg-ops-bg/35 px-3 py-2"><div class="text-lg font-semibold text-white">${Number(communicationIntelligence?.counts?.waitingOnMark ?? waitingOnMark.length)}</div><div class="text-[10px] text-ops-light/55">waiting on Mark</div></div>
+                        <div class="border border-ops-border rounded bg-ops-bg/35 px-3 py-2"><div class="text-lg font-semibold text-white">${Number(communicationIntelligence?.counts?.waitingOnOthers ?? (waitingOnClients.length + waitingOnTeam.length))}</div><div class="text-[10px] text-ops-light/55">waiting elsewhere</div></div>
+                        <div class="border border-ops-border rounded bg-ops-bg/35 px-3 py-2"><div class="text-lg font-semibold text-white">${Number(communicationIntelligence?.counts?.draftableReplies ?? 0)}</div><div class="text-[10px] text-ops-light/55">draftable</div></div>
+                        <div class="border border-ops-border rounded bg-ops-bg/35 px-3 py-2"><div class="text-lg font-semibold text-white">${Number(communicationIntelligence?.counts?.followUpsDue ?? 0)}</div><div class="text-[10px] text-ops-light/55">follow-ups</div></div>
+                        <div class="border border-ops-border rounded bg-ops-bg/35 px-3 py-2"><div class="text-lg font-semibold text-white">${Number(communicationIntelligence?.counts?.unusualSilence ?? 0)}</div><div class="text-[10px] text-ops-light/55">silence</div></div>
+                        <div class="border border-ops-border rounded bg-ops-bg/35 px-3 py-2"><div class="text-lg font-semibold text-white">${Number(communicationIntelligence?.counts?.highValueMissedOpportunities ?? 0)}</div><div class="text-[10px] text-ops-light/55">opportunities</div></div>
+                    </div>
+                    <div class="mt-3 space-y-2">${miniRows(briefList(communicationIntelligence.waitingOnMark).length ? communicationIntelligence.waitingOnMark : waitingOnMark, 'No communication obligations above threshold.', 3)}</div>
+                </section>
+
+                <section class="border border-ops-border rounded-lg bg-ops-surface/45 p-4">
+                    <div class="text-[10px] font-mono uppercase tracking-widest text-ops-light">Memory Pulse</div>
+                    <div class="mt-3 space-y-2">
+                        ${briefList(memoryPulse.newFacts).slice(0, 2).map((item) => `<div class="text-[11px] text-ops-light/75">New: ${escapeHtml(previewText(safeText(item?.title || item?.summary), 110))} <span class="text-ops-light/40">(${escapeHtml(safeText(item?.source) || 'source unknown')})</span></div>`).join('') || '<div class="text-[11px] text-ops-light/55">New: no fresh memory records surfaced.</div>'}
+                        ${briefList(memoryPulse.staleAssumptions).slice(0, 2).map((item) => `<div class="text-[11px] text-ops-light/75">Stale: ${escapeHtml(previewText(safeText(item?.title || item?.summary), 110))}</div>`).join('') || `<div class="text-[11px] text-ops-light/75">Stale: ${dormantProjects.length} old project${dormantProjects.length === 1 ? '' : 's'} should stay in known history unless pinned.</div>`}
+                        ${briefList(memoryPulse.uncertain).slice(0, 2).map((item) => `<div class="text-[11px] text-ops-light/75">Unsure: ${escapeHtml(previewText(safeText(item?.title || item?.summary), 110))}</div>`).join('') || '<div class="text-[11px] text-ops-light/55">Unsure: no low-confidence signals above threshold.</div>'}
+                    </div>
+                </section>
+            </div>
+
+            <section class="border border-ops-border rounded-lg bg-ops-surface/45 p-4 min-h-[420px]">
+                <div class="flex items-center justify-between gap-2">
+                    <div>
+                        <div class="text-[10px] font-mono uppercase tracking-widest text-ops-light">${view === 'signals' ? 'Signal Stream' : view === 'systems' ? 'System Health Queue' : view === 'memory' ? 'Memory Review Queue' : 'Attention Queue'}</div>
+                        <div class="text-[11px] text-ops-light/55 mt-0.5">${view === 'memory' ? 'Memory is shown with source, confidence, and correction intent.' : view === 'systems' ? 'Operational systems are separated from projects and communications.' : 'Ranked by urgency, importance, money, relationships, focus, risk, and whether Mark is the blocker.'}</div>
+                        ${suppressedControlCount ? `<div class="text-[10px] text-ops-light/45 mt-1">${suppressedControlCount} item${suppressedControlCount === 1 ? '' : 's'} hidden by dismiss/snooze/action controls.</div>` : ''}
+                        ${suppressedModeCount ? `<div class="text-[10px] text-ops-light/45 mt-1">${suppressedModeCount} item${suppressedModeCount === 1 ? '' : 's'} hidden by ${escapeHtml(proactiveMode)} mode.</div>` : ''}
+                    </div>
+                    <button type="button" data-command="Explain how you ranked my attention queue." class="stat-pill stat-pill--muted">Why ranked?</button>
+                </div>
+                <div class="mt-4 space-y-3">
+                    ${attentionItems.length ? attentionItems.map(itemCard).join('') : `<div class="border border-dashed border-ops-border rounded-lg p-4 text-[12px] text-ops-light/60">No attention items crossed the signal threshold.</div>`}
+                </div>
+            </section>
+        </div>
+    `;
+    container.appendChild(main);
+
+    if (sidePort) {
+        const side = document.createElement('div');
+        side.className = 'h-full min-h-0 overflow-y-auto p-4 space-y-4';
+        side.innerHTML = `
+            <section class="border border-ops-border rounded-lg bg-ops-surface/45 p-4">
+                <div class="text-[10px] font-mono uppercase tracking-widest text-ops-light">System Health</div>
+                <div class="mt-3 space-y-2">
+                    ${briefList(systemHealth.items).slice(0, 5).map((item) => {
+                        const status = safeText(item?.status);
+                        const tone = status === 'critical' ? 'text-red-300' : status === 'warning' || status === 'needs_credentials' ? 'text-amber-300' : status === 'active' ? 'text-blue-300' : 'text-emerald-300';
+                        return `<div class="border border-ops-border rounded bg-ops-bg/35 px-2.5 py-2">
+                            <div class="flex items-center justify-between gap-2 text-[11px]">
+                                <span class="text-white truncate">${escapeHtml(safeText(item?.title) || 'System')}</span>
+                                <span class="${tone} font-mono shrink-0">${escapeHtml(status || 'unknown')}</span>
+                            </div>
+                            <div class="mt-0.5 text-[10px] text-ops-light/60 truncate">${escapeHtml(safeText(item?.summary) || 'No detail')}</div>
+                        </div>`;
+                    }).join('') || '<div class="text-[11px] text-ops-light/50">No system health data available.</div>'}
+                </div>
+            </section>
+            <section class="border border-ops-border rounded-lg bg-ops-surface/45 p-4">
+                <div class="text-[10px] font-mono uppercase tracking-widest text-ops-light">Suggested Actions</div>
+                <div class="mt-3 space-y-2">
+                    ${actionQueue.length ? actionQueue.slice(0, 5).map((a) => {
+                        const control = actionControls[safeText(a?.id)] || {};
+                        const lifecycle = safeText(control.lifecycle || a?.lifecycle || a?.suggestedButtonLabel) || 'Review';
+                        const actionId = safeText(a?.id);
+                        return `
+                        <div class="border border-ops-border rounded bg-ops-bg/35 px-3 py-2">
+                            <button type="button" data-command="${escapeHtml(safeText(a?.body || a?.summary || a?.title))}" class="w-full text-left hover:text-white transition-colors">
+                                <div class="text-[11px] text-white truncate">${escapeHtml(safeText(a?.title) || 'Prepared action')}</div>
+                                <div class="text-[10px] text-ops-light/60 truncate">${escapeHtml(lifecycle)}${a?.approvalRequired || a?.requiresApproval ? ' / approval required' : ''}</div>
+                            </button>
+                            <div class="mt-2 flex flex-wrap gap-1.5">
+                                <button type="button" data-action-transition="approved_action" data-action-id="${escapeHtml(actionId)}" class="stat-pill stat-pill--muted">Approve</button>
+                                <button type="button" data-action-transition="completed_action" data-action-id="${escapeHtml(actionId)}" class="stat-pill stat-pill--muted">Complete</button>
+                                <button type="button" data-action-transition="dismissed_action" data-action-id="${escapeHtml(actionId)}" class="stat-pill stat-pill--muted">Dismiss</button>
+                            </div>
+                        </div>
+                    `; }).join('') : `
+                        <button type="button" data-command="Generate a concise session briefing with top 3 actions." class="w-full text-left border border-ops-border rounded bg-ops-bg/35 px-3 py-2 hover:bg-ops-surface/60 transition-colors">
+                            <div class="text-[11px] text-white">Generate briefing</div>
+                            <div class="text-[10px] text-ops-light/60">Top changes, blockers, and next moves.</div>
+                        </button>
+                    `}
+                </div>
+            </section>
+            <section class="border border-ops-border rounded-lg bg-ops-surface/45 p-4">
+                <div class="text-[10px] font-mono uppercase tracking-widest text-ops-light">Risks and Opportunities</div>
+                <div class="mt-3 space-y-2">${miniRows([...(briefList(sessionBriefing.risks).length ? briefList(sessionBriefing.risks) : risks), ...(briefList(sessionBriefing.opportunities).length ? briefList(sessionBriefing.opportunities) : opportunities)], 'No strong risk or opportunity signals.', 5)}</div>
+            </section>
+            <section class="border border-ops-border rounded-lg bg-ops-surface/45 p-4">
+                <div class="flex items-center justify-between gap-2">
+                    <div class="text-[10px] font-mono uppercase tracking-widest text-ops-light">World Model</div>
+                    <button type="button" data-entity-search class="stat-pill stat-pill--muted">Search</button>
+                </div>
+                <div class="mt-3 grid grid-cols-2 gap-2">
+                    ${Object.entries(worldModel.counts || {}).slice(0, 6).map(([key, value]) => `<div class="border border-ops-border rounded bg-ops-bg/35 px-2.5 py-2"><div class="text-sm font-semibold text-white">${escapeHtml(String(value ?? 0))}</div><div class="text-[9px] font-mono text-ops-light/55">${escapeHtml(key)}</div></div>`).join('') || '<div class="text-[11px] text-ops-light/50">World model has not been built yet.</div>'}
+                </div>
+                <div class="mt-3 flex flex-wrap gap-1.5">
+                    ${[
+                        ...briefList(worldModel?.entities?.people).slice(0, 3),
+                        ...briefList(worldModel?.entities?.projects).slice(0, 3),
+                        ...briefList(worldModel?.entities?.clients).slice(0, 2),
+                    ].map((entity) => `<button type="button" data-entity-inspect="${escapeHtml(safeText(entity?.id || entity?.name))}" class="stat-pill stat-pill--muted">${escapeHtml(previewText(safeText(entity?.name || entity?.id), 28))}</button>`).join('')}
+                </div>
+            </section>
+            ${view === 'memory' ? `<section class="border border-ops-border rounded-lg bg-ops-surface/45 p-4">
+                <div class="text-[10px] font-mono uppercase tracking-widest text-ops-light">Memory Controls</div>
+                <div class="mt-3 space-y-2">
+                    ${briefList(memoryPulse.records).slice(0, 8).map((record) => {
+                        const id = safeText(record?.id);
+                        const control = memoryControls[id] || {};
+                        const stateLabel = control.forgotten ? 'forgotten' : control.archived ? 'archived' : control.outdated ? 'outdated' : control.important ? 'important' : control.pinned ? 'pinned' : safeText(record?.status) || 'active';
+                        return `<div class="border border-ops-border rounded bg-ops-bg/35 px-2.5 py-2">
+                            <div class="flex items-start justify-between gap-2">
+                                <div class="min-w-0">
+                                    <div class="text-[11px] text-white truncate">${escapeHtml(safeText(record?.title) || 'Memory')}</div>
+                                    <div class="text-[10px] text-ops-light/60 truncate">source: ${escapeHtml(safeText(record?.source) || 'unknown')} / confidence ${Math.round(Number(record?.confidence || 0) * 100)}%</div>
+                                </div>
+                                <span class="stat-pill stat-pill--muted shrink-0">${escapeHtml(stateLabel)}</span>
+                            </div>
+                            <div class="mt-2 flex flex-wrap gap-1.5">
+                                <button type="button" data-memory-control="pin" data-memory-id="${escapeHtml(id)}" class="stat-pill stat-pill--muted">Pin</button>
+                                <button type="button" data-memory-control="important" data-memory-id="${escapeHtml(id)}" class="stat-pill stat-pill--muted">Important</button>
+                                <button type="button" data-memory-control="archive" data-memory-id="${escapeHtml(id)}" class="stat-pill stat-pill--muted">Archive</button>
+                                <button type="button" data-memory-control="outdated" data-memory-id="${escapeHtml(id)}" class="stat-pill stat-pill--muted">Outdated</button>
+                                <button type="button" data-memory-control="forget" data-memory-id="${escapeHtml(id)}" class="stat-pill stat-pill--muted">Forget</button>
+                            </div>
+                        </div>`;
+                    }).join('') || '<div class="text-[11px] text-ops-light/50">No memory records available for control.</div>'}
+                </div>
+            </section>` : ''}
+        `;
+        sidePort.appendChild(side);
+    }
+
+    container.querySelectorAll('[data-command]').forEach((el) => {
+        el.addEventListener('click', () => runCommandSurfaceDirective(el.getAttribute('data-command')));
+    });
+    container.querySelectorAll('[data-command-surface-input]').forEach((input) => {
+        const autosize = () => {
+            input.style.height = 'auto';
+            input.style.height = `${Math.min(112, Math.max(40, input.scrollHeight))}px`;
+        };
+        input.addEventListener('input', autosize);
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                const form = input.closest('[data-command-surface-form]');
+                form?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+            }
+        });
+        autosize();
+    });
+    container.querySelectorAll('[data-command-surface-form]').forEach((form) => {
+        form.addEventListener('submit', (e) => {
+            e.preventDefault();
+            const input = form.querySelector('[data-command-surface-input]');
+            const text = safeText(input?.value).trim();
+            if (!text) {
+                input?.focus?.();
+                return;
+            }
+            if (input) {
+                input.value = '';
+                input.style.height = '40px';
+            }
+            runCommandSurfaceDirective(text);
+        });
+    });
+    container.querySelectorAll('[data-command-fill]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            const form = btn.closest('[data-command-surface-form]') || container.querySelector('[data-command-surface-form]');
+            const input = form?.querySelector('[data-command-surface-input]');
+            if (!input) return;
+            const value = safeText(btn.getAttribute('data-command-fill'));
+            input.value = value;
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            input.focus();
+            try { input.setSelectionRange(input.value.length, input.value.length); } catch {}
+        });
+    });
+    sidePort?.querySelectorAll('[data-command]')?.forEach((el) => {
+        el.addEventListener('click', () => runCommandSurfaceDirective(el.getAttribute('data-command')));
+    });
+    container.querySelectorAll('[data-item-inspect]').forEach((el) => {
+        el.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            inspectOperationalItem(el.getAttribute('data-item-inspect'));
+        });
+    });
+    sidePort?.querySelectorAll('[data-item-inspect]')?.forEach((el) => {
+        el.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            inspectOperationalItem(el.getAttribute('data-item-inspect'));
+        });
+    });
+    const bindActionTransitions = (rootEl) => {
+        rootEl?.querySelectorAll?.('[data-action-transition]')?.forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const id = safeText(btn.getAttribute('data-action-id')).trim();
+            const lifecycle = safeText(btn.getAttribute('data-action-transition')).trim();
+            if (!id || !lifecycle) return;
+            transitionAction(id, lifecycle, { changedBy: 'command-surface' });
+            renderMain();
+        });
+        });
+    };
+    bindActionTransitions(container);
+    bindActionTransitions(sidePort);
+    container.querySelectorAll('[data-refresh-brief]').forEach((el) => el.addEventListener('click', async (e) => {
+        const btn = e.currentTarget;
+        btn.textContent = 'Refreshing';
+        await refreshActiveBrief({ force: true });
+        renderMain();
+    }));
+    container.querySelectorAll('[data-session-check-in]').forEach((el) => el.addEventListener('click', async (e) => {
+        const btn = e.currentTarget;
+        btn.textContent = 'Checking in';
+        try {
+            await apiJson('/api/marcus/session/check-in', { method: 'POST' });
+            await refreshActiveBrief({ force: true });
+            runCommandSurfaceDirective('Brief me on what changed since my last check-in.');
+        } catch (err) {
+            addChatMessage('ai', `Error: ${safeText(err?.message || 'Session check-in failed')}`);
+        } finally {
+            renderMain();
+        }
+    }));
+    container.querySelectorAll('[data-proactive-mode]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            const mode = setStoredProactiveMode(btn.getAttribute('data-proactive-mode'));
+            runCommandSurfaceDirective(`Set MARCUS proactive behavior to ${mode}. Explain what that means and what you will suppress or surface.`);
+            renderMain();
+        });
+    });
+    container.querySelectorAll('[data-focus-pin]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            const id = safeText(btn.getAttribute('data-focus-pin')).trim();
+            const title = safeText(btn.getAttribute('data-focus-title')).trim() || id;
+            const detail = safeText(btn.getAttribute('data-focus-detail')).trim();
+            if (!id) return;
+            const focusControls = getFocusControls();
+            for (const key of Object.keys(focusControls)) {
+                focusControls[key] = { ...(focusControls[key] || {}), primary: false };
+            }
+            setFocusControl(id, {
+                id,
+                targetId: id,
+                title,
+                name: title,
+                summary: detail || `Pinned focus lane: ${title}`,
+                detail,
+                type: 'project_focus',
+                state: 'active',
+                pinned: true,
+                primary: true,
+                source: 'command-surface',
+                confidence: 1,
+                changedBy: 'command-surface',
+            });
+            runCommandSurfaceDirective(`Set current focus to ${title}.`);
+            renderMain();
+        });
+    });
+    const bindSignalControls = (rootEl) => {
+        rootEl?.querySelectorAll?.('[data-signal-control]')?.forEach((btn) => {
+            btn.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const id = safeText(btn.getAttribute('data-signal-id')).trim();
+                const action = safeText(btn.getAttribute('data-signal-control')).trim();
+                if (!id || !action) return;
+                if (action === 'snooze') {
+                    setSignalControl(id, { snoozedUntil: Date.now() + (24 * 60 * 60 * 1000), dismissed: false });
+                } else if (action === 'dismiss') {
+                    setSignalControl(id, { dismissed: true });
+                } else if (action === 'convert') {
+                    setSignalControl(id, { convertedToAction: true, lifecycle: 'suggested_action' });
+                    setActionControl(`action:${id}`, { sourceSignalId: id, lifecycle: 'suggested_action', requiresApproval: true });
+                    runCommandSurfaceDirective(`Convert this signal into an action and keep execution draft-only until approved: ${id}`);
+                }
+                renderMain();
+            });
+        });
+    };
+    bindSignalControls(container);
+    bindSignalControls(sidePort);
+    const bindMemoryControls = (rootEl) => {
+        rootEl?.querySelectorAll?.('[data-memory-control]')?.forEach((btn) => {
+            btn.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const id = safeText(btn.getAttribute('data-memory-id')).trim();
+                const action = safeText(btn.getAttribute('data-memory-control')).trim();
+                if (!id || !action) return;
+                if (action === 'pin') setMemoryControl(id, { pinned: true, archived: false, forgotten: false, outdated: false });
+                if (action === 'important') setMemoryControl(id, { important: true, pinned: true, archived: false, forgotten: false, outdated: false });
+                if (action === 'archive') setMemoryControl(id, { archived: true, pinned: false, important: false, forgotten: false, outdated: false });
+                if (action === 'outdated') setMemoryControl(id, { outdated: true, pinned: false, important: false, archived: false });
+                if (action === 'forget') setMemoryControl(id, { forgotten: true, pinned: false, important: false, outdated: false, archived: false });
+                renderMain();
+            });
+        });
+    };
+    bindMemoryControls(container);
+    bindMemoryControls(sidePort);
+    sidePort?.querySelector?.('[data-entity-search]')?.addEventListener('click', () => {
+        const q = safeText(window.prompt('Entity, person, client, project, or system to inspect:') || '').trim();
+        if (q) runCommandSurfaceDirective(`Show me everything related to ${q}`);
+    });
+    const bindEntityInspect = (rootEl) => {
+        rootEl?.querySelectorAll?.('[data-entity-inspect]')?.forEach((btn) => {
+            btn.addEventListener('click', () => {
+                const id = safeText(btn.getAttribute('data-entity-inspect')).trim();
+                if (id) runCommandSurfaceDirective(`Show me everything related to ${id}`);
+            });
+        });
+    };
+    bindEntityInspect(container);
+    bindEntityInspect(sidePort);
 }
 
 function buildClientsIndexFromProjects(projects) {
@@ -6359,7 +9087,7 @@ function renderSettings(container) {
 
                         if (ids.includes(String(state.currentProjectId || ''))) {
                             state.currentProjectId = null;
-                            state.currentView = 'dashboard';
+                            state.currentView = 'work';
                         }
 
                         state.bulkProjectDeleteSelectedById = {};
@@ -7861,7 +10589,7 @@ function renderSettings(container) {
             await Promise.all([fetchState(), fetchSettings()]);
             startPolling();
             alert('Admin token saved.');
-            state.currentView = 'dashboard';
+            state.currentView = 'command';
             renderNav();
             renderMain();
             renderChat();
@@ -8899,12 +11627,40 @@ function renderProjects(container) {
     const activeProjects = getActiveProjects();
     const archivedProjects = getArchivedProjects();
     const teamOwnerOptions = [''].concat(getAssignableOwnerNames());
+    const brief = state.activeBrief || {};
+    if (!state.activeBrief && !state.activeBriefLoading) {
+        setTimeout(async () => {
+            await refreshActiveBrief({ force: true });
+            if (state.currentView === 'projects') renderMain();
+        }, 0);
+    }
+    const projectActivity = briefList(brief.projectActivity);
+    const operationalActive = projectActivity.filter((p) => ['active', 'waiting', 'warming'].includes(safeText(p?.activityStatus || p?.status).toLowerCase()));
+    const knownHistory = projectActivity.filter((p) => ['parked', 'historical', 'archived'].includes(safeText(p?.activityStatus || p?.status).toLowerCase()));
 
     const wrap = document.createElement('div');
     wrap.className = 'h-full flex flex-col min-h-0';
 
     const content = document.createElement('div');
     content.className = 'flex-1 min-h-0 overflow-y-auto p-6';
+
+    const workSummary = document.createElement('div');
+    workSummary.className = 'mb-6 border border-blue-500/20 rounded-lg bg-blue-500/10 p-4';
+    workSummary.innerHTML = `
+        <div class="flex flex-col md:flex-row md:items-start justify-between gap-3">
+            <div>
+                <div class="text-[10px] font-mono uppercase tracking-widest text-blue-200/75">Work Layer</div>
+                <div class="mt-1 text-lg font-semibold text-white">Active Work is separated from Known History</div>
+                <div class="mt-1 text-[11px] text-ops-light/75">Projects without meaningful recent activity are kept in memory/search, but do not compete with current attention unless pinned or reactivated.</div>
+            </div>
+            <div class="grid grid-cols-3 gap-2 shrink-0">
+                <div class="border border-ops-border rounded bg-ops-bg/35 px-3 py-2"><div class="text-base font-semibold text-white">${operationalActive.length || activeProjects.length}</div><div class="text-[9px] font-mono text-ops-light/55">active</div></div>
+                <div class="border border-ops-border rounded bg-ops-bg/35 px-3 py-2"><div class="text-base font-semibold text-white">${knownHistory.length || archivedProjects.length}</div><div class="text-[9px] font-mono text-ops-light/55">history</div></div>
+                <div class="border border-ops-border rounded bg-ops-bg/35 px-3 py-2"><div class="text-base font-semibold text-white">14</div><div class="text-[9px] font-mono text-ops-light/55">day rule</div></div>
+            </div>
+        </div>
+    `;
+    content.appendChild(workSummary);
 
     // New Project Intake
     const intake = document.createElement('div');
@@ -9105,6 +11861,27 @@ function renderProjects(container) {
 
     const activeCard = makeProjectListCard('Active Projects', activeProjects, 'None.');
     content.appendChild(activeCard);
+
+    if (knownHistory.length || archivedProjects.length) {
+        const byId = new Map((Array.isArray(state.projects) ? state.projects : []).map((p) => [safeText(p?.id), p]));
+        const historyRows = knownHistory
+            .map((row) => {
+                const existing = byId.get(safeText(row?.id)) || byId.get(safeText(row?.id).replace(/^project:[^:]+:/, ''));
+                return existing || {
+                    id: safeText(row?.id),
+                    name: safeText(row?.name),
+                    status: safeText(row?.activityStatus || row?.status),
+                    type: 'Known History',
+                    agentBrief: safeText(row?.reason) || 'Suppressed from active attention.',
+                    dueDate: safeText(row?.dueDate),
+                    owner: '',
+                };
+            })
+            .concat(archivedProjects.filter((p) => !knownHistory.some((row) => safeText(row?.id) === safeText(p?.id))));
+        const historyCard = makeProjectListCard('Known History', historyRows.slice(0, 60), 'No dormant or archived projects.');
+        historyCard.classList.add('mt-8');
+        content.appendChild(historyCard);
+    }
 
     const noMatches = document.createElement('div');
     noMatches.className = 'mt-4 p-4 border border-white/5 rounded-xl text-zinc-500 italic text-sm bg-black/10 hidden';
@@ -14601,6 +17378,55 @@ async function handleChatSubmit() {
     }
 }
 
+async function sendOperationalCommand(message, options = {}) {
+    const msg = safeText(message).trim();
+    if (!msg) return;
+    const opts = options && typeof options === 'object' ? options : {};
+    const initiatedBy = safeText(opts.initiatedBy).trim();
+    const recordUser = opts.recordUser !== false;
+    const displayUser = opts.displayUser !== false;
+
+    stopMarcusSpeech();
+    if (recordUser) recordChatMessage("user", msg);
+    if (displayUser) addChatMessage("user", msg);
+
+    const status = document.getElementById("ai-status");
+    if (status) status.style.opacity = "1";
+    setMarcusPresence('busy');
+    showMarcusTypingIndicator();
+
+    try {
+        const data = await apiJson('/api/marcus/command', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message: msg }),
+        });
+        const reply = safeText(data?.reply) || 'No operational response was produced.';
+        removeMarcusTypingIndicator();
+        setMarcusPresence('responding');
+        const recordedReply = initiatedBy ? `[${initiatedBy}] ${reply}` : reply;
+        recordChatMessage("ai", recordedReply);
+        if (data?.ok && (briefList(data?.cards).length || briefList(data?.suggestedActions).length || data?.evidence)) {
+            addOperationalChatMessage(data);
+        } else {
+            addChatMessage("ai", reply, true);
+        }
+        speakMarcus(reply);
+        await refreshActiveBrief({ force: true });
+        renderNav();
+        renderMain();
+    } catch (e) {
+        removeMarcusTypingIndicator();
+        const friendly = safeText(e?.message || 'Operational command failed').trim();
+        recordChatMessage("ai", `Error: ${friendly}`);
+        addChatMessage("ai", `Error: ${friendly}`);
+        throw e;
+    } finally {
+        if (status) status.style.opacity = "0";
+        setMarcusPresence('idle');
+    }
+}
+
 function recordChatMessage(role, text) {
     const entry = { role: normalizeRole(role), content: String(text || "") };
     if (state.currentProjectId) {
@@ -14699,6 +17525,180 @@ function addChatMessage(role, text, animate = false) {
     stream.scrollTop = stream.scrollHeight;
 }
 
+function operationalCardDetail(item) {
+    return safeText(item?.detail) || safeText(item?.summary) || safeText(item?.why) || safeText(item?.recommendedAction) || safeText(item?.source) || 'No supporting detail available.';
+}
+
+function addOperationalChatMessage(data) {
+    const stream = document.getElementById("chat-stream");
+    if (!stream) return;
+    removeMarcusTypingIndicator();
+
+    const title = safeText(data?.title) || 'Operational readout';
+    const reply = safeText(data?.reply) || 'No operational response was produced.';
+    const cards = briefList(data?.cards).slice(0, 5);
+    const suggestedActions = briefList(data?.suggestedActions).slice(0, 4);
+    const evidence = data?.evidence && typeof data.evidence === 'object' ? data.evidence : {};
+    const evidenceItems = briefList(evidence.items).slice(0, 5);
+    const confidence = Number.isFinite(Number(data?.confidence)) ? `${Math.round(Number(data.confidence) * 100)}%` : '';
+    const sourceCounts = evidence.sourceCounts && typeof evidence.sourceCounts === 'object' ? evidence.sourceCounts : {};
+    const sourceSummary = Object.entries(sourceCounts).slice(0, 4).map(([source, count]) => `${source} ${count}`).join(' / ');
+
+    const div = document.createElement("div");
+    div.className = "flex flex-col gap-1.5 mb-5 animate-fade-in";
+    const header = document.createElement("span");
+    header.className = "text-[9px] uppercase font-bold tracking-widest text-blue-400 ml-1";
+    header.innerText = "M.A.R.C.U.S. // OPERATIONAL";
+
+    const bubble = document.createElement("div");
+    bubble.className = "max-w-[92%] bg-ops-surface/90 backdrop-blur border border-blue-500/20 text-white rounded-br-2xl rounded-bl-sm rounded-t-2xl px-4 py-3 shadow-md";
+    bubble.innerHTML = `
+        <div class="flex items-start justify-between gap-3">
+            <div class="min-w-0">
+                <div class="text-[10px] font-mono uppercase tracking-widest text-blue-300/80">${escapeHtml(safeText(data?.intent) || 'command')}</div>
+                <div class="mt-1 text-sm font-semibold text-white">${escapeHtml(title)}</div>
+            </div>
+            ${confidence ? `<span class="stat-pill stat-pill--muted shrink-0">${escapeHtml(confidence)}</span>` : ''}
+        </div>
+        <div class="mt-3 text-[12px] leading-relaxed text-ops-light/90">${typeof marked === 'function' ? marked.parse(reply) : escapeHtml(reply).replace(/\n/g, '<br/>')}</div>
+        ${cards.length ? `<div class="mt-3 space-y-2">
+            ${cards.map((card) => {
+                const id = safeText(card?.id || card?.target || card?.name || card?.title);
+                const score = Number.isFinite(Number(card?.score)) ? Math.round(Number(card.score)) : '';
+                const why = commandItemReason(card);
+                const cardType = safeText(card?.type || card?.group).toLowerCase();
+                const sourceSignalId = safeText(card?.sourceSignalId).trim();
+                const sourceActionId = safeText(card?.sourceActionId).trim();
+                const isDecisionCard = id.startsWith('decision:') || cardType === 'decision';
+                const isMemoryCard = id.startsWith('memory:') || briefList(card?.controls).some((control) => ['pin', 'important', 'archive', 'forget', 'outdated', 'correct'].includes(safeText(control).toLowerCase()));
+                const isProjectCard = id.startsWith('project:') || ['idea', 'active', 'waiting_on_mark', 'waiting_on_client', 'waiting_on_team', 'blocked', 'review', 'launched', 'complete', 'dormant', 'archived', 'waiting', 'warming', 'historical', 'parked'].includes(safeText(card?.projectState || card?.activityStatus || card?.status).toLowerCase());
+                const isSignalCard = !isDecisionCard && !isMemoryCard && !isProjectCard && (Number.isFinite(Number(card?.score)) || safeText(card?.bucket || card?.priority || card?.targetType || card?.source));
+                return `
+                    <div class="border border-ops-border rounded bg-ops-bg/35 px-2.5 py-2">
+                        <div class="flex items-start justify-between gap-2">
+                            <div class="min-w-0">
+                                <div class="text-[11px] text-white truncate">${escapeHtml(safeText(card?.title || card?.name) || 'Context card')}</div>
+                                <div class="mt-0.5 text-[10px] text-ops-light/65 truncate">${escapeHtml(operationalCardDetail(card))}</div>
+                            </div>
+                            ${score ? `<span class="text-[10px] font-mono text-blue-200 shrink-0">${escapeHtml(String(score))}</span>` : ''}
+                        </div>
+                        <div class="mt-2 flex flex-wrap gap-1.5">
+                            <span class="stat-pill stat-pill--muted">why: ${escapeHtml(previewText(why, 64))}</span>
+                            ${safeText(card?.source) ? `<span class="stat-pill stat-pill--muted">${escapeHtml(safeText(card.source))}</span>` : ''}
+                            ${id ? `<button type="button" data-entity-inspect="${escapeHtml(id)}" class="stat-pill stat-pill--accent">Inspect</button>` : ''}
+                            ${id ? `<button type="button" data-item-inspect="${escapeHtml(id)}" class="stat-pill stat-pill--muted">Why</button>` : ''}
+                            ${isDecisionCard && sourceActionId ? `<button type="button" data-action-transition="approved_action" data-action-id="${escapeHtml(sourceActionId)}" class="stat-pill stat-pill--muted">Approve</button><button type="button" data-action-transition="dismissed_action" data-action-id="${escapeHtml(sourceActionId)}" class="stat-pill stat-pill--muted">Dismiss</button>` : ''}
+                            ${isDecisionCard && sourceSignalId ? `<button type="button" data-signal-control="snooze" data-signal-id="${escapeHtml(sourceSignalId)}" class="stat-pill stat-pill--muted">Snooze</button><button type="button" data-signal-control="convert" data-signal-id="${escapeHtml(sourceSignalId)}" class="stat-pill stat-pill--muted">Action</button><button type="button" data-signal-control="dismiss" data-signal-id="${escapeHtml(sourceSignalId)}" class="stat-pill stat-pill--muted">Dismiss</button>` : ''}
+                            ${isMemoryCard && id ? `<button type="button" data-memory-control="pin" data-memory-id="${escapeHtml(id)}" class="stat-pill stat-pill--muted">Pin</button><button type="button" data-memory-control="important" data-memory-id="${escapeHtml(id)}" class="stat-pill stat-pill--muted">Important</button><button type="button" data-memory-control="archive" data-memory-id="${escapeHtml(id)}" class="stat-pill stat-pill--muted">Archive</button><button type="button" data-memory-control="outdated" data-memory-id="${escapeHtml(id)}" class="stat-pill stat-pill--muted">Outdated</button><button type="button" data-memory-control="forget" data-memory-id="${escapeHtml(id)}" class="stat-pill stat-pill--muted">Forget</button>` : ''}
+                            ${isProjectCard && id ? `<button type="button" data-project-control="active" data-project-id="${escapeHtml(id)}" class="stat-pill stat-pill--muted">Keep active</button><button type="button" data-project-control="known_history" data-project-id="${escapeHtml(id)}" class="stat-pill stat-pill--muted">History</button><button type="button" data-project-control="complete" data-project-id="${escapeHtml(id)}" class="stat-pill stat-pill--muted">Done</button>` : ''}
+                            ${isSignalCard && id ? `<button type="button" data-signal-control="snooze" data-signal-id="${escapeHtml(id)}" class="stat-pill stat-pill--muted">Snooze</button><button type="button" data-signal-control="convert" data-signal-id="${escapeHtml(id)}" class="stat-pill stat-pill--muted">Action</button><button type="button" data-signal-control="dismiss" data-signal-id="${escapeHtml(id)}" class="stat-pill stat-pill--muted">Dismiss</button>` : ''}
+                        </div>
+                    </div>
+                `;
+            }).join('')}
+        </div>` : ''}
+        ${suggestedActions.length ? `<div class="mt-3 border-t border-ops-border/70 pt-3">
+            <div class="text-[10px] font-mono uppercase tracking-widest text-ops-light/60">Next Actions</div>
+            <div class="mt-2 flex flex-wrap gap-1.5">
+                ${suggestedActions.map((action) => {
+                    const id = safeText(action?.id);
+                    const label = safeText(action?.suggestedButtonLabel || action?.title || action?.summary) || 'Review action';
+                    return `<button type="button" ${id ? `data-action-transition="approved_action" data-action-id="${escapeHtml(id)}"` : `data-command="${escapeHtml(label)}"`} class="stat-pill stat-pill--accent">${escapeHtml(previewText(label, 34))}</button>`;
+                }).join('')}
+            </div>
+        </div>` : ''}
+        ${evidenceItems.length || sourceSummary ? `<div class="mt-3 border-t border-ops-border/70 pt-3">
+            <div class="text-[10px] font-mono uppercase tracking-widest text-ops-light/60">Evidence</div>
+            ${sourceSummary ? `<div class="mt-1 text-[10px] text-ops-light/55">${escapeHtml(sourceSummary)}</div>` : ''}
+            <div class="mt-2 flex flex-wrap gap-1.5">
+                ${evidenceItems.map((item) => `<span class="stat-pill stat-pill--muted">${escapeHtml(previewText(`${item.source || 'source'}${item.confidence !== null && item.confidence !== undefined ? ` ${item.confidence}%` : ''}: ${item.why || item.title}`, 72))}</span>`).join('')}
+            </div>
+        </div>` : ''}
+    `;
+
+    div.appendChild(header);
+    div.appendChild(bubble);
+    stream.appendChild(div);
+
+    bubble.querySelectorAll('[data-command]').forEach((el) => {
+        el.addEventListener('click', () => runCommandSurfaceDirective(el.getAttribute('data-command')));
+    });
+    bubble.querySelectorAll('[data-entity-inspect]').forEach((el) => {
+        el.addEventListener('click', () => {
+            const id = safeText(el.getAttribute('data-entity-inspect')).trim();
+            if (id) runCommandSurfaceDirective(`Show me everything related to ${id}`);
+        });
+    });
+    bubble.querySelectorAll('[data-item-inspect]').forEach((el) => {
+        el.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            inspectOperationalItem(el.getAttribute('data-item-inspect'));
+        });
+    });
+    bubble.querySelectorAll('[data-action-transition]').forEach((btn) => {
+        btn.addEventListener('click', async (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const id = safeText(btn.getAttribute('data-action-id')).trim();
+            const lifecycle = safeText(btn.getAttribute('data-action-transition')).trim();
+            if (!id || !lifecycle) return;
+            transitionAction(id, lifecycle, { changedBy: 'command-response' });
+            await refreshActiveBrief({ force: true }).catch(() => {});
+            renderMain();
+        });
+    });
+    bubble.querySelectorAll('[data-memory-control]').forEach((btn) => {
+        btn.addEventListener('click', async (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const id = safeText(btn.getAttribute('data-memory-id')).trim();
+            const action = safeText(btn.getAttribute('data-memory-control')).trim();
+            if (!id || !action) return;
+            if (action === 'pin') setMemoryControl(id, { pinned: true, archived: false, forgotten: false, outdated: false, changedBy: 'command-response' });
+            if (action === 'important') setMemoryControl(id, { important: true, pinned: true, archived: false, forgotten: false, outdated: false, changedBy: 'command-response' });
+            if (action === 'archive') setMemoryControl(id, { archived: true, pinned: false, important: false, forgotten: false, outdated: false, changedBy: 'command-response' });
+            if (action === 'outdated') setMemoryControl(id, { outdated: true, pinned: false, important: false, archived: false, changedBy: 'command-response' });
+            if (action === 'forget') setMemoryControl(id, { forgotten: true, pinned: false, important: false, outdated: false, archived: false, changedBy: 'command-response' });
+            await refreshActiveBrief({ force: true }).catch(() => {});
+            renderMain();
+        });
+    });
+    bubble.querySelectorAll('[data-signal-control]').forEach((btn) => {
+        btn.addEventListener('click', async (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const id = safeText(btn.getAttribute('data-signal-id')).trim();
+            const action = safeText(btn.getAttribute('data-signal-control')).trim();
+            if (!id || !action) return;
+            if (action === 'snooze') {
+                setSignalControl(id, { snoozedUntil: Date.now() + (24 * 60 * 60 * 1000), dismissed: false, changedBy: 'command-response' });
+            } else if (action === 'dismiss') {
+                setSignalControl(id, { dismissed: true, changedBy: 'command-response' });
+            } else if (action === 'convert') {
+                setSignalControl(id, { convertedToAction: true, lifecycle: 'suggested_action', changedBy: 'command-response' });
+                setActionControl(`action:${id}`, { sourceSignalId: id, lifecycle: 'suggested_action', requiresApproval: true, changedBy: 'command-response' });
+            }
+            await refreshActiveBrief({ force: true }).catch(() => {});
+            renderMain();
+        });
+    });
+    bubble.querySelectorAll('[data-project-control]').forEach((btn) => {
+        btn.addEventListener('click', async (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const id = safeText(btn.getAttribute('data-project-id')).trim();
+            const state = safeText(btn.getAttribute('data-project-control')).trim();
+            if (!id || !state) return;
+            setProjectControl(id, { state, changedBy: 'command-response' });
+            await refreshActiveBrief({ force: true }).catch(() => {});
+            renderMain();
+        });
+    });
+
+    stream.scrollTop = stream.scrollHeight;
+}
+
 function renderChat() {
     const stream = document.getElementById("chat-stream");
     if(!stream) return;
@@ -14724,6 +17724,35 @@ function computeFocusNudgeSnapshot() {
     const osIdleSeconds = Number(state.desktopContext?.idleSeconds) || 0;
     const osIdleFresh = state.desktopContext?.fetchedAt && (now - state.desktopContext.fetchedAt) < 60_000;
     const idleMinutes = osIdleFresh ? Math.min(webIdleMinutes, Math.floor(osIdleSeconds / 60)) : webIdleMinutes;
+    const brief = state.activeBrief && typeof state.activeBrief === 'object' ? state.activeBrief : {};
+    const attentionItems = briefList(brief.controlledAttention?.attentionQueue || brief.controlledAttention?.topPriorities || brief.topPriorities)
+        .filter((item) => !isSignalSuppressed(item));
+    const decisionItems = briefList(brief.decisionQueue);
+    const actionItems = briefList(brief.activeActionQueue || brief.actionQueue);
+    const approvalItems = actionItems.filter((item) => item?.approvalRequired || item?.requiresApproval || safeText(item?.lifecycle).trim() === 'draft_action');
+    const systemItems = briefList(brief.systemHealth?.items);
+    const systemWarnings = systemItems.filter((item) => {
+        const status = safeText(item?.status || item?.priority).trim().toLowerCase();
+        return status && status !== 'ok' && status !== 'active' && status !== 'normal';
+    });
+    const criticalAttention = attentionItems.filter((item) => {
+        const score = Number(item?.score || 0);
+        const bucket = safeText(item?.bucket || item?.queue).trim().toLowerCase();
+        const priority = safeText(item?.priority || item?.urgency).trim().toLowerCase();
+        return score >= 78 || bucket === 'interrupt_now' || priority === 'critical' || priority === 'urgent';
+    });
+    const proactiveMode = normalizeProactiveMode(brief?.attentionPolicy?.mode || state.uiPrefs?.proactiveMode || getStoredProactiveMode());
+    const topAttention = attentionItems.slice(0, 4).map((item) => ({
+        id: safeText(item?.id || item?.target || item?.title).trim(),
+        title: safeText(item?.title || item?.name || item?.summary).trim(),
+        reason: safeText(item?.reason || item?.rankingReason || item?.summary).trim(),
+        score: Number.isFinite(Number(item?.score)) ? Math.round(Number(item.score)) : 0,
+        source: safeText(item?.source).trim(),
+        recommendedAction: safeText(item?.recommendedAction || item?.nextAction).trim(),
+    }));
+    const topDecision = decisionItems[0] || null;
+    const topApproval = approvalItems[0] || null;
+    const topSystemWarning = systemWarnings[0] || null;
 
     const today = ymdFromLocalDate(new Date());
     const allTasks = getMyTasks();
@@ -14811,6 +17840,17 @@ function computeFocusNudgeSnapshot() {
         currentProjectUrgentCount: currentProjectUrgent.length,
         recentInbox,
         topTasks,
+        proactiveMode,
+        attentionCount: attentionItems.length,
+        criticalAttentionCount: criticalAttention.length,
+        decisionCount: decisionItems.length,
+        approvalCount: approvalItems.length,
+        systemWarningCount: Math.max(systemWarnings.length, Number(brief?.systemHealth?.warningCount || 0) + Number(brief?.systemHealth?.criticalCount || 0)),
+        topAttention,
+        topDecisionTitle: safeText(topDecision?.title || topDecision?.question || topDecision?.summary).trim(),
+        topApprovalTitle: safeText(topApproval?.title || topApproval?.summary).trim(),
+        topSystemWarningTitle: safeText(topSystemWarning?.title || topSystemWarning?.summary).trim(),
+        attentionPolicyDescription: safeText(brief?.attentionPolicy?.description).trim(),
         // Desktop context
         desktopWindowTitle: safeText(state.desktopContext?.windowTitle).trim(),
         desktopProcessName: safeText(state.desktopContext?.processName).trim(),
@@ -14842,12 +17882,72 @@ function shouldTriggerFocusNudge(snapshot, { initial = false } = {}) {
     const currentProjectName = safeText(snapshot.currentProjectName).trim();
     const desktopMatchedProject = safeText(snapshot.desktopMatchedProjectName).trim();
     const desktopProcess = safeText(snapshot.desktopProcessName).trim();
+    const proactiveMode = normalizeProactiveMode(snapshot.proactiveMode);
+    const attentionCount = Number(snapshot.attentionCount) || 0;
+    const criticalAttentionCount = Number(snapshot.criticalAttentionCount) || 0;
+    const decisionCount = Number(snapshot.decisionCount) || 0;
+    const approvalCount = Number(snapshot.approvalCount) || 0;
+    const systemWarningCount = Number(snapshot.systemWarningCount) || 0;
+    const topAttention = Array.isArray(snapshot.topAttention) ? snapshot.topAttention : [];
+    const topAttentionTitle = safeText(topAttention[0]?.title).trim();
+    const quietish = proactiveMode === 'quiet' || proactiveMode === 'away';
+
+    if (approvalCount && (!quietish || initial || idle >= 1)) {
+        return {
+            ok: true,
+            kind: 'approval-needed',
+            reason: `${approvalCount} approval-gated action${approvalCount === 1 ? '' : 's'} need a decision${safeText(snapshot.topApprovalTitle).trim() ? `: ${safeText(snapshot.topApprovalTitle).trim()}` : ''}`,
+            command: 'What needs a decision?',
+            cooldownMs: 6 * 60 * 1000,
+        };
+    }
+
+    if (systemWarningCount && (!quietish || initial || idle >= 2)) {
+        return {
+            ok: true,
+            kind: 'system-warning',
+            reason: `${systemWarningCount} system warning${systemWarningCount === 1 ? '' : 's'}${safeText(snapshot.topSystemWarningTitle).trim() ? `: ${safeText(snapshot.topSystemWarningTitle).trim()}` : ''}`,
+            command: 'Show system health.',
+            cooldownMs: quietish ? 15 * 60 * 1000 : 8 * 60 * 1000,
+        };
+    }
+
+    if (decisionCount && !quietish && (initial || idle >= 2)) {
+        return {
+            ok: true,
+            kind: 'decision-needed',
+            reason: `${decisionCount} decision${decisionCount === 1 ? '' : 's'} need Mark${safeText(snapshot.topDecisionTitle).trim() ? `: ${safeText(snapshot.topDecisionTitle).trim()}` : ''}`,
+            command: 'What needs a decision?',
+            cooldownMs: 7 * 60 * 1000,
+        };
+    }
+
+    if (criticalAttentionCount && (initial || idle >= 2)) {
+        return {
+            ok: true,
+            kind: 'critical-attention',
+            reason: `${criticalAttentionCount} critical attention item${criticalAttentionCount === 1 ? '' : 's'}${topAttentionTitle ? `: ${topAttentionTitle}` : ''}`,
+            command: 'What matters right now?',
+            cooldownMs: quietish ? 15 * 60 * 1000 : 7 * 60 * 1000,
+        };
+    }
+
+    if (attentionCount >= 3 && !quietish && (initial || idle >= 5)) {
+        return {
+            ok: true,
+            kind: 'attention-brief',
+            reason: `${attentionCount} ranked attention item${attentionCount === 1 ? '' : 's'} are active${topAttentionTitle ? `; top: ${topAttentionTitle}` : ''}`,
+            command: 'Brief me.',
+            cooldownMs: 10 * 60 * 1000,
+        };
+    }
 
     if (initial && (urgentDue >= 2 || overdue >= 3 || inboxNew >= 6)) {
         return {
             ok: true,
             kind: 'startup-brief',
             reason: `Startup brief: ${urgentDue} urgent items, ${overdue} overdue tasks, ${inboxNew} new inbox items`,
+            command: 'Brief me.',
             cooldownMs: 8 * 60 * 1000,
         };
     }
@@ -15035,6 +18135,16 @@ async function sendProactiveFocusNudge(decision, snapshot) {
     // Make sure Marcus is visible so this actually initiates a conversation.
     applyMarcusOpenState(true);
     setStoredMarcusOpen(true);
+
+    const operationalCommand = safeText(decision?.command).trim();
+    if (operationalCommand) {
+        await sendOperationalCommand(operationalCommand, {
+            initiatedBy: `proactive:${safeText(decision?.kind).trim() || 'attention'}`,
+            recordUser: false,
+            displayUser: false,
+        });
+        return;
+    }
 
     const status = document.getElementById('ai-status');
     if (status) status.style.opacity = '1';

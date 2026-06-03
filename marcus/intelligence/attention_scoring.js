@@ -21,13 +21,32 @@ export function scoreOperationalSignal(signal, { nowMs = Date.now(), projectStat
   const type = signal?.type || OperationalTypes.SYSTEM_SIGNAL;
   const confidence = Number.isFinite(Number(signal?.confidence)) ? Math.max(0, Math.min(1, Number(signal.confidence))) : 0.65;
   const projectStatus = projectStatusById.get(String(signal?.relatedProjectId || '')) || '';
+  const isSystemType = [
+    OperationalTypes.SYSTEM_SIGNAL,
+    OperationalTypes.SYSTEM,
+    OperationalTypes.TOOL,
+    OperationalTypes.WEBSITE,
+    OperationalTypes.PAYMENT,
+  ].includes(type);
   const ageDays = daysBetween(nowMs, parseTime(signal?.lastSeenAt || signal?.updatedAt || signal?.createdAt));
   const dueDays = dueDistanceDays(signal?.dueAt, nowMs);
+  const expiresMs = parseTime(signal?.expiresAt);
+  const expired = Boolean(expiresMs && expiresMs < nowMs);
   let score = 0;
   const reasons = [];
 
   score += Math.max(0, Math.min(30, Number(signal?.urgency || 0) * 30));
+  score += Math.max(0, Math.min(12, Number(signal?.moneyImpact || 0) * 12));
+  score += Math.max(0, Math.min(10, Number(signal?.relationshipImpact || 0) * 10));
+  score += Math.max(0, Math.min(14, Number(signal?.riskImpact || 0) * 14));
   score += Math.max(0, 18 - ageDays);
+
+  if (Number(signal?.importance) === 1) {
+    score += 14;
+    reasons.push('high importance');
+  } else if (Number(signal?.importance) === 3) {
+    score -= 8;
+  }
 
   if (Number(signal?.priority) === 1) {
     score += 20;
@@ -94,20 +113,46 @@ export function scoreOperationalSignal(signal, { nowMs = Date.now(), projectStat
       score += 8;
       reasons.push('stale project');
     }
-  } else if (projectStatus === 'historical' || projectStatus === 'archived') {
+  } else if (!isSystemType && (projectStatus === 'historical' || projectStatus === 'archived')) {
     score -= 35;
     reasons.push('historical project suppressed');
-  } else if (projectStatus === 'parked') {
+  } else if (!isSystemType && projectStatus === 'parked') {
     score -= 14;
+  }
+
+  if (isSystemType) {
+    score += 8;
+    reasons.push('operational system signal');
+    if (['needs_credentials', 'approval_required', 'warning', 'critical'].includes(status)) {
+      score += 16;
+      reasons.push(status === 'needs_credentials' ? 'credentials needed' : 'system attention needed');
+    }
+    if (hasAny(text, ['broken', 'down', 'failed', 'error', 'expired', 'disconnect', 'missing', 'ssl', 'dns', 'hosting'])) {
+      score += 18;
+      reasons.push('system risk');
+    }
+    if (hasAny(text, ['deploy', 'deployment', 'launch', 'publish', 'website', 'domain'])) {
+      score += type === OperationalTypes.WEBSITE ? 10 : 6;
+      reasons.push('website or deployment context');
+    }
+    if (type === OperationalTypes.PAYMENT) {
+      score += 14;
+      reasons.push('payment context');
+    }
+    if (status === 'connected' || status === 'known') score -= 10;
   }
 
   if (hasAny(text, ['invoice', 'payment', 'billing', 'refund', 'chargeback', 'contract'])) {
     score += 18;
     reasons.push('financial risk');
+  } else if (Number(signal?.moneyImpact || 0) > 0.5) {
+    reasons.push('money impact');
   }
   if (hasAny(text, ['angry', 'upset', 'frustrated', 'unhappy', 'cancel', 'cancellation', 'escalat'])) {
     score += 20;
     reasons.push('client relationship risk');
+  } else if (Number(signal?.relationshipImpact || 0) > 0.5) {
+    reasons.push('relationship impact');
   }
   if (hasAny(text, ['opportunity', 'upgrade', 'upsell', 'proposal', 'new project', 'referral'])) {
     score += 10;
@@ -124,6 +169,10 @@ export function scoreOperationalSignal(signal, { nowMs = Date.now(), projectStat
   if (ageDays > 45 && !signal?.requiresMark && dueDays === null) {
     score -= 40;
     reasons.push('old low-signal item');
+  }
+  if (expired && !signal?.requiresMark && !signal?.requiresApproval) {
+    score -= 45;
+    reasons.push('expired signal');
   }
 
   let bucket = 'monitor';

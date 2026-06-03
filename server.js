@@ -183,6 +183,8 @@ function resolveDirFromEnv(envValue) {
 
 const DATA_DIR = resolveDirFromEnv(process.env.TASK_TRACKER_DATA_DIR || process.env.DATA_DIR) || path.join(process.cwd(), 'data');
 const DATA_FILE = path.join(DATA_DIR, 'tasks.json');
+const MARCUS_OPERATIONAL_CONTROLS_FILE = path.join(DATA_DIR, 'marcus-operational-controls.json');
+const MARCUS_SESSION_STATE_FILE = path.join(DATA_DIR, 'marcus-session-state.json');
 
 const BUSINESS_DATA_DIR = path.join(DATA_DIR, 'businesses');
 
@@ -659,6 +661,757 @@ async function writeSettings(next) {
   backupCriticalFiles().catch(() => {
     // backup is best-effort
   });
+}
+
+function normalizeProactiveModeServer(mode) {
+  const value = typeof mode === 'string' ? mode.trim().toLowerCase() : '';
+  return ['quiet', 'normal', 'aggressive', 'focus', 'away'].includes(value) ? value : 'normal';
+}
+
+function normalizeControlMap(input) {
+  const raw = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
+  const out = {};
+  for (const [key, value] of Object.entries(raw)) {
+    const id = String(key || '').trim().slice(0, 240);
+    if (!id || !value || typeof value !== 'object' || Array.isArray(value)) continue;
+    out[id] = {
+      ...value,
+      updatedAt: typeof value.updatedAt === 'string' ? value.updatedAt : '',
+    };
+  }
+  return out;
+}
+
+function normalizeMarcusOperationalControls(input = {}) {
+  const raw = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
+  return {
+    ok: true,
+    version: 1,
+    updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : '',
+    proactiveMode: normalizeProactiveModeServer(raw.proactiveMode),
+    signals: normalizeControlMap(raw.signals),
+    memory: normalizeControlMap(raw.memory),
+    actions: normalizeControlMap(raw.actions),
+    projects: normalizeControlMap(raw.projects),
+    focus: normalizeControlMap(raw.focus),
+  };
+}
+
+async function readMarcusOperationalControls() {
+  try {
+    await fs.mkdir(DATA_DIR, { recursive: true });
+    const raw = await fs.readFile(MARCUS_OPERATIONAL_CONTROLS_FILE, 'utf8');
+    return normalizeMarcusOperationalControls(JSON.parse(raw));
+  } catch {
+    return normalizeMarcusOperationalControls({});
+  }
+}
+
+async function writeMarcusOperationalControls(next) {
+  const normalized = normalizeMarcusOperationalControls({
+    ...(next && typeof next === 'object' ? next : {}),
+    updatedAt: nowIso(),
+  });
+  await fs.mkdir(DATA_DIR, { recursive: true });
+  const tmpFile = `${MARCUS_OPERATIONAL_CONTROLS_FILE}.tmp-${crypto.randomBytes(6).toString('hex')}`;
+  await fs.writeFile(tmpFile, JSON.stringify(normalized, null, 2) + '\n', 'utf8');
+  await fs.rename(tmpFile, MARCUS_OPERATIONAL_CONTROLS_FILE);
+  backupCriticalFiles().catch(() => {
+    // backup is best-effort
+  });
+  return normalized;
+}
+
+function normalizeMarcusSessionState(input = {}) {
+  const raw = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
+  const lastCheckInAt = typeof raw.lastCheckInAt === 'string' && Date.parse(raw.lastCheckInAt) ? raw.lastCheckInAt : '';
+  const lastOpenedAt = typeof raw.lastOpenedAt === 'string' && Date.parse(raw.lastOpenedAt) ? raw.lastOpenedAt : '';
+  return {
+    ok: true,
+    version: 1,
+    updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : '',
+    lastCheckInAt,
+    lastOpenedAt,
+    lastBriefHash: typeof raw.lastBriefHash === 'string' ? raw.lastBriefHash.slice(0, 80) : '',
+    checkInCount: Number.isFinite(Number(raw.checkInCount)) ? Math.max(0, Math.floor(Number(raw.checkInCount))) : 0,
+  };
+}
+
+async function readMarcusSessionState() {
+  try {
+    await fs.mkdir(DATA_DIR, { recursive: true });
+    const raw = await fs.readFile(MARCUS_SESSION_STATE_FILE, 'utf8');
+    return normalizeMarcusSessionState(JSON.parse(raw));
+  } catch {
+    return normalizeMarcusSessionState({});
+  }
+}
+
+async function writeMarcusSessionState(next) {
+  const normalized = normalizeMarcusSessionState({
+    ...(next && typeof next === 'object' ? next : {}),
+    updatedAt: nowIso(),
+  });
+  await fs.mkdir(DATA_DIR, { recursive: true });
+  const tmpFile = `${MARCUS_SESSION_STATE_FILE}.tmp-${crypto.randomBytes(6).toString('hex')}`;
+  await fs.writeFile(tmpFile, JSON.stringify(normalized, null, 2) + '\n', 'utf8');
+  await fs.rename(tmpFile, MARCUS_SESSION_STATE_FILE);
+  backupCriticalFiles().catch(() => {
+    // backup is best-effort
+  });
+  return normalized;
+}
+
+function mergeControlPatch(existing, section, id, patch) {
+  const safeSection = ['signals', 'memory', 'actions', 'projects', 'focus'].includes(section) ? section : '';
+  const safeId = String(id || '').trim().slice(0, 240);
+  if (!safeSection || !safeId) throw new Error('Invalid control section or id');
+  const cleanPatch = patch && typeof patch === 'object' && !Array.isArray(patch) ? patch : {};
+  const next = normalizeMarcusOperationalControls(existing);
+  next[safeSection] = normalizeControlMap(next[safeSection]);
+  if (safeSection === 'focus' && cleanPatch.primary) {
+    for (const [key, value] of Object.entries(next.focus || {})) {
+      if (value && typeof value === 'object') next.focus[key] = { ...value, primary: false };
+    }
+  }
+  next[safeSection][safeId] = {
+    ...(next[safeSection][safeId] || {}),
+    ...cleanPatch,
+    updatedAt: nowIso(),
+  };
+  return next;
+}
+
+function normalizeSnakeValue(value) {
+  return String(value || '').trim().toLowerCase().replace(/[-\s]+/g, '_');
+}
+
+function normalizeActionLifecycle(value) {
+  const normalized = normalizeSnakeValue(value);
+  return ['suggested_action', 'draft_action', 'approved_action', 'completed_action', 'dismissed_action'].includes(normalized)
+    ? normalized
+    : '';
+}
+
+function normalizeProjectControlState(value) {
+  const normalized = normalizeSnakeValue(value);
+  return ['active', 'pinned', 'reactivated', 'known_history', 'dormant', 'archived', 'complete', 'completed'].includes(normalized)
+    ? (normalized === 'completed' ? 'complete' : normalized)
+    : '';
+}
+
+function transitionActionControl(existing, actionId, lifecycle, extra = {}) {
+  const id = String(actionId || '').trim().slice(0, 240);
+  const nextLifecycle = normalizeActionLifecycle(lifecycle);
+  if (!id) throw new Error('Action id is required');
+  if (!nextLifecycle) throw new Error('Invalid action lifecycle');
+  const next = normalizeMarcusOperationalControls(existing);
+  const previous = next.actions[id] && typeof next.actions[id] === 'object' ? next.actions[id] : {};
+  const executionStatus = nextLifecycle === 'approved_action'
+    ? 'approved_pending_execution'
+    : nextLifecycle === 'completed_action'
+      ? 'manually_completed'
+      : nextLifecycle === 'dismissed_action'
+        ? 'dismissed'
+        : (previous.executionStatus || 'not_executable');
+  next.actions[id] = {
+    ...previous,
+    ...(extra && typeof extra === 'object' && !Array.isArray(extra) ? extra : {}),
+    lifecycle: nextLifecycle,
+    executionStatus,
+    executionDeferred: nextLifecycle === 'approved_action',
+    approvedAt: nextLifecycle === 'approved_action' ? nowIso() : previous.approvedAt || '',
+    completedAt: nextLifecycle === 'completed_action' ? nowIso() : previous.completedAt || '',
+    dismissedAt: nextLifecycle === 'dismissed_action' ? nowIso() : previous.dismissedAt || '',
+    updatedAt: nowIso(),
+  };
+  return next;
+}
+
+function createManualActionControl(existing, input = {}) {
+  const clean = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
+  const title = String(clean.title || clean.summary || 'Review manual action').replace(/\s+/g, ' ').trim().slice(0, 180);
+  const summary = String(clean.summary || clean.body || title).replace(/\s+/g, ' ').trim().slice(0, 500);
+  const type = String(clean.type || 'manual_action').trim().slice(0, 80);
+  const now = nowIso();
+  const seed = `${title}|${summary}|${now}|${crypto.randomBytes(4).toString('hex')}`;
+  const id = `action:manual:${crypto.createHash('sha1').update(seed).digest('hex').slice(0, 16)}`;
+  const next = normalizeMarcusOperationalControls(existing);
+  next.actions[id] = {
+    id,
+    title,
+    summary,
+    body: String(clean.body || summary).trim().slice(0, 1200),
+    type,
+    source: 'manual-command',
+    lifecycle: normalizeActionLifecycle(clean.lifecycle) || 'suggested_action',
+    executionStatus: 'not_executable',
+    executionDeferred: true,
+    requiresApproval: clean.requiresApproval !== false,
+    approvalRequired: clean.requiresApproval !== false,
+    payload: clean.payload && typeof clean.payload === 'object' && !Array.isArray(clean.payload) ? clean.payload : undefined,
+    createdAt: now,
+    updatedAt: now,
+    changedBy: String(clean.changedBy || 'command').trim().slice(0, 80),
+  };
+  return { next, action: next.actions[id] };
+}
+
+function createProjectDraftActionControl(existing, input = {}) {
+  const clean = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
+  const name = String(clean.projectName || clean.title || 'New project').replace(/\s+/g, ' ').trim().slice(0, 180);
+  if (!name) throw new Error('Project name is required');
+  return createManualActionControl(existing, {
+    title: `Create project: ${name}`,
+    summary: String(clean.summary || `Review and create a project record for ${name}.`).replace(/\s+/g, ' ').trim().slice(0, 500),
+    body: String(clean.body || clean.summary || `Project draft requested from command: ${name}`).trim().slice(0, 1200),
+    type: 'create_project_draft',
+    lifecycle: 'draft_action',
+    requiresApproval: true,
+    changedBy: clean.changedBy || 'command',
+    payload: {
+      projectName: name,
+      sourceText: String(clean.sourceText || '').trim().slice(0, 1000),
+      proposedState: 'idea',
+    },
+  });
+}
+
+function createManualFocusControl(existing, input = {}) {
+  const clean = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
+  const title = String(clean.title || clean.name || 'Current focus').replace(/\s+/g, ' ').trim().slice(0, 180);
+  if (!title) throw new Error('Focus title is required');
+  const summary = String(clean.summary || clean.detail || 'Pinned from command.').replace(/\s+/g, ' ').trim().slice(0, 500);
+  const now = nowIso();
+  const idSeed = `${title}|${summary}`.toLowerCase();
+  const id = `focus:manual:${crypto.createHash('sha1').update(idSeed).digest('hex').slice(0, 16)}`;
+  const next = normalizeMarcusOperationalControls(existing);
+  for (const [key, value] of Object.entries(next.focus || {})) {
+    if (value && typeof value === 'object' && value.primary) {
+      next.focus[key] = { ...value, primary: false, updatedAt: now };
+    }
+  }
+  next.focus[id] = {
+    ...(next.focus[id] || {}),
+    id,
+    title,
+    name: title,
+    summary,
+    detail: summary,
+    type: 'manual_focus',
+    state: 'active',
+    pinned: true,
+    primary: true,
+    source: 'command',
+    confidence: 1,
+    createdAt: next.focus[id]?.createdAt || now,
+    updatedAt: now,
+    changedBy: String(clean.changedBy || 'command').trim().slice(0, 80),
+  };
+  return { next, focus: next.focus[id] };
+}
+
+function getOperationalItemIds(item) {
+  const ids = new Set();
+  if (!item || typeof item !== 'object') return ids;
+  for (const key of ['id', 'sourceSignalId', 'signalId', 'target', 'targetId', 'projectId', 'threadId', 'messageId', 'taskId']) {
+    const value = String(item[key] || '').trim();
+    if (value) ids.add(value);
+  }
+  if (item.id) ids.add(`action:${String(item.id).trim()}`);
+  return ids;
+}
+
+function findControlForItem(item, controls = {}) {
+  const map = controls && typeof controls === 'object' && !Array.isArray(controls) ? controls : {};
+  const ids = getOperationalItemIds(item);
+  for (const id of ids) {
+    if (map[id]) return { id, control: map[id] };
+  }
+  return { id: '', control: null };
+}
+
+function isSignalControlledOut(item, signalControls = {}, now = Date.now()) {
+  const { control } = findControlForItem(item, signalControls);
+  if (!control) return false;
+  if (control.dismissed || control.convertedToAction) return true;
+  const snoozedUntil = Number(control.snoozedUntil || 0);
+  return Boolean(snoozedUntil && snoozedUntil > now);
+}
+
+function filterControlledSignals(rows, signalControls, now) {
+  const list = Array.isArray(rows) ? rows : [];
+  return list.filter((item) => !isSignalControlledOut(item, signalControls, now));
+}
+
+function applyFocusControlsToBrief(out, focusControls = {}) {
+  const controls = normalizeControlMap(focusControls);
+  const focusRows = Object.values(controls)
+    .filter((control) => control && typeof control === 'object' && !control.dismissed && !control.archived && !control.forgotten)
+    .map((control) => ({
+      id: String(control.id || control.targetId || control.target || '').trim(),
+      title: String(control.title || control.name || control.summary || 'Pinned focus').trim(),
+      name: String(control.name || control.title || control.summary || 'Pinned focus').trim(),
+      summary: String(control.summary || control.detail || '').trim(),
+      detail: String(control.detail || control.summary || '').trim(),
+      type: String(control.type || 'focus_control').trim(),
+      state: String(control.state || 'active').trim(),
+      source: String(control.source || 'operational-controls').trim(),
+      confidence: Number.isFinite(Number(control.confidence)) ? Number(control.confidence) : 1,
+      pinned: Boolean(control.pinned || control.primary),
+      primary: Boolean(control.primary),
+      target: String(control.target || control.targetId || '').trim(),
+      targetId: String(control.targetId || control.target || '').trim(),
+      businessKey: String(control.businessKey || '').trim(),
+      businessName: String(control.businessName || '').trim(),
+      updatedAt: String(control.updatedAt || '').trim(),
+      controlled: true,
+    }))
+    .filter((control) => control.title || control.name || control.targetId)
+    .sort((a, b) => Number(b.primary) - Number(a.primary) || String(b.updatedAt).localeCompare(String(a.updatedAt)));
+
+  if (!focusRows.length) {
+    out.focusPolicy = {
+      controlledFocusCount: 0,
+      primaryFocusId: String(out.currentFocus?.id || out.activeProject?.id || '').trim(),
+      source: out.currentFocus ? 'inferred' : 'none',
+    };
+    return out;
+  }
+
+  const primary = focusRows.find((row) => row.primary) || focusRows[0];
+  const activeProjects = Array.isArray(out.projectActivity) ? out.projectActivity : [];
+  const pinnedTargets = new Set(focusRows.map((row) => row.targetId || row.target || row.id).filter(Boolean));
+  const matchedProjects = activeProjects
+    .filter((project) => {
+      const ids = getOperationalItemIds(project);
+      for (const id of ids) if (pinnedTargets.has(id)) return true;
+      return false;
+    })
+    .map((project) => ({ ...project, focusPinned: true, controlled: true }));
+
+  out.focusLanes = Array.from(new Map([...focusRows, ...matchedProjects].map((row) => [String(row.id || row.targetId || row.title || row.name), row])).values());
+  out.currentFocus = {
+    id: primary.id || primary.targetId || `focus:${crypto.createHash('sha1').update(primary.title || primary.name).digest('hex').slice(0, 12)}`,
+    title: primary.title || primary.name,
+    name: primary.name || primary.title,
+    detail: primary.detail || primary.summary,
+    summary: primary.summary || primary.detail,
+    type: primary.type,
+    source: primary.source,
+    confidence: primary.confidence,
+    pinned: true,
+    controlled: true,
+    businessKey: primary.businessKey,
+    businessName: primary.businessName,
+    updatedAt: primary.updatedAt,
+  };
+  out.activeProject = out.currentFocus;
+  out.focusPolicy = {
+    controlledFocusCount: focusRows.length,
+    primaryFocusId: out.currentFocus.id,
+    source: 'operational-controls',
+  };
+  return out;
+}
+
+function isCriticalAttentionItem(item) {
+  const score = Number(item?.score || 0);
+  const priority = String(item?.priority || item?.status || '').toLowerCase();
+  const bucket = String(item?.bucket || item?.queue || '').toLowerCase();
+  return score >= 78 || priority === 'critical' || bucket === 'interrupt_now';
+}
+
+function matchesFocusAttentionItem(item, brief) {
+  if (isCriticalAttentionItem(item)) return true;
+  const focus = brief?.activeProject || brief?.currentFocus || {};
+  const terms = [
+    focus?.id,
+    focus?.target,
+    focus?.name,
+    focus?.title,
+    item?.bucket === 'waiting' ? 'waiting' : '',
+  ].map((value) => String(value || '').trim().toLowerCase()).filter(Boolean);
+  if (!terms.length) return false;
+  const text = JSON.stringify(item || {}).toLowerCase();
+  return terms.some((term) => text.includes(term));
+}
+
+function applyProactiveAttentionPolicy(items, brief, mode) {
+  const list = Array.isArray(items) ? items : [];
+  if (mode === 'quiet') return list.filter(isCriticalAttentionItem);
+  if (mode === 'away') return list.filter((item) => Number(item?.score || 0) >= 86 || String(item?.priority || '').toLowerCase() === 'critical');
+  if (mode === 'focus') return list.filter((item) => matchesFocusAttentionItem(item, brief));
+  return list;
+}
+
+function applyMemoryControlsToPulse(memoryPulse, memoryControls = {}) {
+  const pulse = memoryPulse && typeof memoryPulse === 'object' ? memoryPulse : {};
+  const overlayRecord = (record) => {
+    const { control } = findControlForItem(record, memoryControls);
+    if (!control) return record;
+    return {
+      ...record,
+      ...control,
+      pinned: Boolean(control.important || control.pinned || record?.pinned),
+      status: control.archived
+        ? 'archived'
+        : control.important && !control.outdated && !control.forgotten ? 'important' : (control.status || record?.status),
+      controlled: true,
+    };
+  };
+  const visible = (rows) => (Array.isArray(rows) ? rows : [])
+    .map(overlayRecord)
+    .filter((record) => !record.forgotten && !record.archived)
+    .sort((a, b) => Number(Boolean(b.important)) - Number(Boolean(a.important)) || Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)));
+  return {
+    ...pulse,
+    records: visible(pulse.records),
+    newFacts: visible(pulse.newFacts),
+    staleAssumptions: visible(pulse.staleAssumptions),
+    uncertain: visible(pulse.uncertain),
+    controlledRecords: Object.entries(memoryControls || {}).map(([id, control]) => ({ id, ...control })),
+  };
+}
+
+function applyActionControlsToQueue(actionQueue, controls = {}) {
+  const rows = Array.isArray(actionQueue) ? actionQueue : [];
+  const seen = new Set();
+  const overlaid = rows.map((action) => {
+    const { id, control } = findControlForItem(action, controls);
+    if (id) seen.add(id);
+    if (!control) return action;
+    return {
+      ...action,
+      ...control,
+      id: action.id || id,
+      lifecycle: normalizeActionLifecycle(control.lifecycle) || action.lifecycle || 'suggested_action',
+      controlled: true,
+    };
+  });
+  for (const [id, control] of Object.entries(controls || {})) {
+    if (seen.has(id)) continue;
+    if (!control?.sourceSignalId && !control?.title && !control?.summary) continue;
+    overlaid.push({
+      id,
+      title: control.title || `Review converted signal: ${control.sourceSignalId}`,
+      summary: control.summary || (control.sourceSignalId ? 'Converted from an operational signal. Review before execution.' : 'Manual action created from command.'),
+      sourceSignalId: control.sourceSignalId,
+      source: control.source || (control.sourceSignalId ? 'signal-control' : 'manual-command'),
+      type: control.type || (control.sourceSignalId ? 'converted_signal' : 'manual_action'),
+      requiresApproval: control.requiresApproval !== false,
+      approvalRequired: control.approvalRequired !== false && control.requiresApproval !== false,
+      lifecycle: normalizeActionLifecycle(control.lifecycle) || 'suggested_action',
+      executionStatus: control.executionStatus || 'not_executable',
+      executionDeferred: control.executionDeferred !== false,
+      controlled: true,
+      ...control,
+    });
+  }
+  return overlaid;
+}
+
+function decisionForApprovalAction(action) {
+  if (!action || typeof action !== 'object') return null;
+  const id = String(action.id || '').trim();
+  if (!id || !(action.approvalRequired || action.requiresApproval)) return null;
+  return {
+    id: `decision:${id}`,
+    type: 'Decision',
+    title: action.title || action.summary || 'Approve prepared action',
+    summary: action.summary || action.body || 'Prepared action is waiting for Mark approval.',
+    question: 'Should this prepared action be approved, revised, or dismissed?',
+    source: action.source || 'action-queue',
+    sourceActionId: id,
+    businessKey: action.businessKey || '',
+    target: action.target || id,
+    targetType: action.type || 'ActionDraft',
+    score: Number(action.score || 62),
+    urgency: Number(action.urgency || 0.5),
+    confidence: Number(action.confidence || 0.72),
+    reasons: [action.approvalReason || 'External execution remains approval-gated.'],
+    recommendedAction: action.suggestedButtonLabel || 'Review and approve or dismiss.',
+    requiresMark: true,
+    approvalRequired: true,
+  };
+}
+
+function applyProjectControlsToActivity(projectActivity, controls = {}) {
+  const rows = Array.isArray(projectActivity) ? projectActivity : [];
+  return rows.map((project) => {
+    const { control } = findControlForItem(project, controls);
+    if (!control) return project;
+    const state = normalizeProjectControlState(control.state || control.activityStatus || control.status);
+    const next = {
+      ...project,
+      ...control,
+      controlled: true,
+      controlState: state || control.controlState || '',
+    };
+    if (state === 'active' || state === 'pinned' || state === 'reactivated') {
+      next.activityStatus = 'active';
+      next.status = 'active';
+      next.projectState = 'active';
+      next.pinned = true;
+      next.operationalOverride = 'keep_active';
+      next.reason = control.reason || 'Kept active by operator control.';
+    } else if (state === 'archived' || state === 'complete') {
+      next.activityStatus = state === 'complete' ? 'complete' : 'archived';
+      next.status = next.activityStatus;
+      next.projectState = state === 'complete' ? 'complete' : 'archived';
+      next.operationalOverride = state;
+      next.reason = control.reason || (state === 'complete' ? 'Marked complete by operator control.' : 'Archived by operator control.');
+    } else if (state === 'known_history' || state === 'dormant') {
+      next.activityStatus = 'historical';
+      next.status = 'historical';
+      next.projectState = 'dormant';
+      next.operationalOverride = 'known_history';
+      next.reason = control.reason || 'Kept in known history by operator control.';
+    }
+    return next;
+  });
+}
+
+function recomputeCommunicationCounts(comms) {
+  const out = comms && typeof comms === 'object' ? { ...comms } : {};
+  out.counts = {
+    waitingOnMark: Array.isArray(out.waitingOnMark) ? out.waitingOnMark.length : 0,
+    waitingOnOthers: Array.isArray(out.waitingOnOthers) ? out.waitingOnOthers.length : 0,
+    draftableReplies: Array.isArray(out.draftableReplies) ? out.draftableReplies.length : 0,
+    followUpsDue: Array.isArray(out.followUpsDue) ? out.followUpsDue.length : 0,
+    unusualSilence: Array.isArray(out.unusualSilence) ? out.unusualSilence.length : 0,
+    highValueMissedOpportunities: Array.isArray(out.highValueMissedOpportunities) ? out.highValueMissedOpportunities.length : 0,
+  };
+  return out;
+}
+
+function hashMarcusBriefForSession(brief) {
+  const payload = {
+    top: (Array.isArray(brief?.topPriorities) ? brief.topPriorities : []).slice(0, 8).map((item) => item?.id || item?.title),
+    actions: (Array.isArray(brief?.activeActionQueue) ? brief.activeActionQueue : Array.isArray(brief?.actionQueue) ? brief.actionQueue : []).slice(0, 8).map((item) => item?.id || item?.title),
+    systems: (Array.isArray(brief?.systemHealth?.items) ? brief.systemHealth.items : []).map((item) => `${item?.id || item?.title}:${item?.status || ''}`),
+  };
+  return crypto.createHash('sha1').update(JSON.stringify(payload)).digest('hex');
+}
+
+function itemChangedAtMs(item) {
+  const candidates = [
+    item?.changedAt,
+    item?.lastSeenAt,
+    item?.lastActivityAt,
+    item?.updatedAt,
+    item?.createdAt,
+    item?.date,
+  ];
+  for (const value of candidates) {
+    const ms = Date.parse(String(value || ''));
+    if (Number.isFinite(ms)) return ms;
+  }
+  return 0;
+}
+
+function sessionChangeRow(item, category, fallbackAt = '') {
+  if (!item || typeof item !== 'object') return null;
+  const changedMs = itemChangedAtMs(item);
+  const changedAt = changedMs ? new Date(changedMs).toISOString() : fallbackAt;
+  return {
+    id: String(item.id || item.target || `${category}:${item.title || item.name || ''}`).trim().slice(0, 240),
+    category,
+    title: String(item.title || item.name || item.summary || 'Changed item').trim().slice(0, 180),
+    summary: String(item.detail || item.summary || item.recommendedAction || item.nextAction || '').trim().slice(0, 260),
+    source: String(item.source || item.channel || item.businessKey || category).trim().slice(0, 80),
+    changedAt,
+    score: Number.isFinite(Number(item.score)) ? Math.round(Number(item.score)) : null,
+    confidence: Number.isFinite(Number(item.confidence)) ? Math.round(Number(item.confidence) * 100) : null,
+  };
+}
+
+function buildSessionContextForBrief(brief, rawSessionState) {
+  const state = normalizeMarcusSessionState(rawSessionState);
+  const lastMs = Date.parse(state.lastCheckInAt || '') || 0;
+  const generatedAt = String(brief?.generatedAt || nowIso());
+  const candidates = [
+    ...(Array.isArray(brief?.topPriorities) ? brief.topPriorities.map((item) => [item, 'attention']) : []),
+    ...(Array.isArray(brief?.operationalSignals) ? brief.operationalSignals.map((item) => [item, 'signal']) : []),
+    ...(Array.isArray(brief?.activeActionQueue) ? brief.activeActionQueue.map((item) => [item, 'action']) : []),
+    ...(Array.isArray(brief?.actionQueue) ? brief.actionQueue.map((item) => [item, 'action']) : []),
+    ...(Array.isArray(brief?.memoryPulse?.records) ? brief.memoryPulse.records.map((item) => [item, 'memory']) : []),
+    ...(Array.isArray(brief?.systemHealth?.items) ? brief.systemHealth.items.map((item) => [item, 'system']) : []),
+    ...(Array.isArray(brief?.projectActivity) ? brief.projectActivity.map((item) => [item, 'work']) : []),
+  ];
+  const seen = new Set();
+  const changed = [];
+  for (const [item, category] of candidates) {
+    const row = sessionChangeRow(item, category, generatedAt);
+    if (!row?.title) continue;
+    const key = row.id || `${row.category}:${row.title}`;
+    if (seen.has(key)) continue;
+    const realChangedMs = itemChangedAtMs(item);
+    const changedMs = Date.parse(row.changedAt || '') || 0;
+    if (lastMs && changedMs && changedMs <= lastMs) continue;
+    if (lastMs && !realChangedMs) continue;
+    seen.add(key);
+    changed.push(row);
+  }
+  changed.sort((a, b) => (Date.parse(b.changedAt || '') || 0) - (Date.parse(a.changedAt || '') || 0) || Number(b.score || 0) - Number(a.score || 0));
+  const topChanged = changed.slice(0, 8);
+  const counts = {};
+  for (const row of changed) counts[row.category] = Number(counts[row.category] || 0) + 1;
+  return {
+    ...state,
+    currentBriefHash: hashMarcusBriefForSession(brief),
+    generatedAt,
+    hasPriorCheckIn: Boolean(state.lastCheckInAt),
+    changedSinceLastCheckIn: topChanged,
+    changedSinceLastCheckInCount: changed.length,
+    changedSinceLastCheckInCounts: counts,
+    briefingLine: state.lastCheckInAt
+      ? (topChanged.length ? `${topChanged.length} notable change${topChanged.length === 1 ? '' : 's'} since ${state.lastCheckInAt}.` : `No notable changes since ${state.lastCheckInAt}.`)
+      : 'No prior check-in recorded; using the current active brief as the starting baseline.',
+  };
+}
+
+function applyOperationalControlsToBrief(brief, rawControls) {
+  const controls = normalizeMarcusOperationalControls(rawControls);
+  const now = Date.now();
+  const mode = controls.proactiveMode;
+  const out = { ...(brief && typeof brief === 'object' ? brief : {}) };
+  out.projectActivity = applyProjectControlsToActivity(out.projectActivity, controls.projects);
+  applyFocusControlsToBrief(out, controls.focus);
+  const closedProjectIds = new Set((Array.isArray(out.projectActivity) ? out.projectActivity : [])
+    .filter((project) => ['archived', 'complete'].includes(normalizeProjectControlState(project?.controlState || project?.activityStatus || project?.status)) || ['archived', 'complete'].includes(String(project?.operationalOverride || '').toLowerCase()))
+    .map((project) => String(project?.id || project?.target || '').trim())
+    .filter(Boolean));
+  const activeOverrideIds = new Set((Array.isArray(out.projectActivity) ? out.projectActivity : [])
+    .filter((project) => ['active', 'pinned', 'reactivated'].includes(normalizeProjectControlState(project?.controlState || project?.activityStatus || project?.status)) || project?.operationalOverride === 'keep_active')
+    .map((project) => String(project?.id || project?.target || '').trim())
+    .filter(Boolean));
+  const isClosedProjectItem = (item) => {
+    const ids = getOperationalItemIds(item);
+    for (const id of ids) if (closedProjectIds.has(id)) return true;
+    return false;
+  };
+  const controlledSignalKeys = [
+    'topPriorities',
+    'urgentInterrupts',
+    'waitingOnMark',
+    'waitingOnClients',
+    'waitingOnTeam',
+    'stalledProjects',
+    'risks',
+    'opportunities',
+    'decisionQueue',
+    'ignoreQueue',
+    'operationalSignals',
+  ];
+  let suppressedByControlsCount = 0;
+  for (const key of controlledSignalKeys) {
+    if (!Array.isArray(out[key])) continue;
+    const filtered = filterControlledSignals(out[key], controls.signals, now).filter((item) => !isClosedProjectItem(item));
+    suppressedByControlsCount += out[key].length - filtered.length;
+    out[key] = filtered;
+  }
+
+  const rawTop = Array.isArray(out.topPriorities) ? out.topPriorities : [];
+  const rawUrgent = Array.isArray(out.urgentInterrupts) ? out.urgentInterrupts : [];
+  const controlledTop = applyProactiveAttentionPolicy(rawTop, out, mode);
+  const controlledUrgent = applyProactiveAttentionPolicy(rawUrgent, out, mode);
+  const attentionQueue = Array.from(new Map([...controlledUrgent, ...controlledTop].map((item) => [String(item?.id || item?.title || JSON.stringify(item)), item])).values());
+  const suppressedByModeCount = Math.max(0, rawTop.length - controlledTop.length) + Math.max(0, rawUrgent.length - controlledUrgent.length);
+
+  out.controlledAttention = {
+    topPriorities: controlledTop,
+    urgentInterrupts: controlledUrgent,
+    attentionQueue,
+  };
+  out.topPriorities = controlledTop;
+  out.urgentInterrupts = controlledUrgent;
+
+  const modeDescriptions = {
+    quiet: 'Only critical or interrupt-grade items are surfaced.',
+    normal: 'Ranked attention is shown after explicit controls are applied.',
+    aggressive: 'All generated attention above the base threshold is surfaced.',
+    focus: 'Focus-related work and critical blockers are surfaced.',
+    away: 'Only critical items remain visible for later catch-up.',
+  };
+  out.attentionPolicy = {
+    mode,
+    description: modeDescriptions[mode] || modeDescriptions.normal,
+    interruptThreshold: mode === 'away' ? 86 : mode === 'quiet' ? 78 : mode === 'focus' ? 78 : 0,
+    visibleAttentionCount: attentionQueue.length,
+    suppressedByControlsCount,
+    suppressedByModeCount,
+  };
+
+  const actionQueue = applyActionControlsToQueue(out.actionQueue || out.preparedActions || [], controls.actions);
+  out.actionQueue = actionQueue;
+  out.preparedActions = applyActionControlsToQueue(out.preparedActions || [], controls.actions);
+  out.activeActionQueue = actionQueue.filter((action) => !['completed_action', 'dismissed_action'].includes(normalizeActionLifecycle(action.lifecycle)));
+  const existingDecisionIds = new Set((Array.isArray(out.decisionQueue) ? out.decisionQueue : []).map((decision) => String(decision?.id || '').trim()).filter(Boolean));
+  const actionDecisions = out.activeActionQueue
+    .map(decisionForApprovalAction)
+    .filter((decision) => decision && !existingDecisionIds.has(String(decision.id || '').trim()));
+  out.decisionQueue = [...(Array.isArray(out.decisionQueue) ? out.decisionQueue : []), ...actionDecisions]
+    .sort((a, b) => Number(b?.score || 0) - Number(a?.score || 0))
+    .slice(0, 20);
+
+  out.memoryPulse = applyMemoryControlsToPulse(out.memoryPulse, controls.memory);
+  const activeProjects = (Array.isArray(out.projectActivity) ? out.projectActivity : []).filter((project) => ['active', 'waiting', 'warming'].includes(String(project?.activityStatus || project?.status || '').toLowerCase()));
+  out.projects = activeProjects.slice(0, 3);
+  const activeProject = activeProjects[0] || null;
+  if (activeProject && out.focusPolicy?.source !== 'operational-controls') {
+    out.activeProject = {
+      id: activeProject.id,
+      name: activeProject.name || activeProject.title,
+      businessKey: activeProject.businessKey || '',
+      businessName: activeProject.businessName || activeProject.businessKey || '',
+      activityStatus: activeProject.activityStatus || activeProject.status,
+      controlled: Boolean(activeProject.controlled),
+    };
+    out.currentFocus = out.activeProject;
+  }
+  out.projectControlPolicy = {
+    activeOverrideCount: activeOverrideIds.size,
+    closedOverrideCount: closedProjectIds.size,
+    controlledProjectCount: Object.keys(controls.projects || {}).length,
+  };
+  if (out.sessionBriefing && typeof out.sessionBriefing === 'object') {
+    out.sessionBriefing = {
+      ...out.sessionBriefing,
+      needsAttention: filterControlledSignals(out.sessionBriefing.needsAttention, controls.signals, now),
+      waitingOnMark: filterControlledSignals(out.sessionBriefing.waitingOnMark, controls.signals, now),
+      risks: filterControlledSignals(out.sessionBriefing.risks, controls.signals, now),
+      opportunities: filterControlledSignals(out.sessionBriefing.opportunities, controls.signals, now),
+      decisions: filterControlledSignals(out.sessionBriefing.decisions, controls.signals, now),
+      ignoreQueue: filterControlledSignals(out.sessionBriefing.ignoreQueue, controls.signals, now),
+      topActions: out.activeActionQueue.slice(0, 5),
+    };
+  }
+  if (out.communicationIntelligence && typeof out.communicationIntelligence === 'object') {
+    const comms = { ...out.communicationIntelligence };
+    for (const key of ['waitingOnMark', 'waitingOnOthers', 'draftableReplies', 'followUpsDue', 'unusualSilence', 'highValueMissedOpportunities']) {
+      comms[key] = filterControlledSignals(comms[key], controls.signals, now);
+    }
+    out.communicationIntelligence = recomputeCommunicationCounts(comms);
+  }
+  out.operationalControls = controls;
+  return out;
+}
+
+function applyMarcusSessionContextToBrief(brief, sessionState) {
+  const out = { ...(brief && typeof brief === 'object' ? brief : {}) };
+  const sessionContext = buildSessionContextForBrief(out, sessionState);
+  out.sessionContext = sessionContext;
+  if (out.sessionBriefing && typeof out.sessionBriefing === 'object') {
+    out.sessionBriefing = {
+      ...out.sessionBriefing,
+      lastCheckInAt: sessionContext.lastCheckInAt,
+      changedSinceLastTime: sessionContext.changedSinceLastCheckIn,
+      changedSinceLastTimeCount: sessionContext.changedSinceLastCheckInCount,
+      changedSummary: sessionContext.briefingLine,
+    };
+  }
+  return out;
 }
 
 async function getAiConfig() {
@@ -12684,10 +13437,1029 @@ app.post('/api/marcus/live/voice/speak', async (req, res) => {
 
 app.get('/api/marcus/active-brief', async (req, res) => {
   try {
-    const brief = await buildMarcusActiveBrief();
-    res.json(brief);
+    const [brief, controls, sessionState] = await Promise.all([
+      buildMarcusActiveBrief(),
+      readMarcusOperationalControls(),
+      readMarcusSessionState(),
+    ]);
+    const controlledBrief = applyOperationalControlsToBrief(brief, controls);
+    res.json(applyMarcusSessionContextToBrief(controlledBrief, sessionState));
   } catch (err) {
     res.status(500).json({ ok: false, error: String(err?.message || err) });
+  }
+});
+
+app.get('/api/marcus/session-state', async (req, res) => {
+  try {
+    res.json(await readMarcusSessionState());
+  } catch (err) {
+    res.status(500).json({ ok: false, error: String(err?.message || err) });
+  }
+});
+
+app.post('/api/marcus/session/check-in', async (req, res) => {
+  try {
+    const [brief, controls, existing] = await Promise.all([
+      buildMarcusActiveBrief(),
+      readMarcusOperationalControls(),
+      readMarcusSessionState(),
+    ]);
+    const controlledBrief = applyOperationalControlsToBrief(brief, controls);
+    const sessionContext = buildSessionContextForBrief(controlledBrief, existing);
+    const now = nowIso();
+    const saved = await writeMarcusSessionState({
+      ...existing,
+      lastCheckInAt: now,
+      lastOpenedAt: now,
+      lastBriefHash: sessionContext.currentBriefHash,
+      checkInCount: Number(existing.checkInCount || 0) + 1,
+    });
+    res.json({
+      ok: true,
+      sessionState: saved,
+      previousSessionContext: sessionContext,
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: String(err?.message || err) });
+  }
+});
+
+function normalizeMarcusCommandIntent(message) {
+  const text = String(message || '').trim().toLowerCase();
+  if (!text) return 'empty';
+  if (/\b(memory correction|correct memory|forget memory|archive memory|archive this memory|important memory|mark memory important|mark outdated memory)\b/.test(text)) return 'memory_correction';
+  if (/\b(keep this active|keep .* active|reactivate|pin project|project is done|project.*done|mark project complete|this project is complete|archive this|archive project|move .* history|known history)\b/.test(text)) return 'project_correction';
+  if (/\b(that is wrong|that's wrong|incorrect|not true|forget this|pin this|mark important|this is important|mark outdated|this is outdated|do not bother me|don't bother me|keep this active|reactivate this)\b/.test(text)) return 'memory_correction';
+  if (parseProjectDraftCommand(message)) return 'project_create';
+  if (parseFocusCommand(message)) return 'focus_control';
+  if (parseProactiveModeCommand(text)) return 'proactive_mode';
+  const wantsNewAction =
+    (/\b(create|add|make|turn this into)\b/.test(text) && /\b(action|reminder|follow[- ]?up|reply|draft)\b/.test(text)) ||
+    /\bremind me\b/.test(text) ||
+    /\bdraft\s+(?:a|the)?\s*(?:reply|response)\b/.test(text) ||
+    (/\bfollow[- ]?up\b/.test(text) && /\b(action|task|todo|to-do|create|add|make)\b/.test(text));
+  if (wantsNewAction) return 'action_create';
+  if (/\bwhat\s+did\s+i\s+say\s+about\s+.+\s+last\s+time\b/.test(text)) return 'entity_context';
+  if (/\b(what changed|changed since|since last|check-?in|last time)\b/.test(text)) return 'briefing';
+  if (/\b(brief|briefing|session brief|brief me)\b/.test(text)) return 'briefing';
+  if (/\b(what matters|today|right now|attention|priority|priorities)\b/.test(text)) return 'what_matters';
+  if (/\b(decision|decisions|decide|needs deciding|need to decide|what should i decide|approval point|approval points)\b/.test(text)) return 'decisions';
+  if (/\b(can wait|what can wait|what should i ignore|ignore for now|deprioriti[sz]ed|not important|what can i ignore)\b/.test(text)) return 'ignore_queue';
+  if (/\b(forgetting|forget|missing|missed|blind spot|blindspot)\b/.test(text)) return 'what_forgetting';
+  if (/\b(waiting on me|waiting on mark|need me|needs me|my blocker|i'?m blocking)\b/.test(text)) return 'waiting_on_mark';
+  if (/\b(blocked projects?|blocked work|stuck projects?|stuck work|find blockers|show blockers)\b/.test(text)) return 'blocked_projects';
+  if (/\b(stale clients?|stale contacts?|silent clients?|which clients are stale|old clients)\b/.test(text)) return 'stale_clients';
+  if (/\b(compare|versus| vs |difference between)\b/.test(text)) return 'compare_context';
+  if (/\b(show sources?|show evidence|sources only|source list|where did you get)\b/.test(text)) return 'show_sources';
+  if (/\b(communication|communications|follow-ups?|follow ups?|draftable|reply|replies|unusual silence|missed opportunities|waiting on others)\b/.test(text)) return 'communication_intelligence';
+  if (/\b(stale|dormant|known history|old projects|archive|historical)\b/.test(text)) return 'stale_work';
+  if (/\b(confidence|why|ranked|ranking|score|source|evidence)\b/.test(text)) return 'explain_confidence';
+  if (/\b(system|systems|health|integration|credential|api|website|automation)\b/.test(text)) return 'system_health';
+  if (/\b(memory|remember|knows|source|stale assumption|outdated)\b/.test(text)) return 'memory';
+  if (/\b(summary|session)\b/.test(text)) return 'briefing';
+  if (/\b(approve|approved|complete|completed|done|dismiss|dismissed)\b/.test(text) && /\b(action|draft|approval)\b/.test(text)) return 'action_transition';
+  if (/\b(action|actions|approval|draft|execute|next move)\b/.test(text)) return 'actions';
+  return 'general_operational';
+}
+
+function parseProactiveModeCommand(message) {
+  const text = String(message || '').trim().toLowerCase();
+  if (!text) return '';
+  const hasModeCue = /\b(mode|go|switch|set|make)\b/.test(text);
+  if (/\b(current focus|focus lane|focus lanes|focus on|working on)\b/.test(text) && !/\bfocus mode\b/.test(text)) return '';
+  if (/\b(do not disturb|don't disturb|heads down)\b/.test(text) || (hasModeCue && /\bquiet\b/.test(text))) return 'quiet';
+  if (hasModeCue && /\b(normal|standard|default)\b/.test(text)) return 'normal';
+  if (hasModeCue && /\b(aggressive|high signal|show everything|tell me everything)\b/.test(text)) return 'aggressive';
+  if (/\bfocus mode\b/.test(text) || (hasModeCue && /\bfocus\b/.test(text) && /\bmode\b/.test(text))) return 'focus';
+  if (hasModeCue && /\b(away|offline|out of office)\b/.test(text)) return 'away';
+  return '';
+}
+
+function parseFocusCommand(message) {
+  const raw = String(message || '').replace(/\s+/g, ' ').trim().slice(0, 1000);
+  const text = raw.toLowerCase();
+  if (!raw) return null;
+  if (/\b(clear|remove|unset)\b/.test(text) && /\b(current focus|focus lane|focus lanes|pinned focus)\b/.test(text)) {
+    return { action: 'clear' };
+  }
+  if (!/\b(set|pin|make|current focus|focus on|working on|focus lane)\b/.test(text)) return null;
+  const match = raw.match(/\b(?:set|pin|make)\s+(?:my\s+)?(?:current\s+)?focus(?:\s+lane)?(?:\s+to|:)?\s+(.+)$/i)
+    || raw.match(/\b(?:focus on|working on)\s+(.+)$/i);
+  const title = String(match?.[1] || '').replace(/\.$/, '').trim();
+  if (!title || title.length < 2) return null;
+  return {
+    action: 'set',
+    title: title.slice(0, 180),
+    summary: `Pinned current focus from command: ${title.slice(0, 220)}`,
+  };
+}
+
+function parseProjectDraftCommand(message) {
+  const raw = String(message || '').replace(/\s+/g, ' ').trim().slice(0, 1000);
+  const text = raw.toLowerCase();
+  if (!raw) return null;
+  if (/\b(archive|complete|done|history|historical|keep active|reactivate)\b/.test(text)) return null;
+  if (!/\b(project|initiative|workstream)\b/.test(text)) return null;
+  const match = raw.match(/\b(?:turn this into|make this|convert this into)\s+(?:a\s+)?(?:project|initiative|workstream)(?::|\s+)?(.*)$/i)
+    || raw.match(/\b(?:create|add|draft|start)\s+(?:a\s+)?(?:new\s+)?(?:project|initiative|workstream)(?:\s+called|\s+named|\s+for|:)?\s*(.*)$/i);
+  if (!match) return null;
+  const name = String(match[1] || '').replace(/[.!?]+$/g, '').trim();
+  return {
+    action: 'create_project_draft',
+    projectName: (name || 'New project from command').slice(0, 180),
+    summary: raw,
+    sourceText: raw,
+  };
+}
+
+function buildManualActionDraftFromCommand(message) {
+  const raw = String(message || '').replace(/\s+/g, ' ').trim().slice(0, 1000);
+  let cleaned = raw
+    .replace(/^(please\s+)?(create|add|make)\s+(a\s+)?/i, '')
+    .replace(/^turn this into\s+(an?\s+)?/i, '')
+    .replace(/^remind me\s+(to|if|when)?\s*/i, '')
+    .replace(/^draft\s+(a|the)?\s*(reply|response)(\s+but\s+don'?t\s+send)?[.:]?\s*/i, '')
+    .trim();
+  const isReminder = /\b(remind|reminder)\b/i.test(raw);
+  const isFollowUp = /\b(follow[- ]?up)\b/i.test(raw);
+  const isDraft = /\b(draft|reply|response)\b/i.test(raw);
+  const type = isReminder ? 'reminder' : isFollowUp ? 'follow_up' : isDraft ? 'draft_reply' : 'manual_action';
+  const titlePrefix = isReminder ? 'Reminder' : isFollowUp ? 'Follow-up' : isDraft ? 'Draft reply' : 'Action';
+  if (isFollowUp && /^follow[- ]?up\.?$/i.test(cleaned)) cleaned = 'Review the most important follow-up from current context';
+  if (isDraft && !cleaned) cleaned = 'Prepare reply draft for the current communication context';
+  const titleText = cleaned || raw || 'Review manual action';
+  return {
+    title: `${titlePrefix}: ${titleText}`.slice(0, 180),
+    summary: raw || titleText,
+    body: raw,
+    type,
+    lifecycle: isDraft ? 'draft_action' : 'suggested_action',
+    requiresApproval: true,
+    changedBy: 'command',
+  };
+}
+
+function commandLineForItem(item, idx) {
+  const title = String(item?.title || item?.name || 'Untitled').trim();
+  const rawDetail = String(item?.detail || item?.summary || item?.reason || '').replace(/\s+/g, ' ').trim();
+  const detail = rawDetail.toLowerCase() === title.toLowerCase() ? '' : rawDetail;
+  const reason = Array.isArray(item?.reasons) && item.reasons.length ? ` Reason: ${item.reasons[0]}.` : '';
+  const compressed = Number(item?.duplicateCount || 0) > 1 ? ` Compressed ${Number(item.duplicateCount)} related signals.` : '';
+  const score = Number.isFinite(Number(item?.score)) ? ` Score ${Math.round(Number(item.score))}.` : '';
+  return `${idx + 1}. ${title}${detail ? ` - ${detail.slice(0, 180)}` : ''}${reason}${compressed}${score}`;
+}
+
+function commandEvidenceForItem(item) {
+  if (!item || typeof item !== 'object') return null;
+  const reasons = Array.isArray(item.reasons) ? item.reasons : Array.isArray(item.scoreReasons) ? item.scoreReasons : [];
+  const related = Array.isArray(item.relatedEntities) ? item.relatedEntities : Array.isArray(item.relationships) ? item.relationships : [];
+  return {
+    id: String(item.id || item.target || item.name || item.title || '').trim(),
+    title: String(item.title || item.name || item.summary || 'Evidence').trim().slice(0, 160),
+    source: String(item.source || item.channel || item.group || item.type || '').trim().slice(0, 80),
+    confidence: Number.isFinite(Number(item.confidence)) ? Math.round(Number(item.confidence) * 100) : null,
+    score: Number.isFinite(Number(item.score)) ? Math.round(Number(item.score)) : null,
+    why: String(reasons[0] || item.reason || item.recommendedAction || item.summary || '').trim().slice(0, 220),
+    relatedEntities: related.slice(0, 6),
+  };
+}
+
+function buildCommandEvidence(cards, brief) {
+  const evidence = (Array.isArray(cards) ? cards : []).map(commandEvidenceForItem).filter(Boolean).slice(0, 8);
+  const sourceCounts = {};
+  for (const item of evidence) {
+    const source = item.source || 'unknown';
+    sourceCounts[source] = Number(sourceCounts[source] || 0) + 1;
+  }
+  return {
+    items: evidence,
+    sourceCounts,
+    policy: brief?.attentionPolicy || null,
+    lowSignalSuppressedCount: Number(brief?.lowSignalSuppressedCount || 0),
+  };
+}
+
+function briefOperationalCollections(brief) {
+  const memoryRecords = Array.isArray(brief?.memoryPulse?.records) ? brief.memoryPulse.records : [];
+  const systemItems = Array.isArray(brief?.systemHealth?.items) ? brief.systemHealth.items : [];
+  const worldEntities = flattenWorldEntities(brief?.worldModel);
+  return [
+    ...(Array.isArray(brief?.controlledAttention?.attentionQueue) ? brief.controlledAttention.attentionQueue : []),
+    ...(Array.isArray(brief?.topPriorities) ? brief.topPriorities : []),
+    ...(Array.isArray(brief?.urgentInterrupts) ? brief.urgentInterrupts : []),
+    ...(Array.isArray(brief?.operationalSignals) ? brief.operationalSignals : []),
+    ...(Array.isArray(brief?.decisionQueue) ? brief.decisionQueue : []),
+    ...(Array.isArray(brief?.activeActionQueue) ? brief.activeActionQueue : []),
+    ...(Array.isArray(brief?.actionQueue) ? brief.actionQueue : []),
+    ...(Array.isArray(brief?.ignoreQueue) ? brief.ignoreQueue : []),
+    ...memoryRecords,
+    ...systemItems,
+    ...worldEntities,
+  ];
+}
+
+function findBriefOperationalItem(brief, itemIdOrQuery) {
+  const query = String(itemIdOrQuery || '').trim();
+  if (!query) return null;
+  const q = query.toLowerCase();
+  const rows = briefOperationalCollections(brief);
+  const exact = rows.find((item) => {
+    const ids = [
+      item?.id,
+      item?.sourceSignalId,
+      item?.sourceActionId,
+      item?.target,
+      item?.targetId,
+      item?.name,
+      item?.title,
+    ].map((value) => String(value || '').trim());
+    return ids.some((id) => id && id === query);
+  });
+  if (exact) return exact;
+  return rows.find((item) => {
+    const text = `${item?.id || ''} ${item?.name || ''} ${item?.title || ''} ${item?.summary || ''}`.toLowerCase();
+    return text.includes(q);
+  }) || null;
+}
+
+function inspectBriefOperationalItem(brief, itemIdOrQuery) {
+  const item = findBriefOperationalItem(brief, itemIdOrQuery);
+  if (!item) return null;
+  const itemId = String(item.id || item.sourceSignalId || item.name || item.title || '').trim();
+  const entityContext = itemId ? inspectWorldEntity(brief, itemId) : null;
+  const evidence = buildCommandEvidence([item], brief);
+  const reasons = Array.isArray(item.reasons) ? item.reasons : Array.isArray(item.scoreReasons) ? item.scoreReasons : [];
+  const sourceRefs = Array.isArray(item.sourceRefs) ? item.sourceRefs : [];
+  const relatedEntities = Array.isArray(item.relatedEntities) ? item.relatedEntities : [];
+  const controls = {
+    canSnooze: Boolean(item.sourceSignalId || (item.id && !String(item.id).startsWith('decision:'))),
+    canDismiss: Boolean(item.sourceSignalId || item.sourceActionId || item.id),
+    canConvertToAction: Boolean(item.sourceSignalId || (item.id && !String(item.id).startsWith('decision:'))),
+    canApprove: Boolean(item.sourceActionId || (item.id && (item.approvalRequired || item.requiresApproval || String(item.lifecycle || '').includes('draft')))),
+    canCorrectMemory: String(item.type || item.group || '').toLowerCase().includes('memory') || String(item.id || '').startsWith('memory:'),
+  };
+  return {
+    ok: true,
+    item,
+    explanation: {
+      title: String(item.title || item.name || 'Operational item').trim(),
+      summary: String(item.detail || item.summary || item.recommendedAction || item.nextAction || '').trim(),
+      why: String(reasons[0] || item.reason || item.recommendedAction || item.summary || 'This item is present in the current ActiveBrief.').trim(),
+      source: String(item.source || item.channel || item.group || item.type || 'unknown').trim(),
+      score: Number.isFinite(Number(item.score)) ? Math.round(Number(item.score)) : null,
+      confidence: Number.isFinite(Number(item.confidence)) ? Math.round(Number(item.confidence) * 100) : null,
+      bucket: String(item.bucket || item.status || '').trim(),
+      recommendedAction: String(item.recommendedAction || item.nextAction || item.suggestedButtonLabel || '').trim(),
+    },
+    evidence,
+    sourceRefs,
+    relatedEntities,
+    relatedContext: entityContext ? {
+      relationships: entityContext.relationships || [],
+      relatedEntities: entityContext.relatedEntities || [],
+      relatedSignals: entityContext.relatedSignals || [],
+      relatedDecisions: entityContext.relatedDecisions || [],
+      relatedActions: entityContext.relatedActions || [],
+      relatedSystems: entityContext.relatedSystems || [],
+      relatedMemory: entityContext.relatedMemory || [],
+      counts: entityContext.counts || {},
+    } : null,
+    controls,
+    generatedAt: nowIso(),
+  };
+}
+
+function flattenWorldEntities(worldModel) {
+  const wm = worldModel && typeof worldModel === 'object' ? worldModel : {};
+  const entities = wm.entities && typeof wm.entities === 'object' ? wm.entities : {};
+  const rows = [];
+  for (const [group, list] of Object.entries(entities)) {
+    if (!Array.isArray(list)) continue;
+    for (const entity of list) {
+      if (!entity || typeof entity !== 'object') continue;
+      rows.push({
+        ...entity,
+        group,
+        id: String(entity.id || entity.name || '').trim(),
+        name: String(entity.name || entity.title || entity.id || '').trim(),
+      });
+    }
+  }
+  return rows.filter((entity) => entity.id || entity.name);
+}
+
+function scoreEntityMatch(entity, query) {
+  const q = String(query || '').trim().toLowerCase();
+  if (!q) return 0;
+  const name = String(entity?.name || '').toLowerCase();
+  const id = String(entity?.id || '').toLowerCase();
+  const type = String(entity?.type || entity?.group || '').toLowerCase();
+  const source = String(entity?.source || '').toLowerCase();
+  let score = 0;
+  if (name === q || id === q) score += 100;
+  if (name.includes(q)) score += 60;
+  if (id.includes(q)) score += 45;
+  if (type.includes(q)) score += 20;
+  if (source.includes(q)) score += 10;
+  for (const part of q.split(/\s+/g).filter(Boolean)) {
+    if (name.includes(part)) score += 12;
+    if (id.includes(part)) score += 8;
+  }
+  return score;
+}
+
+function searchWorldEntities(brief, query, { limit = 10 } = {}) {
+  const rows = flattenWorldEntities(brief?.worldModel);
+  return rows
+    .map((entity) => ({ ...entity, matchScore: scoreEntityMatch(entity, query) }))
+    .filter((entity) => entity.matchScore > 0)
+    .sort((a, b) => b.matchScore - a.matchScore || String(a.name).localeCompare(String(b.name)))
+    .slice(0, Math.max(1, Math.min(50, Number(limit) || 10)));
+}
+
+function entityGroupMatches(entity, groups = []) {
+  const set = new Set(groups.map((group) => String(group || '').toLowerCase()));
+  const group = String(entity?.group || '').toLowerCase();
+  const type = String(entity?.type || '').toLowerCase();
+  return set.has(group) || set.has(type);
+}
+
+function uniqueRelatedRows(rows = []) {
+  const out = [];
+  const seen = new Set();
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const id = String(row?.id || row?.name || row?.title || '').trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push(row);
+  }
+  return out;
+}
+
+function inspectWorldEntity(brief, entityIdOrQuery) {
+  const rows = flattenWorldEntities(brief?.worldModel);
+  const query = String(entityIdOrQuery || '').trim();
+  if (!query) return null;
+  const entity = rows.find((row) => row.id === query) || searchWorldEntities(brief, query, { limit: 1 })[0] || null;
+  if (!entity) return null;
+
+  const relationships = Array.isArray(brief?.worldModel?.relationships) ? brief.worldModel.relationships : [];
+  const relatedEdges = relationships.filter((rel) => rel?.from === entity.id || rel?.to === entity.id);
+  const relatedIds = new Set();
+  for (const rel of relatedEdges) {
+    if (rel?.from && rel.from !== entity.id) relatedIds.add(rel.from);
+    if (rel?.to && rel.to !== entity.id) relatedIds.add(rel.to);
+  }
+  const relatedEntities = rows.filter((row) => relatedIds.has(row.id)).slice(0, 20);
+  const haystackTerms = [entity.id, entity.name].filter(Boolean).map((x) => String(x).toLowerCase());
+  const includesEntity = (item) => {
+    const text = JSON.stringify(item || {}).toLowerCase();
+    return haystackTerms.some((term) => term && text.includes(term));
+  };
+  const rowsByGroup = (groups) => relatedEntities.filter((row) => entityGroupMatches(row, groups));
+  const relatedSignals = uniqueRelatedRows([
+    ...rowsByGroup(['signals']),
+    ...(Array.isArray(brief?.operationalSignals) ? brief.operationalSignals : []).filter(includesEntity),
+  ]).slice(0, 10);
+  const relatedDecisions = uniqueRelatedRows([
+    ...rowsByGroup(['decisions', 'Decision']),
+    ...(Array.isArray(brief?.decisionQueue) ? brief.decisionQueue : []).filter(includesEntity),
+  ]).slice(0, 10);
+  const relatedActions = uniqueRelatedRows([
+    ...rowsByGroup(['actions', 'ActionDraft', 'Action']),
+    ...(Array.isArray(brief?.actionQueue) ? brief.actionQueue : []).filter(includesEntity),
+  ]).slice(0, 10);
+  const relatedSystems = uniqueRelatedRows([
+    ...rowsByGroup(['systems', 'System', 'SystemSignal', 'Tool', 'Website', 'Payment']),
+    ...(Array.isArray(brief?.systemHealth?.items) ? brief.systemHealth.items : []).filter(includesEntity),
+  ]).slice(0, 10);
+  const relatedMemory = uniqueRelatedRows([
+    ...rowsByGroup(['memory', 'Memory']),
+    ...(Array.isArray(brief?.memoryPulse?.records) ? brief.memoryPulse.records : []).filter(includesEntity),
+  ]).slice(0, 10);
+  return {
+    ok: true,
+    entity,
+    relationships: relatedEdges.slice(0, 30),
+    relatedEntities,
+    relatedSignals,
+    relatedDecisions,
+    relatedActions,
+    relatedSystems,
+    relatedMemory,
+    counts: {
+      relationships: relatedEdges.length,
+      relatedEntities: relatedEntities.length,
+      signals: relatedSignals.length,
+      decisions: relatedDecisions.length,
+      actions: relatedActions.length,
+      systems: relatedSystems.length,
+      memory: relatedMemory.length,
+    },
+  };
+}
+
+function extractEntityQuery(message) {
+  const raw = String(message || '').trim();
+  const patterns = [
+    /\bwhat\s+did\s+i\s+say\s+about\s+(.+?)\s+last\s+time\??$/i,
+    /\b(?:show|find|inspect|summarize|open)\s+(?:me\s+)?(?:everything\s+)?(?:related\s+to|about|for)\s+(.+)$/i,
+    /\b(?:what changed with|what do you know about|everything related to)\s+(.+)$/i,
+    /\b(?:related)\s+(.+)$/i,
+  ];
+  for (const re of patterns) {
+    const m = raw.match(re);
+    if (m?.[1]) return m[1].replace(/[?.!]+$/g, '').trim();
+  }
+  return '';
+}
+
+function parseCompareCommand(message) {
+  const raw = String(message || '').replace(/\s+/g, ' ').trim().slice(0, 1000);
+  if (!raw) return null;
+  const patterns = [
+    /\bcompare\s+(.+?)\s+(?:and|to|with)\s+(.+)$/i,
+    /\bdifference between\s+(.+?)\s+and\s+(.+)$/i,
+    /\b(.+?)\s+vs\.?\s+(.+)$/i,
+  ];
+  for (const re of patterns) {
+    const match = raw.match(re);
+    if (!match?.[1] || !match?.[2]) continue;
+    const left = String(match[1] || '').replace(/[?.!]+$/g, '').trim();
+    const right = String(match[2] || '').replace(/[?.!]+$/g, '').trim();
+    if (left && right) return { left: left.slice(0, 160), right: right.slice(0, 160) };
+  }
+  return null;
+}
+
+function buildMarcusCommandResponse({ message, brief }) {
+  const intent = normalizeMarcusCommandIntent(message);
+  const top = Array.isArray(brief?.controlledAttention?.topPriorities) ? brief.controlledAttention.topPriorities : (Array.isArray(brief?.topPriorities) ? brief.topPriorities : []);
+  const waiting = Array.isArray(brief?.waitingOnMark) ? brief.waitingOnMark : [];
+  const actions = Array.isArray(brief?.activeActionQueue) && brief.activeActionQueue.length ? brief.activeActionQueue : (Array.isArray(brief?.actionQueue) && brief.actionQueue.length ? brief.actionQueue : (Array.isArray(brief?.preparedActions) ? brief.preparedActions : []));
+  const decisions = Array.isArray(brief?.decisionQueue) ? brief.decisionQueue : [];
+  const ignoreQueue = Array.isArray(brief?.ignoreQueue) ? brief.ignoreQueue : [];
+  const stale = Array.isArray(brief?.worldModel?.knownHistory) ? brief.worldModel.knownHistory : (Array.isArray(brief?.stalledProjects) ? brief.stalledProjects : []);
+  const projectActivity = Array.isArray(brief?.projectActivity) ? brief.projectActivity : [];
+  const systems = Array.isArray(brief?.systemHealth?.items) ? brief.systemHealth.items : [];
+  const comms = brief?.communicationIntelligence && typeof brief.communicationIntelligence === 'object' ? brief.communicationIntelligence : {};
+  const memory = brief?.memoryPulse && typeof brief.memoryPulse === 'object' ? brief.memoryPulse : {};
+  const session = brief?.sessionBriefing && typeof brief.sessionBriefing === 'object' ? brief.sessionBriefing : {};
+  const sessionContext = brief?.sessionContext && typeof brief.sessionContext === 'object' ? brief.sessionContext : {};
+  const confidence = Number.isFinite(Number(brief?.confidence)) ? Math.round(Number(brief.confidence) * 100) : null;
+
+  let title = 'Operational answer';
+  let lines = [];
+  let suggestedActions = [];
+  let cards = [];
+  const entityQuery = extractEntityQuery(message);
+  const compareQuery = parseCompareCommand(message);
+
+  let responseIntent = intent;
+
+  if (compareQuery) {
+    responseIntent = 'compare_context';
+    const left = inspectWorldEntity(brief, compareQuery.left);
+    const right = inspectWorldEntity(brief, compareQuery.right);
+    title = `Compare: ${compareQuery.left} vs ${compareQuery.right}`;
+    lines = [
+      left?.entity ? `${left.entity.name || left.entity.id}: ${left.counts?.signals || 0} signals, ${left.counts?.actions || 0} actions, ${left.counts?.relationships || 0} relationships.` : `${compareQuery.left}: no exact entity match.`,
+      right?.entity ? `${right.entity.name || right.entity.id}: ${right.counts?.signals || 0} signals, ${right.counts?.actions || 0} actions, ${right.counts?.relationships || 0} relationships.` : `${compareQuery.right}: no exact entity match.`,
+      left?.relatedSignals?.[0] ? `Left top signal: ${left.relatedSignals[0].title || left.relatedSignals[0].name}.` : '',
+      right?.relatedSignals?.[0] ? `Right top signal: ${right.relatedSignals[0].title || right.relatedSignals[0].name}.` : '',
+      'Use the cards to inspect the underlying sources before deciding priority.',
+    ].filter(Boolean);
+    cards = [
+      ...(left ? [left.entity, ...left.relatedSignals, ...left.relatedActions] : searchWorldEntities(brief, compareQuery.left, { limit: 3 })),
+      ...(right ? [right.entity, ...right.relatedSignals, ...right.relatedActions] : searchWorldEntities(brief, compareQuery.right, { limit: 3 })),
+    ].filter(Boolean).slice(0, 10);
+  } else if (entityQuery) {
+    responseIntent = 'entity_context';
+    const inspected = inspectWorldEntity(brief, entityQuery);
+    title = inspected?.entity ? `Entity context: ${inspected.entity.name || inspected.entity.id}` : `Entity context: ${entityQuery}`;
+    if (inspected?.entity) {
+      const q = entityQuery.toLowerCase();
+      const changedRows = Array.isArray(sessionContext.changedSinceLastCheckIn) ? sessionContext.changedSinceLastCheckIn : [];
+      const relatedChanges = changedRows.filter((item) => JSON.stringify(item || {}).toLowerCase().includes(q)).slice(0, 4);
+      lines = [
+        `${inspected.entity.name || inspected.entity.id} is a ${inspected.entity.type || inspected.entity.group || 'known entity'} from ${inspected.entity.source || 'unknown source'} with ${Math.round(Number(inspected.entity.confidence || 0) * 100)}% confidence.`,
+        relatedChanges.length ? `Changed since last check-in: ${relatedChanges.map((item) => item.title || item.name || item.summary).join('; ')}.` : '',
+        inspected.relatedEntities.length ? `Related entities: ${inspected.relatedEntities.slice(0, 8).map((e) => e.name || e.id).join(', ')}.` : 'No direct related entities were found in the current world model.',
+        inspected.relatedSignals.length ? `Related signals: ${inspected.relatedSignals.slice(0, 3).map((s) => s.title).join('; ')}.` : '',
+        inspected.relatedDecisions.length ? `Related decisions: ${inspected.relatedDecisions.slice(0, 3).map((d) => d.question || d.title || d.name).join('; ')}.` : '',
+        inspected.relatedActions.length ? `Related actions: ${inspected.relatedActions.slice(0, 3).map((a) => a.title).join('; ')}.` : '',
+        inspected.relatedSystems.length ? `Related systems: ${inspected.relatedSystems.slice(0, 3).map((s) => s.title || s.name).join('; ')}.` : '',
+        inspected.relatedMemory.length ? `Related memory: ${inspected.relatedMemory.slice(0, 3).map((m) => m.title).join('; ')}.` : '',
+      ].filter(Boolean);
+      cards = [
+        ...inspected.relatedDecisions,
+        ...inspected.relatedActions,
+        ...inspected.relatedSignals,
+        ...inspected.relatedSystems,
+        ...inspected.relatedMemory,
+        ...inspected.relatedEntities,
+      ].slice(0, 10);
+    } else {
+      const matches = searchWorldEntities(brief, entityQuery, { limit: 6 });
+      lines = matches.length
+        ? [`I did not find an exact entity for "${entityQuery}", but these are close:`, ...matches.map((e, idx) => `${idx + 1}. ${e.name || e.id} (${e.type || e.group}, ${e.source || 'unknown source'}).`)]
+        : [`I could not find "${entityQuery}" in the current world model. It may be absent, stale, or named differently.`];
+      cards = matches;
+    }
+  } else if (intent === 'what_matters') {
+    title = 'What matters right now';
+    lines = top.length
+      ? top.slice(0, 5).map(commandLineForItem)
+      : ['Nothing crossed the active attention threshold. MARCUS is still monitoring for blockers, client risk, and approvals.'];
+    suggestedActions = actions.slice(0, 3);
+    cards = top.slice(0, 5);
+  } else if (intent === 'what_forgetting') {
+    title = 'What you may be forgetting';
+    const staleLines = stale.slice(0, 3).map((item, idx) => `${idx + 1}. ${item.name || item.title} is not active attention anymore. Keep it in known history unless it should be pinned or reactivated.`);
+    const waitingLines = waiting.slice(0, 3).map((item, idx) => `${idx + 1 + staleLines.length}. ${item.title} appears to be waiting on Mark.`);
+    const uncertain = Array.isArray(memory.uncertain) ? memory.uncertain.slice(0, 2).map((item, idx) => `${idx + 1 + staleLines.length + waitingLines.length}. Low-confidence memory/signal: ${item.title || item.summary}.`) : [];
+    lines = [...waitingLines, ...staleLines, ...uncertain];
+    if (!lines.length) lines = ['No obvious forgotten item surfaced. The main risk is still stale or weakly linked memory, so use Memory review if something feels off.'];
+    cards = [...waiting, ...stale].slice(0, 6);
+  } else if (intent === 'waiting_on_mark') {
+    title = 'Waiting on Mark';
+    lines = waiting.length ? waiting.slice(0, 6).map(commandLineForItem) : ['No high-confidence item is currently marked as waiting on Mark.'];
+    suggestedActions = actions.filter((a) => /reply|draft|prepare|open/i.test(`${a.title || ''} ${a.type || ''}`)).slice(0, 3);
+    cards = waiting.slice(0, 6);
+  } else if (intent === 'blocked_projects') {
+    title = 'Blocked work';
+    const blockedSignals = [
+      ...top,
+      ...(Array.isArray(brief?.operationalSignals) ? brief.operationalSignals : []),
+    ].filter((item) => /\b(blocked|stuck|waiting|dependency|credentials|access|approval)\b/i.test(`${item?.title || ''} ${item?.summary || ''} ${item?.detail || ''} ${item?.status || ''} ${item?.recommendedAction || ''}`));
+    const blockedProjects = projectActivity.filter((project) => /\b(blocked|stuck|waiting|review)\b/i.test(`${project?.activityStatus || ''} ${project?.status || ''} ${project?.reason || ''} ${project?.nextAction || ''}`));
+    cards = [...blockedSignals, ...blockedProjects].slice(0, 8);
+    lines = cards.length
+      ? cards.slice(0, 6).map((item, idx) => `${idx + 1}. ${item.title || item.name}: ${item.recommendedAction || item.nextAction || item.summary || item.reason || 'Inspect the blocker.'}`)
+      : ['No explicit blocked project or stuck work signal crossed the current threshold.'];
+    suggestedActions = actions.filter((a) => /\b(block|credential|access|approval|follow)\b/i.test(`${a.title || ''} ${a.summary || ''} ${a.type || ''}`)).slice(0, 3);
+  } else if (intent === 'stale_clients') {
+    title = 'Stale clients and silent relationships';
+    const clientEntities = flattenWorldEntities(brief?.worldModel).filter((entity) => entityGroupMatches(entity, ['clients', 'Client', 'people', 'Person']));
+    const silence = Array.isArray(comms.unusualSilence) ? comms.unusualSilence : [];
+    const followUps = Array.isArray(comms.followUpsDue) ? comms.followUpsDue : [];
+    const staleProjectClients = projectActivity
+      .filter((project) => ['parked', 'historical', 'archived', 'dormant'].includes(String(project?.activityStatus || project?.status || '').toLowerCase()) && (project?.clientName || project?.businessName))
+      .slice(0, 6)
+      .map((project) => ({
+        id: project.id,
+        title: project.clientName || project.businessName || project.name,
+        summary: `${project.name || project.title || 'Work'} is ${project.activityStatus || project.status || 'not active'}.`,
+        source: 'projectActivity',
+        confidence: project.confidence || 0.68,
+      }));
+    cards = [...silence, ...followUps, ...staleProjectClients, ...clientEntities].slice(0, 10);
+    lines = cards.length
+      ? cards.slice(0, 6).map((item, idx) => `${idx + 1}. ${item.title || item.name}: ${item.reason || item.summary || item.status || 'Review relationship context.'}`)
+      : ['No stale clients or unusual silence records are visible in the current brief.'];
+    suggestedActions = followUps.slice(0, 3).map((item) => ({
+      title: `Create follow-up: ${item.title || item.name}`,
+      summary: item.summary || item.reason || 'Follow up with this relationship.',
+      type: 'follow_up',
+      requiresApproval: true,
+    }));
+  } else if (intent === 'decisions') {
+    title = 'Decision queue';
+    lines = decisions.length
+      ? decisions.slice(0, 6).map((item, idx) => `${idx + 1}. ${item.question || 'Decision needed'} ${item.title ? `(${item.title})` : ''}${item.summary ? ` - ${String(item.summary).slice(0, 180)}` : ''}`)
+      : ['No explicit decision points crossed the current signal threshold. MARCUS is still watching for approvals, blockers, and waiting-on-Mark items.'];
+    suggestedActions = actions.filter((a) => a?.approvalRequired || a?.requiresApproval).slice(0, 3);
+    cards = decisions.slice(0, 8);
+  } else if (intent === 'ignore_queue') {
+    title = 'What can wait';
+    lines = ignoreQueue.length
+      ? ignoreQueue.slice(0, 8).map((item, idx) => `${idx + 1}. ${item.title} - ${item.reason || item.summary || 'Can wait.'}${Number.isFinite(Number(item.score)) ? ` Score ${Math.round(Number(item.score))}.` : ''}`)
+      : ['Nothing specific is marked as safe to ignore beyond the current suppressed low-signal set. Dormant projects remain searchable but should not compete for attention.'];
+    cards = ignoreQueue.slice(0, 8);
+  } else if (intent === 'communication_intelligence') {
+    title = 'Communication intelligence';
+    const counts = comms.counts || {};
+    lines = [
+      `${Number(counts.waitingOnMark || 0)} waiting on Mark.`,
+      `${Number(counts.waitingOnOthers || 0)} waiting on someone else.`,
+      `${Number(counts.draftableReplies || 0)} draftable repl${Number(counts.draftableReplies || 0) === 1 ? 'y' : 'ies'}.`,
+      `${Number(counts.followUpsDue || 0)} follow-up${Number(counts.followUpsDue || 0) === 1 ? '' : 's'} due.`,
+      `${Number(counts.unusualSilence || 0)} unusual silence item${Number(counts.unusualSilence || 0) === 1 ? '' : 's'}.`,
+      `${Number(counts.highValueMissedOpportunities || 0)} possible missed opportunit${Number(counts.highValueMissedOpportunities || 0) === 1 ? 'y' : 'ies'}.`,
+      ...(Array.isArray(comms.followUpsDue) ? comms.followUpsDue.slice(0, 3).map((item, idx) => `Follow-up ${idx + 1}: ${item.title} - ${String(item.summary || '').slice(0, 160)}`) : []),
+      ...(Array.isArray(comms.highValueMissedOpportunities) ? comms.highValueMissedOpportunities.slice(0, 2).map((item, idx) => `Opportunity ${idx + 1}: ${item.title} - ${String(item.summary || '').slice(0, 160)}`) : []),
+    ];
+    cards = [
+      ...(Array.isArray(comms.waitingOnMark) ? comms.waitingOnMark : []),
+      ...(Array.isArray(comms.followUpsDue) ? comms.followUpsDue : []),
+      ...(Array.isArray(comms.highValueMissedOpportunities) ? comms.highValueMissedOpportunities : []),
+    ].slice(0, 8);
+    suggestedActions = Array.isArray(comms.draftableReplies) ? comms.draftableReplies.slice(0, 3) : [];
+  } else if (intent === 'stale_work') {
+    title = 'Stale or historical work';
+    lines = stale.length
+      ? stale.slice(0, 8).map((item, idx) => `${idx + 1}. ${item.name || item.title} - ${item.activityStatus || item.status || 'history'}${item.lastActivityAt ? `, last activity ${item.lastActivityAt}` : ''}.`)
+      : ['No dormant or historical projects were returned in this brief.'];
+    cards = stale.slice(0, 8);
+  } else if (intent === 'project_correction') {
+    title = 'Work state correction';
+    const active = projectActivity.filter((project) => ['active', 'waiting', 'warming'].includes(String(project?.activityStatus || project?.status || '').toLowerCase()));
+    const history = projectActivity.filter((project) => ['parked', 'historical', 'archived', 'dormant', 'complete'].includes(String(project?.activityStatus || project?.status || '').toLowerCase()));
+    const candidates = [...active, ...history].slice(0, 10);
+    lines = [
+      candidates.length
+        ? 'Pick the exact work item below, then keep it active, move it to known history, or mark it complete/archive.'
+        : 'No project activity records are available in this brief.',
+      'MARCUS records this as a project-state overlay; the source project record is preserved until explicit execution is added.',
+    ];
+    suggestedActions = [
+      { title: 'Keep selected work active', lifecycle: 'suggested_action', requiresApproval: false },
+      { title: 'Move selected work to known history', lifecycle: 'suggested_action', requiresApproval: false },
+      { title: 'Mark selected work complete/archive', lifecycle: 'suggested_action', requiresApproval: false },
+    ];
+    cards = candidates;
+  } else if (intent === 'explain_confidence') {
+    title = 'Why MARCUS ranked this way';
+    lines = [
+      `Brief confidence is ${confidence === null ? 'not available' : `${confidence}%`}.`,
+      'Ranking weighs urgency, importance, deadline proximity, money/relationship risk, current focus, whether Mark is the blocker, and source confidence.',
+      `${Number(brief?.lowSignalSuppressedCount || 0)} low-signal item${Number(brief?.lowSignalSuppressedCount || 0) === 1 ? '' : 's'} were suppressed.`,
+      ...top.slice(0, 3).map((item, idx) => `${idx + 1}. ${item.title}: ${(Array.isArray(item.reasons) && item.reasons[0]) || 'ranked by attention score'}${Number.isFinite(Number(item.score)) ? `, score ${Math.round(Number(item.score))}` : ''}.`),
+    ];
+    cards = top.slice(0, 5);
+  } else if (intent === 'show_sources') {
+    title = 'Sources and evidence';
+    cards = [
+      ...top.slice(0, 5),
+      ...systems.slice(0, 4),
+      ...(Array.isArray(memory.records) ? memory.records.slice(0, 4) : []),
+    ].slice(0, 10);
+    const sourceEvidence = buildCommandEvidence(cards, brief);
+    const sourceCounts = sourceEvidence.sourceCounts || {};
+    lines = [
+      Object.keys(sourceCounts).length ? `Current answer sources: ${Object.entries(sourceCounts).map(([source, count]) => `${source} ${count}`).join(', ')}.` : 'No source counts are available for the current cards.',
+      `${Number(brief?.lowSignalSuppressedCount || 0)} low-signal item${Number(brief?.lowSignalSuppressedCount || 0) === 1 ? '' : 's'} are suppressed.`,
+      'Use card Inspect/Why controls to see item-level evidence, confidence, and related context.',
+    ];
+  } else if (intent === 'system_health') {
+    title = 'System health';
+    lines = systems.length
+      ? systems.map((item, idx) => `${idx + 1}. ${item.title}: ${item.status}. ${item.summary || ''} Recommended: ${item.recommendedAction || 'Monitor.'}`)
+      : ['No system health records are available in this brief.'];
+    cards = systems;
+  } else if (intent === 'memory') {
+    title = 'Memory pulse';
+    const newFacts = Array.isArray(memory.newFacts) ? memory.newFacts.slice(0, 3).map((item) => `New: ${item.title || item.summary} (${item.source || 'unknown source'}).`) : [];
+    const staleFacts = Array.isArray(memory.staleAssumptions) ? memory.staleAssumptions.slice(0, 3).map((item) => `Stale: ${item.title || item.summary}.`) : [];
+    const uncertain = Array.isArray(memory.uncertain) ? memory.uncertain.slice(0, 3).map((item) => `Uncertain: ${item.title || item.summary}.`) : [];
+    lines = [...newFacts, ...staleFacts, ...uncertain];
+    if (!lines.length) lines = ['No memory pulse records are available.'];
+    cards = Array.isArray(memory.records) ? memory.records.slice(0, 8) : [];
+  } else if (intent === 'memory_correction') {
+    title = 'Memory correction';
+    const records = Array.isArray(memory.records) ? memory.records : [];
+    const staleFacts = Array.isArray(memory.staleAssumptions) ? memory.staleAssumptions : [];
+    const uncertainFacts = Array.isArray(memory.uncertain) ? memory.uncertain : [];
+    const candidates = [...uncertainFacts, ...staleFacts, ...records].filter(Boolean);
+    lines = [
+      candidates.length
+        ? 'Pick the exact memory or signal below, then mark it important, pin it, archive it, mark it outdated, forget it, or inspect sources before changing it.'
+        : 'No memory records are available in this brief. Refresh Memory or inspect an entity first.',
+      'MARCUS records corrections as a control overlay so the source history remains intact until a future execution system performs deeper edits.',
+    ];
+    suggestedActions = [
+      { title: 'Pin the selected memory', lifecycle: 'suggested_action', requiresApproval: false },
+      { title: 'Mark the selected memory important', lifecycle: 'suggested_action', requiresApproval: false },
+      { title: 'Archive the selected memory', lifecycle: 'suggested_action', requiresApproval: false },
+      { title: 'Mark the selected memory outdated', lifecycle: 'suggested_action', requiresApproval: false },
+      { title: 'Forget the selected memory', lifecycle: 'suggested_action', requiresApproval: false },
+    ];
+    cards = candidates.slice(0, 8);
+  } else if (intent === 'briefing') {
+    title = 'Session briefing';
+    const changed = Array.isArray(sessionContext.changedSinceLastCheckIn) ? sessionContext.changedSinceLastCheckIn : (Array.isArray(session.changedSinceLastTime) ? session.changedSinceLastTime : []);
+    lines = [
+      sessionContext.briefingLine ? `Changed: ${sessionContext.briefingLine}` : '',
+      ...changed.slice(0, 4).map((item, idx) => `Change ${idx + 1}: ${item.title || item.name}${item.summary ? ` - ${String(item.summary).slice(0, 160)}` : ''}.`),
+      ...(Array.isArray(session.needsAttention) ? session.needsAttention.slice(0, 3).map((item, idx) => `Attention ${idx + 1}: ${item.title || item.name}.`) : []),
+      ...(Array.isArray(session.waitingOnMark) ? session.waitingOnMark.slice(0, 3).map((item, idx) => `Waiting on Mark ${idx + 1}: ${item.title || item.name}.`) : []),
+      ...(Array.isArray(session.topActions) ? session.topActions.slice(0, 3).map((item, idx) => `Action ${idx + 1}: ${item.title || item.summary}.`) : []),
+      ...(Array.isArray(session.canIgnore) ? session.canIgnore.slice(0, 2).map((item) => {
+        if (item && typeof item === 'object') {
+          return `Can ignore: ${item.title || item.summary || 'Can wait'}${item.reason ? ` - ${String(item.reason).slice(0, 160)}` : ''}.`;
+        }
+        return `Can ignore: ${item}.`;
+      }) : []),
+    ].filter(Boolean);
+    if (!lines.length) lines = [brief?.narrativeSummary || 'No briefing details were returned.'];
+    suggestedActions = Array.isArray(session.topActions) ? session.topActions.slice(0, 3) : [];
+    cards = [...changed.slice(0, 4), ...top.slice(0, 3), ...actions.slice(0, 3)];
+  } else if (intent === 'actions') {
+    title = 'Action queue';
+    lines = actions.length
+      ? actions.slice(0, 6).map((item, idx) => {
+        const lifecycle = item.lifecycle || item.type || 'suggested_action';
+        const executionStatus = item.executionStatus || (lifecycle === 'approved_action' ? 'approved_pending_execution' : 'not_executable');
+        return `${idx + 1}. ${item.title || item.summary} - ${lifecycle}; execution ${executionStatus}${item.requiresApproval || item.approvalRequired ? ' (approval required)' : ''}.`;
+      })
+      : ['No prepared action drafts are queued.'];
+    cards = actions.slice(0, 6);
+  } else if (intent === 'action_transition') {
+    title = 'Action approval workflow';
+    lines = [
+      'Action lifecycle supports suggested_action, draft_action, approved_action, completed_action, and dismissed_action.',
+      'Use the action controls in the Suggested Actions panel to approve, complete, or dismiss a specific action.',
+      'External execution remains intentionally unimplemented here; approving records intent and keeps execution controlled.',
+    ];
+    cards = actions.slice(0, 6);
+  } else {
+    title = 'Operational readout';
+    lines = [
+      brief?.narrativeSummary || 'MARCUS has an active brief but no deterministic handler matched this command.',
+      top[0] ? `Top signal: ${top[0].title}.` : '',
+      waiting.length ? `${waiting.length} item${waiting.length === 1 ? '' : 's'} waiting on Mark.` : '',
+    ].filter(Boolean);
+    suggestedActions = actions.slice(0, 3);
+    cards = top.slice(0, 5);
+  }
+
+  const evidence = buildCommandEvidence(cards, brief);
+  const sourceSummary = Object.entries(evidence.sourceCounts)
+    .slice(0, 4)
+    .map(([source, count]) => `${source}: ${count}`)
+    .join(', ');
+  const sourceLine = sourceSummary ? `\n\nSources: ${sourceSummary}.` : '';
+  const reply = `${title}\n\n${lines.join('\n')}${suggestedActions.length ? `\n\nSuggested next actions:\n${suggestedActions.map((a, idx) => `${idx + 1}. ${a.title || a.summary || a.suggestedButtonLabel || 'Review action'}`).join('\n')}` : ''}${sourceLine}`;
+  return {
+    ok: true,
+    handled: intent !== 'empty',
+    intent: responseIntent,
+    title,
+    reply,
+    cards,
+    suggestedActions,
+    evidence,
+    confidence: brief?.confidence ?? null,
+    generatedAt: nowIso(),
+  };
+}
+
+app.post('/api/marcus/command', async (req, res) => {
+  try {
+    const message = typeof req.body?.message === 'string' ? req.body.message.trim().slice(0, 2000) : '';
+    if (!message) return res.status(400).json({ ok: false, error: 'Message required' });
+    const commandIntent = normalizeMarcusCommandIntent(message);
+    if (commandIntent === 'project_create') {
+      const projectIntent = parseProjectDraftCommand(message);
+      const existingControls = await readMarcusOperationalControls();
+      const { next, action } = createProjectDraftActionControl(existingControls, {
+        projectName: projectIntent?.projectName,
+        summary: projectIntent?.summary,
+        sourceText: projectIntent?.sourceText,
+        changedBy: 'command',
+      });
+      await writeMarcusOperationalControls(next);
+      const [brief, sessionState] = await Promise.all([
+        buildMarcusActiveBrief(),
+        readMarcusSessionState(),
+      ]);
+      const enrichedBrief = applyMarcusSessionContextToBrief(applyOperationalControlsToBrief(brief, next), sessionState);
+      const response = buildMarcusCommandResponse({ message: 'Show my action queue.', brief: enrichedBrief });
+      return res.json({
+        ...response,
+        intent: 'project_create',
+        title: 'Project draft queued',
+        reply: `Project draft queued\n\n${action.title}\n${action.summary ? `\n${action.summary}` : ''}\n\nIt is queued as ${action.lifecycle}. No project record was created yet; execution remains approval-gated.`,
+        cards: [action, ...(Array.isArray(response.cards) ? response.cards : [])].slice(0, 8),
+        suggestedActions: [action],
+        createdAction: action,
+        evidence: buildCommandEvidence([action], enrichedBrief),
+      });
+    }
+    if (commandIntent === 'focus_control') {
+      const focusIntent = parseFocusCommand(message);
+      const existingControls = await readMarcusOperationalControls();
+      let next = normalizeMarcusOperationalControls(existingControls);
+      let focus = null;
+      if (focusIntent?.action === 'clear') {
+        next.focus = {};
+      } else {
+        const created = createManualFocusControl(existingControls, {
+          title: focusIntent?.title,
+          summary: focusIntent?.summary,
+          changedBy: 'command',
+        });
+        next = created.next;
+        focus = created.focus;
+      }
+      await writeMarcusOperationalControls(next);
+      const [brief, sessionState] = await Promise.all([
+        buildMarcusActiveBrief(),
+        readMarcusSessionState(),
+      ]);
+      const enrichedBrief = applyMarcusSessionContextToBrief(applyOperationalControlsToBrief(brief, next), sessionState);
+      const currentFocus = enrichedBrief.currentFocus || focus;
+      const card = currentFocus ? {
+        ...currentFocus,
+        id: currentFocus.id || focus?.id || 'focus:current',
+        type: currentFocus.type || 'focus_control',
+        title: currentFocus.title || currentFocus.name || 'Current focus',
+        summary: currentFocus.summary || currentFocus.detail || 'Pinned current focus.',
+        source: currentFocus.source || 'operational-controls',
+        confidence: Number.isFinite(Number(currentFocus.confidence)) ? Number(currentFocus.confidence) : 1,
+      } : {
+        id: 'focus:cleared',
+        type: 'focus_control',
+        title: 'Current focus cleared',
+        summary: 'MARCUS will infer focus from active work, desktop context, and ranked signals.',
+        source: 'operational-controls',
+        confidence: 1,
+      };
+      return res.json({
+        ok: true,
+        handled: true,
+        intent: 'focus_control',
+        title: focusIntent?.action === 'clear' ? 'Current focus cleared' : 'Current focus pinned',
+        reply: focusIntent?.action === 'clear'
+          ? 'Current focus cleared\n\nMARCUS will infer focus from active work, desktop context, and ranked signals.'
+          : `Current focus pinned\n\n${card.title}\n${card.summary || ''}`.trim(),
+        cards: [card],
+        suggestedActions: enrichedBrief.activeActionQueue || [],
+        evidence: buildCommandEvidence([card], enrichedBrief),
+        focusPolicy: enrichedBrief.focusPolicy || null,
+        currentFocus: enrichedBrief.currentFocus || null,
+        generatedAt: nowIso(),
+      });
+    }
+    if (commandIntent === 'proactive_mode') {
+      const mode = parseProactiveModeCommand(message);
+      const existingControls = await readMarcusOperationalControls();
+      const next = normalizeMarcusOperationalControls({
+        ...existingControls,
+        proactiveMode: mode || existingControls.proactiveMode,
+      });
+      await writeMarcusOperationalControls(next);
+      const [brief, sessionState] = await Promise.all([
+        buildMarcusActiveBrief(),
+        readMarcusSessionState(),
+      ]);
+      const enrichedBrief = applyMarcusSessionContextToBrief(applyOperationalControlsToBrief(brief, next), sessionState);
+      const policy = enrichedBrief.attentionPolicy || { mode: next.proactiveMode };
+      const card = {
+        id: `proactive-mode:${policy.mode || next.proactiveMode}`,
+        type: 'proactive_mode',
+        title: `Proactive mode: ${policy.mode || next.proactiveMode}`,
+        summary: policy.description || 'Attention policy updated.',
+        source: 'operational-controls',
+        confidence: 1,
+        visibleAttentionCount: policy.visibleAttentionCount,
+        suppressedByModeCount: policy.suppressedByModeCount,
+        suppressedByControlsCount: policy.suppressedByControlsCount,
+      };
+      return res.json({
+        ok: true,
+        handled: true,
+        intent: 'proactive_mode',
+        title: 'Proactive mode updated',
+        reply: `Proactive mode updated\n\nMARCUS is now in ${policy.mode || next.proactiveMode} mode.\n${policy.description || ''}`.trim(),
+        cards: [card],
+        suggestedActions: enrichedBrief.activeActionQueue || [],
+        evidence: buildCommandEvidence([card], enrichedBrief),
+        attentionPolicy: policy,
+        generatedAt: nowIso(),
+      });
+    }
+    if (commandIntent === 'action_create') {
+      const existingControls = await readMarcusOperationalControls();
+      const draft = buildManualActionDraftFromCommand(message);
+      const { next, action } = createManualActionControl(existingControls, draft);
+      await writeMarcusOperationalControls(next);
+      const [brief, sessionState] = await Promise.all([
+        buildMarcusActiveBrief(),
+        readMarcusSessionState(),
+      ]);
+      const enrichedBrief = applyMarcusSessionContextToBrief(applyOperationalControlsToBrief(brief, next), sessionState);
+      const response = buildMarcusCommandResponse({ message: 'Show my action queue.', brief: enrichedBrief });
+      return res.json({
+        ...response,
+        intent: 'action_create',
+        title: 'Action draft created',
+        reply: `Action draft created\n\n${action.title}\n${action.summary ? `\n${action.summary}` : ''}\n\nIt is queued as ${action.lifecycle}. Execution remains approval-gated.`,
+        cards: [action, ...(Array.isArray(response.cards) ? response.cards : [])].slice(0, 8),
+        suggestedActions: [action],
+        createdAction: action,
+        evidence: buildCommandEvidence([action], enrichedBrief),
+      });
+    }
+    const [brief, controls, sessionState] = await Promise.all([
+      buildMarcusActiveBrief(),
+      readMarcusOperationalControls(),
+      readMarcusSessionState(),
+    ]);
+    const enrichedBrief = applyMarcusSessionContextToBrief(applyOperationalControlsToBrief(brief, controls), sessionState);
+    res.json(buildMarcusCommandResponse({ message, brief: enrichedBrief }));
+  } catch (err) {
+    res.status(500).json({ ok: false, error: String(err?.message || err) });
+  }
+});
+
+app.get('/api/marcus/entities/search', async (req, res) => {
+  try {
+    const q = String(req.query?.q || '').trim().slice(0, 200);
+    const limit = Math.max(1, Math.min(50, Number(req.query?.limit) || 10));
+    const brief = await buildMarcusActiveBrief();
+    res.json({ ok: true, query: q, items: searchWorldEntities(brief, q, { limit }) });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: String(err?.message || err) });
+  }
+});
+
+app.get('/api/marcus/entities/inspect', async (req, res) => {
+  try {
+    const id = String(req.query?.id || req.query?.q || '').trim().slice(0, 240);
+    if (!id) return res.status(400).json({ ok: false, error: 'id or q is required' });
+    const brief = await buildMarcusActiveBrief();
+    const result = inspectWorldEntity(brief, id);
+    if (!result) return res.status(404).json({ ok: false, error: 'Entity not found' });
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: String(err?.message || err) });
+  }
+});
+
+app.get('/api/marcus/items/inspect', async (req, res) => {
+  try {
+    const id = String(req.query?.id || req.query?.q || '').trim().slice(0, 240);
+    if (!id) return res.status(400).json({ ok: false, error: 'id or q is required' });
+    const [brief, controls, sessionState] = await Promise.all([
+      buildMarcusActiveBrief(),
+      readMarcusOperationalControls(),
+      readMarcusSessionState(),
+    ]);
+    const enrichedBrief = applyMarcusSessionContextToBrief(applyOperationalControlsToBrief(brief, controls), sessionState);
+    const result = inspectBriefOperationalItem(enrichedBrief, id);
+    if (!result) return res.status(404).json({ ok: false, error: 'Item not found' });
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: String(err?.message || err) });
+  }
+});
+
+app.get('/api/marcus/operational-controls', async (req, res) => {
+  try {
+    res.json(await readMarcusOperationalControls());
+  } catch (err) {
+    res.status(500).json({ ok: false, error: String(err?.message || err) });
+  }
+});
+
+app.put('/api/marcus/operational-controls/proactive-mode', async (req, res) => {
+  try {
+    const existing = await readMarcusOperationalControls();
+    const next = await writeMarcusOperationalControls({
+      ...existing,
+      proactiveMode: normalizeProactiveModeServer(req.body?.mode),
+    });
+    res.json(next);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: String(err?.message || err) });
+  }
+});
+
+app.post('/api/marcus/operational-controls/:section/:id', async (req, res) => {
+  try {
+    const existing = await readMarcusOperationalControls();
+    const next = mergeControlPatch(existing, req.params.section, req.params.id, req.body?.patch || req.body || {});
+    const saved = await writeMarcusOperationalControls(next);
+    res.json(saved);
+  } catch (err) {
+    res.status(400).json({ ok: false, error: String(err?.message || err) });
+  }
+});
+
+app.post('/api/marcus/actions/:id/transition', async (req, res) => {
+  try {
+    const existing = await readMarcusOperationalControls();
+    const next = transitionActionControl(existing, req.params.id, req.body?.lifecycle, req.body?.patch || {});
+    const saved = await writeMarcusOperationalControls(next);
+    res.json(saved);
+  } catch (err) {
+    res.status(400).json({ ok: false, error: String(err?.message || err) });
+  }
+});
+
+app.delete('/api/marcus/operational-controls/:section/:id', async (req, res) => {
+  try {
+    const section = String(req.params.section || '').trim();
+    const id = String(req.params.id || '').trim();
+    if (!['signals', 'memory', 'actions', 'projects', 'focus'].includes(section) || !id) throw new Error('Invalid control section or id');
+    const existing = await readMarcusOperationalControls();
+    const next = normalizeMarcusOperationalControls(existing);
+    delete next[section][id];
+    const saved = await writeMarcusOperationalControls(next);
+    res.json(saved);
+  } catch (err) {
+    res.status(400).json({ ok: false, error: String(err?.message || err) });
   }
 });
 
