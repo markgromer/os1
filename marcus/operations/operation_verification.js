@@ -1,4 +1,4 @@
-import { makeOperationId, normalizeVerificationResult, nowIso, safeObject, safeString } from './operation_types.js';
+import { createVerificationResult, makeOperationId, normalizeDesktopCorrelation, normalizeVerificationResult, nowIso, safeObject, safeString } from './operation_types.js';
 
 export const VERIFICATION_TYPES = Object.freeze([
   'build', 'test', 'lint', 'typecheck', 'repository_cleanliness', 'diff_review', 'manual_review', 'url_health', 'artifact_present',
@@ -18,8 +18,9 @@ function requirementFrom(value) {
 }
 
 export class OperationVerification {
-  constructor({ queueDesktopAction = null } = {}) {
+  constructor({ queueDesktopAction = null, store = null } = {}) {
     this.queueDesktopAction = typeof queueDesktopAction === 'function' ? queueDesktopAction : null;
+    this.store = store;
   }
 
   buildRequirements(registryRecord, requested = []) {
@@ -41,7 +42,7 @@ export class OperationVerification {
     return requirements.slice(0, 20);
   }
 
-  async run({ operation, step, registryRecord }) {
+  async run({ operation, step, registryRecord, idempotencyKey = '' }) {
     const requirements = (Array.isArray(step?.input?.requirements) ? step.input.requirements : [])
       .map(requirementFrom);
     const effective = requirements.length ? requirements : this.buildRequirements(registryRecord);
@@ -72,19 +73,55 @@ export class OperationVerification {
       if (SCRIPT_CHECKS.has(requirement.type)) {
         const workspacePath = safeString(registryRecord?.localWorkspace?.path, 2_000);
         const configured = safeString(registryRecord?.commands?.[requirement.type], 500);
-        if (workspacePath && configured && this.queueDesktopAction && !prior?.evidence?.actionId) {
-          const action = await this.queueDesktopAction({
-            type: 'run-project-script',
-            payload: { path: workspacePath, scriptName: requirement.type },
-            requestedBy: `operation:${operation.id}`,
-          });
-          results.push(normalizeVerificationResult({
-            id: prior?.id || makeOperationId('verify'), type: requirement.type, required: requirement.required,
-            status: 'running', command: configured, target: workspacePath, startedAt: nowIso(),
-            output: 'Verification was queued through the desktop agent. It has not been treated as passed.',
-            evidence: { actionId: action?.id || '', provider: 'desktop' },
-          }, { operationId: operation.id, stepId: step.id }));
+        if (prior?.status === 'running' && prior?.evidence?.actionId) {
+          results.push(normalizeVerificationResult(prior, { operationId: operation.id, stepId: step.id }));
           queuedDesktopAction = true;
+        } else if (workspacePath && configured && registryRecord?.localWorkspace?.trustStatus === 'approved'
+          && registryRecord?.localWorkspace?.desktopAgentId && this.queueDesktopAction && this.store) {
+          const verification = createVerificationResult({
+            type: requirement.type, required: requirement.required, status: 'running', command: configured, target: workspacePath,
+            output: 'Verification was durably correlated and queued through the desktop agent. It has not been treated as passed.',
+          }, { operationId: operation.id, stepId: step.id });
+          const actionId = makeOperationId('desktop');
+          const correlationKey = `${idempotencyKey}:${requirement.type}`;
+          verification.evidence = { actionId, provider: 'desktop', idempotencyKey: correlationKey };
+          const correlation = normalizeDesktopCorrelation({
+            actionId, operationId: operation.id, stepId: step.id, verificationId: verification.id,
+            verificationType: requirement.type, actionType: 'run-project-script', projectRegistryId: operation.projectRegistryId,
+            desktopAgentId: registryRecord.localWorkspace.desktopAgentId, idempotencyKey: correlationKey, queuedAt: nowIso(), status: 'queued',
+          });
+          await this.store.update(operation.businessKey, operation.id, (draft) => {
+            const existing = draft.desktopCorrelations.find((item) => item.idempotencyKey === correlationKey);
+            if (!existing) draft.desktopCorrelations.push(correlation);
+            if (!draft.verification.some((item) => item.id === verification.id)) draft.verification.push(verification);
+            return draft;
+          });
+          try {
+            const action = await this.queueDesktopAction({
+              id: actionId,
+              idempotencyKey: correlationKey,
+              type: 'run-project-script',
+              payload: {
+                path: workspacePath, scriptName: requirement.type, projectRegistryId: operation.projectRegistryId,
+                desktopAgentId: registryRecord.localWorkspace.desktopAgentId, businessKey: operation.businessKey,
+              },
+              requestedBy: `operation:${operation.id}`,
+            });
+            if (action?.id !== actionId) throw new Error('Desktop queue returned a mismatched action id.');
+            results.push(verification);
+            queuedDesktopAction = true;
+          } catch (error) {
+            verification.status = 'needs_manual_review';
+            verification.error = safeString(error?.message, 2_000) || 'Desktop verification queue failed.';
+            await this.store.update(operation.businessKey, operation.id, (draft) => {
+              const savedCorrelation = draft.desktopCorrelations.find((item) => item.actionId === actionId);
+              if (savedCorrelation) savedCorrelation.status = 'recovery_required';
+              const savedVerification = draft.verification.find((item) => item.id === verification.id);
+              if (savedVerification) Object.assign(savedVerification, verification);
+              return draft;
+            });
+            results.push(verification);
+          }
         } else {
           results.push(normalizeVerificationResult({
             id: prior?.id || makeOperationId('verify'), type: requirement.type, required: requirement.required,

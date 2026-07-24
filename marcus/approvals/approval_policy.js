@@ -1,4 +1,4 @@
-import { RISK_LEVELS, safeEnum, safeObject, safeString } from '../operations/operation_types.js';
+import { safeObject, safeString } from '../operations/operation_types.js';
 
 const RISK_RANK = Object.freeze({ low: 0, medium: 1, high: 2, critical: 3 });
 
@@ -49,12 +49,20 @@ export class ApprovalPolicy {
     const provider = safeString(raw.provider, 100).toLowerCase() || 'internal';
     const action = safeString(raw.action || raw.toolName, 500).toLowerCase() || 'execute_step';
     const environment = safeString(raw.environment, 100).toLowerCase() || 'unknown';
-    const requestedRisk = safeEnum(raw.riskLevel, RISK_LEVELS, 'low');
-    let riskLevel = maxRisk(requestedRisk, riskFromAction(`${provider} ${action} ${environment}`));
+    let riskLevel = riskFromAction(`${provider} ${action} ${environment}`);
     if (environment === 'production' && !/read|inspect|list|health/i.test(action)) riskLevel = maxRisk(riskLevel, 'high');
 
-    const explicitRequest = raw.explicitRequest === true;
-    const configuredAutonomy = raw.configuredAutonomy === true || raw.autonomyMode === 'configured';
+    const authorization = safeObject(raw.authorization);
+    const actionClass = riskFromAction(`${provider} ${action} ${environment}`) === 'low' ? 'read_or_verify' : safeString(raw.actionClass, 160) || action;
+    const trustedSource = ['authenticated_request', 'recorded_approval', 'server_policy'].includes(authorization.source);
+    const authorizationMatches = trustedSource
+      && authorization.businessKey === safeString(raw.business, 200)
+      && authorization.projectRegistryId === safeString(raw.projectRegistryId, 160)
+      && authorization.environment === environment
+      && ((Array.isArray(authorization.providers) && authorization.providers.includes(provider)) || authorization.provider === provider)
+      && Array.isArray(authorization.actionClasses)
+      && authorization.actionClasses.includes(actionClass);
+    const trustedAuthorization = authorizationMatches && authorization.revoked !== true;
     let approvalRequirement = 'none';
     let approvalRequired = false;
     if (riskLevel === 'critical') {
@@ -63,7 +71,7 @@ export class ApprovalPolicy {
     } else if (riskLevel === 'high') {
       approvalRequirement = 'explicit';
       approvalRequired = true;
-    } else if (riskLevel === 'medium' && !(explicitRequest || configuredAutonomy)) {
+    } else if (riskLevel === 'medium' && !trustedAuthorization) {
       approvalRequirement = 'explicit_or_configured_autonomy';
       approvalRequired = true;
     }
@@ -91,11 +99,12 @@ export class ApprovalPolicy {
       communicationImpact,
       approvalRequirement,
       approvalRequired,
-      explicitRequest,
-      configuredAutonomy,
+      actionClass,
+      trustedAuthorization,
+      authorizationSource: trustedAuthorization ? authorization.source : '',
       reason: approvalRequired
         ? `${provider === 'approval' ? 'Approval checkpoint' : `${riskLevel} risk action`} requires ${approvalRequirement.replaceAll('_', ' ')}.`
-        : `${riskLevel} risk action is allowed by the current request and autonomy policy.`,
+        : `${riskLevel} risk action is allowed by trusted server-side authorization provenance.`,
     };
   }
 }

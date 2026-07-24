@@ -3339,8 +3339,8 @@ function operationStatusClass(status) {
     if (value === 'completed') return 'text-emerald-300 border-emerald-500/30 bg-emerald-500/10';
     if (value === 'failed' || value === 'cancelled') return 'text-red-300 border-red-500/30 bg-red-500/10';
     if (value === 'waiting_for_approval') return 'text-amber-200 border-amber-500/30 bg-amber-500/10';
-    if (value === 'blocked' || value === 'paused') return 'text-orange-200 border-orange-500/30 bg-orange-500/10';
-    if (value === 'running' || value === 'verifying') return 'text-blue-200 border-blue-500/30 bg-blue-500/10';
+    if (value === 'blocked' || value === 'paused' || value === 'recovery_required') return 'text-orange-200 border-orange-500/30 bg-orange-500/10';
+    if (value === 'running' || value === 'verifying' || value === 'awaiting_provider') return 'text-blue-200 border-blue-500/30 bg-blue-500/10';
     return 'text-zinc-300 border-zinc-600 bg-zinc-800/60';
 }
 
@@ -3360,6 +3360,8 @@ function renderOperations(container) {
     const pendingApprovals = (selected?.approvals || []).filter((approval) => approval.status === 'pending');
     const activeBlockers = (selected?.blockers || []).filter((blocker) => blocker.status === 'active');
     const waitsForEvidence = activeBlockers.some((blocker) => ['external_codex_required', 'verification_required'].includes(blocker.type));
+    const projectResolution = selected?.metadata?.projectResolution && typeof selected.metadata.projectResolution === 'object' ? selected.metadata.projectResolution : {};
+    const inferredProjectNeedsConfirmation = projectResolution.confidence === 'medium' && projectResolution.confirmed !== true;
 
     container.innerHTML = `
         <div class="h-full min-h-0 overflow-y-auto p-4 lg:p-6">
@@ -3403,11 +3405,13 @@ function renderOperations(container) {
                             </div>
                             <div class="mt-4 grid sm:grid-cols-3 gap-3 text-xs"><div><div class="text-[9px] uppercase tracking-wider text-zinc-500">Project</div><div class="mt-1 text-zinc-200">${escapeHtml(selected.projectName || 'Unresolved')}</div></div><div><div class="text-[9px] uppercase tracking-wider text-zinc-500">Risk</div><div class="mt-1 text-zinc-200">${escapeHtml(selected.riskLevel)}</div></div><div><div class="text-[9px] uppercase tracking-wider text-zinc-500">Current step</div><div class="mt-1 text-zinc-200">${escapeHtml(currentStep?.title || 'None')}</div></div></div>
                             <div class="mt-4"><div class="text-[9px] uppercase tracking-wider text-zinc-500">Objective</div><div class="mt-1 text-sm text-zinc-200 whitespace-pre-wrap">${escapeHtml(selected.objective)}</div></div>
+                            ${projectResolution.confidence ? `<div class="mt-4 rounded border ${inferredProjectNeedsConfirmation ? 'border-amber-500/30 bg-amber-500/5' : 'border-ops-border bg-black/10'} p-3"><div class="flex flex-wrap items-center justify-between gap-2"><div class="text-[10px] font-mono uppercase text-zinc-400">Project resolution: ${escapeHtml(projectResolution.confidence)} confidence</div>${inferredProjectNeedsConfirmation ? '<span class="text-[10px] text-amber-200">Confirmation required</span>' : ''}</div><div class="mt-1 text-xs text-zinc-300">${escapeHtml(projectResolution.reason || 'No resolution reason recorded.')}</div>${Array.isArray(projectResolution.alternatives) && projectResolution.alternatives.length ? `<div class="mt-2 text-[10px] text-zinc-500">Alternatives: ${projectResolution.alternatives.map((item) => `${escapeHtml(item.name || item.id || 'Unknown')} (${Number(item.score) || 0})`).join(', ')}</div>` : ''}</div>` : ''}
                             <details class="mt-3"><summary class="cursor-pointer text-[10px] text-zinc-400">Original request</summary><div class="mt-2 rounded bg-black/20 p-3 text-xs text-zinc-300 whitespace-pre-wrap">${escapeHtml(selected.originalRequest)}</div></details>
                             <div class="mt-4 flex flex-wrap gap-2">
-                                ${selected.status === 'draft' ? '<button data-operation-action="plan" class="stat-pill stat-pill--accent">Plan</button>' : ''}
+                                ${selected.status === 'draft' && !inferredProjectNeedsConfirmation ? '<button data-operation-action="plan" class="stat-pill stat-pill--accent">Plan</button>' : ''}
+                                ${selected.status === 'draft' && inferredProjectNeedsConfirmation ? '<button data-operation-action="confirm-project" class="stat-pill stat-pill--accent">Confirm inferred project</button>' : ''}
                                 ${selected.status === 'planned' ? '<button data-operation-action="start" class="stat-pill stat-pill--accent">Start real cycle</button>' : ''}
-                                ${['queued', 'running', 'verifying'].includes(selected.status) ? '<button data-operation-action="tick" class="stat-pill stat-pill--accent">Run cycle</button><button data-operation-action="pause" class="stat-pill stat-pill--muted">Pause</button>' : ''}
+                                ${['queued', 'running', 'awaiting_provider', 'verifying'].includes(selected.status) ? '<button data-operation-action="tick" class="stat-pill stat-pill--accent">Run cycle</button><button data-operation-action="pause" class="stat-pill stat-pill--muted">Pause</button>' : ''}
                                 ${selected.status === 'paused' ? '<button data-operation-action="resume" class="stat-pill stat-pill--accent">Resume</button>' : ''}
                                 ${(selected.status === 'failed' || (selected.status === 'blocked' && !waitsForEvidence)) ? '<button data-operation-action="retry" class="stat-pill stat-pill--muted">Retry step</button>' : ''}
                                 ${!['completed', 'failed', 'cancelled'].includes(selected.status) ? '<button data-operation-action="cancel" class="stat-pill stat-pill--muted">Cancel</button>' : ''}
@@ -3450,7 +3454,11 @@ function renderOperations(container) {
         if (!selected || !action) return;
         if (action === 'cancel' && !window.confirm('Cancel this durable operation?')) return;
         button.disabled = true;
-        try { await runOperationApi(selected.id, action, { actor: 'mark' }); renderMain(); } catch (e) { alert(e?.message || `Failed to ${action} operation.`); } finally { button.disabled = false; }
+        try {
+            if (action === 'confirm-project') await runOperationApi(selected.id, action, { actor: 'mark', revision: selected.revision });
+            else await runOperationApi(selected.id, action, { actor: 'mark' });
+            renderMain();
+        } catch (e) { alert(e?.message || `Failed to ${action} operation.`); } finally { button.disabled = false; }
     }));
     container.querySelectorAll('[data-approval-approve]').forEach((button) => button.addEventListener('click', async () => {
         const approvalId = safeText(button.getAttribute('data-approval-approve'));
@@ -3458,7 +3466,7 @@ function renderOperations(container) {
         let message = safeText(window.prompt('Approval note (critical actions must include “I understand”):') || '').trim();
         if (!approvalId) return;
         try {
-            const data = await apiJson(`/api/operations/${encodeURIComponent(selected.id)}/approvals/${encodeURIComponent(approvalId)}/approve`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ approvedBy: 'mark', message, strongConfirmation: approval?.riskLevel === 'critical' && /i understand/i.test(message) }) });
+            const data = await apiJson(`/api/operations/${encodeURIComponent(selected.id)}/approvals/${encodeURIComponent(approvalId)}/approve`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ approvedBy: 'mark', message }) });
             replaceOperationInState(data.operation); renderMain();
         } catch (e) { alert(e?.message || 'Approval failed.'); }
     }));

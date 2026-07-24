@@ -25,6 +25,9 @@ const os = require('os');
 
 const SERVER_URL = (process.argv[2] || process.env.MARCUS_SERVER_URL || '').trim();
 const ADMIN_TOKEN = (process.argv[3] || process.env.ADMIN_TOKEN || '').trim();
+const DESKTOP_AGENT_ID = String(process.env.MARCUS_DESKTOP_AGENT_ID || os.hostname()).trim().slice(0, 200);
+const ALLOWED_WORKSPACE_ROOT_VALUES = String(process.env.MARCUS_ALLOWED_WORKSPACE_ROOTS || '')
+  .split(path.delimiter).map((value) => value.trim()).filter(Boolean);
 
 if (!SERVER_URL) {
   console.error('Usage: node desktop-agent.cjs <SERVER_URL> [ADMIN_TOKEN]');
@@ -37,6 +40,7 @@ const POLL_MS = 5000;
 const WORKSPACE_SCAN_INTERVAL_MS = 30_000; // full workspace scan every 30s
 const SYSTEM_HEALTH_INTERVAL_MS = 60_000; // system health check every 60s
 const RELAY_PATH = '/api/desktop-context/relay';
+const ALLOWED_NPM_SCRIPTS = new Set(['install', 'dev', 'build', 'test', 'lint', 'typecheck']);
 
 // ── PowerShell capture script ──────────────────────────────────
 const SCRIPT_DIR = path.join(os.tmpdir(), 'marcus-agent');
@@ -192,16 +196,52 @@ function readPackageScripts(cwd) {
   }
 }
 
-function validateWorkspaceFolder(projectPath) {
+function comparablePath(value) {
+  const resolved = path.resolve(value);
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+function pathWithin(root, candidate) {
+  const relative = path.relative(comparablePath(root), comparablePath(candidate));
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+function broadWorkspaceRoots() {
+  const home = path.resolve(os.homedir());
+  return new Set([
+    path.parse(home).root, home, path.join(home, 'Documents'), path.join(home, 'OneDrive'), path.join(home, 'OneDrive', 'Documents'),
+  ].map(comparablePath));
+}
+
+function allowedWorkspaceRoots() {
+  const broad = broadWorkspaceRoots();
+  const roots = [];
+  for (const value of ALLOWED_WORKSPACE_ROOT_VALUES) {
+    let canonical;
+    try { canonical = fs.realpathSync.native(path.resolve(value)); } catch { continue; }
+    if (broad.has(comparablePath(canonical))) continue;
+    if (!roots.some((root) => comparablePath(root) === comparablePath(canonical))) roots.push(canonical);
+  }
+  return roots;
+}
+
+function validateWorkspaceFolder(projectPath, binding = {}) {
   const target = String(projectPath || '').trim();
   if (!target) return { ok: false, error: 'Path required' };
+  if (binding.desktopAgentId && binding.desktopAgentId !== DESKTOP_AGENT_ID) return { ok: false, error: 'Desktop agent identity does not match the registered workspace binding' };
+  if (binding.requireProjectBinding && !String(binding.projectRegistryId || '').trim()) return { ok: false, error: 'Project registry binding is required' };
+  let canonical;
   try {
-    const stat = fs.statSync(target);
+    canonical = fs.realpathSync.native(path.resolve(target));
+    const stat = fs.statSync(canonical);
     if (!stat.isDirectory()) return { ok: false, error: 'Path is not a folder' };
   } catch {
     return { ok: false, error: 'Path does not exist' };
   }
-  return { ok: true, path: target };
+  const roots = allowedWorkspaceRoots();
+  if (!roots.length) return { ok: false, error: 'No safe MARCUS_ALLOWED_WORKSPACE_ROOTS are configured' };
+  if (!roots.some((root) => pathWithin(root, canonical))) return { ok: false, error: 'Path is outside the configured workspace roots' };
+  return { ok: true, path: canonical };
 }
 
 async function preparePublish(projectPath) {
@@ -248,13 +288,14 @@ async function runNpmScript(cwd, scriptName) {
   const clean = String(scriptName || '').trim();
   if (!clean) return { ok: true, skipped: true };
   if (!/^[A-Za-z0-9:_-]+$/.test(clean)) return { ok: false, stderr: 'Invalid npm script name' };
+  if (!ALLOWED_NPM_SCRIPTS.has(clean)) return { ok: false, stderr: `npm script "${clean}" is not allowlisted` };
   const scripts = readPackageScripts(cwd);
   if (!scripts[clean]) return { ok: false, stderr: `package.json has no "${clean}" script` };
   return await runLocalCommand(cwd, 'npm.cmd', ['run', clean], 120_000);
 }
 
 async function publishProjectChanges(payload) {
-  const valid = validateWorkspaceFolder(payload?.path);
+  const valid = validateWorkspaceFolder(payload?.path, payload || {});
   if (!valid.ok) return valid;
   const cwd = valid.path;
 
@@ -305,7 +346,7 @@ async function publishProjectChanges(payload) {
 }
 
 async function runProjectScript(payload) {
-  const valid = validateWorkspaceFolder(payload?.path);
+  const valid = validateWorkspaceFolder(payload?.path, { ...payload, requireProjectBinding: true });
   if (!valid.ok) return valid;
   const cwd = valid.path;
   const scriptName = String(payload?.scriptName || '').trim();
@@ -640,6 +681,17 @@ async function checkDesktopActions() {
       if (!id || !type) continue;
 
       let outcome = { ok: false, error: `Unsupported desktop action: ${type}` };
+      const pathAction = ['open-vscode', 'prepare-publish', 'publish-project-changes', 'run-project-script'].includes(type);
+      if (pathAction) {
+        const operationBound = String(action?.requestedBy || '').startsWith('operation:');
+        const valid = validateWorkspaceFolder(action?.payload?.path, { ...action?.payload, requireProjectBinding: operationBound });
+        if (!valid.ok) {
+          outcome = valid;
+          responses.push({ id, type, businessKey: String(action?.payload?.businessKey || ''), projectRegistryId: String(action?.payload?.projectRegistryId || ''), desktopAgentId: DESKTOP_AGENT_ID, ...outcome });
+          continue;
+        }
+        action.payload.path = valid.path;
+      }
       if (type === 'open-vscode') {
         outcome = await openVsCode(action?.payload?.path);
       } else if (type === 'prepare-publish') {
@@ -654,13 +706,13 @@ async function checkDesktopActions() {
         outcome = await setPerformanceProfile(action?.payload || {});
       }
 
-      responses.push({ id, type, ...outcome });
+      responses.push({ id, type, businessKey: String(action?.payload?.businessKey || ''), projectRegistryId: String(action?.payload?.projectRegistryId || ''), desktopAgentId: DESKTOP_AGENT_ID, ...outcome });
       const ts = new Date().toLocaleTimeString();
       console.log(`[${ts}] Desktop action ${type}: ${outcome.ok ? 'ok' : outcome.error}`);
     }
 
     if (responses.length) {
-      await relay({ results: responses }, '/api/desktop-context/action-results');
+      await relay({ agentId: DESKTOP_AGENT_ID, results: responses }, '/api/desktop-context/action-results');
     }
   } catch {}
 }
@@ -1008,6 +1060,7 @@ async function tick() {
 
   // Build relay payload
   const payload = {
+    agentId: DESKTOP_AGENT_ID,
     windowTitle: ctx.windowTitle,
     processName: ctx.processName,
     idleSeconds: ctx.idleSeconds,

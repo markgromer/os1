@@ -67,6 +67,10 @@ function normalizeWorkspace(value = {}) {
     path: safeString(raw.path || raw.workspacePath, 2_000),
     platform: safeString(raw.platform, 100),
     desktopAgentId: safeString(raw.desktopAgentId, 200),
+    trustStatus: ['approved', 'pending', 'rejected'].includes(safeString(raw.trustStatus, 40)) ? safeString(raw.trustStatus, 40) : 'pending',
+    trustSource: safeString(raw.trustSource, 100),
+    approvedAt: safeIso(raw.approvedAt),
+    canonicalPath: safeString(raw.canonicalPath, 2_000),
   };
 }
 
@@ -144,6 +148,23 @@ export function normalizeProjectRegistryRecord(input = {}, options = {}) {
   };
 }
 
+export function createProjectRegistryRecord(input = {}, options = {}) {
+  const raw = safeObject(input);
+  const timestamp = nowIso();
+  const localWorkspace = normalizeWorkspace(raw.localWorkspace || { path: raw.workspacePath });
+  if (localWorkspace.path) {
+    localWorkspace.trustStatus = 'pending';
+    localWorkspace.trustSource = '';
+    localWorkspace.approvedAt = '';
+    localWorkspace.desktopAgentId = '';
+    localWorkspace.canonicalPath = '';
+  }
+  return normalizeProjectRegistryRecord({
+    ...raw, id: makeOperationId('registry'), businessKey: options.businessKey,
+    localWorkspace, createdAt: timestamp, updatedAt: timestamp,
+  }, options);
+}
+
 function emptyRegistry(businessKey) {
   return { version: 1, businessKey: safeBusinessKey(businessKey), revision: 1, updatedAt: new Date(0).toISOString(), projects: [] };
 }
@@ -191,6 +212,18 @@ export class ProjectRegistry {
     return path.join(this.dataDir, 'businesses', safeBusinessKey(businessKey), 'project-registry.json');
   }
 
+  async discoverBusinessKeys() {
+    let entries = [];
+    try { entries = await fs.readdir(path.join(this.dataDir, 'businesses'), { withFileTypes: true }); } catch { return []; }
+    const keys = [];
+    for (const entry of entries) {
+      const key = entry.isDirectory() ? safeBusinessKey(entry.name, '') : '';
+      if (!key) continue;
+      try { await fs.access(this.fileForBusiness(key)); keys.push(key); } catch { /* no registry */ }
+    }
+    return keys;
+  }
+
   async ensure(businessKey) {
     const key = safeBusinessKey(businessKey);
     const file = this.fileForBusiness(key);
@@ -229,7 +262,7 @@ export class ProjectRegistry {
 
   async create(businessKey, input) {
     return this.mutate(businessKey, (document) => {
-      const record = normalizeProjectRegistryRecord(input, { businessKey });
+      const record = createProjectRegistryRecord(input, { businessKey });
       if (document.projects.some((item) => item.id === record.id)) {
         const error = new Error('Project registry record already exists.');
         error.code = 'PROJECT_REGISTRY_EXISTS';
@@ -255,8 +288,32 @@ export class ProjectRegistry {
         if (rawPatch[key] && typeof rawPatch[key] === 'object' && !Array.isArray(rawPatch[key])) merged[key] = { ...safeObject(current[key]), ...rawPatch[key] };
       }
       const updated = normalizeProjectRegistryRecord({ ...merged, id: current.id, businessKey: current.businessKey, createdAt: current.createdAt, updatedAt: nowIso() }, { businessKey });
+      if (safeObject(rawPatch.localWorkspace).path && safeObject(rawPatch.localWorkspace).path !== current.localWorkspace.path) {
+        updated.localWorkspace = {
+          ...updated.localWorkspace, trustStatus: 'pending', trustSource: '', approvedAt: '', desktopAgentId: '', canonicalPath: '',
+        };
+      }
       document.projects[index] = updated;
       return updated;
+    });
+  }
+
+  async approveWorkspace(businessKey, id, input = {}) {
+    const raw = safeObject(input);
+    const desktopAgentId = safeString(raw.desktopAgentId, 200);
+    const canonicalPath = safeString(raw.canonicalPath || raw.path, 2_000);
+    if (!desktopAgentId || !canonicalPath) {
+      throw Object.assign(new Error('desktopAgentId and canonicalPath are required to approve a workspace.'), { code: 'WORKSPACE_APPROVAL_INVALID' });
+    }
+    return this.mutate(businessKey, (document) => {
+      const record = document.projects.find((item) => item.id === id);
+      if (!record) throw Object.assign(new Error('Project registry record not found.'), { code: 'PROJECT_REGISTRY_NOT_FOUND' });
+      if (!record.localWorkspace.path) throw Object.assign(new Error('The project has no workspace path to approve.'), { code: 'WORKSPACE_APPROVAL_INVALID' });
+      record.localWorkspace = {
+        ...record.localWorkspace, path: canonicalPath, canonicalPath, desktopAgentId, trustStatus: 'approved', trustSource: 'explicit_operator_approval', approvedAt: nowIso(),
+      };
+      record.updatedAt = nowIso();
+      return record;
     });
   }
 
@@ -280,6 +337,14 @@ export class ProjectRegistry {
           teamMembers: raw.teamMembers,
           repoUrl: raw.repoUrl,
           workspacePath: raw.workspacePath,
+          localWorkspace: raw.workspacePath ? {
+            path: raw.workspacePath,
+            desktopAgentId: safeString(raw.desktopAgentId, 200),
+            trustStatus: safeString(raw.desktopAgentId, 200) ? 'approved' : 'pending',
+            trustSource: 'legacy_project_record',
+            approvedAt: safeString(raw.desktopAgentId, 200) ? nowIso() : '',
+            canonicalPath: raw.workspacePath,
+          } : {},
           productionUrl: raw.productionUrl || raw.websiteUrl || raw.liveUrl,
           previewUrl: raw.previewUrl || raw.stagingUrl,
           renderServiceId: raw.renderServiceId,

@@ -1,5 +1,5 @@
 import { isStrongConfirmation } from './approval_policy.js';
-import { makeOperationId, normalizeApproval, nowIso, safeString } from '../operations/operation_types.js';
+import { createActivityEvent, createApproval, createBlocker, normalizeApproval, nowIso, safeString } from '../operations/operation_types.js';
 
 export class ApprovalService {
   constructor({ store }) {
@@ -13,19 +13,17 @@ export class ApprovalService {
       if (approval.status === 'pending' && approval.expiresAt && Date.parse(approval.expiresAt) <= Date.now()) approval.status = 'expired';
     }
     if (existing) return existing;
-    return normalizeApproval({
-      id: makeOperationId('approval'),
+    return createApproval({
       operationId: operation.id,
       stepId: step.id,
       action: classification.action,
       riskLevel: classification.riskLevel,
       reason: classification.reason,
-      requestedAt: nowIso(),
       status: 'pending',
     });
   }
 
-  async approve(businessKey, operationId, approvalId, { approvedBy = 'mark', message = '', strongConfirmation = false } = {}) {
+  async approve(businessKey, operationId, approvalId, { approvedBy = 'mark', message = '' } = {}) {
     const snapshot = await this.store.get(businessKey, operationId);
     const expiring = snapshot?.approvals?.find((approval) => approval.id === approvalId);
     if (expiring?.status === 'pending' && expiring.expiresAt && Date.parse(expiring.expiresAt) <= Date.now()) {
@@ -33,9 +31,9 @@ export class ApprovalService {
         const approval = operation.approvals.find((item) => item.id === approvalId);
         if (approval?.status === 'pending') approval.status = 'expired';
         operation.activityLog.push({
-          id: makeOperationId('evt'), operationId, stepId: approval?.stepId || '', type: 'approval_expired', actor: 'system',
+          ...createActivityEvent({ operationId, stepId: approval?.stepId || '', type: 'approval_expired', actor: 'system',
           message: 'Approval expired before it was granted.', data: { approvalId }, timestamp: nowIso(),
-        });
+        }) });
         return operation;
       });
       throw Object.assign(new Error('Approval has expired.'), { code: 'APPROVAL_EXPIRED' });
@@ -48,7 +46,7 @@ export class ApprovalService {
       if (current.expiresAt && Date.parse(current.expiresAt) <= Date.now()) {
         throw Object.assign(new Error('Approval has expired.'), { code: 'APPROVAL_EXPIRED' });
       }
-      const confirmed = strongConfirmation === true || isStrongConfirmation(message);
+      const confirmed = isStrongConfirmation(message);
       if (current.riskLevel === 'critical' && !confirmed) {
         throw Object.assign(new Error('Critical actions require strong confirmation acknowledging the irreversible risk.'), { code: 'STRONG_CONFIRMATION_REQUIRED' });
       }
@@ -66,9 +64,9 @@ export class ApprovalService {
         step.approvalId = current.id;
       }
       operation.activityLog.push({
-        id: makeOperationId('evt'), operationId, stepId: current.stepId, type: 'approval_approved', actor: approvedBy,
+        ...createActivityEvent({ operationId, stepId: current.stepId, type: 'approval_approved', actor: approvedBy,
         message: `Approval granted for ${current.action}.`, data: { approvalId, riskLevel: current.riskLevel }, timestamp: nowIso(),
-      });
+      }) });
       if (operation.status === 'waiting_for_approval') operation.status = 'queued';
       return operation;
     });
@@ -93,14 +91,14 @@ export class ApprovalService {
         step.error = 'Approval rejected.';
       }
       operation.status = 'blocked';
-      operation.blockers.push({
-        id: makeOperationId('blocker'), operationId, stepId: current.stepId, type: 'approval_rejected',
+      operation.blockers.push(createBlocker({
+        operationId, stepId: current.stepId, type: 'approval_rejected',
         message: `Approval rejected for ${current.action}.`, status: 'active', createdAt: nowIso(), resolution: safeString(message, 2_000),
-      });
+      }));
       operation.activityLog.push({
-        id: makeOperationId('evt'), operationId, stepId: current.stepId, type: 'approval_rejected', actor: rejectedBy,
+        ...createActivityEvent({ operationId, stepId: current.stepId, type: 'approval_rejected', actor: rejectedBy,
         message: `Approval rejected for ${current.action}.`, data: { approvalId, reason: message }, timestamp: nowIso(),
-      });
+      }) });
       return operation;
     });
   }

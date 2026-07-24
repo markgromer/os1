@@ -1,3 +1,5 @@
+import crypto from 'node:crypto';
+
 import { ApprovalPolicy } from '../approvals/approval_policy.js';
 import { ApprovalService } from '../approvals/approval_service.js';
 import { CodexProvider } from '../providers/codex_provider.js';
@@ -6,6 +8,7 @@ import { GitHubReadProvider } from '../providers/github_provider.js';
 import { ProjectRegistry } from '../projects/project_registry.js';
 import { ProjectResolver } from '../projects/project_resolver.js';
 import { OperationRecovery } from './operation_recovery.js';
+import { OperationReconciliation } from './operation_reconciliation.js';
 import { OperationRunner } from './operation_runner.js';
 import { OperationService } from './operation_service.js';
 import { OperationStore } from './operation_store.js';
@@ -41,6 +44,25 @@ function acceptanceCriteriaFromRequest(request, objective) {
   return criteria.filter(Boolean);
 }
 
+function deriveTrustedAuthorization({ request, businessKey, projectRegistryId }) {
+  const text = safeString(request, 12_000).toLowerCase();
+  const actionClasses = [];
+  if (/\b(codex|implement|build|fix|change|update|redesign|repair|create)\b/.test(text)) actionClasses.push('codex_implementation');
+  if (/\b(test|build|lint|typecheck|verify|verification)\b/.test(text)) actionClasses.push('run-project-script');
+  if (/\b(read|inspect|compare|github|repository|pull request|workflow)\b/.test(text)) {
+    actionClasses.push('repository_metadata', 'default_branch', 'branch_metadata', 'commit_metadata', 'repository_file', 'compare_refs', 'pull_request_metadata', 'workflow_status');
+  }
+  return {
+    source: 'authenticated_request', businessKey, projectRegistryId,
+    environment: 'development', providers: [
+      ...(actionClasses.includes('codex_implementation') ? ['codex'] : []),
+      ...(actionClasses.includes('run-project-script') ? ['desktop'] : []),
+      ...(actionClasses.some((item) => item.includes('repository') || item.includes('branch') || item.includes('commit') || item.includes('workflow') || item.includes('pull_request') || item === 'compare_refs' || item === 'default_branch') ? ['github_read'] : []),
+    ],
+    actionClasses: [...new Set(actionClasses)], requestDigest: crypto.createHash('sha256').update(text).digest('hex'), createdAt: nowIso(), revoked: false,
+  };
+}
+
 export function createOperationsEngine({
   dataDir,
   getLegacyProjects = async () => [],
@@ -48,13 +70,14 @@ export function createOperationsEngine({
   queueDesktopAction = null,
   githubReadAdapter = null,
   directCodexAdapter = null,
+  providerTimeoutMs = 45_000,
 } = {}) {
   const store = new OperationStore({ dataDir });
   const registry = new ProjectRegistry({ dataDir });
   const resolver = new ProjectResolver({ registry });
   const policy = new ApprovalPolicy();
   const approvalService = new ApprovalService({ store });
-  const verification = new OperationVerification({ queueDesktopAction });
+  const verification = new OperationVerification({ queueDesktopAction, store });
   const codex = new CodexProvider({ mode: directCodexAdapter ? 'direct' : 'external_handoff', directAdapter: directCodexAdapter });
   const desktop = new DesktopProvider({ queueAction: queueDesktopAction });
   const githubRead = new GitHubReadProvider({ readAdapter: githubReadAdapter });
@@ -62,13 +85,29 @@ export function createOperationsEngine({
   const runner = new OperationRunner({
     store, registry, service, policy, approvalService, verification,
     providers: { codex, desktop, github_read: githubRead },
+    providerTimeoutMs,
   });
   service.setRunner(runner);
+  const reconciliation = new OperationReconciliation({ store, runner });
   const recovery = new OperationRecovery({ store });
 
   const legacyProjectsFor = async (businessKey) => {
     const value = await getLegacyProjects(safeBusinessKey(businessKey));
     return Array.isArray(value) ? value : [];
+  };
+
+  const assertRegistryTargetMutable = async (businessKey, registryId, fields) => {
+    const materialFields = new Set(['repo', 'localWorkspace', 'deployments', 'commands', 'projectId']);
+    if (!fields.some((field) => materialFields.has(field))) return;
+    const operations = await store.listAll(businessKey, { nonterminal: true });
+    const bound = operations.find((operation) => operation.projectRegistryId === registryId && operation.status !== 'draft');
+    if (!bound) return;
+    await service.appendOperationEvent(businessKey, bound.id, {
+      type: 'registry_target_change_rejected', actor: 'system',
+      message: `Project registry target update rejected while operation ${bound.id} is ${bound.status}.`,
+      data: { projectRegistryId: registryId, fields },
+    });
+    throw Object.assign(new Error('The project execution target is bound to a planned or active operation. Use an explicit operation recovery/re-plan workflow first.'), { code: 'REGISTRY_TARGET_IN_USE' });
   };
 
   const api = {
@@ -79,12 +118,14 @@ export function createOperationsEngine({
     service,
     runner,
     recovery,
+    reconciliation,
     providers: { codex, desktop, githubRead },
 
     async initializeBusinesses(businessKeys = ['personal']) {
       const output = [];
       const discovered = await store.discoverBusinessKeys();
-      const keys = [...new Set([...businessKeys, ...discovered].map((key) => safeBusinessKey(key)))];
+      const registryBusinesses = await registry.discoverBusinessKeys();
+      const keys = [...new Set([...businessKeys, ...discovered, ...registryBusinesses].map((key) => safeBusinessKey(key)))];
       for (const rawKey of keys) {
         const businessKey = safeBusinessKey(rawKey);
         const legacyProjects = await legacyProjectsFor(businessKey);
@@ -115,8 +156,8 @@ export function createOperationsEngine({
         currentProjectId: raw.currentProjectId,
       });
       const record = resolution.registryRecord;
+      const authorizationProvenance = deriveTrustedAuthorization({ request: originalRequest, businessKey: key, projectRegistryId: record?.id || '' });
       let operation = await service.createOperation(key, {
-        id: safeString(raw.id, 160) || makeOperationId(),
         businessKey: key,
         projectId: record?.projectId || safeString(raw.projectId, 160),
         projectName: record?.canonicalName || safeString(raw.projectName, 300),
@@ -127,7 +168,7 @@ export function createOperationsEngine({
         requestedBy: safeString(raw.requestedBy, 200) || 'mark',
         source: safeString(raw.source, 100) || 'api',
         riskLevel: safeString(raw.riskLevel, 100) || 'low',
-        autonomyMode: safeString(raw.autonomyMode, 100) || 'supervised',
+        autonomyMode: 'supervised',
         acceptanceCriteria: Array.isArray(raw.acceptanceCriteria) && raw.acceptanceCriteria.length
           ? raw.acceptanceCriteria
           : acceptanceCriteriaFromRequest(originalRequest, objective),
@@ -139,7 +180,9 @@ export function createOperationsEngine({
             score: resolution.score,
             reason: resolution.reason,
             alternatives: resolution.alternatives.map((alternative) => ({ id: alternative.registryRecord?.id, name: alternative.registryRecord?.canonicalName, score: alternative.score })),
+            confirmed: resolution.confidence === 'high',
           },
+          authorizationProvenance,
           relevantMemory: Array.isArray(raw.relevantMemory) ? raw.relevantMemory.slice(0, 30) : [],
           currentArchitecture: safeString(raw.currentArchitecture, 12_000),
           projectSnapshot: record ? {
@@ -156,7 +199,7 @@ export function createOperationsEngine({
             commands: record.commands,
           } : {},
         },
-      });
+      }, { authorizationProvenance });
       if (resolution.confidence === 'low') {
         operation = await store.update(key, operation.id, (draft) => {
           draft.blockers.push({ id: makeOperationId('blocker'), operationId: draft.id, type: 'project_unresolved', status: 'active', message: resolution.reason, createdAt: nowIso() });
@@ -176,6 +219,16 @@ export function createOperationsEngine({
       return operations.map((operation) => ({ ...operation, progress: summarizeOperationProgress(operation) }));
     },
 
+    async listOperationSummaries(businessKey, filters = {}) {
+      const operations = await store.list(businessKey, filters);
+      return operations.map((operation) => ({
+        id: operation.id, title: operation.title, projectName: operation.projectName, status: operation.status,
+        riskLevel: operation.riskLevel, updatedAt: operation.updatedAt, progress: summarizeOperationProgress(operation),
+        needsApproval: operation.approvals.some((approval) => approval.status === 'pending'),
+        needsRecovery: operation.status === 'recovery_required',
+      }));
+    },
+
     async getOperation(businessKey, operationId) {
       const operation = await store.get(businessKey, operationId);
       return operation ? { ...operation, progress: summarizeOperationProgress(operation) } : null;
@@ -184,7 +237,9 @@ export function createOperationsEngine({
     createOperation: (businessKey, input) => service.createOperation(businessKey, input),
     updateOperation: (businessKey, id, patch, options) => service.updateOperation(businessKey, id, patch, options),
     planOperation: (businessKey, id, input) => service.planOperation(businessKey, id, input),
+    replanOperation: (businessKey, id, input) => service.replanOperation(businessKey, id, input),
     startOperation: (businessKey, id, input) => service.startOperation(businessKey, id, input),
+    confirmProject: (businessKey, id, input) => service.confirmProject(businessKey, id, input),
     pauseOperation: (businessKey, id, input) => service.pauseOperation(businessKey, id, input),
     resumeOperation: (businessKey, id, input) => service.resumeOperation(businessKey, id, input),
     cancelOperation: (businessKey, id, input) => service.cancelOperation(businessKey, id, input),
@@ -198,6 +253,7 @@ export function createOperationsEngine({
     registerVerificationResults: (businessKey, id, results, input) => service.registerVerificationResults(businessKey, id, results, input),
     waiveVerification: (businessKey, id, verificationId, input) => service.waiveVerification(businessKey, id, verificationId, input),
     tick: (businessKey, id) => runner.tick(businessKey, id),
+    reconcileDesktopResult: (input, options) => reconciliation.reconcileDesktopResult(input, options),
 
     async listProjectRegistry(businessKey) {
       const key = safeBusinessKey(businessKey);
@@ -206,7 +262,14 @@ export function createOperationsEngine({
       return registry.list(key);
     },
     createProjectRegistryRecord: (businessKey, input) => registry.create(businessKey, input),
-    updateProjectRegistryRecord: (businessKey, id, patch) => registry.update(businessKey, id, patch),
+    async updateProjectRegistryRecord(businessKey, id, patch) {
+      await assertRegistryTargetMutable(businessKey, id, Object.keys(safeObject(patch)));
+      return registry.update(businessKey, id, patch);
+    },
+    async approveProjectWorkspace(businessKey, id, input) {
+      await assertRegistryTargetMutable(businessKey, id, ['localWorkspace']);
+      return registry.approveWorkspace(businessKey, id, input);
+    },
   };
 
   return api;

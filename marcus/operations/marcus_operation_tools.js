@@ -41,7 +41,7 @@ export function getMarcusOperationToolDefinitions() {
     {
       type: 'function', function: {
         name: 'approve_operation_step', description: 'Approve one pending operation approval. Critical actions require strong confirmation.',
-        parameters: { type: 'object', properties: { operationId: { type: 'string' }, approvalId: { type: 'string' }, message: { type: 'string' }, strongConfirmation: { type: 'boolean' } }, required: ['operationId', 'approvalId'] },
+        parameters: { type: 'object', properties: { operationId: { type: 'string' }, approvalId: { type: 'string' }, message: { type: 'string' } }, required: ['operationId', 'approvalId'] },
       },
     },
     {
@@ -104,7 +104,7 @@ export async function executeMarcusOperationTool({ name, args, engine, businessK
     if (approval?.riskLevel === 'critical' && !strongConfirmation) {
       return { ok: false, approvalRequired: true, error: 'The current user message does not contain strong confirmation for this critical action.' };
     }
-    return { ok: true, operation: await engine.approveOperationStep(businessKey, input.operationId, input.approvalId, { approvedBy: 'mark', message: actualRequest, strongConfirmation, runCycle: true }) };
+    return { ok: true, operation: await engine.approveOperationStep(businessKey, input.operationId, input.approvalId, { approvedBy: 'mark', message: actualRequest, runCycle: true }) };
   }
   if (name === 'reject_operation_step') {
     const actualRequest = safeString(requestMessage, 4_000);

@@ -110,6 +110,14 @@ export class OperationStore {
     return operations.slice(0, limit);
   }
 
+  async listAll(businessKey, filters = {}) {
+    const document = await this.readDocument(businessKey);
+    let operations = document.operations.slice();
+    if (filters.nonterminal === true) operations = operations.filter((operation) => !['completed', 'failed', 'cancelled'].includes(operation.status));
+    operations.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    return operations;
+  }
+
   async get(businessKey, operationId) {
     const id = String(operationId || '').trim();
     if (!id) return null;

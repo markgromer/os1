@@ -16,9 +16,11 @@ import nodemailer from 'nodemailer';
 
 import { mcpCallTool, mcpListTools } from './mcpClient.js';
 import { registerOperationsRoutes } from './marcus/api/operations_routes.js';
+import { messageHasExplicitPublishApproval } from './marcus/approvals/publish_safeguard.js';
 import { buildMarcusSystemPrompt } from './marcus/core/build_system_prompt.js';
 import { buildActiveBrief as buildOperationalActiveBrief } from './marcus/intelligence/active_brief.js';
 import { createOperationsEngine } from './marcus/operations/operation_engine.js';
+import { discoverDurableBackupSources } from './marcus/operations/operation_backups.js';
 import {
   executeMarcusOperationTool,
   formatOperationStatusForMarcus,
@@ -29,8 +31,12 @@ import {
 
 const app = express();
 // When running behind SiteGround / reverse proxies, trust forwarded headers.
-app.set('trust proxy', true);
 const PORT = process.env.PORT ? Number(process.env.PORT) : 3030;
+const IS_HOSTED_RUNTIME = String(process.env.NODE_ENV || '').toLowerCase() === 'production'
+  || Boolean(process.env.RENDER || process.env.RENDER_SERVICE_ID || process.env.RENDER_EXTERNAL_URL);
+const ALLOW_UNAUTHENTICATED_LOCAL = String(process.env.MARCUS_ALLOW_UNAUTHENTICATED_LOCAL || '').trim().toLowerCase() === 'true';
+const SERVER_HOST = String(process.env.MARCUS_HOST || '').trim() || (IS_HOSTED_RUNTIME ? '0.0.0.0' : '127.0.0.1');
+app.set('trust proxy', IS_HOSTED_RUNTIME ? 1 : false);
 
 const DEFAULT_BUSINESS_KEY = 'personal';
 const requestContext = new AsyncLocalStorage();
@@ -56,6 +62,7 @@ app.use(express.json({
 
 app.use(express.urlencoded({
   extended: false,
+  limit: '512kb',
   verify: (req, res, buf) => {
     req.rawBody = buf;
   },
@@ -159,9 +166,7 @@ function withBusinessKey(businessKey, fn) {
 
 function getBusinessKeyFromRequest(req) {
   const headerKey = typeof req?.get === 'function' ? req.get('x-business-key') : '';
-  const queryKey = typeof req?.query?.businessKey === 'string' ? req.query.businessKey : '';
-  const bodyKey = typeof req?.body?.businessKey === 'string' ? req.body.businessKey : '';
-  return normalizeBusinessKey(headerKey || queryKey || bodyKey);
+  return normalizeBusinessKey(headerKey);
 }
 
 // Attach a per-request business context.
@@ -169,6 +174,11 @@ function getBusinessKeyFromRequest(req) {
 // - Otherwise we fall back to the server's saved active business key.
 app.use((req, res, next) => {
   const incoming = getBusinessKeyFromRequest(req);
+  const allowed = new Set((Array.isArray(cachedBusinesses) ? cachedBusinesses : []).map((item) => normalizeBusinessKey(item?.key || '')).filter(Boolean));
+  if (incoming && !allowed.has(incoming)) {
+    res.status(403).json({ ok: false, error: 'Business is not available to the authenticated operator.' });
+    return;
+  }
   const key = incoming || cachedActiveBusinessKey || DEFAULT_BUSINESS_KEY;
   requestContext.run({ businessKey: key }, () => {
     try {
@@ -205,6 +215,7 @@ const operationsEngine = createOperationsEngine({
   },
   getDesktopContext: async () => desktopRelayCache?.data || desktopContextCache?.data || {},
   queueDesktopAction: async (action) => queueDesktopAction(action),
+  githubReadAdapter: async (input) => githubOperationsReadAdapter(input),
 });
 
 async function createOrReuseDurableOperationForMessage(message, { projectId = '', projectName = '', source = 'marcus_chat' } = {}) {
@@ -397,6 +408,17 @@ async function backupCriticalFiles({ force = false } = {}) {
       const ok = await writeBackupSnapshot({ sourceFile: file, prefix: `tasks-${key}` });
       if (ok) markBackupForKey(cacheKey);
     }
+
+    const durableSources = await discoverDurableBackupSources({
+      businessDataDir: BUSINESS_DATA_DIR,
+      configuredBusinessKeys: (Array.isArray(cfg.businesses) ? cfg.businesses : []).map((business) => business.key),
+    });
+    for (const source of durableSources) {
+      const cacheKey = `durable:${source.prefix}`;
+      if (!force && !shouldCreateBackupForKey(cacheKey)) continue;
+      const ok = await writeBackupSnapshot({ sourceFile: source.sourceFile, prefix: source.prefix });
+      if (ok) markBackupForKey(cacheKey);
+    }
   } catch {
     // ignore extra backup errors
   }
@@ -417,6 +439,10 @@ function startBackupScheduler() {
 }
 
 const ADMIN_TOKEN = typeof process.env.ADMIN_TOKEN === 'string' ? process.env.ADMIN_TOKEN.trim() : '';
+const LOOPBACK_BINDING = SERVER_HOST === 'localhost' || SERVER_HOST === '::1' || /^127(?:\.\d{1,3}){3}$/.test(SERVER_HOST);
+if (!ADMIN_TOKEN && (IS_HOSTED_RUNTIME || !ALLOW_UNAUTHENTICATED_LOCAL || !LOOPBACK_BINDING)) {
+  throw new Error('ADMIN_TOKEN is required outside explicit loopback development. For local-only development set MARCUS_ALLOW_UNAUTHENTICATED_LOCAL=true and bind MARCUS_HOST to a loopback address.');
+}
 const ELEVENLABS_API_KEY = typeof process.env.ELEVENLABS_API_KEY === 'string' ? process.env.ELEVENLABS_API_KEY.trim() : '';
 const ELEVENLABS_VOICE_ID = typeof process.env.ELEVENLABS_VOICE_ID === 'string' ? process.env.ELEVENLABS_VOICE_ID.trim() : '';
 const ELEVENLABS_MODEL_ID = typeof process.env.ELEVENLABS_MODEL_ID === 'string' ? process.env.ELEVENLABS_MODEL_ID.trim() : 'eleven_flash_v2_5';
@@ -494,8 +520,8 @@ const marcusLiveSessionTokens = new Map();
 
 function pruneMarcusLiveSessionTokens() {
   const now = Date.now();
-  for (const [token, expiresAt] of marcusLiveSessionTokens.entries()) {
-    if (!Number.isFinite(expiresAt) || expiresAt <= now) marcusLiveSessionTokens.delete(token);
+  for (const [token, session] of marcusLiveSessionTokens.entries()) {
+    if (!Number.isFinite(session?.expiresAt) || session.expiresAt <= now) marcusLiveSessionTokens.delete(token);
   }
 }
 
@@ -503,7 +529,7 @@ function createMarcusLiveSessionToken() {
   pruneMarcusLiveSessionTokens();
   const token = crypto.randomBytes(24).toString('base64url');
   const expiresAt = Date.now() + MARCUS_LIVE_SESSION_TTL_MS;
-  marcusLiveSessionTokens.set(token, expiresAt);
+  marcusLiveSessionTokens.set(token, { expiresAt, businessKey: getBusinessKeyFromContext() });
   return { token, expiresAt };
 }
 
@@ -514,9 +540,14 @@ function isValidMarcusLiveSessionToken(token) {
   return Boolean(marcusLiveSessionTokens.has(t));
 }
 
+function getMarcusLiveSession(token) {
+  const value = isValidMarcusLiveSessionToken(token) ? marcusLiveSessionTokens.get(String(token || '').trim()) : null;
+  return value || null;
+}
+
 function isMarcusLiveSessionRoute(req) {
   const p = String(req?.path || '');
-  return (p === '/api/operations' && String(req?.method || '').toUpperCase() === 'GET')
+  return (p === '/api/operations/summary' && String(req?.method || '').toUpperCase() === 'GET')
     || p === '/api/marcus/live'
     || p === '/api/marcus/live/action'
     || p === '/api/marcus/active-brief'
@@ -541,7 +572,8 @@ app.use((req, res, next) => {
 
     const token = extractBearerToken(req);
     if (token && safeTimingEqual(token, ADMIN_TOKEN)) return next();
-    if (isMarcusLiveSessionRoute(req) && isValidMarcusLiveSessionToken(token)) return next();
+    const liveSession = isMarcusLiveSessionRoute(req) ? getMarcusLiveSession(token) : null;
+    if (liveSession && liveSession.businessKey === getBusinessKeyFromContext()) return next();
     res.status(401).json({ error: 'Unauthorized' });
   } catch {
     res.status(401).json({ error: 'Unauthorized' });
@@ -1776,6 +1808,51 @@ async function githubApi(pathPart, { method = 'GET', body, timeoutMs = 20_000 } 
   return data;
 }
 
+async function githubOperationsReadAdapter({ repository, action, input = {} }) {
+  const [owner, repo] = String(repository || '').split('/');
+  if (!/^[A-Za-z0-9_.-]+$/.test(owner || '') || !/^[A-Za-z0-9_.-]+$/.test(repo || '')) throw new Error('Registered GitHub repository is invalid.');
+  const base = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+  const ref = String(input.ref || '').trim();
+  let data;
+  if (action === 'repository_metadata' || action === 'default_branch') {
+    data = await githubApi(base);
+    return action === 'default_branch'
+      ? { repository, defaultBranch: data?.default_branch || '' }
+      : { repository, id: data?.id, name: data?.name, fullName: data?.full_name, private: Boolean(data?.private), defaultBranch: data?.default_branch, archived: Boolean(data?.archived), updatedAt: data?.updated_at, pushedAt: data?.pushed_at, htmlUrl: data?.html_url };
+  }
+  if (action === 'branch_metadata') {
+    data = await githubApi(`${base}/branches/${encodeURIComponent(ref)}`);
+    return { repository, name: data?.name, protected: Boolean(data?.protected), commit: { sha: data?.commit?.sha, url: data?.commit?.html_url } };
+  }
+  if (action === 'commit_metadata') {
+    data = await githubApi(`${base}/commits/${encodeURIComponent(ref)}`);
+    return { repository, sha: data?.sha, htmlUrl: data?.html_url, message: String(data?.commit?.message || '').slice(0, 8_000), author: data?.commit?.author, committer: data?.commit?.committer, files: (Array.isArray(data?.files) ? data.files : []).slice(0, 100).map((file) => ({ filename: file.filename, status: file.status, additions: file.additions, deletions: file.deletions, changes: file.changes })) };
+  }
+  if (action === 'repository_file') {
+    const filePath = String(input.path || '').split('/').map(encodeURIComponent).join('/');
+    const qs = ref ? `?ref=${encodeURIComponent(ref)}` : '';
+    data = await githubApi(`${base}/contents/${filePath}${qs}`);
+    if (Array.isArray(data)) return { repository, type: 'directory', entries: data.slice(0, 100).map((item) => ({ name: item.name, path: item.path, type: item.type, size: item.size, sha: item.sha })) };
+    const encoded = String(data?.content || '').replace(/\s+/g, '');
+    return { repository, type: data?.type || 'file', path: data?.path || input.path, sha: data?.sha, size: data?.size || 0, content: encoded ? Buffer.from(encoded, 'base64').toString('utf8').slice(0, 80_000) : '' };
+  }
+  if (action === 'compare_refs') {
+    data = await githubApi(`${base}/compare/${encodeURIComponent(input.base)}...${encodeURIComponent(input.head)}`);
+    return { repository, status: data?.status, aheadBy: data?.ahead_by, behindBy: data?.behind_by, totalCommits: data?.total_commits, commits: (Array.isArray(data?.commits) ? data.commits : []).slice(0, 100).map((commit) => ({ sha: commit.sha, message: String(commit?.commit?.message || '').slice(0, 2_000), htmlUrl: commit.html_url })), files: (Array.isArray(data?.files) ? data.files : []).slice(0, 100).map((file) => ({ filename: file.filename, status: file.status, additions: file.additions, deletions: file.deletions, changes: file.changes })) };
+  }
+  if (action === 'pull_request_metadata') {
+    data = await githubApi(`${base}/pulls/${Number(input.pullNumber)}`);
+    return { repository, number: data?.number, title: data?.title, state: data?.state, draft: Boolean(data?.draft), merged: Boolean(data?.merged), mergeable: data?.mergeable, base: data?.base?.ref, head: data?.head?.ref, headSha: data?.head?.sha, author: data?.user?.login, htmlUrl: data?.html_url, updatedAt: data?.updated_at };
+  }
+  if (action === 'workflow_status') {
+    const query = new URLSearchParams({ per_page: String(Math.max(1, Math.min(100, Number(input.limit) || 50))) });
+    if (ref) query.set('branch', ref);
+    data = await githubApi(`${base}/actions/runs?${query}`);
+    return { repository, totalCount: data?.total_count || 0, runs: (Array.isArray(data?.workflow_runs) ? data.workflow_runs : []).slice(0, 100).map((run) => ({ id: run.id, name: run.name, event: run.event, status: run.status, conclusion: run.conclusion, branch: run.head_branch, sha: run.head_sha, htmlUrl: run.html_url, createdAt: run.created_at, updatedAt: run.updated_at })) };
+  }
+  throw new Error('Unsupported GitHub read action.');
+}
+
 async function cloudflareApi(pathPart, { method = 'GET', body, timeoutMs = 20_000 } = {}) {
   const cfg = getCloudflareConfig();
   if (!cfg.token) throw new Error('CLOUDFLARE_API_TOKEN is not configured.');
@@ -2305,6 +2382,8 @@ function createSmtpTransport(profile) {
     connectionTimeout: normalizeTimeoutMs(profile.connectionTimeout, 20_000),
     greetingTimeout: normalizeTimeoutMs(profile.greetingTimeout, 20_000),
     socketTimeout: normalizeTimeoutMs(profile.socketTimeout, 20_000),
+    disableFileAccess: true,
+    disableUrlAccess: true,
     ...(profile.requireTLS === true ? { requireTLS: true } : {}),
     ...(profile.ignoreTLS === true ? { ignoreTLS: true } : {}),
   };
@@ -8012,6 +8091,8 @@ app.put('/api/businesses', async (req, res) => {
     const finalCfg = getBusinessConfigFromSettings(merged);
     const next = { ...merged, businesses: finalCfg.businesses, activeBusinessKey: finalCfg.activeBusinessKey };
     await writeSettings(next);
+    cachedBusinesses = finalCfg.businesses;
+    cachedActiveBusinessKey = finalCfg.activeBusinessKey;
     res.json({ ok: true, activeBusinessKey: finalCfg.activeBusinessKey, businesses: finalCfg.businesses });
   });
 
@@ -8045,6 +8126,8 @@ app.post('/api/businesses/active', async (req, res) => {
 
     const finalCfg = getBusinessConfigFromSettings(next);
     await writeSettings({ ...next, businesses: finalCfg.businesses, activeBusinessKey: finalCfg.activeBusinessKey });
+    cachedBusinesses = finalCfg.businesses;
+    cachedActiveBusinessKey = finalCfg.activeBusinessKey;
     res.json({ ok: true, activeBusinessKey: finalCfg.activeBusinessKey, businesses: finalCfg.businesses });
   });
 
@@ -12578,6 +12661,7 @@ app.post('/api/projects/:id/auto-suggest-tasks', async (req, res) => {
 
 let pendingDesktopActions = [];     // [{id,type,payload,requestedAt,requestedBy}]
 let desktopActionResults = [];      // [{id,type,ok,error?,completedAt}]
+const desktopActionsByIdempotency = new Map();
 const DESKTOP_ACTION_RESULT_TTL_MS = 10 * 60_000;
 
 function pruneDesktopActionResults() {
@@ -12586,22 +12670,25 @@ function pruneDesktopActionResults() {
 }
 
 function queueDesktopAction(action) {
+  const idempotencyKey = String(action?.idempotencyKey || '').trim().slice(0, 240);
+  if (idempotencyKey && desktopActionsByIdempotency.has(idempotencyKey)) return desktopActionsByIdempotency.get(idempotencyKey);
+  const suppliedId = String(action?.id || '').trim().slice(0, 120);
   const entry = {
-    id: makeId(),
+    id: suppliedId || makeId(),
     type: String(action?.type || '').trim(),
     payload: action?.payload && typeof action.payload === 'object' ? action.payload : {},
     requestedAt: Date.now(),
     requestedBy: String(action?.requestedBy || 'marcus').slice(0, 80),
+    idempotencyKey,
   };
+  const duplicateId = pendingDesktopActions.find((item) => item.id === entry.id);
+  if (duplicateId) return duplicateId;
   pendingDesktopActions.push(entry);
+  if (idempotencyKey) {
+    desktopActionsByIdempotency.set(idempotencyKey, entry);
+    if (desktopActionsByIdempotency.size > 2_000) desktopActionsByIdempotency.delete(desktopActionsByIdempotency.keys().next().value);
+  }
   return entry;
-}
-
-function messageHasExplicitPublishApproval(messageText) {
-  const text = String(messageText || '').toLowerCase();
-  const hasApproval = /\b(approve|approved|approval granted|go ahead|ship it|publish it|push it|send it|do it)\b/.test(text);
-  const hasPublishIntent = /\b(publish|push|commit|deploy|ship|release)\b/.test(text);
-  return hasApproval && hasPublishIntent;
 }
 
 function launchVsCodeNative(projectPath, cb) {
@@ -12655,27 +12742,48 @@ app.get('/api/desktop-context/actions', (req, res) => {
   res.json({ ok: true, actions });
 });
 
-app.post('/api/desktop-context/action-results', (req, res) => {
+app.post('/api/desktop-context/action-results', async (req, res) => {
   const results = Array.isArray(req.body?.results) ? req.body.results : [];
+  const relayAgentId = typeof req.body?.agentId === 'string' ? req.body.agentId.trim().slice(0, 200) : '';
   const now = Date.now();
   let count = 0;
+  const rejected = [];
   for (const raw of results) {
     if (!raw || typeof raw !== 'object') continue;
     const id = typeof raw.id === 'string' ? raw.id.trim().slice(0, 80) : '';
     const type = typeof raw.type === 'string' ? raw.type.trim().slice(0, 80) : '';
     if (!id || !type) continue;
-    desktopActionResults.push({
+    const businessKey = normalizeBusinessKey(raw.businessKey || '');
+    const details = (() => {
+      try {
+        const encoded = JSON.stringify(raw.details ?? null);
+        return encoded.length <= 20_000 ? JSON.parse(encoded) : { truncated: true, preview: encoded.slice(0, 20_000) };
+      } catch { return null; }
+    })();
+    const result = {
       id,
       type,
-      ok: raw.ok !== false,
-      error: typeof raw.error === 'string' ? raw.error.trim().slice(0, 500) : '',
-      details: raw.details && typeof raw.details === 'object' ? raw.details : null,
+      businessKey,
+      projectRegistryId: typeof raw.projectRegistryId === 'string' ? raw.projectRegistryId.trim().slice(0, 160) : '',
+      desktopAgentId: relayAgentId || (typeof raw.desktopAgentId === 'string' ? raw.desktopAgentId.trim().slice(0, 200) : ''),
+      ok: raw.ok === true,
+      error: typeof raw.error === 'string' ? raw.error.trim().slice(0, 4_000) : '',
+      details,
       completedAt: now,
-    });
-    count++;
+    };
+    desktopActionResults.push(result);
+    if (businessKey && result.projectRegistryId) {
+      try {
+        const reconciled = await operationsEngine.reconcileDesktopResult(result, { runCycle: false });
+        count++;
+        if (reconciled.operation?.status === 'queued') setImmediate(() => operationsEngine.tick(businessKey, reconciled.operation.id).catch(() => {}));
+      } catch (error) {
+        rejected.push({ id, code: error?.code || 'DESKTOP_RESULT_REJECTED' });
+      }
+    } else count++;
   }
   pruneDesktopActionResults();
-  res.json({ ok: true, received: count });
+  res.json({ ok: true, received: count, rejected });
 });
 
 app.get('/api/desktop-context/action-results', (req, res) => {
@@ -17328,6 +17436,7 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
         const { project, workspacePath } = resolveProjectWorkspace();
         const scriptName = typeof args?.scriptName === 'string' ? args.scriptName.trim() : '';
         if (!scriptName) return { ok: false, error: 'scriptName is required.' };
+        if (!new Set(['install', 'dev', 'build', 'test', 'lint', 'typecheck']).has(scriptName)) return { ok: false, error: 'scriptName is not allowlisted.' };
         if (!workspacePath) {
           return {
             ok: false,
@@ -17923,7 +18032,7 @@ function startMarcusBriefScheduler() {
   setInterval(() => { void tick(); }, 30_000);
 }
 
-const httpServer = app.listen(PORT, async () => {
+const httpServer = app.listen(PORT, SERVER_HOST, async () => {
   await refreshBusinessCacheFromSettings();
   const businesses = Array.isArray(cachedBusinesses) ? cachedBusinesses : [{ key: DEFAULT_BUSINESS_KEY }];
   for (const biz of businesses) {
@@ -17963,7 +18072,7 @@ const httpServer = app.listen(PORT, async () => {
   startAirtableRequestsAutoSyncScheduler();
   startMarcusBriefScheduler();
   // eslint-disable-next-line no-console
-  console.log(`M.A.R.C.U.S. running on http://localhost:${PORT}`);
+  console.log(`M.A.R.C.U.S. running on http://${SERVER_HOST}:${PORT}`);
 });
 
 

@@ -171,7 +171,7 @@ test('runner enforces dependencies and runtime approval even when a step says ap
   });
 });
 
-test('recovery pauses interrupted running steps without assuming completion', async () => {
+test('recovery requires reconciliation for interrupted running steps without assuming completion', async () => {
   await withEngine(async (engine) => {
     const operation = await engine.store.create('personal', {
       title: 'Interrupted', objective: 'Recover', status: 'running',
@@ -180,7 +180,7 @@ test('recovery pauses interrupted running steps without assuming completion', as
     const recovered = await engine.recovery.recoverBusiness('personal');
     assert.deepEqual(recovered, [operation.id]);
     const after = await engine.getOperation('personal', operation.id);
-    assert.equal(after.status, 'paused');
+    assert.equal(after.status, 'recovery_required');
     assert.equal(after.steps[0].status, 'blocked');
     assert.equal(after.blockers[0].type, 'recovery_required');
     const resumed = await engine.resumeOperation('personal', operation.id, { reason: 'Provider state checked; retry is safe.', runCycle: false });

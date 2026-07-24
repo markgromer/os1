@@ -1,8 +1,38 @@
-import { makeOperationId, nowIso, redactSecrets, safeObject, safeString, sanitizeStructured } from '../operations/operation_types.js';
+import { createArtifact, makeOperationId, nowIso, PROVIDER_RESULT_STATUSES, redactSecrets, safeEnum, safeObject, safeString, sanitizeStructured } from '../operations/operation_types.js';
 
 export const CODEX_JOB_STATUSES = Object.freeze([
-  'handoff_ready', 'queued', 'running', 'waiting_external', 'completed', 'failed', 'cancelled', 'paused',
+  'completed', 'started', 'queued', 'running', 'waiting_external', 'waiting', 'failed', 'cancelled', 'paused', 'unknown',
 ]);
+
+export function normalizeProviderStatus(value, fallback = 'unknown') {
+  const aliases = { success: 'completed', succeeded: 'completed', complete: 'completed', pending: 'queued', in_progress: 'running', canceled: 'cancelled' };
+  const raw = safeString(value, 80).toLowerCase();
+  return safeEnum(aliases[raw] || raw, PROVIDER_RESULT_STATUSES, fallback);
+}
+
+function normalizeJob(rawJob, base = {}) {
+  const raw = safeObject(rawJob);
+  const status = normalizeProviderStatus(raw.status, normalizeProviderStatus(base.status, 'unknown'));
+  return {
+    provider: safeString(raw.provider || base.provider, 100) || 'direct',
+    recordId: safeString(base.recordId, 120) || makeOperationId('codexjob'),
+    jobId: safeString(raw.jobId || raw.id || base.jobId, 300),
+    operationId: safeString(base.operationId || raw.operationId, 120),
+    stepId: safeString(base.stepId || raw.stepId, 120),
+    projectRegistryId: safeString(base.projectRegistryId || raw.projectRegistryId, 160),
+    repository: safeString(base.repository || raw.repository, 1_000),
+    branch: safeString(raw.branch || base.branch, 500),
+    status,
+    idempotencyKey: safeString(base.idempotencyKey || raw.idempotencyKey, 240),
+    startedAt: safeString(raw.startedAt || base.startedAt, 64) || nowIso(),
+    updatedAt: nowIso(),
+    completedAt: status === 'completed' ? (safeString(raw.completedAt, 64) || nowIso()) : '',
+    artifacts: Array.isArray(raw.artifacts) ? sanitizeStructured(raw.artifacts.slice(0, 50), 30_000) : [],
+    diffSummary: safeString(raw.diffSummary, 20_000),
+    error: safeString(raw.error || raw.message, 8_000),
+    rawMetadata: sanitizeStructured(raw.rawMetadata || raw.metadata || {}, 15_000),
+  };
+}
 
 function formatList(values, fallback = '- None supplied.') {
   const list = (Array.isArray(values) ? values : []).map((value) => safeString(value, 2_000)).filter(Boolean);
@@ -85,9 +115,10 @@ export class CodexProvider {
   constructor({ mode = 'external_handoff', directAdapter = null } = {}) {
     this.mode = mode === 'direct' && directAdapter ? 'direct' : 'external_handoff';
     this.directAdapter = directAdapter;
+    this.launchesByIdempotencyKey = new Map();
   }
 
-  async startJob({ operation, step, registryRecord }) {
+  async startJob({ operation, step, registryRecord, idempotencyKey }) {
     const prompt = generateCodexHandoff({
       operation,
       step,
@@ -99,6 +130,7 @@ export class CodexProvider {
     const branch = branchPattern.replaceAll('{operationId}', operation.id);
     const base = {
       provider: this.mode,
+      recordId: makeOperationId('codexjob'),
       jobId: '',
       operationId: operation.id,
       stepId: step.id,
@@ -113,27 +145,36 @@ export class CodexProvider {
       artifacts: [],
       diffSummary: '',
       rawMetadata: {},
+      idempotencyKey: safeString(idempotencyKey || step.idempotencyKey, 240),
     };
     if (this.mode === 'direct') {
-      const launched = await this.directAdapter.startJob(base);
-      return { status: 'started', job: { ...base, ...sanitizeStructured(launched, 20_000) }, prompt };
+      let launch = this.launchesByIdempotencyKey.get(base.idempotencyKey);
+      if (!launch) {
+        launch = Promise.resolve(this.directAdapter.startJob({ ...base, prompt }, { idempotencyKey: base.idempotencyKey }));
+        this.launchesByIdempotencyKey.set(base.idempotencyKey, launch);
+        if (this.launchesByIdempotencyKey.size > 1_000) this.launchesByIdempotencyKey.delete(this.launchesByIdempotencyKey.keys().next().value);
+      }
+      const launched = await launch;
+      const job = normalizeJob(launched, base);
+      const status = normalizeProviderStatus(launched?.status, 'started');
+      job.status = status;
+      return { status, job, prompt };
     }
     return {
       status: 'waiting_external',
       job: base,
       prompt,
-      artifact: {
-        id: makeOperationId('artifact'), operationId: operation.id, stepId: step.id, type: 'codex_handoff',
+      artifact: createArtifact({ operationId: operation.id, stepId: step.id, type: 'codex_handoff',
         name: `Codex handoff - ${operation.title}`, mimeType: 'text/markdown', content: prompt, createdAt: nowIso(),
         metadata: { providerMode: 'external_handoff', repository: base.repository, branch },
-      },
+      }),
       message: 'A complete Codex handoff was generated. No direct Codex launch API is configured, so the operation is waiting for an external Codex job or result.',
     };
   }
 
   async getJobStatus(job) {
-    if (this.mode === 'direct') return this.directAdapter.getJobStatus(job);
-    return sanitizeStructured(job, 20_000);
+    if (this.mode === 'direct') return normalizeJob(await this.directAdapter.getJobStatus(job), job);
+    return normalizeJob(job, job);
   }
 
   async sendFollowup(job, message) {
@@ -142,22 +183,22 @@ export class CodexProvider {
   }
 
   async getArtifacts(job) {
-    if (this.mode === 'direct') return this.directAdapter.getArtifacts(job);
-    return Array.isArray(job?.artifacts) ? job.artifacts : [];
+    const artifacts = this.mode === 'direct' ? await this.directAdapter.getArtifacts(job) : job?.artifacts;
+    return Array.isArray(artifacts) ? sanitizeStructured(artifacts.slice(0, 50), 50_000) : [];
   }
 
   async getDiff(job) {
-    if (this.mode === 'direct') return this.directAdapter.getDiff(job);
-    return { summary: safeString(job?.diffSummary, 20_000) };
+    const diff = this.mode === 'direct' ? await this.directAdapter.getDiff(job) : { summary: job?.diffSummary };
+    return sanitizeStructured({ ...safeObject(diff), summary: safeString(diff?.summary || diff?.diffSummary, 40_000) }, 50_000);
   }
 
   async cancelJob(job) {
-    if (this.mode === 'direct') return this.directAdapter.cancelJob(job);
-    return { ...job, status: 'cancelled', updatedAt: nowIso() };
+    if (this.mode === 'direct') return normalizeJob(await this.directAdapter.cancelJob(job), job);
+    return normalizeJob({ ...job, status: 'cancelled' }, job);
   }
 
   async resumeJob(job) {
-    if (this.mode === 'direct') return this.directAdapter.resumeJob(job);
+    if (this.mode === 'direct') return normalizeJob(await this.directAdapter.resumeJob(job), job);
     return { ...job, status: job?.jobId ? 'running' : 'waiting_external', updatedAt: nowIso() };
   }
 }

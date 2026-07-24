@@ -6,8 +6,10 @@ export const OPERATION_STATUSES = Object.freeze([
   'waiting_for_approval',
   'queued',
   'running',
+  'awaiting_provider',
   'paused',
   'blocked',
+  'recovery_required',
   'verifying',
   'completed',
   'failed',
@@ -48,8 +50,10 @@ export const OPERATION_TRANSITIONS = Object.freeze({
   waiting_for_approval: ['queued', 'blocked', 'paused', 'cancelled'],
   queued: ['running', 'waiting_for_approval', 'paused', 'blocked', 'failed', 'cancelled'],
   running: ['queued', 'waiting_for_approval', 'paused', 'blocked', 'verifying', 'failed', 'cancelled'],
+  awaiting_provider: ['queued', 'running', 'paused', 'blocked', 'recovery_required', 'verifying', 'failed', 'cancelled'],
   paused: ['queued', 'waiting_for_approval', 'blocked', 'cancelled'],
   blocked: ['queued', 'waiting_for_approval', 'paused', 'failed', 'cancelled'],
+  recovery_required: ['queued', 'waiting_for_approval', 'paused', 'blocked', 'failed', 'cancelled'],
   verifying: ['queued', 'waiting_for_approval', 'blocked', 'completed', 'failed', 'cancelled'],
   completed: [],
   failed: ['queued', 'cancelled'],
@@ -64,6 +68,9 @@ export const MAX_VERIFICATION_RESULTS = 100;
 export const MAX_STEPS = 50;
 export const MAX_STORED_OUTPUT_CHARS = 40_000;
 export const MAX_ARTIFACT_CONTENT_CHARS = 100_000;
+export const PROVIDER_RESULT_STATUSES = Object.freeze([
+  'completed', 'started', 'queued', 'running', 'waiting_external', 'waiting', 'failed', 'cancelled', 'paused', 'unknown',
+]);
 
 const SECRET_PATTERNS = [
   /(authorization\s*[:=]\s*(?:bearer\s+)?)[^\s,;]+/gi,
@@ -273,6 +280,43 @@ export function normalizeBlocker(input = {}, defaults = {}) {
   };
 }
 
+export function normalizeProviderAction(input = {}, defaults = {}) {
+  const raw = safeObject(input);
+  return {
+    id: safeString(raw.id, 120) || makeOperationId('action'),
+    operationId: safeString(raw.operationId || defaults.operationId, 120),
+    stepId: safeString(raw.stepId || defaults.stepId, 120),
+    provider: safeString(raw.provider || defaults.provider, 100),
+    action: safeString(raw.action || defaults.action, 160),
+    idempotencyKey: safeString(raw.idempotencyKey || defaults.idempotencyKey, 240),
+    externalId: safeString(raw.externalId, 300),
+    status: safeEnum(raw.status, PROVIDER_RESULT_STATUSES, 'unknown'),
+    issuedAt: safeIso(raw.issuedAt) || nowIso(),
+    updatedAt: safeIso(raw.updatedAt) || safeIso(raw.issuedAt) || nowIso(),
+    completedAt: safeIso(raw.completedAt),
+    cancellationConfirmed: raw.cancellationConfirmed === true,
+    metadata: sanitizeStructured(raw.metadata ?? {}, 15_000),
+  };
+}
+
+export function normalizeDesktopCorrelation(input = {}, defaults = {}) {
+  const raw = safeObject(input);
+  return {
+    actionId: safeString(raw.actionId, 120),
+    operationId: safeString(raw.operationId || defaults.operationId, 120),
+    stepId: safeString(raw.stepId || defaults.stepId, 120),
+    verificationId: safeString(raw.verificationId, 120),
+    verificationType: safeString(raw.verificationType, 100),
+    actionType: safeString(raw.actionType, 100),
+    projectRegistryId: safeString(raw.projectRegistryId, 160),
+    desktopAgentId: safeString(raw.desktopAgentId, 200),
+    idempotencyKey: safeString(raw.idempotencyKey, 240),
+    queuedAt: safeIso(raw.queuedAt) || nowIso(),
+    completedAt: safeIso(raw.completedAt),
+    status: safeEnum(raw.status, ['queued', 'running', 'completed', 'failed', 'recovery_required'], 'queued'),
+  };
+}
+
 export function normalizeStep(input = {}, index = 0, defaults = {}) {
   const raw = safeObject(input);
   const sequence = safeInteger(raw.sequence, index + 1, 1, MAX_STEPS);
@@ -316,7 +360,7 @@ function normalizeAcceptanceCriteria(value) {
 
 function normalizeOperationMetadata(value) {
   const raw = safeObject(value);
-  const reserved = new Set(['projectResolution', 'relevantMemory', 'currentArchitecture', 'codexJobs', 'extra']);
+  const reserved = new Set(['projectResolution', 'relevantMemory', 'currentArchitecture', 'codexJobs', 'authorizationProvenance', 'executionTarget', 'extra']);
   const extra = { ...safeObject(raw.extra) };
   for (const [key, item] of Object.entries(raw)) if (!reserved.has(key)) extra[key] = item;
   return {
@@ -324,6 +368,8 @@ function normalizeOperationMetadata(value) {
     relevantMemory: normalizeStringArray(raw.relevantMemory, 20, 1_000),
     currentArchitecture: redactSecrets(raw.currentArchitecture ?? '', 12_000).trim(),
     codexJobs: sanitizeStructured(raw.codexJobs ?? {}, 15_000),
+    authorizationProvenance: sanitizeStructured(raw.authorizationProvenance ?? {}, 12_000),
+    executionTarget: sanitizeStructured(raw.executionTarget ?? {}, 25_000),
     extra: sanitizeStructured(extra, 12_000),
   };
 }
@@ -363,6 +409,8 @@ export function normalizeOperation(input = {}, options = {}) {
     approvals: (Array.isArray(raw.approvals) ? raw.approvals : []).slice(-MAX_APPROVALS).map((item) => normalizeApproval(item, { operationId })),
     verification: (Array.isArray(raw.verification) ? raw.verification : []).slice(-MAX_VERIFICATION_RESULTS).map((item) => normalizeVerificationResult(item, { operationId })),
     blockers: (Array.isArray(raw.blockers) ? raw.blockers : []).slice(-MAX_BLOCKERS).map((item) => normalizeBlocker(item, { operationId })),
+    providerActions: (Array.isArray(raw.providerActions) ? raw.providerActions : []).slice(-200).map((item) => normalizeProviderAction(item, { operationId })),
+    desktopCorrelations: (Array.isArray(raw.desktopCorrelations) ? raw.desktopCorrelations : []).slice(-200).map((item) => normalizeDesktopCorrelation(item, { operationId })),
     activityLog: (Array.isArray(raw.activityLog) ? raw.activityLog : []).slice(-MAX_ACTIVITY_EVENTS).map((item) => normalizeActivityEvent(item, { operationId })),
     createdAt,
     updatedAt: safeIso(raw.updatedAt) || createdAt,
@@ -379,6 +427,59 @@ export function normalizeOperation(input = {}, options = {}) {
   if (status === 'failed' && !normalized.failedAt) normalized.failedAt = normalized.updatedAt;
   if (status === 'cancelled' && !normalized.cancelledAt) normalized.cancelledAt = normalized.updatedAt;
   return normalized;
+}
+
+// Creation helpers deliberately discard identity and time fields. Persisted-record
+// normalizers above are for rehydration and intentionally preserve them.
+export function createActivityEvent(input = {}, defaults = {}) {
+  return normalizeActivityEvent({ ...safeObject(input), id: makeOperationId('evt'), timestamp: nowIso(), createdAt: undefined }, defaults);
+}
+
+export function createArtifact(input = {}, defaults = {}) {
+  return normalizeArtifact({ ...safeObject(input), id: makeOperationId('artifact'), createdAt: nowIso() }, defaults);
+}
+
+export function createApproval(input = {}, defaults = {}) {
+  return normalizeApproval({
+    ...safeObject(input), id: makeOperationId('approval'), requestedAt: nowIso(), approvedAt: undefined, rejectedAt: undefined,
+  }, defaults);
+}
+
+export function createVerificationResult(input = {}, defaults = {}) {
+  const raw = safeObject(input);
+  const status = safeEnum(raw.status, VERIFICATION_STATUSES, 'pending');
+  return normalizeVerificationResult({
+    ...raw, id: makeOperationId('verify'), status,
+    startedAt: status === 'running' ? nowIso() : '',
+    completedAt: ['passed', 'failed', 'skipped', 'needs_manual_review'].includes(status) ? nowIso() : '',
+  }, defaults);
+}
+
+export function createBlocker(input = {}, defaults = {}) {
+  return normalizeBlocker({ ...safeObject(input), id: makeOperationId('blocker'), createdAt: nowIso(), resolvedAt: '' }, defaults);
+}
+
+export function createStep(input = {}, index = 0, defaults = {}) {
+  return normalizeStep({
+    ...safeObject(input), id: makeOperationId('step'), startedAt: '', completedAt: '', failedAt: '', attemptCount: 0, idempotencyKey: '',
+  }, index, defaults);
+}
+
+export function createOperationRecord(input = {}, options = {}) {
+  const raw = safeObject(input);
+  const timestamp = nowIso();
+  return normalizeOperation({
+    ...raw,
+    id: makeOperationId(),
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    startedAt: '',
+    pausedAt: '',
+    completedAt: '',
+    failedAt: '',
+    cancelledAt: '',
+    revision: 1,
+  }, options);
 }
 
 export function canTransitionOperation(from, to) {

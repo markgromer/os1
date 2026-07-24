@@ -19,9 +19,13 @@ This is a tiny “project command center” that runs locally and stores everyth
 
 2. Start the app:
 
-   ```bash
+   ```powershell
+   $env:MARCUS_ALLOW_UNAUTHENTICATED_LOCAL = "true"
+   $env:MARCUS_HOST = "127.0.0.1"
    npm start
    ```
+
+   Unauthenticated mode is intentionally limited to an explicit loopback-only development setting. Alternatively, set `ADMIN_TOKEN` locally.
 
 3. Open: `http://localhost:3030`
 
@@ -293,10 +297,12 @@ Each project has two optional link fields in the **Project** panel:
 Run the desktop agent on the machine that should open projects:
 
 ```powershell
+$env:MARCUS_DESKTOP_AGENT_ID = "mark-primary-desktop"
+$env:MARCUS_ALLOWED_WORKSPACE_ROOTS = "C:\Users\markg\OneDrive\Documents\Projects;D:\TrustedWork"
 node desktop-agent.cjs https://your-app.onrender.com yourAdminToken
 ```
 
-The agent already relays active editor context. It now also polls for approved local desktop actions, validates the requested folder exists, opens it in VS Code, and reports the result back to Marcus.
+`MARCUS_ALLOWED_WORKSPACE_ROOTS` must contain specific project-parent folders, not a drive root, home directory, Documents directory, or OneDrive Documents root. Durable operations also require the registry workspace to be explicitly approved and bound to the same `MARCUS_DESKTOP_AGENT_ID`. The agent resolves real paths before every action and rejects traversal, symlink/junction escapes, unregistered operations, and paths outside the allowed roots.
 
 Supported local desktop actions:
 
@@ -472,11 +478,12 @@ Set these environment variables in your SiteGround Node app:
 - `BASE_URL` = `https://ops.yourdomain.com`
 - `PORT` = whatever SiteGround assigns (often provided automatically)
 
-Optional but recommended:
+Required for every hosted or production runtime:
 
 - `ADMIN_TOKEN` = a long random string
-   - When set, all `/api/*` routes require the token **except** inbound webhooks and OAuth callbacks.
-   - The browser UI will prompt once and remember it in `localStorage`.
+   - The server refuses hosted/production startup without it.
+   - All `/api/*` routes require the token except explicitly verified inbound webhooks, OAuth callbacks, health, and auth bootstrap routes.
+   - The browser UI will prompt once and remember it in an HttpOnly cookie.
 
 Data paths (optional):
 - `TASK_TRACKER_DATA_DIR` = absolute path where `tasks.json` should live
