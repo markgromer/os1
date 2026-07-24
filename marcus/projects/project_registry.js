@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { makeOperationId, nowIso, safeBusinessKey, safeIso, safeObject, safeString, sanitizeStructured } from '../operations/operation_types.js';
+import { validateAllowedWorkspaceRoots, validateTrustedWorkspace } from './workspace_trust.js';
 
 function safeUrl(value) {
   const text = safeString(value, 2_000);
@@ -63,14 +64,47 @@ function normalizeRepository(value = {}) {
 
 function normalizeWorkspace(value = {}) {
   const raw = safeObject(value);
+  const challenge = safeObject(raw.approvalChallenge);
+  const proof = safeObject(raw.validationProof);
+  const normalizedProof = {
+    method: ['same_machine', 'desktop_agent_attestation'].includes(safeString(proof.method, 80)) ? safeString(proof.method, 80) : '',
+    challengeId: safeString(proof.challengeId, 120),
+    businessKey: safeBusinessKey(proof.businessKey, ''),
+    projectRegistryId: safeString(proof.projectRegistryId, 160),
+    desktopAgentId: safeString(proof.desktopAgentId, 200),
+    registeredPath: safeString(proof.registeredPath, 2_000),
+    canonicalPath: safeString(proof.canonicalPath, 2_000),
+    validatedAt: safeIso(proof.validatedAt),
+  };
+  const proofComplete = Boolean(normalizedProof.method && normalizedProof.challengeId && normalizedProof.businessKey
+    && normalizedProof.projectRegistryId && normalizedProof.desktopAgentId && normalizedProof.registeredPath
+    && normalizedProof.canonicalPath && normalizedProof.validatedAt);
+  const requestedTrust = safeString(raw.trustStatus, 40);
   return {
     path: safeString(raw.path || raw.workspacePath, 2_000),
     platform: safeString(raw.platform, 100),
     desktopAgentId: safeString(raw.desktopAgentId, 200),
-    trustStatus: ['approved', 'pending', 'rejected'].includes(safeString(raw.trustStatus, 40)) ? safeString(raw.trustStatus, 40) : 'pending',
-    trustSource: safeString(raw.trustSource, 100),
-    approvedAt: safeIso(raw.approvedAt),
-    canonicalPath: safeString(raw.canonicalPath, 2_000),
+    trustStatus: requestedTrust === 'approved' && proofComplete ? 'approved' : (requestedTrust === 'rejected' ? 'rejected' : 'pending'),
+    trustSource: proofComplete ? safeString(raw.trustSource, 100) : '',
+    approvedAt: proofComplete ? safeIso(raw.approvedAt) : '',
+    canonicalPath: proofComplete ? normalizedProof.canonicalPath : '',
+    operatorApproval: {
+      approvedBy: safeString(raw.operatorApproval?.approvedBy, 120),
+      approvedAt: safeIso(raw.operatorApproval?.approvedAt),
+      message: safeString(raw.operatorApproval?.message, 2_000),
+    },
+    approvalChallenge: {
+      id: safeString(challenge.id, 120),
+      status: ['pending', 'validated', 'failed'].includes(safeString(challenge.status, 40)) ? safeString(challenge.status, 40) : '',
+      businessKey: safeBusinessKey(challenge.businessKey, ''),
+      projectRegistryId: safeString(challenge.projectRegistryId, 160),
+      desktopAgentId: safeString(challenge.desktopAgentId, 200),
+      registeredPath: safeString(challenge.registeredPath, 2_000),
+      createdAt: safeIso(challenge.createdAt),
+      completedAt: safeIso(challenge.completedAt),
+      error: safeString(challenge.error, 2_000),
+    },
+    validationProof: normalizedProof,
   };
 }
 
@@ -116,8 +150,24 @@ export function normalizeProjectRegistryRecord(input = {}, options = {}) {
     throw error;
   }
   const aliases = stringArray(raw.aliases, 50, 300).filter((alias) => alias.toLowerCase() !== canonicalName.toLowerCase());
+  const recordId = safeString(raw.id, 160) || makeOperationId('registry');
+  const localWorkspace = normalizeWorkspace(raw.localWorkspace || { path: raw.workspacePath });
+  const proof = safeObject(localWorkspace.validationProof);
+  if (localWorkspace.trustStatus === 'approved' && (
+    proof.businessKey !== businessKey
+    || proof.projectRegistryId !== recordId
+    || proof.desktopAgentId !== localWorkspace.desktopAgentId
+    || proof.registeredPath !== localWorkspace.path
+    || proof.canonicalPath !== localWorkspace.canonicalPath
+  )) {
+    localWorkspace.trustStatus = 'pending';
+    localWorkspace.trustSource = '';
+    localWorkspace.approvedAt = '';
+    localWorkspace.canonicalPath = '';
+    localWorkspace.validationProof = {};
+  }
   return {
-    id: safeString(raw.id, 160) || makeOperationId('registry'),
+    id: recordId,
     businessKey,
     projectId: safeString(raw.projectId, 160),
     canonicalName,
@@ -127,7 +177,7 @@ export function normalizeProjectRegistryRecord(input = {}, options = {}) {
     owner: safeString(raw.owner, 300),
     teamMembers: stringArray(raw.teamMembers, 100, 300),
     repo: normalizeRepository(raw.repo || { url: raw.repoUrl }),
-    localWorkspace: normalizeWorkspace(raw.localWorkspace || { path: raw.workspacePath }),
+    localWorkspace,
     deployments: normalizeDeployments(raw.deployments, raw),
     services: sanitizeStructured(raw.services ?? {}, 20_000),
     communication: {
@@ -202,10 +252,13 @@ function fillMissing(existing, incoming) {
 }
 
 export class ProjectRegistry {
-  constructor({ dataDir }) {
+  constructor({ dataDir, allowedWorkspaceRoots = [] }) {
     if (!dataDir) throw new Error('ProjectRegistry requires dataDir.');
     this.dataDir = path.resolve(dataDir);
     this.queues = new Map();
+    this.allowedWorkspaceRoots = Array.isArray(allowedWorkspaceRoots) && allowedWorkspaceRoots.length
+      ? validateAllowedWorkspaceRoots(allowedWorkspaceRoots)
+      : [];
   }
 
   fileForBusiness(businessKey) {
@@ -284,13 +337,19 @@ export class ProjectRegistry {
       const current = document.projects[index];
       const rawPatch = safeObject(patch);
       const merged = { ...current, ...rawPatch };
-      for (const key of ['repo', 'localWorkspace', 'deployments', 'services', 'communication', 'documentation', 'commands', 'permissions', 'metadata']) {
+      for (const key of ['repo', 'deployments', 'services', 'communication', 'documentation', 'commands', 'permissions', 'metadata']) {
         if (rawPatch[key] && typeof rawPatch[key] === 'object' && !Array.isArray(rawPatch[key])) merged[key] = { ...safeObject(current[key]), ...rawPatch[key] };
+      }
+      if (rawPatch.localWorkspace && typeof rawPatch.localWorkspace === 'object' && !Array.isArray(rawPatch.localWorkspace)) {
+        merged.localWorkspace = { ...safeObject(current.localWorkspace) };
+        if (Object.prototype.hasOwnProperty.call(rawPatch.localWorkspace, 'path')) merged.localWorkspace.path = safeString(rawPatch.localWorkspace.path, 2_000);
+        if (Object.prototype.hasOwnProperty.call(rawPatch.localWorkspace, 'platform')) merged.localWorkspace.platform = safeString(rawPatch.localWorkspace.platform, 100);
       }
       const updated = normalizeProjectRegistryRecord({ ...merged, id: current.id, businessKey: current.businessKey, createdAt: current.createdAt, updatedAt: nowIso() }, { businessKey });
       if (safeObject(rawPatch.localWorkspace).path && safeObject(rawPatch.localWorkspace).path !== current.localWorkspace.path) {
         updated.localWorkspace = {
           ...updated.localWorkspace, trustStatus: 'pending', trustSource: '', approvedAt: '', desktopAgentId: '', canonicalPath: '',
+          operatorApproval: {}, approvalChallenge: {}, validationProof: {},
         };
       }
       document.projects[index] = updated;
@@ -301,18 +360,94 @@ export class ProjectRegistry {
   async approveWorkspace(businessKey, id, input = {}) {
     const raw = safeObject(input);
     const desktopAgentId = safeString(raw.desktopAgentId, 200);
-    const canonicalPath = safeString(raw.canonicalPath || raw.path, 2_000);
-    if (!desktopAgentId || !canonicalPath) {
-      throw Object.assign(new Error('desktopAgentId and canonicalPath are required to approve a workspace.'), { code: 'WORKSPACE_APPROVAL_INVALID' });
+    const actor = safeString(raw.approvedBy || raw.actor, 120) || 'authenticated_operator';
+    if (!desktopAgentId) throw Object.assign(new Error('desktopAgentId is required to request workspace approval.'), { code: 'WORKSPACE_APPROVAL_INVALID' });
+    const snapshot = await this.get(businessKey, id);
+    if (!snapshot) throw Object.assign(new Error('Project registry record not found.'), { code: 'PROJECT_REGISTRY_NOT_FOUND' });
+    const registeredPath = safeString(snapshot.localWorkspace?.path, 2_000);
+    if (!registeredPath) throw Object.assign(new Error('The project has no workspace path to approve.'), { code: 'WORKSPACE_APPROVAL_INVALID' });
+    const suppliedPath = safeString(raw.path || raw.canonicalPath, 2_000);
+    if (suppliedPath && suppliedPath !== registeredPath) {
+      throw Object.assign(new Error('Workspace approval must validate the registered project path; a replacement browser/API path is not accepted.'), { code: 'WORKSPACE_REGISTRY_MISMATCH' });
+    }
+    const challengeId = makeOperationId('workspace');
+    let canonicalPath = '';
+    if (this.allowedWorkspaceRoots.length && raw.remoteValidation !== true) {
+      canonicalPath = validateTrustedWorkspace({
+        workspacePath: registeredPath, registeredPath, allowedRoots: this.allowedWorkspaceRoots,
+      });
     }
     return this.mutate(businessKey, (document) => {
       const record = document.projects.find((item) => item.id === id);
       if (!record) throw Object.assign(new Error('Project registry record not found.'), { code: 'PROJECT_REGISTRY_NOT_FOUND' });
-      if (!record.localWorkspace.path) throw Object.assign(new Error('The project has no workspace path to approve.'), { code: 'WORKSPACE_APPROVAL_INVALID' });
-      record.localWorkspace = {
-        ...record.localWorkspace, path: canonicalPath, canonicalPath, desktopAgentId, trustStatus: 'approved', trustSource: 'explicit_operator_approval', approvedAt: nowIso(),
+      if (record.localWorkspace.path !== registeredPath) throw Object.assign(new Error('The registered workspace changed before approval.'), { code: 'WORKSPACE_REGISTRY_MISMATCH' });
+      const timestamp = nowIso();
+      const challenge = {
+        id: challengeId, status: canonicalPath ? 'validated' : 'pending', businessKey: safeBusinessKey(businessKey),
+        projectRegistryId: id, desktopAgentId, registeredPath, createdAt: timestamp,
+        completedAt: canonicalPath ? timestamp : '', error: '',
       };
-      record.updatedAt = nowIso();
+      const proof = canonicalPath ? {
+        method: 'same_machine', challengeId, businessKey: safeBusinessKey(businessKey), projectRegistryId: id,
+        desktopAgentId, registeredPath, canonicalPath, validatedAt: timestamp,
+      } : {};
+      record.localWorkspace = {
+        ...record.localWorkspace,
+        desktopAgentId,
+        trustStatus: canonicalPath ? 'approved' : 'pending',
+        trustSource: canonicalPath ? 'operator_and_same_machine_validation' : '',
+        approvedAt: canonicalPath ? timestamp : '',
+        canonicalPath,
+        operatorApproval: { approvedBy: actor, approvedAt: timestamp, message: safeString(raw.message, 2_000) },
+        approvalChallenge: challenge,
+        validationProof: proof,
+      };
+      record.updatedAt = timestamp;
+      return record;
+    });
+  }
+
+  async attestWorkspace(businessKey, id, input = {}) {
+    const raw = safeObject(input);
+    return this.mutate(businessKey, (document) => {
+      const record = document.projects.find((item) => item.id === id);
+      if (!record) throw Object.assign(new Error('Project registry record not found.'), { code: 'PROJECT_REGISTRY_NOT_FOUND' });
+      const workspace = record.localWorkspace;
+      const challenge = safeObject(workspace.approvalChallenge);
+      const challengeId = safeString(raw.challengeId || raw.actionId || raw.id, 120);
+      const desktopAgentId = safeString(raw.desktopAgentId, 200);
+      const registeredPath = safeString(raw.registeredPath, 2_000);
+      const canonicalPath = safeString(raw.canonicalPath, 2_000);
+      if (!challenge.id || challenge.status !== 'pending'
+        || challenge.id !== challengeId
+        || challenge.businessKey !== safeBusinessKey(businessKey)
+        || challenge.projectRegistryId !== id
+        || challenge.desktopAgentId !== desktopAgentId
+        || challenge.registeredPath !== registeredPath
+        || workspace.path !== registeredPath
+        || workspace.desktopAgentId !== desktopAgentId
+        || !workspace.operatorApproval?.approvedAt) {
+        throw Object.assign(new Error('Workspace validation result does not match its pending approval challenge.'), { code: 'WORKSPACE_ATTESTATION_MISMATCH' });
+      }
+      const timestamp = nowIso();
+      if (raw.ok !== true) {
+        workspace.trustStatus = 'rejected'; workspace.trustSource = ''; workspace.approvedAt = ''; workspace.canonicalPath = '';
+        workspace.validationProof = {};
+        workspace.approvalChallenge = { ...challenge, status: 'failed', completedAt: timestamp, error: safeString(raw.error, 2_000) || 'Desktop workspace validation failed.' };
+        record.updatedAt = timestamp;
+        return record;
+      }
+      if (!canonicalPath) throw Object.assign(new Error('A successful workspace attestation requires the canonical path.'), { code: 'WORKSPACE_ATTESTATION_INVALID' });
+      workspace.trustStatus = 'approved';
+      workspace.trustSource = 'operator_and_desktop_agent_attestation';
+      workspace.approvedAt = timestamp;
+      workspace.canonicalPath = canonicalPath;
+      workspace.approvalChallenge = { ...challenge, status: 'validated', completedAt: timestamp, error: '' };
+      workspace.validationProof = {
+        method: 'desktop_agent_attestation', challengeId, businessKey: safeBusinessKey(businessKey), projectRegistryId: id,
+        desktopAgentId, registeredPath, canonicalPath, validatedAt: timestamp,
+      };
+      record.updatedAt = timestamp;
       return record;
     });
   }
@@ -340,10 +475,10 @@ export class ProjectRegistry {
           localWorkspace: raw.workspacePath ? {
             path: raw.workspacePath,
             desktopAgentId: safeString(raw.desktopAgentId, 200),
-            trustStatus: safeString(raw.desktopAgentId, 200) ? 'approved' : 'pending',
-            trustSource: 'legacy_project_record',
-            approvedAt: safeString(raw.desktopAgentId, 200) ? nowIso() : '',
-            canonicalPath: raw.workspacePath,
+            trustStatus: 'pending',
+            trustSource: '',
+            approvedAt: '',
+            canonicalPath: '',
           } : {},
           productionUrl: raw.productionUrl || raw.websiteUrl || raw.liveUrl,
           previewUrl: raw.previewUrl || raw.stagingUrl,

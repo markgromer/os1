@@ -44,6 +44,17 @@ function defaultAcceptanceCriteria(operation) {
   ];
 }
 
+function authorizationAfterProjectSelection(existing, projectRegistryId) {
+  const authorization = safeObject(existing);
+  if (authorization.projectRegistryId === projectRegistryId) return authorization;
+  return {
+    ...authorization,
+    revoked: true,
+    revokedAt: nowIso(),
+    revocationReason: 'Project selection changed after the authenticated request was recorded; fresh action authorization is required.',
+  };
+}
+
 function mergeVerificationResults(existing, incoming, operationId, stepId) {
   const map = new Map((Array.isArray(existing) ? existing : []).map((item) => [item.id, item]));
   const suppliedIds = (Array.isArray(incoming) ? incoming : []).map((item) => safeString(item?.id, 120)).filter(Boolean);
@@ -137,7 +148,7 @@ export class OperationService {
         operation.metadata = {
           ...safeObject(operation.metadata),
           projectResolution: { resolved: true, confidence: 'high', score: 100, reason: 'Explicitly selected by Mark.', alternatives: [] },
-          authorizationProvenance: { ...safeObject(operation.metadata?.authorizationProvenance), projectRegistryId: selectedRegistry.id },
+          authorizationProvenance: authorizationAfterProjectSelection(operation.metadata?.authorizationProvenance, selectedRegistry.id),
         };
         for (const blocker of operation.blockers) if (blocker.type === 'project_unresolved' && blocker.status === 'active') {
           blocker.status = 'resolved'; blocker.resolvedAt = nowIso(); blocker.resolution = 'Project explicitly selected.';
@@ -265,7 +276,7 @@ export class OperationService {
       if (registryRecord) {
         operation.projectRegistryId = registryRecord.id; operation.projectId = registryRecord.projectId; operation.projectName = registryRecord.canonicalName;
         operation.metadata.projectResolution = { resolved: true, confidence: 'high', score: 100, reason: 'Explicitly selected during re-plan.', alternatives: [], confirmed: true };
-        operation.metadata.authorizationProvenance = { ...safeObject(operation.metadata.authorizationProvenance), projectRegistryId: registryRecord.id };
+        operation.metadata.authorizationProvenance = authorizationAfterProjectSelection(operation.metadata.authorizationProvenance, registryRecord.id);
       }
       operation.status = 'draft'; operation.steps = []; operation.plan = []; operation.approvals = []; operation.verification = [];
       operation.blockers = []; operation.providerActions = []; operation.desktopCorrelations = []; operation.currentStepId = '';
@@ -316,43 +327,109 @@ export class OperationService {
       operation.projectId = record.projectId;
       operation.projectName = record.canonicalName;
       operation.metadata.projectResolution = { ...safeObject(operation.metadata.projectResolution), resolved: true, confirmed: true, confirmedAt: nowIso(), confirmedBy: safeString(actor, 100) || 'mark' };
-      operation.metadata.authorizationProvenance = { ...safeObject(operation.metadata.authorizationProvenance), projectRegistryId: record.id };
+      operation.metadata.authorizationProvenance = authorizationAfterProjectSelection(operation.metadata.authorizationProvenance, record.id);
       appendEvent(operation, { type: 'project_resolution_confirmed', actor, message: `Confirmed inferred project ${record.canonicalName}.`, data: { projectRegistryId: record.id } });
       return operation;
     }, { expectedOperationRevision: expectedRevision });
   }
 
   async pauseOperation(businessKey, operationId, { actor = 'mark', reason = '' } = {}) {
-    return this.store.update(businessKey, operationId, (operation) => {
-      if (!['queued', 'running', 'awaiting_provider', 'waiting_for_approval', 'blocked', 'recovery_required', 'verifying'].includes(operation.status)) {
-        throw Object.assign(new Error(`Operation cannot pause from ${operation.status}.`), { code: 'INVALID_TRANSITION' });
+    let operation = await this.store.update(businessKey, operationId, (draft) => {
+      if (!['queued', 'running', 'awaiting_provider', 'waiting_for_approval', 'blocked', 'recovery_required', 'verifying'].includes(draft.status)) {
+        throw Object.assign(new Error(`Operation cannot pause from ${draft.status}.`), { code: 'INVALID_TRANSITION' });
       }
-      transition(operation, 'paused');
-      const running = operation.steps.find((step) => step.status === 'running');
-      if (running) {
-        running.status = 'blocked';
-        running.error = 'Paused before provider completion was confirmed.';
-      }
-      appendEvent(operation, { type: 'operation_paused', actor, message: safeString(reason, 2_000) || 'Operation paused.', data: {}, timestamp: nowIso() });
-      return operation;
+      transition(draft, 'paused');
+      const running = draft.steps.find((step) => step.status === 'running');
+      if (running) running.error = '';
+      appendEvent(draft, {
+        type: 'operation_paused', actor,
+        message: safeString(reason, 2_000) || 'Operation paused. Any in-flight provider attempt remains durably associated and cannot be relaunched.',
+        data: { activeStepId: running?.id || '', providerJobRegistered: Boolean(running && safeObject(draft.metadata?.codexJobs)[running.id]) },
+        timestamp: nowIso(),
+      });
+      return draft;
     });
+    const running = operation.steps.find((step) => step.status === 'running' && step.type === 'codex');
+    const activeJob = running ? safeObject(operation.metadata?.codexJobs)[running.id] : null;
+    const provider = this.runner?.providers?.codex;
+    if (!running || !activeJob || provider?.mode !== 'direct') return operation;
+    if (!provider.supportsPause()) {
+      return this.store.update(businessKey, operationId, (draft) => {
+        if (draft.status !== 'paused') return draft;
+        appendEvent(draft, {
+          type: 'provider_pause_unsupported', actor, stepId: running.id,
+          message: 'The provider does not support pause; its existing job remains bound to this attempt and may continue externally.',
+          data: { jobId: activeJob.jobId || '', idempotencyKey: running.idempotencyKey },
+        });
+        return draft;
+      });
+    }
+    let pausedJob;
+    try { pausedJob = await provider.pauseJob(activeJob); }
+    catch (error) {
+      return this.store.update(businessKey, operationId, (draft) => {
+        if (draft.status !== 'paused') return draft;
+        appendEvent(draft, { type: 'provider_pause_failed', actor, stepId: running.id, message: `Provider pause was not confirmed: ${safeString(error?.message, 2_000) || 'unknown error'}` });
+        return draft;
+      });
+    }
+    operation = await this.store.update(businessKey, operationId, (draft) => {
+      if (draft.status !== 'paused') return draft;
+      const step = draft.steps.find((item) => item.id === running.id);
+      if (!step || step.idempotencyKey !== running.idempotencyKey || step.attemptCount !== running.attemptCount) return draft;
+      const safeJob = sanitizeStructured({ ...activeJob, ...safeObject(pausedJob) }, 30_000);
+      delete safeJob.prompt;
+      draft.metadata.codexJobs[step.id] = safeJob;
+      const action = draft.providerActions.find((item) => item.stepId === step.id && item.idempotencyKey === step.idempotencyKey);
+      if (action) { action.status = safeJob.status === 'paused' ? 'paused' : action.status; action.updatedAt = nowIso(); }
+      appendEvent(draft, {
+        type: 'provider_pause_result_recorded', actor, stepId: step.id,
+        message: safeJob.status === 'paused' ? 'The external provider confirmed pause.' : 'The external provider did not confirm pause; the job remains associated and may continue.',
+        data: { jobId: safeJob.jobId || '', confirmed: safeJob.status === 'paused' },
+      });
+      return draft;
+    });
+    return operation;
   }
 
   async resumeOperation(businessKey, operationId, { actor = 'mark', reason = '', runCycle = true } = {}) {
     const snapshot = await this.store.get(businessKey, operationId);
     if (!snapshot) throw Object.assign(new Error('Operation not found.'), { code: 'OPERATION_NOT_FOUND' });
-    const pausedEntry = Object.entries(safeObject(snapshot.metadata?.codexJobs)).find(([, job]) => job?.status === 'paused');
-    if (pausedEntry && this.runner?.providers?.codex?.mode === 'direct') {
-      const [stepId, pausedJob] = pausedEntry;
-      let resumedJob;
-      try { resumedJob = await this.runner.providers.codex.resumeJob(pausedJob); }
-      catch (error) { throw Object.assign(new Error(`Codex provider could not resume the paused job: ${error?.message || 'unknown error'}`), { code: 'PROVIDER_RESUME_FAILED' }); }
+    if (!['paused', 'blocked', 'recovery_required'].includes(snapshot.status)) throw Object.assign(new Error(`Operation cannot resume from ${snapshot.status}.`), { code: 'INVALID_TRANSITION' });
+    const activeCodexStep = snapshot.steps.find((step) => step.type === 'codex' && ['running', 'blocked'].includes(step.status)
+      && safeObject(snapshot.metadata?.codexJobs)[step.id]);
+    const pendingCodexLaunch = snapshot.steps.find((step) => step.type === 'codex' && step.status === 'running'
+      && !safeObject(snapshot.metadata?.codexJobs)[step.id]);
+    if (snapshot.status === 'paused' && (activeCodexStep || pendingCodexLaunch) && this.runner?.providers?.codex?.mode === 'direct') {
+      const stepId = (activeCodexStep || pendingCodexLaunch).id;
+      const boundStep = activeCodexStep || pendingCodexLaunch;
+      const boundJob = activeCodexStep ? safeObject(snapshot.metadata?.codexJobs)[stepId] : null;
+      let resumedJob = boundJob;
+      if (boundJob?.status === 'paused') {
+        if (!this.runner.providers.codex.supportsResume()) {
+          throw Object.assign(new Error('The Codex provider paused the job but does not support resuming it.'), { code: 'PROVIDER_RESUME_UNSUPPORTED' });
+        }
+        try { resumedJob = await this.runner.providers.codex.resumeJob(boundJob); }
+        catch (error) { throw Object.assign(new Error(`Codex provider could not resume the paused job: ${error?.message || 'unknown error'}`), { code: 'PROVIDER_RESUME_FAILED' }); }
+      }
       const resumed = await this.store.update(businessKey, operationId, (operation) => {
-        operation.metadata.codexJobs[stepId] = { ...pausedJob, ...safeObject(resumedJob), status: safeString(resumedJob?.status, 80) || 'running', updatedAt: nowIso() };
+        if (operation.status !== 'paused') throw Object.assign(new Error(`Operation cannot resume from ${operation.status}.`), { code: 'INVALID_TRANSITION' });
         const step = operation.steps.find((item) => item.id === stepId);
-        if (step) { step.status = 'running'; step.error = ''; }
+        if (!step || step.idempotencyKey !== boundStep.idempotencyKey || step.attemptCount !== boundStep.attemptCount) {
+          throw Object.assign(new Error('The provider attempt changed before resume.'), { code: 'STEP_REVISION_CHANGED' });
+        }
+        if (resumedJob) {
+          const safeJob = sanitizeStructured({ ...boundJob, ...safeObject(resumedJob), updatedAt: nowIso() }, 30_000);
+          delete safeJob.prompt;
+          operation.metadata.codexJobs[stepId] = safeJob;
+        }
+        step.status = 'running'; step.error = '';
         operation.status = 'awaiting_provider'; operation.pausedAt = '';
-        appendEvent(operation, { type: 'provider_job_resumed', actor, stepId, message: safeString(reason, 2_000) || 'Paused Codex provider job resumed.' });
+        appendEvent(operation, {
+          type: resumedJob !== boundJob ? 'provider_job_resumed' : 'provider_job_poll_resumed', actor, stepId,
+          message: safeString(reason, 2_000) || (boundJob ? 'Resumed by polling the existing Codex job.' : 'Resumed while the original provider launch is still pending; no duplicate launch was issued.'),
+          data: { jobId: resumedJob?.jobId || '', idempotencyKey: step.idempotencyKey, attempt: step.attemptCount },
+        });
         return operation;
       });
       if (runCycle && this.runner) return this.runner.tick(businessKey, resumed.id);
@@ -360,6 +437,13 @@ export class OperationService {
     }
     const operation = await this.store.update(businessKey, operationId, (draft) => {
       if (!['paused', 'blocked', 'recovery_required'].includes(draft.status)) throw Object.assign(new Error(`Operation cannot resume from ${draft.status}.`), { code: 'INVALID_TRANSITION' });
+      const unreconciledProviderAttempt = draft.steps.find((step) => step.type === 'codex' && step.status === 'blocked'
+        && step.attemptCount > 0 && !safeObject(draft.metadata?.codexJobs)[step.id]
+        && draft.providerActions.some((action) => action.stepId === step.id && action.idempotencyKey === step.idempotencyKey
+          && !['completed', 'failed', 'cancelled'].includes(action.status)));
+      if (unreconciledProviderAttempt) {
+        throw Object.assign(new Error('The original provider launch has no durable job ID after restart. Reconcile that exact attempt before resuming; it will not be relaunched.'), { code: 'OPERATION_STILL_BLOCKED' });
+      }
       const unresolvedExternal = draft.blockers.some((blocker) => blocker.status === 'active' && ['external_codex_required', 'verification_required'].includes(blocker.type));
       if (unresolvedExternal) throw Object.assign(new Error('Required external Codex or verification evidence has not been registered.'), { code: 'OPERATION_STILL_BLOCKED' });
       const pendingApproval = draft.approvals.some((approval) => approval.status === 'pending');
@@ -383,37 +467,52 @@ export class OperationService {
   }
 
   async cancelOperation(businessKey, operationId, { actor = 'mark', reason = '' } = {}) {
-    const snapshot = await this.store.get(businessKey, operationId);
-    if (!snapshot) throw Object.assign(new Error('Operation not found.'), { code: 'OPERATION_NOT_FOUND' });
-    const activeJob = Object.values(safeObject(snapshot.metadata?.codexJobs)).find((job) => ['started', 'queued', 'running', 'unknown'].includes(job?.status));
-    let cancellationConfirmed = false;
-    let cancelledJob = null;
-    if (activeJob && this.runner?.providers?.codex?.mode === 'direct') {
-      try {
-        cancelledJob = await this.runner.providers.codex.cancelJob(activeJob);
-        cancellationConfirmed = cancelledJob?.status === 'cancelled';
-      } catch { cancellationConfirmed = false; }
-    }
-    return this.store.update(businessKey, operationId, (operation) => {
+    let activeJob = null;
+    let activeStepId = '';
+    let operation = await this.store.update(businessKey, operationId, (operation) => {
       if (['completed', 'failed', 'cancelled'].includes(operation.status)) throw Object.assign(new Error(`Operation cannot be cancelled from ${operation.status}.`), { code: 'INVALID_TRANSITION' });
+      const activeEntry = Object.entries(safeObject(operation.metadata?.codexJobs)).find(([, job]) => ['started', 'queued', 'running', 'unknown', 'paused'].includes(job?.status));
+      if (activeEntry) [activeStepId, activeJob] = activeEntry;
       transition(operation, 'cancelled');
-      const externalStillRunning = Object.values(safeObject(operation.metadata?.codexJobs)).some((job) => ['started', 'queued', 'running', 'unknown'].includes(job?.status));
-      if (cancelledJob?.stepId) operation.metadata.codexJobs[cancelledJob.stepId] = { ...safeObject(operation.metadata.codexJobs[cancelledJob.stepId]), ...cancelledJob };
-      if (cancelledJob?.stepId) {
-        const providerAction = operation.providerActions.find((item) => item.stepId === cancelledJob.stepId && item.externalId === cancelledJob.jobId);
-        if (providerAction) {
-          providerAction.status = cancellationConfirmed ? 'cancelled' : 'unknown';
-          providerAction.updatedAt = nowIso();
-          providerAction.completedAt = cancellationConfirmed ? nowIso() : '';
-          providerAction.cancellationConfirmed = cancellationConfirmed;
-        }
-      }
       for (const step of operation.steps) if (!['completed', 'skipped'].includes(step.status)) step.status = 'cancelled';
       for (const approval of operation.approvals) if (approval.status === 'pending') approval.status = 'cancelled';
       const cancellationMessage = safeString(reason, 2_000) || 'Operation cancelled.';
-      appendEvent(operation, { type: 'operation_cancelled', actor, message: externalStillRunning && !cancellationConfirmed ? `${cancellationMessage} A registered external job may still be running; its cancellation was not claimed.` : cancellationMessage, data: { externalCancellationConfirmed: cancellationConfirmed }, timestamp: nowIso() });
+      appendEvent(operation, {
+        type: 'operation_cancelled', actor,
+        message: activeJob ? `${cancellationMessage} External cancellation will be attempted without delaying the terminal transition.` : cancellationMessage,
+        data: { externalCancellationConfirmed: false, externalCancellationPending: Boolean(activeJob) }, timestamp: nowIso(),
+      });
       return operation;
     });
+    if (!activeJob || this.runner?.providers?.codex?.mode !== 'direct') return operation;
+    let cancelledJob = null;
+    let cancellationError = '';
+    try { cancelledJob = await this.runner.providers.codex.cancelJob(activeJob); }
+    catch (error) { cancellationError = safeString(error?.message, 2_000) || 'Provider cancellation failed.'; }
+    const cancellationConfirmed = cancelledJob?.status === 'cancelled';
+    operation = await this.store.update(businessKey, operationId, (draft) => {
+      if (draft.status !== 'cancelled') return draft;
+      if (cancelledJob && activeStepId) {
+        const safeJob = sanitizeStructured({ ...activeJob, ...safeObject(cancelledJob) }, 30_000);
+        delete safeJob.prompt;
+        draft.metadata.codexJobs[activeStepId] = safeJob;
+      }
+      const providerAction = draft.providerActions.find((item) => item.stepId === activeStepId
+        && item.idempotencyKey === safeString(activeJob.idempotencyKey, 240));
+      if (providerAction) {
+        providerAction.status = cancellationConfirmed ? 'cancelled' : 'unknown';
+        providerAction.updatedAt = nowIso();
+        providerAction.completedAt = cancellationConfirmed ? nowIso() : '';
+        providerAction.cancellationConfirmed = cancellationConfirmed;
+      }
+      appendEvent(draft, {
+        type: 'provider_cancellation_result', actor, stepId: activeStepId,
+        message: cancellationConfirmed ? 'External provider cancellation was confirmed.' : 'External provider cancellation was not confirmed; the operation remains cancelled.',
+        data: { externalCancellationConfirmed: cancellationConfirmed, error: cancellationError },
+      });
+      return draft;
+    });
+    return operation;
   }
 
   async retryOperation(businessKey, operationId, { actor = 'mark', stepId = '', runCycle = true } = {}) {
@@ -431,7 +530,7 @@ export class OperationService {
       transition(draft, 'queued');
       appendEvent(draft, { type: 'operation_retry_queued', actor, stepId: step.id, message: `Retry queued for ${step.title}.`, data: { attemptCount: step.attemptCount, maxAttempts: step.maxAttempts }, timestamp: nowIso() });
       return draft;
-    });
+    }, { allowTerminalTransition: true });
     if (runCycle && this.runner) return this.runner.tick(businessKey, operation.id);
     return operation;
   }
@@ -478,7 +577,8 @@ export class OperationService {
     return this.store.update(businessKey, operationId, (operation) => {
       const stepId = safeString(raw.stepId, 160);
       const step = (stepId ? operation.steps.find((item) => item.id === stepId) : null)
-        || operation.steps.find((item) => item.type === 'codex' && ['blocked', 'running', 'failed', 'waiting_for_approval'].includes(item.status));
+        || operation.steps.find((item) => item.type === 'codex' && ['blocked', 'running', 'failed', 'waiting_for_approval'].includes(item.status))
+        || operation.steps.find((item) => item.type === 'codex');
       if (!step) throw Object.assign(new Error('No Codex step is waiting for an external job or result.'), { code: 'CODEX_STEP_NOT_FOUND' });
       const timestamp = nowIso();
       const status = ['completed', 'failed', 'running', 'cancelled'].includes(raw.status) ? raw.status
@@ -489,6 +589,7 @@ export class OperationService {
         prompt: '', status, startedAt: timestamp, updatedAt: timestamp,
         completedAt: status === 'completed' ? timestamp : '', artifacts: Array.isArray(raw.artifacts) ? raw.artifacts.slice(0, 50) : [],
         diffSummary: safeString(raw.diffSummary, 20_000), rawMetadata: safeObject(raw.rawMetadata),
+        idempotencyKey: safeString(safeObject(operation.metadata?.codexJobs)[step.id]?.idempotencyKey || step.idempotencyKey, 240),
       };
       const metadata = safeObject(operation.metadata);
       operation.metadata = { ...metadata, codexJobs: { ...safeObject(metadata.codexJobs), [step.id]: job } };
@@ -502,9 +603,27 @@ export class OperationService {
       if (raw.result) operation.artifacts.push(createArtifact({ operationId, stepId: step.id, type: 'codex_result', name: 'Codex completion result', content: raw.result }));
       if (Array.isArray(raw.artifacts)) for (const artifact of raw.artifacts) operation.artifacts.push(createArtifact(artifact, { operationId, stepId: step.id }));
 
-      if (Array.isArray(raw.verificationResults)) {
-        const verificationStep = operation.steps.find((item) => item.type === 'verification');
-        operation.verification = mergeVerificationResults(operation.verification, raw.verificationResults, operationId, verificationStep?.id || '');
+      if (Array.isArray(raw.verificationResults) && raw.verificationResults.length) {
+        operation.artifacts.push(createArtifact({
+          operationId, stepId: step.id, type: 'untrusted_codex_verification_claim',
+          name: 'Codex-provided verification claims (untrusted)', mimeType: 'application/json',
+          content: JSON.stringify(sanitizeStructured(raw.verificationResults, 30_000)),
+          metadata: { trustedForVerification: false },
+        }));
+        appendEvent(operation, {
+          type: 'codex_verification_claims_quarantined', actor: safeString(raw.registeredBy, 100) || 'mark', stepId: step.id,
+          message: 'Codex-provided verification claims were retained as untrusted evidence and did not change verification status.',
+          data: { claimCount: raw.verificationResults.length }, timestamp,
+        });
+      }
+
+      if (['completed', 'failed', 'cancelled'].includes(operation.status)) {
+        appendEvent(operation, {
+          type: 'late_external_codex_result_recorded', actor: safeString(raw.registeredBy, 100) || 'mark', stepId: step.id,
+          message: `External Codex evidence arrived after the operation became ${operation.status}; terminal state was retained.`,
+          data: { jobId: job.jobId, providerStatus: status }, timestamp,
+        });
+        return operation;
       }
 
       if (status === 'completed') {
@@ -519,30 +638,66 @@ export class OperationService {
             blocker.status = 'resolved'; blocker.resolvedAt = timestamp; blocker.resolution = 'New verification evidence registered.';
           }
         }
-        if (['blocked', 'paused', 'failed'].includes(operation.status)) operation.status = 'queued';
+        if (['blocked', 'failed'].includes(operation.status)) operation.status = 'queued';
       } else if (status === 'failed') {
         step.status = 'failed'; step.failedAt = timestamp; step.error = safeString(raw.error, 8_000) || 'External Codex job failed.';
-        operation.status = 'failed'; operation.failedAt = timestamp;
+        if (operation.status !== 'paused') { operation.status = 'failed'; operation.failedAt = timestamp; }
+      } else if (status === 'cancelled') {
+        step.status = 'cancelled'; step.error = 'External Codex job was cancelled.';
+        operation.status = 'cancelled'; operation.cancelledAt = timestamp;
       } else {
         step.status = 'blocked';
-        operation.status = 'blocked';
+        if (operation.status !== 'paused') operation.status = 'blocked';
       }
       appendEvent(operation, { type: 'external_codex_job_registered', actor: safeString(raw.registeredBy, 100) || 'mark', stepId: step.id, message: `External Codex job/result registered with status ${status}.`, data: { jobId: job.jobId, branch: job.branch, hasCommit: Boolean(raw.commit), hasDiff: Boolean(job.diffSummary) }, timestamp });
       return operation;
     });
   }
 
-  async registerVerificationResults(businessKey, operationId, results, { actor = 'mark' } = {}) {
+  async registerManualVerificationEvidence(businessKey, operationId, results, { actor = 'authenticated_operator' } = {}) {
+    const suppliedBy = safeString(actor, 120) || 'authenticated_operator';
     return this.store.update(businessKey, operationId, (operation) => {
+      if (['completed', 'failed', 'cancelled'].includes(operation.status)) {
+        throw Object.assign(new Error(`Manual verification evidence cannot change a terminal operation from ${operation.status}.`), { code: 'INVALID_TRANSITION' });
+      }
       const step = operation.steps.find((item) => item.type === 'verification');
       if (!step) throw Object.assign(new Error('Operation has no verification step.'), { code: 'VERIFICATION_STEP_NOT_FOUND' });
-      operation.verification = mergeVerificationResults(operation.verification, results, operationId, step.id);
+      const timestamp = nowIso();
+      const normalized = [];
+      for (const rawResult of Array.isArray(results) ? results : []) {
+        const raw = safeObject(rawResult);
+        const note = safeString(raw.note || raw.evidenceNote, 4_000);
+        const artifactInput = safeObject(raw.artifact);
+        const meaningfulArtifact = Boolean(safeString(artifactInput.content, 100_000) || safeString(artifactInput.path, 1_000) || safeString(artifactInput.url, 2_000));
+        if (note.length < 10 && !meaningfulArtifact) {
+          throw Object.assign(new Error('Manual verification requires a meaningful evidence note or artifact.'), { code: 'MANUAL_EVIDENCE_REQUIRED' });
+        }
+        const status = raw.status === 'failed' ? 'failed' : 'passed';
+        let artifactId = '';
+        if (meaningfulArtifact) {
+          const artifact = createArtifact({ ...artifactInput, type: 'manual_verification_evidence', name: artifactInput.name || `Manual ${safeString(raw.type, 100) || 'verification'} evidence`, metadata: { ...safeObject(artifactInput.metadata), suppliedBy, suppliedAt: timestamp } }, { operationId, stepId: step.id });
+          operation.artifacts.push(artifact);
+          artifactId = artifact.id;
+        }
+        normalized.push({
+          ...raw,
+          stepId: step.id,
+          status,
+          output: status === 'passed' ? note : '',
+          error: status === 'failed' ? note : '',
+          evidence: sanitizeStructured({
+            source: 'authenticated_operator_manual', suppliedBy, suppliedAt: timestamp, note, artifactId,
+          }, 20_000),
+        });
+      }
+      if (!normalized.length) throw Object.assign(new Error('At least one manual verification result is required.'), { code: 'MANUAL_EVIDENCE_REQUIRED' });
+      operation.verification = mergeVerificationResults(operation.verification, normalized, operationId, step.id);
       if (['blocked', 'failed'].includes(step.status) && step.attemptCount < step.maxAttempts) step.status = 'ready';
       for (const blocker of operation.blockers) if (blocker.stepId === step.id && blocker.status === 'active') {
         blocker.status = 'resolved'; blocker.resolvedAt = nowIso(); blocker.resolution = 'Verification evidence registered.';
       }
-      if (['blocked', 'paused', 'failed'].includes(operation.status)) operation.status = 'queued';
-      appendEvent(operation, { type: 'verification_evidence_registered', actor, stepId: step.id, message: `${Array.isArray(results) ? results.length : 0} verification result(s) registered.`, data: {}, timestamp: nowIso() });
+      if (['blocked', 'failed'].includes(operation.status)) operation.status = 'queued';
+      appendEvent(operation, { type: 'manual_verification_evidence_registered', actor: suppliedBy, stepId: step.id, message: `${normalized.length} authenticated manual verification result(s) registered.`, data: { suppliedBy }, timestamp });
       return operation;
     });
   }

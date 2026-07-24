@@ -197,8 +197,22 @@ export class CodexProvider {
     return normalizeJob({ ...job, status: 'cancelled' }, job);
   }
 
+  supportsPause() {
+    return this.mode === 'direct' && typeof this.directAdapter?.pauseJob === 'function';
+  }
+
+  supportsResume() {
+    return this.mode === 'direct' && typeof this.directAdapter?.resumeJob === 'function';
+  }
+
+  async pauseJob(job) {
+    if (!this.supportsPause()) return normalizeJob(job, job);
+    return normalizeJob(await this.directAdapter.pauseJob(job), job);
+  }
+
   async resumeJob(job) {
-    if (this.mode === 'direct') return normalizeJob(await this.directAdapter.resumeJob(job), job);
+    if (this.supportsResume()) return normalizeJob(await this.directAdapter.resumeJob(job), job);
+    if (this.mode === 'direct') return normalizeJob(job, job);
     return { ...job, status: job?.jobId ? 'running' : 'waiting_external', updatedAt: nowIso() };
   }
 }

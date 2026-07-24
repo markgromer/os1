@@ -14,15 +14,13 @@ export function getMarcusOperationToolDefinitions() {
       type: 'function',
       function: {
         name: 'create_operation',
-        description: 'Create a durable, restart-safe operation for multi-step project work. This does not claim execution has started.',
+        description: 'Create a durable, restart-safe operation from the authenticated chat request. Model suggestions cannot grant runtime authority or select a trusted project. This does not claim execution has started.',
         parameters: {
           type: 'object',
           properties: {
-            originalRequest: { type: 'string' }, objective: { type: 'string' }, title: { type: 'string' },
-            projectId: { type: 'string' }, projectName: { type: 'string' }, projectRegistryId: { type: 'string' },
+            objective: { type: 'string' }, title: { type: 'string' },
             acceptanceCriteria: { type: 'array', items: { type: 'string' } }, autoPlan: { type: 'boolean' },
           },
-          required: ['originalRequest'],
         },
       },
     },
@@ -76,7 +74,17 @@ export function isMarcusOperationTool(name) {
 
 export async function executeMarcusOperationTool({ name, args, engine, businessKey, requestMessage = '' }) {
   const input = safeObject(args);
-  if (name === 'create_operation') return engine.createFromRequest(businessKey, { ...input, requestedBy: 'marcus-chat', source: 'marcus_chat', autoPlan: input.autoPlan !== false });
+  if (name === 'create_operation') {
+    const authenticatedRequest = safeString(requestMessage, 12_000);
+    if (!authenticatedRequest) return { ok: false, error: 'The authenticated user request is required to create an operation from chat.' };
+    return engine.createFromRequest(businessKey, {
+      originalRequest: authenticatedRequest,
+      objective: safeString(input.objective, 8_000),
+      title: safeString(input.title, 300),
+      acceptanceCriteria: Array.isArray(input.acceptanceCriteria) ? input.acceptanceCriteria : [],
+      requestedBy: 'marcus-chat', source: 'marcus_chat', autoPlan: input.autoPlan !== false,
+    });
+  }
   if (name === 'get_operation') return { ok: true, operation: await engine.getOperation(businessKey, input.operationId) };
   if (name === 'list_operations') return { ok: true, operations: await engine.listOperations(businessKey, input) };
   if (name === 'plan_operation') return { ok: true, operation: await engine.planOperation(businessKey, input.operationId, input) };

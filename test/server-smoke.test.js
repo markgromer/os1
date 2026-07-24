@@ -19,6 +19,8 @@ async function freePort() {
 
 async function spawnServer({ startupCheck = false, adminToken = 'test-admin-token', production = false } = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'marcus-server-smoke-'));
+  const workspaceRoot = path.join(root, 'workspaces');
+  await fs.mkdir(workspaceRoot, { recursive: true });
   const port = await freePort();
   const child = spawn(process.execPath, ['server.js'], {
     cwd: repositoryRoot,
@@ -34,6 +36,7 @@ async function spawnServer({ startupCheck = false, adminToken = 'test-admin-toke
       MARCUS_STARTUP_CHECK: startupCheck ? 'true' : 'false',
       NODE_ENV: production ? 'production' : 'test',
       ADMIN_TOKEN: adminToken,
+      MARCUS_ALLOWED_WORKSPACE_ROOTS: workspaceRoot,
       RENDER: '', RENDER_SERVICE_ID: '', RENDER_EXTERNAL_URL: '',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -58,7 +61,7 @@ async function spawnServer({ startupCheck = false, adminToken = 'test-admin-toke
     if (child.exitCode === null) await waitForExit();
     await fs.rm(root, { recursive: true, force: true });
   };
-  return { child, port, root, get output() { return output; }, waitForExit, waitForReady, close };
+  return { child, port, root, workspaceRoot, get output() { return output; }, waitForExit, waitForReady, close };
 }
 
 test('isolated server startup succeeds only for explicit loopback development or configured admin auth', async () => {
@@ -113,12 +116,15 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     assert.equal((await fetch(`${base}/api/operations`, { method: 'POST', headers: liveHeaders, body: JSON.stringify({ originalRequest: 'mutate' }) })).status, 401);
 
     const agencyHeaders = { ...adminHeaders, 'x-business-key': 'agency' };
+    const workspace = path.join(server.workspaceRoot, 'desktop-smoke');
+    await fs.mkdir(workspace, { recursive: true });
+    await fs.writeFile(path.join(workspace, 'package.json'), JSON.stringify({ scripts: { test: 'node --test' } }));
     const registryResponse = await fetch(`${base}/api/project-registry`, { method: 'POST', headers: agencyHeaders, body: JSON.stringify({
-      canonicalName: 'Desktop Smoke', localWorkspace: { path: 'C:\\SmokeProject' }, commands: { test: 'node --test' },
+      canonicalName: 'Desktop Smoke', localWorkspace: { path: workspace }, commands: { test: 'node --test' },
     }) });
     const registry = (await registryResponse.json()).project;
     assert.equal(registryResponse.status, 201);
-    const approvedWorkspace = await fetch(`${base}/api/project-registry/${registry.id}/approve-workspace`, { method: 'POST', headers: agencyHeaders, body: JSON.stringify({ canonicalPath: 'C:\\SmokeProject', desktopAgentId: 'agent-smoke' }) });
+    const approvedWorkspace = await fetch(`${base}/api/project-registry/${registry.id}/approve-workspace`, { method: 'POST', headers: agencyHeaders, body: JSON.stringify({ desktopAgentId: 'agent-smoke' }) });
     assert.equal(approvedWorkspace.status, 200);
     const operationResponse = await fetch(`${base}/api/operations`, { method: 'POST', headers: agencyHeaders, body: JSON.stringify({
       originalRequest: 'Verify Desktop Smoke tests.', projectRegistryId: registry.id, autoPlan: false,
@@ -130,11 +136,15 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     assert.equal(plannedResponse.status, 200);
     const startedResponse = await fetch(`${base}/api/operations/${operation.id}/start`, { method: 'POST', headers: agencyHeaders, body: '{}' });
     assert.equal(startedResponse.status, 200);
-    const actions = await (await fetch(`${base}/api/desktop-context/actions`, { headers: agencyHeaders })).json();
+    const wrongAgentActions = await (await fetch(`${base}/api/desktop-context/actions?agentId=wrong-agent`, { headers: agencyHeaders })).json();
+    assert.equal(wrongAgentActions.actions.some((item) => item.requestedBy === `operation:${operation.id}`), false);
+    const actions = await (await fetch(`${base}/api/desktop-context/actions?agentId=agent-smoke`, { headers: agencyHeaders })).json();
     const action = actions.actions.find((item) => item.requestedBy === `operation:${operation.id}`);
     assert.ok(action?.id);
     const resultResponse = await fetch(`${base}/api/desktop-context/action-results`, { method: 'POST', headers: agencyHeaders, body: JSON.stringify({ agentId: 'agent-smoke', results: [{
-      id: action.id, type: action.type, businessKey: 'agency', projectRegistryId: registry.id, desktopAgentId: 'agent-smoke', ok: true, details: { stdout: 'tests passed' },
+      id: action.id, type: action.type, businessKey: 'agency', operationId: action.payload.operationId, stepId: action.payload.stepId,
+      projectRegistryId: registry.id, desktopAgentId: 'agent-smoke', idempotencyKey: action.payload.idempotencyKey,
+      attemptNumber: action.payload.attemptNumber, ok: true, details: { stdout: 'tests passed' },
     }] }) });
     const resultBody = await resultResponse.json();
     assert.equal(resultBody.received, 1);

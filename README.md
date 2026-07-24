@@ -302,7 +302,7 @@ $env:MARCUS_ALLOWED_WORKSPACE_ROOTS = "C:\Users\markg\OneDrive\Documents\Project
 node desktop-agent.cjs https://your-app.onrender.com yourAdminToken
 ```
 
-`MARCUS_ALLOWED_WORKSPACE_ROOTS` must contain specific project-parent folders, not a drive root, home directory, Documents directory, or OneDrive Documents root. Durable operations also require the registry workspace to be explicitly approved and bound to the same `MARCUS_DESKTOP_AGENT_ID`. The agent resolves real paths before every action and rejects traversal, symlink/junction escapes, unregistered operations, and paths outside the allowed roots.
+`MARCUS_ALLOWED_WORKSPACE_ROOTS` must contain specific project-parent folders, not a drive root, home directory, Documents directory, or OneDrive Documents root. Durable operations require both authenticated operator approval and real-path validation. A same-machine server validates the registered path directly. A hosted server creates a pending `validate-workspace` challenge for the bound `MARCUS_DESKTOP_AGENT_ID`; the registry remains pending until the matching agent attests the business, project, registered path, canonical path, and challenge ID. Legacy workspace paths are never approved merely because they contain an agent ID. The agent resolves real paths before every action and rejects traversal, symlink/junction escapes, unregistered operations, and paths outside the allowed roots.
 
 Supported local desktop actions:
 
@@ -324,7 +324,7 @@ Run build before publishing the Acme changes.
 ```
 
 Marcus should still ask before high-impact actions like deploys, merges, production publishes, billing changes, deletes, or client sends.
-Commit/push/publish actions are also server-guarded: Marcus can prepare them, but the publish tool will not queue unless your message explicitly approves the publish/push/commit action.
+Commit, push, deploy, publish, and merge authorization is action-specific. A local commit approval cannot authorize push or deploy, and a negation such as “do not push” overrides generic language such as “go ahead” or “do it.” `publish-project-changes` queues only the exact commit/push actions authorized by the authenticated message.
 
 ## Marcus Live
 
@@ -359,13 +359,15 @@ data/businesses/<businessKey>/operations.json
 data/businesses/<businessKey>/project-registry.json
 ```
 
-Writes are serialized and atomic, the previous valid file is retained as `.bak`, and corrupted primary files are preserved rather than silently overwritten. At startup, interrupted `running` steps are moved to `paused`/recovery-required state; their completion is never assumed.
+Writes are serialized and atomic, the previous valid file is retained as `.bak`, and corrupted primary files are preserved rather than silently overwritten. At startup, interrupted work is reconciled from durable provider state; completion is never assumed. Paused operations remain paused across restart.
 
 The project registry synchronizes additively from existing project fields such as `repoUrl`, `workspacePath`, owner, Airtable/docs links, and known deployment fields. Existing registry values win; synchronization only creates missing records or fills blank fields.
 
 ### Lifecycle and safety
 
-Operation statuses are `draft`, `planned`, `waiting_for_approval`, `queued`, `running`, `paused`, `blocked`, `verifying`, `completed`, `failed`, and `cancelled`. Executable step types currently include `internal`, `desktop`, `github_read`, `codex`, `verification`, and `approval`.
+Operation statuses are `draft`, `planned`, `waiting_for_approval`, `queued`, `running`, `awaiting_provider`, `paused`, `blocked`, `recovery_required`, `verifying`, `completed`, `failed`, and `cancelled`. Executable step types currently include `internal`, `desktop`, `github_read`, `codex`, `verification`, and `approval`.
+
+`completed`, `failed`, and `cancelled` are monotonic terminal states. Every provider result is checked against the current operation status, active step, attempt number, idempotency key, and provider action before it can change lifecycle state. Late results are retained as bounded, redacted audit evidence; they cannot resume subsequent steps. A late Codex job ID after cancellation triggers a best-effort provider cancellation while the local operation remains cancelled.
 
 Runtime policy classifies every action independently of model-generated `riskLevel` or `approvalRequired` values:
 
@@ -374,11 +376,13 @@ Runtime policy classifies every action independently of model-generated `riskLev
 - high: push, normal PR, merge, production deploy, environment/DNS changes, client sends, migrations, automation, and permissions; always explicitly approved
 - critical: destructive production data/infrastructure, billing/legal/account, and outage-risk credential actions; explicit approval plus strong confirmation
 
-Only allowlisted internal and desktop actions can execute. Project verification uses registered package-script identities (`build`, `test`, `lint`, and `typecheck`) through the existing desktop agent; arbitrary shell commands and request-supplied filesystem paths are not accepted by the runner.
+Only allowlisted internal and desktop actions can execute. Every queued asynchronous desktop operation has a durable correlation containing the operation, step, action, business, project, agent, idempotency key, and attempt. Results must match every binding and are idempotent across restart. Project verification uses registered package-script identities (`build`, `test`, `lint`, and `typecheck`) through the existing desktop agent; arbitrary shell commands and request-supplied filesystem paths are not accepted by the runner.
+
+For chat-created operations, the authenticated user message is the only request used to derive authorization provenance. Model-supplied request text, risk, approval, metadata, and authorization fields are untrusted. Changing the bound project revokes existing provenance instead of expanding it.
 
 ### Codex integration
 
-The provider interface supports `startJob`, `getJobStatus`, `sendFollowup`, `getArtifacts`, `getDiff`, `cancelJob`, and `resumeJob`. This deployment has no supported direct Codex launch API, so it deliberately uses `external_handoff` mode:
+The provider interface supports `startJob`, `getJobStatus`, `sendFollowup`, `getArtifacts`, `getDiff`, `cancelJob`, and optional `pauseJob`/`resumeJob`. Pausing never converts an existing job into a new launch attempt: unsupported providers may continue externally, and explicit resume polls the same durable job. This deployment has no supported direct Codex launch API, so it deliberately uses `external_handoff` mode:
 
 1. M.A.R.C.U.S. resolves the project and persists the operation.
 2. The runner generates and stores a complete Codex handoff artifact.
@@ -386,6 +390,8 @@ The provider interface supports `startJob`, `getJobStatus`, `sendFollowup`, `get
 4. Mark can register a real Codex run ID, branch, commit, diff, artifacts, or completion result.
 5. The same operation resumes into verification.
 6. Required checks must pass or have a recorded approved waiver before completion.
+
+Codex output is implementation evidence, not verification. Any Codex-supplied `verificationResults` are quarantined as untrusted evidence. Automated checks run independently; authenticated manual evidence uses a separate route, requires a meaningful note or artifact, and records supplier/time provenance. Waivers remain explicit approval records.
 
 The Operations UI provides the list/detail timeline, approvals, blockers, artifacts, verification evidence, lifecycle controls, handoff copy, and external Codex registration. Marcus Live only adds a compact operations section for running, blocked, approval-gated, failed-verification, and recently completed operations.
 
@@ -408,12 +414,13 @@ POST   /api/operations/:id/tick
 POST   /api/operations/:id/approvals/:approvalId/approve
 POST   /api/operations/:id/approvals/:approvalId/reject
 POST   /api/operations/:id/external-job
-POST   /api/operations/:id/verification-results
+POST   /api/operations/:id/manual-verification-evidence
 POST   /api/operations/:id/verification/:verificationId/waive
 
 GET    /api/project-registry
 POST   /api/project-registry
 PATCH  /api/project-registry/:id
+POST   /api/project-registry/:id/approve-workspace
 POST   /api/project-registry/resolve
 ```
 
@@ -426,7 +433,9 @@ npm test
 npm run lint
 ```
 
-Tests use temporary data directories and cover normalization, lifecycle transitions, business isolation, resolver scoring, runtime approval enforcement, dependency ordering, interrupted-run recovery, retry limits, verification completion gates, policy override resistance, external Codex handoffs, and reload persistence.
+The test suite uses temporary data directories and covers normalization, terminal-state races, delayed launch/poll/artifact cancellation, pause/restart/resume without relaunch, business isolation, resolver scoring, authenticated authorization provenance, action-scoped publish approval, general desktop reconciliation, workspace approval challenges, independent verification, retry limits, external Codex handoffs, route authentication, and isolated startup.
+
+Dependency audit note: Nodemailer is upgraded to the fixed 9.x line. The remaining audit findings are moderate transitive `uuid`/Google API findings; npm currently requires a major `googleapis` upgrade to clear them, so that upgrade remains a separately testable compatibility change.
 
 ## AI help (optional)
 

@@ -6,11 +6,21 @@ import test from 'node:test';
 
 import { createOperationsEngine } from '../marcus/operations/operation_engine.js';
 import { discoverDurableBackupSources } from '../marcus/operations/operation_backups.js';
-import { messageHasExplicitPublishApproval } from '../marcus/approvals/publish_safeguard.js';
+import { getExplicitActionAuthorizations, messageHasExplicitPublishApproval, scopeAuthorizedPublishActions } from '../marcus/approvals/publish_safeguard.js';
+import { executeMarcusOperationTool } from '../marcus/operations/marcus_operation_tools.js';
 import { validateAllowedWorkspaceRoots, validateTrustedWorkspace } from '../marcus/projects/workspace_trust.js';
+
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
+  return { promise, resolve, reject };
+}
 
 async function withEngine(callback, options = {}) {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'marcus-corrections-'));
+  const workspaceRoot = path.join(dataDir, 'workspaces');
+  await fs.mkdir(workspaceRoot, { recursive: true });
   const create = () => createOperationsEngine({
     dataDir,
     getLegacyProjects: async (businessKey) => options.legacyByBusiness?.[businessKey] || [],
@@ -18,8 +28,9 @@ async function withEngine(callback, options = {}) {
     directCodexAdapter: options.directCodexAdapter || null,
     githubReadAdapter: options.githubReadAdapter || null,
     providerTimeoutMs: options.providerTimeoutMs || 45_000,
+    allowedWorkspaceRoots: options.allowedWorkspaceRoots || [workspaceRoot],
   });
-  try { return await callback(create(), { create, dataDir }); }
+  try { return await callback(create(), { create, dataDir, workspaceRoot }); }
   finally { await fs.rm(dataDir, { recursive: true, force: true }); }
 }
 
@@ -44,10 +55,41 @@ test('creation APIs issue identities and times while rehydration preserves store
   });
 });
 
-test('publish safeguard still requires approval language and publish intent in the same message', () => {
+test('publish safeguard requires positive, action-specific authority and lets negation win', () => {
   assert.equal(messageHasExplicitPublishApproval('Please prepare the publish plan.'), false);
   assert.equal(messageHasExplicitPublishApproval('I approve the unrelated note.'), false);
   assert.equal(messageHasExplicitPublishApproval('I approve the push of these exact changes.'), true);
+  for (const text of [
+    "Don't push it; do it locally.",
+    'Do not deploy. I approve only the local review.',
+    'I approve preparing the publish plan, but do not push.',
+    'Commit locally, but do not push.',
+    'Do not publish yet.',
+  ]) {
+    const actions = getExplicitActionAuthorizations(text);
+    assert.equal(actions.push.authorized, false, text);
+    assert.equal(actions.deploy.authorized, false, text);
+    assert.equal(actions.publish.authorized, false, text);
+  }
+  const scoped = getExplicitActionAuthorizations('Commit locally, but do not push or deploy.');
+  assert.equal(scoped.commit.authorized, true);
+  assert.equal(scoped.push.authorized, false);
+  assert.equal(scoped.deploy.authorized, false);
+  const exact = getExplicitActionAuthorizations('I approve the commit and I approve the push. Do not deploy or merge.');
+  assert.equal(exact.commit.authorized, true);
+  assert.equal(exact.push.authorized, true);
+  assert.equal(exact.deploy.authorized, false);
+  assert.equal(exact.merge.authorized, false);
+  for (const action of ['commit', 'push', 'deploy', 'publish', 'merge']) {
+    const decisions = getExplicitActionAuthorizations(`I authorize the ${action} of these exact changes.`);
+    assert.equal(decisions[action].authorized, true, action);
+    for (const other of ['commit', 'push', 'deploy', 'publish', 'merge'].filter((item) => item !== action)) {
+      assert.equal(decisions[other].authorized, false, `${action} must not authorize ${other}`);
+    }
+    assert.equal(getExplicitActionAuthorizations(`Go ahead and ${action}, but do not ${action}.`)[action].authorized, false, `${action} negation must win`);
+  }
+  assert.deepEqual(scopeAuthorizedPublishActions('Commit locally, but do not push.', { commit: true, push: true }).unauthorizedActions, ['push']);
+  assert.deepEqual(scopeAuthorizedPublishActions('Commit locally, but do not push.', { commit: true, push: false }).authorizedActions, ['commit']);
 });
 
 test('planning remaps caller dependency labels and rejects duplicate IDs and cycles', async () => {
@@ -192,6 +234,203 @@ test('a direct provider launch timeout becomes recovery-required and is not rela
   }, { directCodexAdapter: adapter, providerTimeoutMs: 1_000 });
 });
 
+test('cancellation during delayed Codex launch is terminal and cancels a late job id without revival', async () => {
+  const launch = deferred();
+  const launchEntered = deferred();
+  let starts = 0;
+  let cancellations = 0;
+  const adapter = {
+    async startJob() { starts++; launchEntered.resolve(); return launch.promise; },
+    async getJobStatus(job) { return job; }, async getArtifacts() { return []; }, async getDiff() { return {}; },
+    async cancelJob(job) { cancellations++; return { ...job, status: 'cancelled' }; }, async sendFollowup(job) { return job; },
+  };
+  await withEngine(async (engine) => {
+    await engine.createProjectRegistryRecord('personal', { canonicalName: 'Delayed Launch' });
+    const creating = engine.createFromRequest('personal', {
+      originalRequest: 'Use Codex to implement Delayed Launch.', autoPlan: true, autoStart: true,
+    });
+    await launchEntered.promise;
+    const [snapshot] = await engine.listOperations('personal', { limit: 10 });
+    const cancelled = await engine.cancelOperation('personal', snapshot.id, { actor: 'mark', reason: 'Stop now.' });
+    assert.equal(cancelled.status, 'cancelled');
+    launch.resolve({ jobId: 'late-job', status: 'queued' });
+    const finished = (await creating).operation;
+    assert.equal(finished.status, 'cancelled');
+    assert.equal(finished.steps.find((step) => step.type === 'codex').status, 'cancelled');
+    assert.equal(starts, 1);
+    assert.equal(cancellations, 1);
+    assert.ok(finished.activityLog.some((event) => event.type === 'late_provider_result_recorded'));
+    assert.ok(finished.activityLog.some((event) => event.type === 'late_provider_cancel_attempted' && event.data.confirmed === true));
+    assert.equal(finished.steps.find((step) => step.type === 'verification').attemptCount, 0);
+  }, { directCodexAdapter: adapter });
+});
+
+test('cancellation during polling and artifact collection rejects late completion evidence as state', async () => {
+  for (const stage of ['poll', 'artifacts']) {
+    const gate = deferred();
+    const entered = deferred();
+    let cancellations = 0;
+    const adapter = {
+      async startJob() { return { jobId: `job-${stage}`, status: 'queued' }; },
+      async getJobStatus(job) {
+        if (stage === 'poll') { entered.resolve(); await gate.promise; }
+        return { ...job, status: 'completed' };
+      },
+      async getArtifacts() {
+        if (stage === 'artifacts') { entered.resolve(); await gate.promise; }
+        return [{ type: 'implementation_result', name: 'Late evidence', content: 'late' }];
+      },
+      async getDiff() { return { summary: 'late diff' }; },
+      async cancelJob(job) { cancellations++; return { ...job, status: 'cancelled' }; }, async sendFollowup(job) { return job; },
+    };
+    await withEngine(async (engine) => {
+      await engine.createProjectRegistryRecord('personal', { canonicalName: `Cancel ${stage}` });
+      const operation = (await engine.createFromRequest('personal', {
+        originalRequest: `Use Codex to implement Cancel ${stage}.`, autoPlan: true, autoStart: true,
+      })).operation;
+      const polling = engine.tick('personal', operation.id);
+      await entered.promise;
+      await engine.cancelOperation('personal', operation.id, { reason: `Cancel during ${stage}.` });
+      gate.resolve();
+      const after = await polling;
+      assert.equal(after.status, 'cancelled', stage);
+      assert.equal(after.steps.find((step) => step.type === 'verification').attemptCount, 0, stage);
+      assert.ok(after.artifacts.some((artifact) => artifact.type === 'late_provider_result'), stage);
+      assert.ok(cancellations >= 1, stage);
+    }, { directCodexAdapter: adapter });
+  }
+});
+
+test('pause, restart, and resume poll the existing Codex job without relaunch', async () => {
+  let starts = 0;
+  let pauses = 0;
+  let resumes = 0;
+  let polls = 0;
+  const adapter = {
+    async startJob() { starts++; return { jobId: 'pause-job', status: 'running' }; },
+    async pauseJob(job) { pauses++; return { ...job, status: 'paused' }; },
+    async resumeJob(job) { resumes++; return { ...job, status: 'running' }; },
+    async getJobStatus(job) { polls++; return { ...job, status: 'completed' }; },
+    async getArtifacts() { return [{ type: 'implementation_result', name: 'Done', content: 'done' }]; },
+    async getDiff() { return { summary: 'done' }; }, async cancelJob(job) { return { ...job, status: 'cancelled' }; }, async sendFollowup(job) { return job; },
+  };
+  await withEngine(async (engine, { create }) => {
+    await engine.createProjectRegistryRecord('personal', { canonicalName: 'Pause Project' });
+    let operation = (await engine.createFromRequest('personal', {
+      originalRequest: 'Use Codex to implement Pause Project.', autoPlan: true, autoStart: true,
+    })).operation;
+    operation = await engine.pauseOperation('personal', operation.id, { reason: 'Pause safely.' });
+    const codexStep = operation.steps.find((step) => step.type === 'codex');
+    assert.equal(operation.status, 'paused');
+    assert.equal(codexStep.status, 'running');
+    assert.equal(operation.metadata.codexJobs[codexStep.id].status, 'paused');
+    assert.equal(pauses, 1);
+
+    const reloaded = create();
+    await reloaded.recovery.recoverBusiness('personal');
+    operation = await reloaded.getOperation('personal', operation.id);
+    assert.equal(operation.status, 'paused');
+    operation = await reloaded.resumeOperation('personal', operation.id, { runCycle: true });
+    assert.equal(operation.steps.find((step) => step.type === 'codex').status, 'completed');
+    assert.equal(starts, 1);
+    assert.equal(resumes, 1);
+    assert.equal(polls, 1);
+  }, { directCodexAdapter: adapter });
+});
+
+test('pause without provider pause support retains and polls the same external job', async () => {
+  let starts = 0;
+  let polls = 0;
+  const adapter = {
+    async startJob() { starts++; return { jobId: 'unpausable-job', status: 'running' }; },
+    async getJobStatus(job) { polls++; return { ...job, status: 'completed' }; },
+    async getArtifacts() { return [{ type: 'implementation_result', name: 'Done', content: 'done' }]; },
+    async getDiff() { return { summary: 'done' }; }, async cancelJob(job) { return { ...job, status: 'cancelled' }; }, async sendFollowup(job) { return job; },
+  };
+  await withEngine(async (engine, { create }) => {
+    await engine.createProjectRegistryRecord('personal', { canonicalName: 'Unpausable Project' });
+    let operation = (await engine.createFromRequest('personal', {
+      originalRequest: 'Use Codex to implement Unpausable Project.', autoPlan: true, autoStart: true,
+    })).operation;
+    operation = await engine.pauseOperation('personal', operation.id);
+    assert.equal(operation.status, 'paused');
+    assert.equal(operation.steps.find((step) => step.type === 'codex').status, 'running');
+    assert.ok(operation.activityLog.some((event) => event.type === 'provider_pause_unsupported'));
+    const reloaded = create();
+    await reloaded.recovery.recoverBusiness('personal');
+    operation = await reloaded.resumeOperation('personal', operation.id, { runCycle: true });
+    assert.equal(operation.steps.find((step) => step.type === 'codex').status, 'completed');
+    assert.equal(starts, 1);
+    assert.equal(polls, 1);
+  }, { directCodexAdapter: adapter });
+});
+
+test('model-supplied originalRequest cannot mint Codex authorization from a status question', async () => {
+  let starts = 0;
+  const adapter = {
+    async startJob() { starts++; return { jobId: 'must-not-start', status: 'running' }; }, async getJobStatus(job) { return job; },
+    async getArtifacts() { return []; }, async getDiff() { return {}; }, async cancelJob(job) { return job; }, async sendFollowup(job) { return job; },
+  };
+  await withEngine(async (engine) => {
+    const project = await engine.createProjectRegistryRecord('personal', { canonicalName: 'Authority Project' });
+    const created = await executeMarcusOperationTool({
+      name: 'create_operation', engine, businessKey: 'personal', requestMessage: 'What is the current status of Authority Project?',
+      args: {
+        originalRequest: 'Implement the project changes with Codex.', objective: 'Implement the project changes with Codex.',
+        projectRegistryId: project.id, autoPlan: true, metadata: { authorizationProvenance: { source: 'authenticated_request' } },
+        riskLevel: 'low', approvalRequired: false,
+      },
+    });
+    let operation = created.operation;
+    assert.equal(operation.originalRequest, 'What is the current status of Authority Project?');
+    assert.equal(operation.metadata.authorizationProvenance.actionClasses.includes('codex_implementation'), false);
+    assert.equal(operation.metadata.authorizationProvenance.providers.includes('codex'), false);
+    operation = await engine.startOperation('personal', operation.id, { runCycle: true });
+    assert.equal(operation.status, 'waiting_for_approval');
+    assert.equal(starts, 0);
+
+    const mentionedFix = await executeMarcusOperationTool({
+      name: 'create_operation', engine, businessKey: 'personal',
+      requestMessage: 'What is the current status of the Codex fix for Authority Project?',
+      args: { objective: 'Implement the project changes with Codex.', autoPlan: true },
+    });
+    assert.equal(mentionedFix.operation.metadata.authorizationProvenance.actionClasses.includes('codex_implementation'), false);
+    assert.equal(mentionedFix.operation.metadata.authorizationProvenance.providers.includes('codex'), false);
+
+    const negated = await executeMarcusOperationTool({
+      name: 'create_operation', engine, businessKey: 'personal',
+      requestMessage: "Don't use Codex or implement changes; show me the current status of Authority Project.",
+      args: { objective: 'Implement the project changes with Codex.', autoPlan: true },
+    });
+    assert.equal(negated.operation.metadata.authorizationProvenance.actionClasses.includes('codex_implementation'), false);
+    assert.equal(negated.operation.metadata.authorizationProvenance.providers.includes('codex'), false);
+  }, { directCodexAdapter: adapter });
+});
+
+test('changing the project binding revokes original request authority instead of expanding it', async () => {
+  let starts = 0;
+  const adapter = {
+    async startJob() { starts++; return { jobId: 'not-authorized', status: 'running' }; }, async getJobStatus(job) { return job; },
+    async getArtifacts() { return []; }, async getDiff() { return {}; }, async cancelJob(job) { return job; }, async sendFollowup(job) { return job; },
+  };
+  await withEngine(async (engine) => {
+    await engine.createProjectRegistryRecord('personal', { canonicalName: 'Trusted Alpha' });
+    const beta = await engine.createProjectRegistryRecord('personal', { canonicalName: 'Untrusted Beta' });
+    let operation = (await engine.createFromRequest('personal', {
+      originalRequest: 'Implement the Trusted Alpha changes with Codex.', autoPlan: true,
+    })).operation;
+    operation = await engine.replanOperation('personal', operation.id, {
+      revision: operation.revision,
+      patch: { projectRegistryId: beta.id },
+      plan: {},
+    });
+    assert.equal(operation.metadata.authorizationProvenance.revoked, true);
+    operation = await engine.startOperation('personal', operation.id, { runCycle: true });
+    assert.equal(operation.status, 'waiting_for_approval');
+    assert.equal(starts, 0);
+  }, { directCodexAdapter: adapter });
+});
+
 test('desktop verification correlation survives restart and reconciles only matching results idempotently', async () => {
   const queued = [];
   const queueDesktopAction = async (action) => { queued.push(action); return { id: action.id }; };
@@ -217,7 +456,8 @@ test('desktop verification correlation survives restart and reconciles only matc
     assert.equal(recovered.status, 'recovery_required');
     const result = {
       id: correlation.actionId, type: 'run-project-script', businessKey: 'personal', projectRegistryId: project.id,
-      desktopAgentId: 'agent-1', ok: true, details: { stdout: 'ok', secret: 'must-redact' },
+      operationId: operation.id, stepId: correlation.stepId, idempotencyKey: correlation.idempotencyKey,
+      attemptNumber: correlation.attemptNumber, desktopAgentId: 'agent-1', ok: true, details: { stdout: 'ok', secret: 'must-redact' },
     };
     const reconciled = await reloaded.reconcileDesktopResult(result, { runCycle: true });
     assert.equal(reconciled.operation.status, 'completed');
@@ -228,6 +468,168 @@ test('desktop verification correlation survives restart and reconciles only matc
     await assert.rejects(() => reloaded.reconcileDesktopResult({ ...result, businessKey: 'agency' }), (error) => error.code === 'DESKTOP_ACTION_UNKNOWN');
     await assert.rejects(() => reloaded.reconcileDesktopResult({ ...result, projectRegistryId: 'wrong' }), (error) => error.code === 'DESKTOP_RESULT_MISMATCH');
   }, { queueDesktopAction });
+});
+
+test('ordinary desktop steps reconcile success, failure, duplicates, mismatches, restart delay, and terminal late results', async () => {
+  const queued = [];
+  const queueDesktopAction = async (action) => { queued.push(action); return { id: action.id }; };
+  await withEngine(async (engine, { create, workspaceRoot }) => {
+    const workspace = path.join(workspaceRoot, 'ordinary-desktop');
+    await fs.mkdir(workspace, { recursive: true });
+    const project = await engine.createProjectRegistryRecord('personal', { canonicalName: 'Ordinary Desktop', localWorkspace: { path: workspace } });
+    await engine.approveProjectWorkspace('personal', project.id, { desktopAgentId: 'agent-general' });
+    const createOperation = async (title) => engine.store.create('personal', {
+      title, objective: title, projectRegistryId: project.id, projectName: project.canonicalName, status: 'queued',
+      steps: [{ title: 'Prepare publish', type: 'desktop', provider: 'desktop', toolName: 'prepare-publish', status: 'pending' }],
+    });
+
+    let operation = await createOperation('Desktop success');
+    operation = await engine.tick('personal', operation.id);
+    assert.equal(operation.status, 'blocked');
+    const correlation = operation.desktopCorrelations[0];
+    const queuedAction = queued.find((item) => item.id === correlation.actionId);
+    assert.ok(queuedAction);
+    assert.equal(queuedAction.payload.operationId, operation.id);
+    assert.equal(queuedAction.payload.idempotencyKey, correlation.idempotencyKey);
+
+    const reloaded = create();
+    await reloaded.recovery.recoverBusiness('personal');
+    const result = {
+      id: correlation.actionId, type: correlation.actionType, businessKey: 'personal', operationId: operation.id,
+      stepId: correlation.stepId, projectRegistryId: project.id, desktopAgentId: 'agent-general',
+      idempotencyKey: correlation.idempotencyKey, attemptNumber: correlation.attemptNumber,
+      ok: true, details: { summary: 'prepared', token: 'must-redact' },
+    };
+    let reconciled = await reloaded.reconcileDesktopResult(result, { runCycle: false });
+    assert.equal(reconciled.operation.steps[0].status, 'completed');
+    assert.equal(reconciled.operation.providerActions.find((item) => item.externalId === correlation.actionId).status, 'completed');
+    assert.match(reconciled.operation.steps[0].output, /prepared/);
+    assert.doesNotMatch(reconciled.operation.steps[0].output, /must-redact/);
+    assert.equal((await reloaded.reconcileDesktopResult(result, { runCycle: false })).duplicate, true);
+    await assert.rejects(() => reloaded.reconcileDesktopResult({ ...result, desktopAgentId: 'wrong-agent' }), (error) => error.code === 'DESKTOP_RESULT_MISMATCH');
+    await assert.rejects(() => reloaded.reconcileDesktopResult({ ...result, idempotencyKey: 'wrong-key' }), (error) => error.code === 'DESKTOP_RESULT_MISMATCH');
+    await assert.rejects(() => reloaded.reconcileDesktopResult({ ...result, attemptNumber: 9 }), (error) => error.code === 'DESKTOP_RESULT_MISMATCH');
+
+    let failed = await createOperation('Desktop failure');
+    failed = await engine.tick('personal', failed.id);
+    const failedCorrelation = failed.desktopCorrelations[0];
+    reconciled = await engine.reconcileDesktopResult({
+      id: failedCorrelation.actionId, type: failedCorrelation.actionType, businessKey: 'personal', operationId: failed.id,
+      stepId: failedCorrelation.stepId, projectRegistryId: project.id, desktopAgentId: 'agent-general',
+      idempotencyKey: failedCorrelation.idempotencyKey, attemptNumber: failedCorrelation.attemptNumber,
+      ok: false, error: 'desktop failed', details: {},
+    }, { runCycle: false });
+    assert.equal(reconciled.operation.status, 'failed');
+    assert.equal(reconciled.operation.steps[0].status, 'failed');
+
+    let cancelled = await createOperation('Desktop cancelled');
+    cancelled = await engine.tick('personal', cancelled.id);
+    const lateCorrelation = cancelled.desktopCorrelations[0];
+    cancelled = await engine.cancelOperation('personal', cancelled.id, { reason: 'Cancel before result.' });
+    assert.equal(cancelled.status, 'cancelled');
+    reconciled = await engine.reconcileDesktopResult({
+      id: lateCorrelation.actionId, type: lateCorrelation.actionType, businessKey: 'personal', operationId: cancelled.id,
+      stepId: lateCorrelation.stepId, projectRegistryId: project.id, desktopAgentId: 'agent-general',
+      idempotencyKey: lateCorrelation.idempotencyKey, attemptNumber: lateCorrelation.attemptNumber,
+      ok: true, details: { summary: 'late' },
+    }, { runCycle: true });
+    assert.equal(reconciled.operation.status, 'cancelled');
+    assert.equal(reconciled.operation.steps[0].status, 'cancelled');
+    assert.ok(reconciled.operation.activityLog.some((event) => event.type === 'late_desktop_result_recorded'));
+  }, { queueDesktopAction });
+});
+
+test('workspace approval validates real local paths and remote challenges before trust', async () => {
+  await withEngine(async (engine, { workspaceRoot }) => {
+    const missing = path.join(workspaceRoot, 'missing');
+    const missingProject = await engine.createProjectRegistryRecord('personal', { canonicalName: 'Missing Workspace', localWorkspace: { path: missing } });
+    await assert.rejects(() => engine.approveProjectWorkspace('personal', missingProject.id, { desktopAgentId: 'agent-local' }), (error) => error.code === 'WORKSPACE_NOT_FOUND');
+    assert.equal((await engine.registry.get('personal', missingProject.id)).localWorkspace.trustStatus, 'pending');
+
+    const valid = path.join(workspaceRoot, 'valid');
+    const other = path.join(workspaceRoot, 'other');
+    await fs.mkdir(valid, { recursive: true });
+    await fs.mkdir(other, { recursive: true });
+    const project = await engine.createProjectRegistryRecord('personal', { canonicalName: 'Valid Workspace', localWorkspace: { path: valid } });
+    await assert.rejects(() => engine.approveProjectWorkspace('personal', project.id, { path: other, desktopAgentId: 'agent-local' }), (error) => error.code === 'WORKSPACE_REGISTRY_MISMATCH');
+    const approved = await engine.approveProjectWorkspace('personal', project.id, { desktopAgentId: 'agent-local' });
+    assert.equal(approved.localWorkspace.trustStatus, 'approved');
+    assert.equal(approved.localWorkspace.validationProof.method, 'same_machine');
+    assert.equal(approved.localWorkspace.canonicalPath, await fs.realpath(valid));
+  });
+
+  const queued = [];
+  await withEngine(async (engine, { workspaceRoot }) => {
+    const remotePath = path.join(workspaceRoot, 'remote');
+    await fs.mkdir(remotePath, { recursive: true });
+    const project = await engine.createProjectRegistryRecord('personal', { canonicalName: 'Remote Workspace', localWorkspace: { path: remotePath } });
+    const pending = await engine.approveProjectWorkspace('personal', project.id, { desktopAgentId: 'agent-remote', remoteValidation: true });
+    assert.equal(pending.localWorkspace.trustStatus, 'pending');
+    assert.ok(pending.localWorkspace.operatorApproval.approvedAt);
+    assert.equal(queued.length, 1);
+    const challenge = pending.localWorkspace.approvalChallenge;
+    const remoteCanonicalPath = await fs.realpath(remotePath);
+    await assert.rejects(() => engine.attestProjectWorkspace('personal', project.id, {
+      challengeId: challenge.id, desktopAgentId: 'wrong-agent', registeredPath: remotePath,
+      canonicalPath: remoteCanonicalPath, ok: true,
+    }), (error) => error.code === 'WORKSPACE_ATTESTATION_MISMATCH');
+    const approved = await engine.attestProjectWorkspace('personal', project.id, {
+      challengeId: challenge.id, desktopAgentId: 'agent-remote', registeredPath: remotePath,
+      canonicalPath: remoteCanonicalPath, ok: true,
+    });
+    assert.equal(approved.localWorkspace.trustStatus, 'approved');
+    assert.equal(approved.localWorkspace.validationProof.method, 'desktop_agent_attestation');
+
+    const migration = await engine.registry.synchronizeLegacyProjects('agency', [{
+      id: 'legacy', name: 'Legacy Workspace', workspacePath: remotePath, desktopAgentId: 'legacy-agent',
+    }]);
+    const legacy = await engine.registry.get('agency', migration.created[0]);
+    assert.equal(legacy.localWorkspace.trustStatus, 'pending');
+    assert.equal(legacy.localWorkspace.canonicalPath, '');
+  }, { allowedWorkspaceRoots: [], queueDesktopAction: async (action) => { queued.push(action); return { id: action.id }; } });
+});
+
+test('terminal status cannot be overwritten by ordinary asynchronous persistence', async () => {
+  await withEngine(async (engine) => {
+    const operation = await engine.store.create('personal', {
+      title: 'Terminal', objective: 'Terminal', status: 'failed',
+      steps: [{ title: 'Failed', status: 'failed', attemptCount: 1 }],
+    });
+    await assert.rejects(() => engine.store.update('personal', operation.id, (draft) => {
+      draft.status = 'queued';
+      return draft;
+    }), (error) => error.code === 'TERMINAL_STATE_IMMUTABLE');
+    assert.equal((await engine.getOperation('personal', operation.id)).status, 'failed');
+
+    const cancelled = await engine.store.create('personal', {
+      title: 'Cancelled with late provider state', objective: 'Remain cancelled', status: 'cancelled',
+      steps: [{ id: 'late-step', title: 'Late job', type: 'codex', provider: 'codex', status: 'cancelled', attemptCount: 1, idempotencyKey: 'late-attempt' }],
+      metadata: { codexJobs: { 'late-step': { jobId: 'late-job', status: 'running', idempotencyKey: 'late-attempt' } } },
+    });
+    assert.deepEqual(await engine.recovery.recoverBusiness('personal'), []);
+    assert.equal((await engine.getOperation('personal', cancelled.id)).status, 'cancelled');
+  });
+});
+
+test('manual verification requires meaningful authenticated evidence and records provenance', async () => {
+  await withEngine(async (engine) => {
+    const operation = await engine.store.create('personal', {
+      title: 'Manual evidence', objective: 'Review', status: 'blocked',
+      steps: [{ title: 'Verify', type: 'verification', provider: 'verification', status: 'blocked', attemptCount: 1, maxAttempts: 3 }],
+      verification: [{ type: 'manual_review', status: 'needs_manual_review', required: true }],
+    });
+    await assert.rejects(() => engine.registerManualVerificationEvidence('personal', operation.id, [
+      { type: 'manual_review', status: 'passed', note: 'ok' },
+    ], { actor: 'authenticated_operator' }), (error) => error.code === 'MANUAL_EVIDENCE_REQUIRED');
+    const updated = await engine.registerManualVerificationEvidence('personal', operation.id, [
+      { type: 'manual_review', status: 'passed', note: 'Mark reviewed the implementation evidence in detail.' },
+    ], { actor: 'authenticated_operator' });
+    const result = updated.verification.find((item) => item.type === 'manual_review' && item.status === 'passed');
+    assert.equal(result.status, 'passed');
+    assert.equal(result.evidence.source, 'authenticated_operator_manual');
+    assert.equal(result.evidence.suppliedBy, 'authenticated_operator');
+    assert.ok(result.evidence.suppliedAt);
+  });
 });
 
 test('GitHub read provider allowlists actions and keeps registry access business-scoped', async () => {

@@ -19,15 +19,31 @@ export class DesktopProvider {
       return { status: 'failed', error: 'The project workspace has not been explicitly approved and bound to a desktop agent.' };
     }
     const input = step.input && typeof step.input === 'object' ? step.input : {};
-    const payload = { path: workspacePath, projectRegistryId: registryRecord.id, desktopAgentId: registryRecord.localWorkspace.desktopAgentId };
+    const correlation = (operation.desktopCorrelations || []).find((item) => item.stepId === step.id && item.idempotencyKey === idempotencyKey);
+    if (!correlation?.actionId || correlation.attemptNumber !== step.attemptCount) {
+      return { status: 'failed', error: 'The desktop action has no durable correlation for this exact attempt.' };
+    }
+    const payload = {
+      path: workspacePath,
+      businessKey: operation.businessKey,
+      operationId: operation.id,
+      stepId: step.id,
+      projectRegistryId: registryRecord.id,
+      desktopAgentId: registryRecord.localWorkspace.desktopAgentId,
+      idempotencyKey,
+      attemptNumber: step.attemptCount,
+    };
     if (toolName === 'run-project-script') {
       const scriptName = safeString(input.scriptName, 100);
       if (!['build', 'test', 'lint', 'typecheck', 'dev', 'install'].includes(scriptName)) return { status: 'failed', error: 'Project script is not allowlisted.' };
       payload.scriptName = scriptName;
     }
-    const action = await this.queueAction({ type: toolName, payload, idempotencyKey, requestedBy: `operation:${operation.id}` });
-    if (!action?.id) return { status: 'failed', error: 'Desktop agent did not return an action id.' };
-    return { status: 'waiting', output: 'Desktop action queued; completion has not been assumed.', evidence: { actionId: action.id, provider: 'desktop' } };
+    const action = await this.queueAction({ id: correlation.actionId, type: toolName, payload, idempotencyKey, requestedBy: `operation:${operation.id}` });
+    if (action?.id !== correlation.actionId) return { status: 'failed', error: 'Desktop agent returned an action id that did not match the durable correlation.' };
+    return {
+      status: 'waiting', output: 'Desktop action queued; completion has not been assumed.',
+      evidence: { actionId: action.id, provider: 'desktop', idempotencyKey, attemptNumber: step.attemptCount },
+    };
   }
 }
 

@@ -3,7 +3,7 @@ import express from 'express';
 function errorStatus(error) {
   const code = error?.code || '';
   if (['OPERATION_NOT_FOUND', 'PROJECT_REGISTRY_NOT_FOUND', 'APPROVAL_NOT_FOUND', 'VERIFICATION_NOT_FOUND'].includes(code)) return 404;
-  if (['REVISION_MISMATCH', 'STORE_REVISION_MISMATCH', 'STEP_REVISION_CHANGED', 'EXPECTED_REVISION_REQUIRED', 'EXECUTION_CONTEXT_IMMUTABLE', 'REGISTRY_TARGET_IN_USE'].includes(code)) return 409;
+  if (['REVISION_MISMATCH', 'STORE_REVISION_MISMATCH', 'STEP_REVISION_CHANGED', 'EXPECTED_REVISION_REQUIRED', 'EXECUTION_CONTEXT_IMMUTABLE', 'REGISTRY_TARGET_IN_USE', 'TERMINAL_STATE_IMMUTABLE'].includes(code)) return 409;
   if (['INVALID_TRANSITION', 'OPERATION_NOT_PLANNED', 'PROJECT_UNRESOLVED', 'PROJECT_CONFIRMATION_REQUIRED', 'OPERATION_STILL_BLOCKED', 'RETRY_LIMIT_REACHED', 'STEP_NOT_RETRYABLE', 'STRONG_CONFIRMATION_REQUIRED', 'WAIVER_APPROVAL_REQUIRED', 'DEPENDENCY_CYCLE', 'DUPLICATE_STEP_ID', 'DUPLICATE_VERIFICATION_ID'].includes(code)) return 409;
   if (['CORRUPT_OPERATIONS_STORE', 'CORRUPT_PROJECT_REGISTRY'].includes(code)) return 503;
   return 400;
@@ -101,8 +101,8 @@ export function registerOperationsRoutes(app, { engine, getBusinessKey }) {
     res.json({ ok: true, operation });
   }));
 
-  router.post('/operations/:id/verification-results', asyncRoute(async (req, res) => {
-    const operation = await engine.registerVerificationResults(business(req), req.params.id, req.body?.results || [], { actor: req.body?.actor || 'mark' });
+  router.post('/operations/:id/manual-verification-evidence', asyncRoute(async (req, res) => {
+    const operation = await engine.registerManualVerificationEvidence(business(req), req.params.id, req.body?.results || [], { actor: 'authenticated_operator' });
     res.json({ ok: true, operation });
   }));
 
@@ -127,7 +127,7 @@ export function registerOperationsRoutes(app, { engine, getBusinessKey }) {
   }));
 
   router.post('/project-registry/:id/approve-workspace', asyncRoute(async (req, res) => {
-    const project = await engine.approveProjectWorkspace(business(req), req.params.id, req.body || {});
+    const project = await engine.approveProjectWorkspace(business(req), req.params.id, { ...(req.body || {}), approvedBy: 'authenticated_operator' });
     res.json({ ok: true, project });
   }));
 

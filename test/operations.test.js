@@ -256,6 +256,14 @@ test('external Codex handoff lifecycle is durable and only completes after regis
     });
     assert.equal(operation.status, 'queued');
     operation = await reloaded.tick('personal', operation.id);
+    assert.equal(operation.status, 'blocked');
+    assert.ok(operation.artifacts.some((artifact) => artifact.type === 'untrusted_codex_verification_claim'));
+    assert.equal(operation.verification.some((result) => ['diff_review', 'manual_review'].includes(result.type) && result.status === 'passed'), false);
+    operation = await reloaded.registerManualVerificationEvidence('personal', operation.id, [
+      { type: 'diff_review', status: 'passed', note: 'Mark reviewed the attached Codex diff and confirmed it matches the scoped request.' },
+      { type: 'manual_review', status: 'passed', note: 'Mark manually reviewed the implementation evidence and acceptance criteria.' },
+    ], { actor: 'authenticated_operator' });
+    operation = await reloaded.tick('personal', operation.id);
     assert.equal(operation.status, 'completed');
     assert.ok(operation.completedAt);
     assert.equal(requiredVerificationPassed(operation), true);

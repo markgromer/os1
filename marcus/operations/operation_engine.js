@@ -47,8 +47,14 @@ function acceptanceCriteriaFromRequest(request, objective) {
 function deriveTrustedAuthorization({ request, businessKey, projectRegistryId }) {
   const text = safeString(request, 12_000).toLowerCase();
   const actionClasses = [];
-  if (/\b(codex|implement|build|fix|change|update|redesign|repair|create)\b/.test(text)) actionClasses.push('codex_implementation');
-  if (/\b(test|build|lint|typecheck|verify|verification)\b/.test(text)) actionClasses.push('run-project-script');
+  const readOnlyOpening = /^\s*(?:what|who|when|where|why|how|show|tell|explain|summarize|list|status\b|is\b|are\b|can\s+you\s+(?:tell|show|explain|summarize|list|check\s+(?:the\s+)?status)\b)/.test(text);
+  const explicitMutationDirective = /(?:^|[.!?]\s+)(?:please\s+)?(?:use\s+codex\s+to\s+)?(?:implement|build|fix|change|update|redesign|repair|create|test|lint|typecheck|verify)\b/.test(text)
+    || /\b(?:please|i\s+(?:want|need)\s+you\s+to|go\s+ahead(?:\s+and|\s+to)?|proceed(?:\s+and|\s+to)?|own\s+(?:the\s+)?problem\s+and)\b[^.!?]{0,100}\b(?:use\s+codex|implement|build|fix|change|update|redesign|repair|create|test|lint|typecheck|verify|get\s+codex\s+working)\b/.test(text);
+  const permitsMutation = !readOnlyOpening || explicitMutationDirective;
+  const codexDenied = /\b(?:do\s+not|don't|dont|never|no)\s+(?:\w+\s+){0,4}(?:use\s+codex|codex|implement|build|fix|change|update|redesign|repair|create)\b/.test(text);
+  const scriptDenied = /\b(?:do\s+not|don't|dont|never|no)\s+(?:\w+\s+){0,4}(?:test|build|lint|typecheck|verify|verification)\b/.test(text);
+  if (permitsMutation && !codexDenied && /\b(codex|implement|build|fix|change|update|redesign|repair|create)\b/.test(text)) actionClasses.push('codex_implementation');
+  if (permitsMutation && !scriptDenied && /\b(test|build|lint|typecheck|verify|verification)\b/.test(text)) actionClasses.push('run-project-script');
   if (/\b(read|inspect|compare|github|repository|pull request|workflow)\b/.test(text)) {
     actionClasses.push('repository_metadata', 'default_branch', 'branch_metadata', 'commit_metadata', 'repository_file', 'compare_refs', 'pull_request_metadata', 'workflow_status');
   }
@@ -71,9 +77,10 @@ export function createOperationsEngine({
   githubReadAdapter = null,
   directCodexAdapter = null,
   providerTimeoutMs = 45_000,
+  allowedWorkspaceRoots = [],
 } = {}) {
   const store = new OperationStore({ dataDir });
-  const registry = new ProjectRegistry({ dataDir });
+  const registry = new ProjectRegistry({ dataDir, allowedWorkspaceRoots });
   const resolver = new ProjectResolver({ registry });
   const policy = new ApprovalPolicy();
   const approvalService = new ApprovalService({ store });
@@ -250,7 +257,7 @@ export function createOperationsEngine({
     approveOperationStep: (businessKey, id, approvalId, input) => service.approveOperationStep(businessKey, id, approvalId, input),
     rejectOperationStep: (businessKey, id, approvalId, input) => service.rejectOperationStep(businessKey, id, approvalId, input),
     registerExternalCodexJob: (businessKey, id, input) => service.registerExternalCodexJob(businessKey, id, input),
-    registerVerificationResults: (businessKey, id, results, input) => service.registerVerificationResults(businessKey, id, results, input),
+    registerManualVerificationEvidence: (businessKey, id, results, input) => service.registerManualVerificationEvidence(businessKey, id, results, input),
     waiveVerification: (businessKey, id, verificationId, input) => service.waiveVerification(businessKey, id, verificationId, input),
     tick: (businessKey, id) => runner.tick(businessKey, id),
     reconcileDesktopResult: (input, options) => reconciliation.reconcileDesktopResult(input, options),
@@ -268,8 +275,28 @@ export function createOperationsEngine({
     },
     async approveProjectWorkspace(businessKey, id, input) {
       await assertRegistryTargetMutable(businessKey, id, ['localWorkspace']);
-      return registry.approveWorkspace(businessKey, id, input);
+      const project = await registry.approveWorkspace(businessKey, id, input);
+      const challenge = safeObject(project.localWorkspace?.approvalChallenge);
+      if (project.localWorkspace?.trustStatus === 'pending' && challenge.status === 'pending' && queueDesktopAction) {
+        const action = await queueDesktopAction({
+          id: challenge.id,
+          idempotencyKey: challenge.id,
+          type: 'validate-workspace',
+          payload: {
+            challengeId: challenge.id,
+            path: challenge.registeredPath,
+            registeredPath: challenge.registeredPath,
+            businessKey: project.businessKey,
+            projectRegistryId: project.id,
+            desktopAgentId: challenge.desktopAgentId,
+          },
+          requestedBy: `workspace-approval:${project.id}`,
+        });
+        if (action?.id !== challenge.id) throw Object.assign(new Error('Desktop workspace validation queue returned a mismatched challenge id.'), { code: 'WORKSPACE_CHALLENGE_QUEUE_MISMATCH' });
+      }
+      return project;
     },
+    attestProjectWorkspace: (businessKey, id, input) => registry.attestWorkspace(businessKey, id, input),
   };
 
   return api;

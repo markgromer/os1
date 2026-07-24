@@ -16,7 +16,7 @@ import nodemailer from 'nodemailer';
 
 import { mcpCallTool, mcpListTools } from './mcpClient.js';
 import { registerOperationsRoutes } from './marcus/api/operations_routes.js';
-import { messageHasExplicitPublishApproval } from './marcus/approvals/publish_safeguard.js';
+import { scopeAuthorizedPublishActions } from './marcus/approvals/publish_safeguard.js';
 import { buildMarcusSystemPrompt } from './marcus/core/build_system_prompt.js';
 import { buildActiveBrief as buildOperationalActiveBrief } from './marcus/intelligence/active_brief.js';
 import { createOperationsEngine } from './marcus/operations/operation_engine.js';
@@ -216,6 +216,8 @@ const operationsEngine = createOperationsEngine({
   getDesktopContext: async () => desktopRelayCache?.data || desktopContextCache?.data || {},
   queueDesktopAction: async (action) => queueDesktopAction(action),
   githubReadAdapter: async (input) => githubOperationsReadAdapter(input),
+  allowedWorkspaceRoots: String(process.env.MARCUS_ALLOWED_WORKSPACE_ROOTS || '')
+    .split(path.delimiter).map((value) => value.trim()).filter(Boolean),
 });
 
 async function createOrReuseDurableOperationForMessage(message, { projectId = '', projectName = '', source = 'marcus_chat' } = {}) {
@@ -12738,7 +12740,15 @@ app.post('/api/launch', (req, res) => {
 });
 
 app.get('/api/desktop-context/actions', (req, res) => {
-  const actions = pendingDesktopActions.splice(0);
+  const relayAgentId = typeof req.query?.agentId === 'string' ? req.query.agentId.trim().slice(0, 200) : '';
+  const actions = [];
+  const remaining = [];
+  for (const action of pendingDesktopActions) {
+    const targetAgentId = typeof action?.payload?.desktopAgentId === 'string' ? action.payload.desktopAgentId.trim().slice(0, 200) : '';
+    if (targetAgentId && targetAgentId !== relayAgentId) remaining.push(action);
+    else actions.push(action);
+  }
+  pendingDesktopActions = remaining;
   res.json({ ok: true, actions });
 });
 
@@ -12764,8 +12774,12 @@ app.post('/api/desktop-context/action-results', async (req, res) => {
       id,
       type,
       businessKey,
+      operationId: typeof raw.operationId === 'string' ? raw.operationId.trim().slice(0, 120) : '',
+      stepId: typeof raw.stepId === 'string' ? raw.stepId.trim().slice(0, 120) : '',
       projectRegistryId: typeof raw.projectRegistryId === 'string' ? raw.projectRegistryId.trim().slice(0, 160) : '',
       desktopAgentId: relayAgentId || (typeof raw.desktopAgentId === 'string' ? raw.desktopAgentId.trim().slice(0, 200) : ''),
+      idempotencyKey: typeof raw.idempotencyKey === 'string' ? raw.idempotencyKey.trim().slice(0, 240) : '',
+      attemptNumber: Number.isFinite(Number(raw.attemptNumber)) ? Number(raw.attemptNumber) : null,
       ok: raw.ok === true,
       error: typeof raw.error === 'string' ? raw.error.trim().slice(0, 4_000) : '',
       details,
@@ -12774,9 +12788,19 @@ app.post('/api/desktop-context/action-results', async (req, res) => {
     desktopActionResults.push(result);
     if (businessKey && result.projectRegistryId) {
       try {
-        const reconciled = await operationsEngine.reconcileDesktopResult(result, { runCycle: false });
-        count++;
-        if (reconciled.operation?.status === 'queued') setImmediate(() => operationsEngine.tick(businessKey, reconciled.operation.id).catch(() => {}));
+        if (type === 'validate-workspace') {
+          await operationsEngine.attestProjectWorkspace(businessKey, result.projectRegistryId, {
+            ...result,
+            challengeId: id,
+            registeredPath: typeof details?.registeredPath === 'string' ? details.registeredPath : '',
+            canonicalPath: typeof details?.canonicalPath === 'string' ? details.canonicalPath : '',
+          });
+          count++;
+        } else {
+          const reconciled = await operationsEngine.reconcileDesktopResult(result, { runCycle: false });
+          count++;
+          if (reconciled.operation?.status === 'queued') setImmediate(() => operationsEngine.tick(businessKey, reconciled.operation.id).catch(() => {}));
+        }
       } catch (error) {
         rejected.push({ id, code: error?.code || 'DESKTOP_RESULT_REJECTED' });
       }
@@ -17394,11 +17418,13 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
         };
       }
       if (toolName === 'publish_project_changes') {
-        if (!messageHasExplicitPublishApproval(message)) {
+        const requestedPush = args?.push !== false;
+        const authorization = scopeAuthorizedPublishActions(message, { commit: true, push: requestedPush });
+        if (!authorization.ok) {
           return {
             ok: false,
             approvalRequired: true,
-            error: 'Explicit approval is required before committing, pushing, deploying, or publishing. Ask Mark to approve the exact publish action.',
+            error: `Explicit action-specific approval is required for: ${authorization.unauthorizedActions.join(', ')}. A local commit does not authorize push or deploy, and negated instructions always win.`,
           };
         }
         const { project, workspacePath } = resolveProjectWorkspace();
@@ -17419,7 +17445,9 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
             commitMessage,
             buildScript: typeof args?.buildScript === 'string' ? args.buildScript.trim() : '',
             testScript: typeof args?.testScript === 'string' ? args.testScript.trim() : '',
-            push: args?.push !== false,
+            commit: true,
+            push: requestedPush,
+            authorizedActions: authorization.authorizedActions,
           },
           requestedBy: 'marcus-chat',
         });

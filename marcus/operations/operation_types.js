@@ -305,15 +305,20 @@ export function normalizeDesktopCorrelation(input = {}, defaults = {}) {
     actionId: safeString(raw.actionId, 120),
     operationId: safeString(raw.operationId || defaults.operationId, 120),
     stepId: safeString(raw.stepId || defaults.stepId, 120),
+    businessKey: safeBusinessKey(raw.businessKey || defaults.businessKey, ''),
     verificationId: safeString(raw.verificationId, 120),
     verificationType: safeString(raw.verificationType, 100),
     actionType: safeString(raw.actionType, 100),
     projectRegistryId: safeString(raw.projectRegistryId, 160),
     desktopAgentId: safeString(raw.desktopAgentId, 200),
     idempotencyKey: safeString(raw.idempotencyKey, 240),
+    attemptNumber: safeInteger(raw.attemptNumber, 0, 0, 10),
     queuedAt: safeIso(raw.queuedAt) || nowIso(),
+    updatedAt: safeIso(raw.updatedAt) || safeIso(raw.queuedAt) || nowIso(),
     completedAt: safeIso(raw.completedAt),
     status: safeEnum(raw.status, ['queued', 'running', 'completed', 'failed', 'recovery_required'], 'queued'),
+    output: redactSecrets(raw.output ?? '', MAX_STORED_OUTPUT_CHARS),
+    error: redactSecrets(raw.error ?? '', 8_000),
   };
 }
 

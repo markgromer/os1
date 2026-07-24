@@ -158,6 +158,12 @@ export class OperationStore {
         throw error;
       }
       const candidate = typeof updater === 'function' ? updater(structuredClone(current)) : { ...current, ...updater };
+      if (['completed', 'failed', 'cancelled'].includes(current.status)
+        && candidate?.status !== current.status && options.allowTerminalTransition !== true) {
+        const error = new Error(`Terminal operation status is monotonic: ${current.status} cannot be overwritten by an asynchronous or ordinary update.`);
+        error.code = 'TERMINAL_STATE_IMMUTABLE';
+        throw error;
+      }
       const timestamp = nowIso();
       const normalized = normalizeOperation({
         ...candidate,

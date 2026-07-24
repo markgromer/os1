@@ -295,6 +295,13 @@ async function runNpmScript(cwd, scriptName) {
 }
 
 async function publishProjectChanges(payload) {
+  const authorizedActions = new Set(Array.isArray(payload?.authorizedActions) ? payload.authorizedActions.map((item) => String(item || '').trim()) : []);
+  if (payload?.commit !== true || !authorizedActions.has('commit')) {
+    return { ok: false, error: 'The queued payload lacks exact commit authorization' };
+  }
+  if (payload?.push !== false && !authorizedActions.has('push')) {
+    return { ok: false, error: 'The queued payload requests push without exact push authorization' };
+  }
   const valid = validateWorkspaceFolder(payload?.path, payload || {});
   if (!valid.ok) return valid;
   const cwd = valid.path;
@@ -627,7 +634,7 @@ function httpGet(urlPath) {
     const mod = isHttps ? https : http;
     const headers = {};
     if (ADMIN_TOKEN) headers['Authorization'] = `Bearer ${ADMIN_TOKEN}`;
-    const req = mod.get({ hostname: url.hostname, port: url.port || (isHttps ? 443 : 80), path: url.pathname, headers, timeout: 5000 }, (res) => {
+    const req = mod.get({ hostname: url.hostname, port: url.port || (isHttps ? 443 : 80), path: `${url.pathname}${url.search}`, headers, timeout: 5000 }, (res) => {
       let buf = '';
       res.on('data', d => buf += d);
       res.on('end', () => { try { resolve(JSON.parse(buf)); } catch { resolve(null); } });
@@ -670,7 +677,7 @@ function openVsCode(projectPath) {
 
 async function checkDesktopActions() {
   try {
-    const result = await httpGet('/api/desktop-context/actions');
+    const result = await httpGet(`/api/desktop-context/actions?agentId=${encodeURIComponent(DESKTOP_AGENT_ID)}`);
     const actions = Array.isArray(result?.actions) ? result.actions : [];
     if (!actions.length) return;
 
@@ -681,13 +688,19 @@ async function checkDesktopActions() {
       if (!id || !type) continue;
 
       let outcome = { ok: false, error: `Unsupported desktop action: ${type}` };
-      const pathAction = ['open-vscode', 'prepare-publish', 'publish-project-changes', 'run-project-script'].includes(type);
+      const pathAction = ['open-vscode', 'prepare-publish', 'publish-project-changes', 'run-project-script', 'validate-workspace'].includes(type);
       if (pathAction) {
         const operationBound = String(action?.requestedBy || '').startsWith('operation:');
-        const valid = validateWorkspaceFolder(action?.payload?.path, { ...action?.payload, requireProjectBinding: operationBound });
+        const valid = validateWorkspaceFolder(action?.payload?.path, { ...action?.payload, requireProjectBinding: operationBound || type === 'validate-workspace' });
         if (!valid.ok) {
           outcome = valid;
-          responses.push({ id, type, businessKey: String(action?.payload?.businessKey || ''), projectRegistryId: String(action?.payload?.projectRegistryId || ''), desktopAgentId: DESKTOP_AGENT_ID, ...outcome });
+          if (type === 'validate-workspace') outcome.details = { registeredPath: String(action?.payload?.registeredPath || ''), canonicalPath: '' };
+          responses.push({
+            id, type, businessKey: String(action?.payload?.businessKey || ''), operationId: String(action?.payload?.operationId || ''),
+            stepId: String(action?.payload?.stepId || ''), projectRegistryId: String(action?.payload?.projectRegistryId || ''),
+            desktopAgentId: DESKTOP_AGENT_ID, idempotencyKey: String(action?.payload?.idempotencyKey || ''),
+            attemptNumber: Number(action?.payload?.attemptNumber ?? 0), ...outcome,
+          });
           continue;
         }
         action.payload.path = valid.path;
@@ -700,13 +713,30 @@ async function checkDesktopActions() {
         outcome = await publishProjectChanges(action?.payload || {});
       } else if (type === 'run-project-script') {
         outcome = await runProjectScript(action?.payload || {});
+      } else if (type === 'validate-workspace') {
+        outcome = {
+          ok: true,
+          details: {
+            challengeId: String(action?.payload?.challengeId || id),
+            canonicalPath: action.payload.path,
+            registeredPath: String(action?.payload?.registeredPath || ''),
+            businessKey: String(action?.payload?.businessKey || ''),
+            projectRegistryId: String(action?.payload?.projectRegistryId || ''),
+            desktopAgentId: DESKTOP_AGENT_ID,
+          },
+        };
       } else if (type === 'clone-github-project') {
         outcome = await cloneGithubProject(action?.payload || {});
       } else if (type === 'set-performance-profile') {
         outcome = await setPerformanceProfile(action?.payload || {});
       }
 
-      responses.push({ id, type, businessKey: String(action?.payload?.businessKey || ''), projectRegistryId: String(action?.payload?.projectRegistryId || ''), desktopAgentId: DESKTOP_AGENT_ID, ...outcome });
+      responses.push({
+        id, type, businessKey: String(action?.payload?.businessKey || ''), operationId: String(action?.payload?.operationId || ''),
+        stepId: String(action?.payload?.stepId || ''), projectRegistryId: String(action?.payload?.projectRegistryId || ''),
+        desktopAgentId: DESKTOP_AGENT_ID, idempotencyKey: String(action?.payload?.idempotencyKey || ''),
+        attemptNumber: Number(action?.payload?.attemptNumber ?? 0), ...outcome,
+      });
       const ts = new Date().toLocaleTimeString();
       console.log(`[${ts}] Desktop action ${type}: ${outcome.ok ? 'ok' : outcome.error}`);
     }

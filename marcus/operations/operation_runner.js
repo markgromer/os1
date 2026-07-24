@@ -1,6 +1,7 @@
 import {
   createArtifact,
   makeOperationId,
+  normalizeDesktopCorrelation,
   normalizeProviderAction,
   normalizeVerificationResult,
   nowIso,
@@ -8,6 +9,7 @@ import {
   safeObject,
   safeString,
   sanitizeStructured,
+  TERMINAL_OPERATION_STATUSES,
 } from './operation_types.js';
 import { normalizeProviderStatus } from '../providers/codex_provider.js';
 import { appendEvent, transition } from './operation_service.js';
@@ -157,13 +159,25 @@ export class OperationRunner {
         if (!step || !['pending', 'ready'].includes(step.status)) throw Object.assign(new Error('Step changed before execution.'), { code: 'STEP_REVISION_CHANGED' });
         if (step.type === 'verification' && draft.status === 'running') transition(draft, 'verifying');
         step.status = 'running'; step.attemptCount += 1; step.startedAt = nowIso(); step.error = '';
-        step.idempotencyKey = step.idempotencyKey || `${operationId}:${step.id}:${step.attemptCount}`;
+        step.idempotencyKey = `${operationId}:${step.id}:${step.attemptCount}`;
         step.riskLevel = classification.riskLevel; draft.currentStepId = step.id;
         if (!draft.providerActions.some((action) => action.idempotencyKey === step.idempotencyKey)) {
           draft.providerActions.push(normalizeProviderAction({
             id: makeOperationId('action'), operationId, stepId: step.id, provider: step.provider, action: step.toolName || step.type,
             idempotencyKey: step.idempotencyKey, status: 'started', issuedAt: nowIso(), updatedAt: nowIso(), metadata: { attempt: step.attemptCount },
           }));
+        }
+        if (step.type === 'desktop' && !draft.desktopCorrelations.some((item) => item.idempotencyKey === step.idempotencyKey)) {
+          const actionId = makeOperationId('desktop');
+          draft.desktopCorrelations.push(normalizeDesktopCorrelation({
+            actionId, operationId, stepId: step.id, businessKey: draft.businessKey,
+            actionType: step.toolName || step.type, projectRegistryId: draft.projectRegistryId,
+            desktopAgentId: registryRecord?.localWorkspace?.desktopAgentId,
+            idempotencyKey: step.idempotencyKey, attemptNumber: step.attemptCount,
+            queuedAt: nowIso(), updatedAt: nowIso(), status: 'queued',
+          }));
+          const providerAction = draft.providerActions.find((action) => action.idempotencyKey === step.idempotencyKey);
+          if (providerAction) providerAction.externalId = actionId;
         }
         appendEvent(draft, { type: 'provider_action_issued', actor: 'runner', stepId: step.id, message: `Issued ${step.title} through ${step.provider}.`, data: { attempt: step.attemptCount, idempotencyKey: step.idempotencyKey } });
         return draft;
@@ -227,15 +241,79 @@ export class OperationRunner {
   async applyProviderResult(businessKey, operationId, runningStep, rawResult = {}) {
     const result = safeObject(rawResult);
     const status = normalizeProviderStatus(result.status);
-    return this.store.update(businessKey, operationId, (draft) => {
+    let deferredControl = null;
+    let updated = await this.store.update(businessKey, operationId, (draft) => {
       const step = draft.steps.find((item) => item.id === runningStep.id);
-      if (!step) return draft;
       const timestamp = nowIso();
-      const action = draft.providerActions.find((item) => item.idempotencyKey === step.idempotencyKey);
+      const expectedKey = safeString(runningStep.idempotencyKey, 240);
+      const expectedAttempt = Number(runningStep.attemptCount) || 0;
+      const action = draft.providerActions.find((item) => item.stepId === runningStep.id && item.idempotencyKey === expectedKey);
+      const desktopCorrelation = draft.desktopCorrelations.find((item) => item.stepId === runningStep.id && item.idempotencyKey === expectedKey);
+      const resultKey = safeString(result.job?.idempotencyKey, 240);
+      const actionAttempt = Number(safeObject(action?.metadata).attempt) || 0;
+      const eligibleStatus = ['running', 'awaiting_provider', 'verifying', 'queued'].includes(draft.status);
+      const eligible = Boolean(step && eligibleStatus && step.status === 'running'
+        && draft.currentStepId === step.id && safeString(step.idempotencyKey, 240) === expectedKey
+        && step.attemptCount === expectedAttempt && action && actionAttempt === expectedAttempt
+        && (!resultKey || resultKey === expectedKey));
+
+      if (!eligible) {
+        const safeJob = result.job ? sanitizeStructured(result.job, 30_000) : {};
+        if (safeJob && typeof safeJob === 'object') delete safeJob.prompt;
+        const evidence = sanitizeStructured({
+          status, job: safeJob, error: result.error || '', output: result.output ?? '',
+          receivedAt: timestamp, expectedIdempotencyKey: expectedKey, expectedAttempt,
+          observedOperationStatus: draft.status, observedStepStatus: step?.status || 'missing',
+        }, 30_000);
+        if (action) {
+          action.updatedAt = timestamp;
+          if (result.job?.jobId) action.externalId = safeString(result.job.jobId, 300);
+          action.metadata = sanitizeStructured({ ...safeObject(action.metadata), lateProviderResult: evidence }, 15_000);
+          if (draft.status === 'paused') action.status = status;
+        }
+        if (step && result.job && (draft.status === 'paused' || TERMINAL_OPERATION_STATUSES.includes(draft.status))) {
+          draft.metadata = {
+            ...safeObject(draft.metadata),
+            codexJobs: { ...safeObject(draft.metadata?.codexJobs), [step.id]: safeJob },
+          };
+        }
+        const signature = `${step?.id || runningStep.id}:${expectedKey}:${expectedAttempt}:${status}:${safeString(result.job?.jobId, 300)}`;
+        if (!draft.activityLog.some((event) => event.type === 'late_provider_result_recorded' && event.data?.signature === signature)) {
+          draft.artifacts.push(createArtifact({
+            operationId, stepId: step?.id || runningStep.id, type: 'late_provider_result',
+            name: 'Late provider result (audit only)', mimeType: 'application/json', content: JSON.stringify(evidence),
+            metadata: { terminalStatus: TERMINAL_OPERATION_STATUSES.includes(draft.status) ? draft.status : '', signature },
+          }));
+          appendEvent(draft, {
+            type: 'late_provider_result_recorded', actor: 'runner', stepId: step?.id || runningStep.id,
+            message: `A provider result arrived after its attempt was no longer eligible; operation status ${draft.status} was retained.`,
+            data: { signature, providerStatus: status, operationStatus: draft.status, idempotencyKey: expectedKey, attempt: expectedAttempt },
+          });
+        }
+        if (result.job?.jobId && step?.type === 'codex' && (draft.status === 'cancelled' || draft.status === 'paused')) {
+          deferredControl = { operationStatus: draft.status, stepId: step.id, actionId: action?.id || '', job: safeJob };
+        }
+        return draft;
+      }
+
       if (action) {
         action.status = status; action.updatedAt = timestamp;
         if (result.job?.jobId) action.externalId = safeString(result.job.jobId, 300);
         if (['completed', 'failed', 'cancelled'].includes(status)) action.completedAt = timestamp;
+      }
+      if (desktopCorrelation) {
+        desktopCorrelation.updatedAt = timestamp;
+        if (status === 'completed') {
+          desktopCorrelation.status = 'completed'; desktopCorrelation.completedAt = timestamp;
+        } else if (['failed', 'cancelled'].includes(status)) {
+          desktopCorrelation.status = 'failed'; desktopCorrelation.completedAt = timestamp;
+          desktopCorrelation.error = safeString(result.error, 8_000) || `Desktop provider returned ${status}.`;
+        } else if (status === 'unknown') {
+          desktopCorrelation.status = 'recovery_required';
+          desktopCorrelation.error = safeString(result.error, 8_000) || 'Desktop provider outcome is unknown.';
+        } else {
+          desktopCorrelation.status = 'running';
+        }
       }
       if (result.job) {
         const safeJob = sanitizeStructured(result.job, 30_000);
@@ -297,6 +375,50 @@ export class OperationRunner {
       appendEvent(draft, { type: step.type === 'verification' ? 'verification_failed' : 'step_failed', actor: 'runner', stepId: step.id, message: step.error });
       return draft;
     });
+
+    if (!deferredControl || !this.providers.codex || this.providers.codex.mode !== 'direct') return updated;
+    let controlledJob = null;
+    let controlError = '';
+    let controlType = '';
+    try {
+      if (deferredControl.operationStatus === 'cancelled') {
+        controlType = 'cancel';
+        controlledJob = await promiseWithTimeout(this.providers.codex.cancelJob(deferredControl.job), this.providerTimeoutMs);
+      } else if (deferredControl.operationStatus === 'paused' && this.providers.codex.supportsPause()) {
+        controlType = 'pause';
+        controlledJob = await promiseWithTimeout(this.providers.codex.pauseJob(deferredControl.job), this.providerTimeoutMs);
+      }
+    } catch (error) {
+      controlError = safeString(error?.message, 4_000) || `Provider ${controlType || 'control'} failed.`;
+    }
+    if (!controlType) return updated;
+    updated = await this.store.update(businessKey, operationId, (draft) => {
+      if (draft.status !== deferredControl.operationStatus) return draft;
+      const timestamp = nowIso();
+      const action = draft.providerActions.find((item) => item.id === deferredControl.actionId);
+      const normalizedStatus = normalizeProviderStatus(controlledJob?.status);
+      const confirmed = controlType === 'cancel' ? normalizedStatus === 'cancelled' : normalizedStatus === 'paused';
+      if (action) {
+        action.updatedAt = timestamp;
+        action.cancellationConfirmed = controlType === 'cancel' && confirmed;
+        if (confirmed) action.status = normalizedStatus;
+        action.metadata = sanitizeStructured({
+          ...safeObject(action.metadata), lateProviderControl: { type: controlType, confirmed, error: controlError, attemptedAt: timestamp },
+        }, 15_000);
+      }
+      if (controlledJob) {
+        const safeJob = sanitizeStructured(controlledJob, 30_000);
+        delete safeJob.prompt;
+        draft.metadata.codexJobs = { ...safeObject(draft.metadata?.codexJobs), [deferredControl.stepId]: safeJob };
+      }
+      appendEvent(draft, {
+        type: `late_provider_${controlType}_attempted`, actor: 'runner', stepId: deferredControl.stepId,
+        message: confirmed ? `Late external provider ${controlType} was confirmed.` : `Late external provider ${controlType} was not confirmed.`,
+        data: { confirmed, error: controlError },
+      });
+      return draft;
+    });
+    return updated;
   }
 
   async requestApproval(businessKey, operationId, next, classification) {

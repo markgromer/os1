@@ -1,4 +1,4 @@
-import { createVerificationResult, makeOperationId, normalizeDesktopCorrelation, normalizeVerificationResult, nowIso, safeObject, safeString } from './operation_types.js';
+import { createVerificationResult, makeOperationId, normalizeDesktopCorrelation, normalizeProviderAction, normalizeVerificationResult, nowIso, safeObject, safeString } from './operation_types.js';
 
 export const VERIFICATION_TYPES = Object.freeze([
   'build', 'test', 'lint', 'typecheck', 'repository_cleanliness', 'diff_review', 'manual_review', 'url_health', 'artifact_present',
@@ -86,14 +86,23 @@ export class OperationVerification {
           const correlationKey = `${idempotencyKey}:${requirement.type}`;
           verification.evidence = { actionId, provider: 'desktop', idempotencyKey: correlationKey };
           const correlation = normalizeDesktopCorrelation({
-            actionId, operationId: operation.id, stepId: step.id, verificationId: verification.id,
+            actionId, operationId: operation.id, stepId: step.id, businessKey: operation.businessKey, verificationId: verification.id,
             verificationType: requirement.type, actionType: 'run-project-script', projectRegistryId: operation.projectRegistryId,
-            desktopAgentId: registryRecord.localWorkspace.desktopAgentId, idempotencyKey: correlationKey, queuedAt: nowIso(), status: 'queued',
+            desktopAgentId: registryRecord.localWorkspace.desktopAgentId, idempotencyKey: correlationKey,
+            attemptNumber: step.attemptCount, queuedAt: nowIso(), updatedAt: nowIso(), status: 'queued',
           });
           await this.store.update(operation.businessKey, operation.id, (draft) => {
             const existing = draft.desktopCorrelations.find((item) => item.idempotencyKey === correlationKey);
             if (!existing) draft.desktopCorrelations.push(correlation);
             if (!draft.verification.some((item) => item.id === verification.id)) draft.verification.push(verification);
+            if (!draft.providerActions.some((item) => item.idempotencyKey === correlationKey)) {
+              draft.providerActions.push(normalizeProviderAction({
+                id: makeOperationId('action'), operationId: operation.id, stepId: step.id,
+                provider: 'desktop', action: 'run-project-script', idempotencyKey: correlationKey,
+                externalId: actionId, status: 'queued', issuedAt: nowIso(), updatedAt: nowIso(),
+                metadata: { attempt: step.attemptCount, verificationId: verification.id },
+              }));
+            }
             return draft;
           });
           try {
@@ -104,6 +113,7 @@ export class OperationVerification {
               payload: {
                 path: workspacePath, scriptName: requirement.type, projectRegistryId: operation.projectRegistryId,
                 desktopAgentId: registryRecord.localWorkspace.desktopAgentId, businessKey: operation.businessKey,
+                operationId: operation.id, stepId: step.id, idempotencyKey: correlationKey, attemptNumber: step.attemptCount,
               },
               requestedBy: `operation:${operation.id}`,
             });
@@ -115,7 +125,13 @@ export class OperationVerification {
             verification.error = safeString(error?.message, 2_000) || 'Desktop verification queue failed.';
             await this.store.update(operation.businessKey, operation.id, (draft) => {
               const savedCorrelation = draft.desktopCorrelations.find((item) => item.actionId === actionId);
-              if (savedCorrelation) savedCorrelation.status = 'recovery_required';
+              if (savedCorrelation) {
+                savedCorrelation.status = 'recovery_required'; savedCorrelation.updatedAt = nowIso(); savedCorrelation.error = verification.error;
+              }
+              const savedAction = draft.providerActions.find((item) => item.externalId === actionId);
+              if (savedAction) {
+                savedAction.status = 'failed'; savedAction.updatedAt = nowIso(); savedAction.completedAt = savedAction.updatedAt;
+              }
               const savedVerification = draft.verification.find((item) => item.id === verification.id);
               if (savedVerification) Object.assign(savedVerification, verification);
               return draft;
