@@ -1,7 +1,49 @@
-import { makeOperationId, nowIso, requiredVerificationPassed, safeObject, TERMINAL_OPERATION_STATUSES } from './operation_types.js';
+import { makeOperationId, nowIso, requiredVerificationPassed, safeObject, safeString, TERMINAL_OPERATION_STATUSES } from './operation_types.js';
+
+const RECOVERABLE_DESKTOP_ACTIONS = new Set(['run-project-script', 'prepare-publish', 'open-vscode']);
 
 export class OperationRecovery {
-  constructor({ store }) { this.store = store; }
+  constructor({ store, registry = null, queueDesktopAction = null }) {
+    this.store = store;
+    this.registry = registry;
+    this.queueDesktopAction = typeof queueDesktopAction === 'function' ? queueDesktopAction : null;
+  }
+
+  async restoreDesktopDispatch(operation, correlation) {
+    if (!this.registry || !this.queueDesktopAction || operation.status === 'paused') return false;
+    if (!RECOVERABLE_DESKTOP_ACTIONS.has(correlation.actionType)) return false;
+    const project = await this.registry.get(operation.businessKey, correlation.projectRegistryId);
+    const step = operation.steps.find((item) => item.id === correlation.stepId);
+    if (!project || !step || project.localWorkspace?.trustStatus !== 'approved'
+      || project.localWorkspace?.desktopAgentId !== correlation.desktopAgentId) return false;
+    const workspacePath = safeString(project.localWorkspace?.path, 2_000);
+    if (!workspacePath) return false;
+    const verification = correlation.verificationId
+      ? operation.verification.find((item) => item.id === correlation.verificationId)
+      : null;
+    const payload = {
+      path: workspacePath,
+      businessKey: operation.businessKey,
+      operationId: operation.id,
+      stepId: step.id,
+      projectRegistryId: project.id,
+      desktopAgentId: correlation.desktopAgentId,
+      idempotencyKey: correlation.idempotencyKey,
+      attemptNumber: correlation.attemptNumber,
+    };
+    if (correlation.actionType === 'run-project-script') {
+      payload.scriptName = safeString(verification?.type || step.input?.scriptName, 100);
+      if (!['build', 'test', 'lint', 'typecheck', 'dev', 'install'].includes(payload.scriptName)) return false;
+    }
+    const action = await this.queueDesktopAction({
+      id: correlation.actionId,
+      idempotencyKey: correlation.idempotencyKey,
+      type: correlation.actionType,
+      payload,
+      requestedBy: `operation:${operation.id}`,
+    });
+    return action?.id === correlation.actionId;
+  }
 
   async recoverBusiness(businessKey) {
     const operations = await this.store.listAll(businessKey, { nonterminal: true });
@@ -19,6 +61,15 @@ export class OperationRecovery {
       const inconsistentJobStatus = activeJobs.length && !['awaiting_provider', 'running', 'queued', 'paused'].includes(operation.status);
       if (!activeJobs.length && !queuedDesktop.length && !unknownActions.length && !runningWithoutJob.length && !expiredApprovals.length && !verificationIncomplete && !inconsistentJobStatus) continue;
 
+      const restoredDesktopIds = new Set();
+      for (const correlation of queuedDesktop) {
+        try {
+          if (await this.restoreDesktopDispatch(operation, correlation)) restoredDesktopIds.add(correlation.actionId);
+        } catch {
+          // The operation is moved to recovery-required below; no action is assumed queued.
+        }
+      }
+
       await this.store.update(businessKey, operation.id, (draft) => {
         const timestamp = nowIso();
         let state = '';
@@ -33,6 +84,13 @@ export class OperationRecovery {
         for (const correlation of draft.desktopCorrelations) {
           if (!['queued', 'running'].includes(correlation.status)) continue;
           if (draft.status === 'paused') continue;
+          if (restoredDesktopIds.has(correlation.actionId)) {
+            correlation.updatedAt = timestamp;
+            state = state || 'awaiting_provider';
+            const verification = draft.verification.find((item) => item.id === correlation.verificationId);
+            if (verification) verification.error = '';
+            continue;
+          }
           correlation.status = 'recovery_required';
           correlation.updatedAt = timestamp;
           state = 'recovery_required';
@@ -45,6 +103,11 @@ export class OperationRecovery {
             step.status = 'running';
             if (draft.status !== 'paused') state = state || 'awaiting_provider';
           } else if (step.status === 'running') {
+            const restoredDesktop = draft.desktopCorrelations.some((item) => item.stepId === step.id && restoredDesktopIds.has(item.actionId));
+            if (restoredDesktop) {
+              state = state || 'awaiting_provider';
+              continue;
+            }
             step.status = 'blocked'; step.error = 'Execution was interrupted and no provider state proves its outcome.'; state = 'recovery_required';
           }
         }
@@ -58,7 +121,7 @@ export class OperationRecovery {
         if (state === 'blocked' && !draft.blockers.some((item) => item.type === 'verification_required' && item.status === 'active')) {
           draft.blockers.push({ id: makeOperationId('blocker'), operationId: draft.id, type: 'verification_required', status: 'active', message: 'Implementation is complete but required verification is incomplete.', createdAt: timestamp });
         }
-        draft.activityLog.push({ id: makeOperationId('evt'), operationId: draft.id, stepId: draft.currentStepId, type: 'operation_recovered', actor: 'system', message: `Startup reconciliation classified this operation as ${draft.status}; no completion was assumed.`, data: { activeJobs: activeJobs.length, queuedDesktop: queuedDesktop.length, unknownActions: unknownActions.length, expiredApprovals: expiredApprovals.length }, timestamp });
+        draft.activityLog.push({ id: makeOperationId('evt'), operationId: draft.id, stepId: draft.currentStepId, type: 'operation_recovered', actor: 'system', message: `Startup reconciliation classified this operation as ${draft.status}; no completion was assumed.`, data: { activeJobs: activeJobs.length, queuedDesktop: queuedDesktop.length, restoredDesktop: restoredDesktopIds.size, unknownActions: unknownActions.length, expiredApprovals: expiredApprovals.length }, timestamp });
         return draft;
       });
       recovered.push(operation.id);

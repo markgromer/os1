@@ -418,15 +418,18 @@ export class ProjectRegistry {
       const desktopAgentId = safeString(raw.desktopAgentId, 200);
       const registeredPath = safeString(raw.registeredPath, 2_000);
       const canonicalPath = safeString(raw.canonicalPath, 2_000);
-      if (!challenge.id || challenge.status !== 'pending'
-        || challenge.id !== challengeId
-        || challenge.businessKey !== safeBusinessKey(businessKey)
-        || challenge.projectRegistryId !== id
-        || challenge.desktopAgentId !== desktopAgentId
-        || challenge.registeredPath !== registeredPath
-        || workspace.path !== registeredPath
-        || workspace.desktopAgentId !== desktopAgentId
-        || !workspace.operatorApproval?.approvedAt) {
+      const identityMatches = Boolean(challenge.id && challenge.id === challengeId
+        && challenge.businessKey === safeBusinessKey(businessKey)
+        && challenge.projectRegistryId === id
+        && challenge.desktopAgentId === desktopAgentId
+        && challenge.registeredPath === registeredPath
+        && workspace.path === registeredPath
+        && workspace.desktopAgentId === desktopAgentId
+        && workspace.operatorApproval?.approvedAt);
+      if (identityMatches && challenge.status === 'validated' && raw.ok === true
+        && canonicalPath && workspace.canonicalPath === canonicalPath) return record;
+      if (identityMatches && challenge.status === 'failed' && raw.ok !== true) return record;
+      if (!identityMatches || challenge.status !== 'pending') {
         throw Object.assign(new Error('Workspace validation result does not match its pending approval challenge.'), { code: 'WORKSPACE_ATTESTATION_MISMATCH' });
       }
       const timestamp = nowIso();

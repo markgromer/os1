@@ -357,9 +357,10 @@ Durable state is isolated by business:
 ```text
 data/businesses/<businessKey>/operations.json
 data/businesses/<businessKey>/project-registry.json
+data/desktop-actions.json
 ```
 
-Writes are serialized and atomic, the previous valid file is retained as `.bak`, and corrupted primary files are preserved rather than silently overwritten. At startup, interrupted work is reconciled from durable provider state; completion is never assumed. Paused operations remain paused across restart.
+Writes are serialized and atomic, the previous valid file is retained as `.bak`, and corrupted primary files are preserved rather than silently overwritten. The global desktop-action file contains only bounded dispatch envelopes, while every operation binding remains business-scoped and is revalidated when a result returns. At startup, interrupted work is reconciled from durable provider state; completion is never assumed. Paused operations remain paused across restart.
 
 The project registry synchronizes additively from existing project fields such as `repoUrl`, `workspacePath`, owner, Airtable/docs links, and known deployment fields. Existing registry values win; synchronization only creates missing records or fills blank fields.
 
@@ -376,7 +377,7 @@ Runtime policy classifies every action independently of model-generated `riskLev
 - high: push, normal PR, merge, production deploy, environment/DNS changes, client sends, migrations, automation, and permissions; always explicitly approved
 - critical: destructive production data/infrastructure, billing/legal/account, and outage-risk credential actions; explicit approval plus strong confirmation
 
-Only allowlisted internal and desktop actions can execute. Every queued asynchronous desktop operation has a durable correlation containing the operation, step, action, business, project, agent, idempotency key, and attempt. Results must match every binding and are idempotent across restart. Project verification uses registered package-script identities (`build`, `test`, `lint`, and `typecheck`) through the existing desktop agent; arbitrary shell commands and request-supplied filesystem paths are not accepted by the runner.
+Only allowlisted internal and desktop actions can execute. Every queued asynchronous desktop operation has a durable correlation containing the operation, step, action, business, project, agent, idempotency key, and attempt. Desktop dispatch uses a persisted lease instead of destructive polling: an action remains durable until its matching result is accepted, and an unacknowledged lease can be redelivered after a restart. Results must match every binding and are idempotent across restart. Project verification uses registered package-script identities (`build`, `test`, `lint`, and `typecheck`) through the existing desktop agent; arbitrary shell commands and request-supplied filesystem paths are not accepted by the runner.
 
 For chat-created operations, the authenticated user message is the only request used to derive authorization provenance. Model-supplied request text, risk, approval, metadata, and authorization fields are untrusted. Changing the bound project revokes existing provenance instead of expanding it.
 
@@ -433,7 +434,7 @@ npm test
 npm run lint
 ```
 
-The test suite uses temporary data directories and covers normalization, terminal-state races, delayed launch/poll/artifact cancellation, pause/restart/resume without relaunch, business isolation, resolver scoring, authenticated authorization provenance, action-scoped publish approval, general desktop reconciliation, workspace approval challenges, independent verification, retry limits, external Codex handoffs, route authentication, and isolated startup.
+The test suite uses temporary data directories and covers normalization, terminal-state races, delayed launch/poll/artifact cancellation, pause/restart/resume without relaunch, business isolation, resolver scoring, authenticated authorization provenance, action-scoped publish approval, durable desktop dispatch leases and recovery, general desktop reconciliation, workspace approval challenges, independent verification, retry limits, external Codex handoffs, route authentication, and isolated startup.
 
 Dependency audit note: Nodemailer is upgraded to the fixed 9.x line. The remaining audit findings are moderate transitive `uuid`/Google API findings; npm currently requires a major `googleapis` upgrade to clear them, so that upgrade remains a separately testable compatibility change.
 

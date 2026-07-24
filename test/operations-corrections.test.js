@@ -453,7 +453,9 @@ test('desktop verification correlation survives restart and reconciles only matc
     const reloaded = create();
     await reloaded.recovery.recoverBusiness('personal');
     const recovered = await reloaded.getOperation('personal', operation.id);
-    assert.equal(recovered.status, 'recovery_required');
+    assert.equal(recovered.status, 'awaiting_provider');
+    assert.equal(queued.length, 2);
+    assert.equal(queued[1].id, correlation.actionId);
     const result = {
       id: correlation.actionId, type: 'run-project-script', businessKey: 'personal', projectRegistryId: project.id,
       operationId: operation.id, stepId: correlation.stepId, idempotencyKey: correlation.idempotencyKey,
@@ -579,6 +581,11 @@ test('workspace approval validates real local paths and remote challenges before
     });
     assert.equal(approved.localWorkspace.trustStatus, 'approved');
     assert.equal(approved.localWorkspace.validationProof.method, 'desktop_agent_attestation');
+    const duplicateAttestation = await engine.attestProjectWorkspace('personal', project.id, {
+      challengeId: challenge.id, desktopAgentId: 'agent-remote', registeredPath: remotePath,
+      canonicalPath: remoteCanonicalPath, ok: true,
+    });
+    assert.equal(duplicateAttestation.localWorkspace.approvalChallenge.status, 'validated');
 
     const migration = await engine.registry.synchronizeLegacyProjects('agency', [{
       id: 'legacy', name: 'Legacy Workspace', workspacePath: remotePath, desktopAgentId: 'legacy-agent',

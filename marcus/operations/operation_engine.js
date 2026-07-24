@@ -96,7 +96,7 @@ export function createOperationsEngine({
   });
   service.setRunner(runner);
   const reconciliation = new OperationReconciliation({ store, runner });
-  const recovery = new OperationRecovery({ store });
+  const recovery = new OperationRecovery({ store, registry, queueDesktopAction });
 
   const legacyProjectsFor = async (businessKey) => {
     const value = await getLegacyProjects(safeBusinessKey(businessKey));
@@ -289,6 +289,7 @@ export function createOperationsEngine({
             businessKey: project.businessKey,
             projectRegistryId: project.id,
             desktopAgentId: challenge.desktopAgentId,
+            idempotencyKey: challenge.id,
           },
           requestedBy: `workspace-approval:${project.id}`,
         });

@@ -757,11 +757,19 @@ async function checkFileRequests(wsPath) {
     for (const r of result.requests) {
       const reqPath = String(r.path || '').trim();
       if (!reqPath) continue;
-      const fullPath = path.join(wsPath, reqPath);
-
-      // Safety: must stay within workspace
-      const resolved = path.resolve(fullPath);
-      if (!resolved.startsWith(path.resolve(wsPath))) continue;
+      // Safety: resolve both paths through the filesystem so traversal and
+      // symlink targets cannot escape into a sibling path with the same prefix.
+      let resolved = '';
+      let workspaceRoot = '';
+      try {
+        workspaceRoot = fs.realpathSync(wsPath);
+        resolved = fs.realpathSync(path.resolve(wsPath, reqPath));
+      } catch {
+        continue;
+      }
+      const relative = path.relative(workspaceRoot, resolved);
+      if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) continue;
+      const fullPath = resolved;
 
       try {
         const stat = fs.statSync(fullPath);

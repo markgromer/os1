@@ -21,6 +21,7 @@ import { buildMarcusSystemPrompt } from './marcus/core/build_system_prompt.js';
 import { buildActiveBrief as buildOperationalActiveBrief } from './marcus/intelligence/active_brief.js';
 import { createOperationsEngine } from './marcus/operations/operation_engine.js';
 import { discoverDurableBackupSources } from './marcus/operations/operation_backups.js';
+import { DesktopActionQueue } from './marcus/operations/desktop_action_queue.js';
 import {
   executeMarcusOperationTool,
   formatOperationStatusForMarcus,
@@ -206,6 +207,10 @@ const MARCUS_OPERATIONAL_CONTROLS_FILE = path.join(DATA_DIR, 'marcus-operational
 const MARCUS_SESSION_STATE_FILE = path.join(DATA_DIR, 'marcus-session-state.json');
 
 const BUSINESS_DATA_DIR = path.join(DATA_DIR, 'businesses');
+const desktopActionQueue = new DesktopActionQueue({
+  dataDir: DATA_DIR,
+  leaseMs: process.env.MARCUS_DESKTOP_ACTION_LEASE_MS,
+});
 
 const operationsEngine = createOperationsEngine({
   dataDir: DATA_DIR,
@@ -390,11 +395,17 @@ async function writeBackupSnapshot({ sourceFile, prefix }) {
 async function backupCriticalFiles({ force = false } = {}) {
   const shouldTasks = force || shouldCreateBackupForKey('tasks');
   const shouldSettings = force || shouldCreateBackupForKey('settings');
+  const shouldDesktopActions = force || shouldCreateBackupForKey('desktop-actions');
 
   // Personal/legacy store
   if (shouldTasks) {
     const ok = await writeBackupSnapshot({ sourceFile: DATA_FILE, prefix: 'tasks' });
     if (ok) markBackupForKey('tasks');
+  }
+
+  if (shouldDesktopActions) {
+    const ok = await writeBackupSnapshot({ sourceFile: desktopActionQueue.file, prefix: 'desktop-actions' });
+    if (ok) markBackupForKey('desktop-actions');
   }
 
   // Per-business stores (best-effort)
@@ -12661,36 +12672,16 @@ app.post('/api/projects/:id/auto-suggest-tasks', async (req, res) => {
   await writeLock;
 });
 
-let pendingDesktopActions = [];     // [{id,type,payload,requestedAt,requestedBy}]
 let desktopActionResults = [];      // [{id,type,ok,error?,completedAt}]
-const desktopActionsByIdempotency = new Map();
 const DESKTOP_ACTION_RESULT_TTL_MS = 10 * 60_000;
 
 function pruneDesktopActionResults() {
   const cutoff = Date.now() - DESKTOP_ACTION_RESULT_TTL_MS;
-  desktopActionResults = desktopActionResults.filter((r) => Number(r?.completedAt || 0) >= cutoff);
+  desktopActionResults = desktopActionResults.filter((r) => Number(r?.completedAt || 0) >= cutoff).slice(-500);
 }
 
-function queueDesktopAction(action) {
-  const idempotencyKey = String(action?.idempotencyKey || '').trim().slice(0, 240);
-  if (idempotencyKey && desktopActionsByIdempotency.has(idempotencyKey)) return desktopActionsByIdempotency.get(idempotencyKey);
-  const suppliedId = String(action?.id || '').trim().slice(0, 120);
-  const entry = {
-    id: suppliedId || makeId(),
-    type: String(action?.type || '').trim(),
-    payload: action?.payload && typeof action.payload === 'object' ? action.payload : {},
-    requestedAt: Date.now(),
-    requestedBy: String(action?.requestedBy || 'marcus').slice(0, 80),
-    idempotencyKey,
-  };
-  const duplicateId = pendingDesktopActions.find((item) => item.id === entry.id);
-  if (duplicateId) return duplicateId;
-  pendingDesktopActions.push(entry);
-  if (idempotencyKey) {
-    desktopActionsByIdempotency.set(idempotencyKey, entry);
-    if (desktopActionsByIdempotency.size > 2_000) desktopActionsByIdempotency.delete(desktopActionsByIdempotency.keys().next().value);
-  }
-  return entry;
+async function queueDesktopAction(action) {
+  return desktopActionQueue.enqueue(action);
 }
 
 function launchVsCodeNative(projectPath, cb) {
@@ -12716,7 +12707,7 @@ function launchVsCodeNative(projectPath, cb) {
   tryNext();
 }
 
-app.post('/api/launch', (req, res) => {
+app.post('/api/launch', async (req, res) => {
   const projectPath = typeof req.body?.path === 'string' ? req.body.path.trim() : '';
   if (!projectPath) return res.status(400).json({ error: 'Path required' });
 
@@ -12731,29 +12722,30 @@ app.post('/api/launch', (req, res) => {
     return;
   }
 
-  const action = queueDesktopAction({
-    type: 'open-vscode',
-    payload: { path: projectPath },
-    requestedBy: 'ui',
-  });
-  res.status(202).json({ ok: true, queued: true, mode: 'desktop-agent', actionId: action.id });
+  try {
+    const action = await queueDesktopAction({
+      type: 'open-vscode',
+      payload: { path: projectPath },
+      requestedBy: 'ui',
+    });
+    res.status(202).json({ ok: true, queued: true, mode: 'desktop-agent', actionId: action.id });
+  } catch (error) {
+    res.status(503).json({ ok: false, error: 'The desktop action queue is unavailable.', code: error?.code || 'DESKTOP_ACTION_QUEUE_FAILED' });
+  }
 });
 
-app.get('/api/desktop-context/actions', (req, res) => {
+app.get('/api/desktop-context/actions', async (req, res) => {
   const relayAgentId = typeof req.query?.agentId === 'string' ? req.query.agentId.trim().slice(0, 200) : '';
-  const actions = [];
-  const remaining = [];
-  for (const action of pendingDesktopActions) {
-    const targetAgentId = typeof action?.payload?.desktopAgentId === 'string' ? action.payload.desktopAgentId.trim().slice(0, 200) : '';
-    if (targetAgentId && targetAgentId !== relayAgentId) remaining.push(action);
-    else actions.push(action);
+  try {
+    const actions = await desktopActionQueue.claim(relayAgentId);
+    res.json({ ok: true, actions });
+  } catch (error) {
+    res.status(503).json({ ok: false, error: 'The desktop action queue is unavailable.', code: error?.code || 'DESKTOP_ACTION_QUEUE_FAILED' });
   }
-  pendingDesktopActions = remaining;
-  res.json({ ok: true, actions });
 });
 
 app.post('/api/desktop-context/action-results', async (req, res) => {
-  const results = Array.isArray(req.body?.results) ? req.body.results : [];
+  const results = Array.isArray(req.body?.results) ? req.body.results.slice(0, 100) : [];
   const relayAgentId = typeof req.body?.agentId === 'string' ? req.body.agentId.trim().slice(0, 200) : '';
   const now = Date.now();
   let count = 0;
@@ -12786,6 +12778,7 @@ app.post('/api/desktop-context/action-results', async (req, res) => {
       completedAt: now,
     };
     desktopActionResults.push(result);
+    let accepted = false;
     if (businessKey && result.projectRegistryId) {
       try {
         if (type === 'validate-workspace') {
@@ -12796,15 +12789,27 @@ app.post('/api/desktop-context/action-results', async (req, res) => {
             canonicalPath: typeof details?.canonicalPath === 'string' ? details.canonicalPath : '',
           });
           count++;
+          accepted = true;
         } else {
           const reconciled = await operationsEngine.reconcileDesktopResult(result, { runCycle: false });
           count++;
+          accepted = true;
           if (reconciled.operation?.status === 'queued') setImmediate(() => operationsEngine.tick(businessKey, reconciled.operation.id).catch(() => {}));
         }
       } catch (error) {
         rejected.push({ id, code: error?.code || 'DESKTOP_RESULT_REJECTED' });
       }
-    } else count++;
+    } else {
+      count++;
+      accepted = true;
+    }
+    if (accepted) {
+      try {
+        await desktopActionQueue.acknowledge({ id, agentId: result.desktopAgentId, type, idempotencyKey: result.idempotencyKey });
+      } catch (error) {
+        rejected.push({ id, code: error?.code || 'DESKTOP_ACTION_ACK_FAILED' });
+      }
+    }
   }
   pruneDesktopActionResults();
   res.json({ ok: true, received: count, rejected });
@@ -13482,15 +13487,20 @@ async function sendMarcusLiveDashboardSnapshot(req, res) {
 
 app.get('/api/marcus/live/dashboard', sendMarcusLiveDashboardSnapshot);
 
-function queueMarcusLivePerformanceAction(req, res) {
+async function queueMarcusLivePerformanceAction(req, res) {
   const mode = String(req.body?.mode || '').trim().toLowerCase();
   const allowed = new Set(['balanced', 'performance', 'power-saver', 'optimize']);
   if (!allowed.has(mode)) return res.status(400).json({ ok: false, error: 'Invalid performance mode' });
-  const action = queueDesktopAction({
-    type: 'set-performance-profile',
-    payload: { mode },
-    requestedBy: 'marcus-live',
-  });
+  let action;
+  try {
+    action = await queueDesktopAction({
+      type: 'set-performance-profile',
+      payload: { mode },
+      requestedBy: 'marcus-live',
+    });
+  } catch (error) {
+    return res.status(503).json({ ok: false, error: 'The desktop action queue is unavailable.', code: error?.code || 'DESKTOP_ACTION_QUEUE_FAILED' });
+  }
   rememberMarcusLiveAction({
     action: 'performance',
     label: `Marcus Live performance: ${mode}`,
@@ -17378,7 +17388,7 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
           };
         }
 
-        const action = queueDesktopAction({
+        const action = await queueDesktopAction({
           type: 'open-vscode',
           payload: { path: workspacePath },
           requestedBy: 'marcus-chat',
@@ -17403,7 +17413,7 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
               : 'Project not found and no workspacePath was provided.',
           };
         }
-        const action = queueDesktopAction({
+        const action = await queueDesktopAction({
           type: 'prepare-publish',
           payload: { path: workspacePath },
           requestedBy: 'marcus-chat',
@@ -17438,7 +17448,7 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
               : 'Project not found and no workspacePath was provided.',
           };
         }
-        const action = queueDesktopAction({
+        const action = await queueDesktopAction({
           type: 'publish-project-changes',
           payload: {
             path: workspacePath,
@@ -17473,7 +17483,7 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
               : 'Project not found and no workspacePath was provided.',
           };
         }
-        const action = queueDesktopAction({
+        const action = await queueDesktopAction({
           type: 'run-project-script',
           payload: { path: workspacePath, scriptName },
           requestedBy: 'marcus-chat',
@@ -17495,7 +17505,7 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
         }
         const parentPath = typeof args?.parentPath === 'string' ? args.parentPath.trim() : '';
         const folderName = typeof args?.folderName === 'string' ? args.folderName.trim() : '';
-        const action = queueDesktopAction({
+        const action = await queueDesktopAction({
           type: 'clone-github-project',
           payload: {
             repoUrl,
@@ -18083,7 +18093,7 @@ const httpServer = app.listen(PORT, SERVER_HOST, async () => {
   try {
     const operationStartup = await operationsEngine.initializeBusinesses(businesses.map((business) => business?.key || DEFAULT_BUSINESS_KEY));
     const recoveredCount = operationStartup.reduce((total, item) => total + (Array.isArray(item.recovered) ? item.recovered.length : 0), 0);
-    if (recoveredCount) console.warn(`M.A.R.C.U.S. paused ${recoveredCount} interrupted durable operation(s) for recovery.`);
+    if (recoveredCount) console.warn(`M.A.R.C.U.S. reconciled ${recoveredCount} interrupted durable operation(s) without assuming completion.`);
   } catch (error) {
     console.error('Durable operations startup recovery failed; operation files were left intact:', error);
   }

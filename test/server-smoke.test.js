@@ -148,6 +148,8 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     }] }) });
     const resultBody = await resultResponse.json();
     assert.equal(resultBody.received, 1);
+    const acknowledgedActions = await (await fetch(`${base}/api/desktop-context/actions?agentId=agent-smoke`, { headers: agencyHeaders })).json();
+    assert.equal(acknowledgedActions.actions.some((item) => item.id === action.id), false);
     const unknownResult = await fetch(`${base}/api/desktop-context/action-results`, { method: 'POST', headers: agencyHeaders, body: JSON.stringify({ agentId: 'agent-smoke', results: [{
       id: 'unknown-action', type: 'run-project-script', businessKey: 'agency', projectRegistryId: registry.id, desktopAgentId: 'agent-smoke', ok: true,
     }] }) });
