@@ -24,3 +24,7 @@ Thumbs.db
 
 # Optional local notes
 notes/
+
+# Local browser-validation artifacts
+.playwright-cli/
+output/playwright/

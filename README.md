@@ -332,6 +332,96 @@ Marcus Live is the live operations cockpit for:
 
 Marcus chat also uses the same freshness logic so old website work is excluded from current project context unless it has recent activity, a pending communication, an urgent task, or is the active desktop workspace.
 
+## Durable Operations Engine
+
+M.A.R.C.U.S. includes a restart-safe operations layer for multi-step project outcomes. It is additive to the existing project/task stores and does not replace the dashboard, task APIs, desktop agent, or integrations.
+
+The engine is split into reusable modules under `marcus/`:
+
+- `operations/`: validated operation/step types, atomic persistence, lifecycle service, deterministic runner, recovery, verification, and Marcus tools
+- `projects/`: universal project registry plus deterministic resolver
+- `approvals/`: runtime risk classification and approval records
+- `providers/`: Codex, desktop, and GitHub-read provider boundaries
+- `api/operations_routes.js`: authenticated operation and registry routes
+
+### Data files and migration
+
+Durable state is isolated by business:
+
+```text
+data/businesses/<businessKey>/operations.json
+data/businesses/<businessKey>/project-registry.json
+```
+
+Writes are serialized and atomic, the previous valid file is retained as `.bak`, and corrupted primary files are preserved rather than silently overwritten. At startup, interrupted `running` steps are moved to `paused`/recovery-required state; their completion is never assumed.
+
+The project registry synchronizes additively from existing project fields such as `repoUrl`, `workspacePath`, owner, Airtable/docs links, and known deployment fields. Existing registry values win; synchronization only creates missing records or fills blank fields.
+
+### Lifecycle and safety
+
+Operation statuses are `draft`, `planned`, `waiting_for_approval`, `queued`, `running`, `paused`, `blocked`, `verifying`, `completed`, `failed`, and `cancelled`. Executable step types currently include `internal`, `desktop`, `github_read`, `codex`, `verification`, and `approval`.
+
+Runtime policy classifies every action independently of model-generated `riskLevel` or `approvalRequired` values:
+
+- low: read/inspect/plan/build/test/lint/typecheck and internal evidence work
+- medium: work-branch modifications, branch/commit/draft-PR metadata, and preview actions; allowed only by an explicit request or configured autonomy
+- high: push, normal PR, merge, production deploy, environment/DNS changes, client sends, migrations, automation, and permissions; always explicitly approved
+- critical: destructive production data/infrastructure, billing/legal/account, and outage-risk credential actions; explicit approval plus strong confirmation
+
+Only allowlisted internal and desktop actions can execute. Project verification uses registered package-script identities (`build`, `test`, `lint`, and `typecheck`) through the existing desktop agent; arbitrary shell commands and request-supplied filesystem paths are not accepted by the runner.
+
+### Codex integration
+
+The provider interface supports `startJob`, `getJobStatus`, `sendFollowup`, `getArtifacts`, `getDiff`, `cancelJob`, and `resumeJob`. This deployment has no supported direct Codex launch API, so it deliberately uses `external_handoff` mode:
+
+1. M.A.R.C.U.S. resolves the project and persists the operation.
+2. The runner generates and stores a complete Codex handoff artifact.
+3. The Codex step becomes honestly blocked/waiting; it is not reported as running.
+4. Mark can register a real Codex run ID, branch, commit, diff, artifacts, or completion result.
+5. The same operation resumes into verification.
+6. Required checks must pass or have a recorded approved waiver before completion.
+
+The Operations UI provides the list/detail timeline, approvals, blockers, artifacts, verification evidence, lifecycle controls, handoff copy, and external Codex registration. Marcus Live only adds a compact operations section for running, blocked, approval-gated, failed-verification, and recently completed operations.
+
+### Operation APIs
+
+All routes use the existing API authentication and active-business context. Looking up an ID only searches the active business store.
+
+```text
+GET    /api/operations
+POST   /api/operations
+GET    /api/operations/:id
+PATCH  /api/operations/:id
+POST   /api/operations/:id/plan
+POST   /api/operations/:id/start
+POST   /api/operations/:id/pause
+POST   /api/operations/:id/resume
+POST   /api/operations/:id/cancel
+POST   /api/operations/:id/retry
+POST   /api/operations/:id/tick
+POST   /api/operations/:id/approvals/:approvalId/approve
+POST   /api/operations/:id/approvals/:approvalId/reject
+POST   /api/operations/:id/external-job
+POST   /api/operations/:id/verification-results
+POST   /api/operations/:id/verification/:verificationId/waive
+
+GET    /api/project-registry
+POST   /api/project-registry
+PATCH  /api/project-registry/:id
+POST   /api/project-registry/resolve
+```
+
+Marcus chat exposes matching operation tools. Strict code/project ownership requests such as “Own the WARREN mobile problem and get Codex working on it” also enter the durable path deterministically, so this behavior does not depend on the model choosing a tool or an AI key being configured.
+
+### Validation
+
+```bash
+npm test
+npm run lint
+```
+
+Tests use temporary data directories and cover normalization, lifecycle transitions, business isolation, resolver scoring, runtime approval enforcement, dependency ordering, interrupted-run recovery, retry limits, verification completion gates, policy override resistance, external Codex handoffs, and reload persistence.
+
 ## AI help (optional)
 
 The per-project **AI Assistant** works in two modes:

@@ -15,8 +15,17 @@ import { simpleParser } from 'mailparser';
 import nodemailer from 'nodemailer';
 
 import { mcpCallTool, mcpListTools } from './mcpClient.js';
+import { registerOperationsRoutes } from './marcus/api/operations_routes.js';
 import { buildMarcusSystemPrompt } from './marcus/core/build_system_prompt.js';
 import { buildActiveBrief as buildOperationalActiveBrief } from './marcus/intelligence/active_brief.js';
+import { createOperationsEngine } from './marcus/operations/operation_engine.js';
+import {
+  executeMarcusOperationTool,
+  formatOperationStatusForMarcus,
+  getMarcusOperationToolDefinitions,
+  isMarcusOperationTool,
+  shouldCreateDurableOperationForRequest,
+} from './marcus/operations/marcus_operation_tools.js';
 
 const app = express();
 // When running behind SiteGround / reverse proxies, trust forwarded headers.
@@ -187,6 +196,36 @@ const MARCUS_OPERATIONAL_CONTROLS_FILE = path.join(DATA_DIR, 'marcus-operational
 const MARCUS_SESSION_STATE_FILE = path.join(DATA_DIR, 'marcus-session-state.json');
 
 const BUSINESS_DATA_DIR = path.join(DATA_DIR, 'businesses');
+
+const operationsEngine = createOperationsEngine({
+  dataDir: DATA_DIR,
+  getLegacyProjects: async (businessKey) => {
+    const store = await readStoreForBusiness(businessKey);
+    return Array.isArray(store?.projects) ? store.projects : [];
+  },
+  getDesktopContext: async () => desktopRelayCache?.data || desktopContextCache?.data || {},
+  queueDesktopAction: async (action) => queueDesktopAction(action),
+});
+
+async function createOrReuseDurableOperationForMessage(message, { projectId = '', projectName = '', source = 'marcus_chat' } = {}) {
+  const businessKey = getBusinessKeyFromContext();
+  const originalRequest = String(message || '').trim();
+  const recent = await operationsEngine.listOperations(businessKey, { limit: 25 });
+  const duplicate = recent.find((operation) => operation.originalRequest === originalRequest
+    && (Date.now() - Date.parse(operation.createdAt || 0)) < 10 * 60_000
+    && !['completed', 'failed', 'cancelled'].includes(operation.status));
+  if (duplicate) return { operation: duplicate, resolution: null, reused: true };
+  const created = await operationsEngine.createFromRequest(businessKey, {
+    originalRequest,
+    projectId,
+    projectName,
+    requestedBy: 'mark',
+    source,
+    autoPlan: true,
+    autoStart: true,
+  });
+  return { ...created, reused: false };
+}
 
 function getStoreFileForBusiness(businessKey) {
   const key = normalizeBusinessKey(businessKey) || DEFAULT_BUSINESS_KEY;
@@ -477,7 +516,8 @@ function isValidMarcusLiveSessionToken(token) {
 
 function isMarcusLiveSessionRoute(req) {
   const p = String(req?.path || '');
-  return p === '/api/marcus/live'
+  return (p === '/api/operations' && String(req?.method || '').toUpperCase() === 'GET')
+    || p === '/api/marcus/live'
     || p === '/api/marcus/live/action'
     || p === '/api/marcus/active-brief'
     || p === '/api/marcus/live/chat'
@@ -540,6 +580,11 @@ app.post('/api/auth/login', (req, res) => {
 app.post('/api/auth/logout', (req, res) => {
   res.setHeader('Set-Cookie', buildAuthCookie({ req, token: '', clear: true }));
   res.json({ ok: true });
+});
+
+registerOperationsRoutes(app, {
+  engine: operationsEngine,
+  getBusinessKey: () => getBusinessKeyFromContext(),
 });
 
 /**
@@ -13490,9 +13535,10 @@ function normalizeMarcusCommandIntent(message) {
   if (/\b(memory correction|correct memory|forget memory|archive memory|archive this memory|important memory|mark memory important|mark outdated memory)\b/.test(text)) return 'memory_correction';
   if (/\b(keep this active|keep .* active|reactivate|pin project|project is done|project.*done|mark project complete|this project is complete|archive this|archive project|move .* history|known history)\b/.test(text)) return 'project_correction';
   if (/\b(that is wrong|that's wrong|incorrect|not true|forget this|pin this|mark important|this is important|mark outdated|this is outdated|do not bother me|don't bother me|keep this active|reactivate this)\b/.test(text)) return 'memory_correction';
-  if (parseProjectDraftCommand(message)) return 'project_create';
   if (parseFocusCommand(message)) return 'focus_control';
   if (parseProactiveModeCommand(text)) return 'proactive_mode';
+  if (parseCodexGoalCommand(message)) return 'codex_goal';
+  if (parseProjectDraftCommand(message)) return 'project_create';
   const wantsNewAction =
     (/\b(create|add|make|turn this into)\b/.test(text) && /\b(action|reminder|follow[- ]?up|reply|draft)\b/.test(text)) ||
     /\bremind me\b/.test(text) ||
@@ -13569,6 +13615,83 @@ function parseProjectDraftCommand(message) {
     projectName: (name || 'New project from command').slice(0, 180),
     summary: raw,
     sourceText: raw,
+  };
+}
+
+function parseCodexGoalCommand(message) {
+  const text = String(message || '').trim().toLowerCase();
+  if (!text || !/\bcodex\b/.test(text)) return null;
+  if (/\b(prompt|goal|handoff|hand off|send|queue|start|spin up|work on|build|implement|fix|refactor|audit|review|test|ship)\b/.test(text)) {
+    return { sourceText: String(message || '').trim() };
+  }
+  return null;
+}
+
+function buildCodexGoalDraftFromCommand(message, brief = {}) {
+  const raw = String(message || '').replace(/\s+/g, ' ').trim().slice(0, 1600);
+  const focus = brief?.currentFocus || brief?.activeProject || {};
+  const project = focus && typeof focus === 'object' ? focus : {};
+  const topAttention = Array.isArray(brief?.controlledAttention?.topPriorities)
+    ? brief.controlledAttention.topPriorities
+    : (Array.isArray(brief?.topPriorities) ? brief.topPriorities : []);
+  const decisions = Array.isArray(brief?.decisionQueue) ? brief.decisionQueue : [];
+  const systems = Array.isArray(brief?.systemHealth?.items) ? brief.systemHealth.items : [];
+  const projectName = String(project?.title || project?.name || '').trim();
+  const workspacePath = String(project?.workspacePath || project?.path || '').trim();
+  const businessName = String(project?.businessName || project?.businessKey || '').trim();
+  const cleanObjective = raw
+    .replace(/^(please\s+)?(create|make|queue|draft|send|prompt)\s+(a\s+)?/i, '')
+    .replace(/\b(codex|goal|handoff|hand off|prompt)\b/ig, '')
+    .replace(/\s+/g, ' ')
+    .replace(/^[\s:.-]+/, '')
+    .trim();
+  const objective = cleanObjective || raw || 'Work from the MARCUS project plan and implement the next approved coding step.';
+  const contextLines = [
+    projectName ? `Project/focus: ${projectName}` : '',
+    businessName ? `Business/context: ${businessName}` : '',
+    workspacePath ? `Workspace path: ${workspacePath}` : '',
+    project?.summary || project?.detail ? `Focus detail: ${String(project.summary || project.detail).replace(/\s+/g, ' ').trim().slice(0, 500)}` : '',
+    ...topAttention.slice(0, 4).map((item, idx) => `Attention ${idx + 1}: ${String(item?.title || item?.summary || '').replace(/\s+/g, ' ').trim().slice(0, 220)}${item?.recommendedAction ? `; suggested: ${String(item.recommendedAction).slice(0, 180)}` : ''}`),
+    ...decisions.slice(0, 3).map((item, idx) => `Decision ${idx + 1}: ${String(item?.title || item?.question || item?.summary || '').replace(/\s+/g, ' ').trim().slice(0, 220)}`),
+    ...systems.filter((item) => String(item?.status || '').toLowerCase() !== 'ok').slice(0, 3).map((item, idx) => `System ${idx + 1}: ${String(item?.title || item?.summary || '').replace(/\s+/g, ' ').trim().slice(0, 220)}`),
+  ].filter(Boolean);
+
+  const prompt = [
+    '# Goal for Codex',
+    '',
+    '## Objective',
+    objective,
+    '',
+    '## MARCUS Context',
+    contextLines.length ? contextLines.map((line) => `- ${line}`).join('\n') : '- No specific project context was available. Inspect the current repository before making assumptions.',
+    '',
+    '## Operating Rules',
+    '- Read the current codebase first and preserve existing data/functionality.',
+    '- Keep the change scoped to this objective unless you find a concrete dependency.',
+    '- Treat external side effects such as deploy, publish, send, bill, delete, DNS, or merge as approval-gated.',
+    '- Prefer focused implementation plus verification over broad refactors.',
+    '',
+    '## Expected Output',
+    '- Implement the requested change or explain the blocker with evidence.',
+    '- Run relevant syntax/tests/runtime checks.',
+    '- Summarize changed files, behavior, and residual risks.',
+  ].join('\n');
+
+  return {
+    title: `Codex goal: ${objective}`.slice(0, 180),
+    summary: `Approval-gated Codex handoff drafted from MARCUS planning${projectName ? ` for ${projectName}` : ''}.`,
+    body: prompt.slice(0, 6000),
+    type: 'codex_goal',
+    lifecycle: 'draft_action',
+    requiresApproval: true,
+    changedBy: 'command',
+    payload: {
+      codexPrompt: prompt.slice(0, 6000),
+      sourceText: raw,
+      projectName,
+      workspacePath,
+      businessName,
+    },
   };
 }
 
@@ -14208,6 +14331,20 @@ app.post('/api/marcus/command', async (req, res) => {
   try {
     const message = typeof req.body?.message === 'string' ? req.body.message.trim().slice(0, 2000) : '';
     if (!message) return res.status(400).json({ ok: false, error: 'Message required' });
+    if (shouldCreateDurableOperationForRequest(message)) {
+      const result = await createOrReuseDurableOperationForMessage(message, { source: 'marcus_command' });
+      return res.json({
+        ok: true,
+        handled: true,
+        intent: 'durable_operation',
+        title: result.reused ? 'Durable operation resumed' : 'Durable operation created',
+        reply: formatOperationStatusForMarcus(result.operation, result.resolution, { reused: result.reused }),
+        cards: [],
+        suggestedActions: [],
+        operation: result.operation,
+        generatedAt: nowIso(),
+      });
+    }
     const commandIntent = normalizeMarcusCommandIntent(message);
     if (commandIntent === 'project_create') {
       const projectIntent = parseProjectDraftCommand(message);
@@ -14327,6 +14464,29 @@ app.post('/api/marcus/command', async (req, res) => {
         evidence: buildCommandEvidence([card], enrichedBrief),
         attentionPolicy: policy,
         generatedAt: nowIso(),
+      });
+    }
+    if (commandIntent === 'codex_goal') {
+      const existingControls = await readMarcusOperationalControls();
+      const [brief, sessionState] = await Promise.all([
+        buildMarcusActiveBrief(),
+        readMarcusSessionState(),
+      ]);
+      const preBrief = applyMarcusSessionContextToBrief(applyOperationalControlsToBrief(brief, existingControls), sessionState);
+      const draft = buildCodexGoalDraftFromCommand(message, preBrief);
+      const { next, action } = createManualActionControl(existingControls, draft);
+      await writeMarcusOperationalControls(next);
+      const enrichedBrief = applyMarcusSessionContextToBrief(applyOperationalControlsToBrief(brief, next), sessionState);
+      const response = buildMarcusCommandResponse({ message: 'Show my action queue.', brief: enrichedBrief });
+      return res.json({
+        ...response,
+        intent: 'codex_goal',
+        title: 'Codex goal drafted',
+        reply: `Codex goal drafted\n\n${action.title}\n\n${action.body || action.summary}\n\nIt is queued as ${action.lifecycle}. Mark should approve the handoff before Codex execution starts.`,
+        cards: [action, ...(Array.isArray(response.cards) ? response.cards : [])].slice(0, 8),
+        suggestedActions: [action],
+        createdAction: action,
+        evidence: buildCommandEvidence([action], enrichedBrief),
       });
     }
     if (commandIntent === 'action_create') {
@@ -14469,6 +14629,15 @@ app.post('/api/marcus/live/chat', async (req, res) => {
   if (!message) return res.status(400).json({ error: 'Empty message' });
 
   try {
+    // Marcus Live is a second chat surface, so durable work requests must enter the
+    // same operation engine instead of being answered as if an AI chat executed them.
+    if (shouldCreateDurableOperationForRequest(message)) {
+      const result = await createOrReuseDurableOperationForMessage(message, { source: 'marcus_live' });
+      const reply = formatOperationStatusForMarcus(result.operation, result.resolution, { reused: result.reused });
+      pushLiveEvent({ type: 'chat', from: 'marcus', text: reply, ts: Date.now() });
+      return res.json({ ok: true, reply, operation: result.operation });
+    }
+
     // Build context from current workspace
     const ws = desktopRelayCache?.data?.workspace;
     const contextParts = [];
@@ -15972,6 +16141,15 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
     const effectiveProject = resolvedProject || (projectId ? (store.projects || []).find((p) => p.id === projectId) : null) || null;
     const effectiveProjectId = effectiveProject?.id || projectId || null;
 
+    if (effectiveThreadId !== 'operator_bio' && shouldCreateDurableOperationForRequest(message)) {
+      const created = await createOrReuseDurableOperationForMessage(message, {
+        projectId: effectiveProjectId || '',
+        projectName: effectiveProject?.name || '',
+        source: 'marcus_chat',
+      });
+      return { content: formatOperationStatusForMarcus(created.operation, created.resolution, { reused: created.reused }) };
+    }
+
     const upsertScratchpad = (pid, text) => {
       store.projectScratchpads = store.projectScratchpads || {};
       store.projectScratchpads[pid] = { text: String(text ?? ''), updatedAt: nowIso() };
@@ -16953,6 +17131,8 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
         });
       }
 
+      tools.push(...getMarcusOperationToolDefinitions());
+
       const messages = [
         {
           role: 'system',
@@ -16960,7 +17140,7 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
             systemPrompt +
             (effectiveThreadId === 'operator_bio'
               ? "\n\nIMPORTANT: Use set_operator_bio to persist changes to the bio."
-              : "\n\nIMPORTANT: When Mark asks for an internal/admin action, use tools instead of only describing the action. For project updates use create_project / update_project / create_tasks. For local project work use open_project_in_vscode when a workspace path is available. If Mark names a GitHub repo that is not local and the desktop agent is available, use clone_github_project; if Mark is remote or the desktop is offline, use the GitHub cloud tools to inspect repos/files. For Cloudflare and Render questions, use the cloud read tools when configured. For build/test/lint/preview requests, use run_project_script with a package.json script name. For publish requests, use prepare_project_publish first unless Mark has already explicitly approved committing/pushing. publish_project_changes is server-guarded and requires explicit approval in Mark's message. For high-impact external actions like publish/deploy/merge/send/billing/delete/DNS changes, prepare the action and ask for explicit approval before executing. When Mark asks whether a queued local action finished, use get_desktop_action_results."),
+              : "\n\nIMPORTANT: When Mark asks for an internal/admin action, use tools instead of only describing the action. Use create_operation for multi-step code/project work, work spanning systems, work that must survive interruption, approval-gated work, or work requiring later verification. Do not create operations for trivial questions. Use the operation lifecycle tools to report the resolved project, risk, approvals, and what is actually running versus waiting. For project updates use create_project / update_project / create_tasks. For local project work use open_project_in_vscode when a workspace path is available. If Mark names a GitHub repo that is not local and the desktop agent is available, use clone_github_project; if Mark is remote or the desktop is offline, use the GitHub cloud tools to inspect repos/files. For Cloudflare and Render questions, use the cloud read tools when configured. For build/test/lint/preview requests, use run_project_script with a package.json script name. For publish requests, use prepare_project_publish first unless Mark has already explicitly approved committing/pushing. publish_project_changes is server-guarded and requires explicit approval in Mark's message. For high-impact external actions like publish/deploy/merge/send/billing/delete/DNS changes, prepare the action and ask for explicit approval before executing. Never claim Codex or another provider is running unless an operation runner actually started that provider path. When Mark asks whether a queued local action finished, use get_desktop_action_results."),
         },
       ];
 
@@ -16998,6 +17178,15 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
     };
 
     const execTool = async (toolName, args) => {
+      if (isMarcusOperationTool(toolName)) {
+        return executeMarcusOperationTool({
+          name: toolName,
+          args,
+          engine: operationsEngine,
+          businessKey: getBusinessKeyFromContext(),
+          requestMessage: message,
+        });
+      }
       const resolveProjectWorkspace = () => {
         const projectIdArg = typeof args?.projectId === 'string' ? args.projectId.trim() : '';
         const projectNameArg = typeof args?.projectName === 'string' ? args.projectName.trim() : '';
@@ -17734,7 +17923,7 @@ function startMarcusBriefScheduler() {
   setInterval(() => { void tick(); }, 30_000);
 }
 
-app.listen(PORT, async () => {
+const httpServer = app.listen(PORT, async () => {
   await refreshBusinessCacheFromSettings();
   const businesses = Array.isArray(cachedBusinesses) ? cachedBusinesses : [{ key: DEFAULT_BUSINESS_KEY }];
   for (const biz of businesses) {
@@ -17754,9 +17943,21 @@ app.listen(PORT, async () => {
       });
     });
   }
+  try {
+    const operationStartup = await operationsEngine.initializeBusinesses(businesses.map((business) => business?.key || DEFAULT_BUSINESS_KEY));
+    const recoveredCount = operationStartup.reduce((total, item) => total + (Array.isArray(item.recovered) ? item.recovered.length : 0), 0);
+    if (recoveredCount) console.warn(`M.A.R.C.U.S. paused ${recoveredCount} interrupted durable operation(s) for recovery.`);
+  } catch (error) {
+    console.error('Durable operations startup recovery failed; operation files were left intact:', error);
+  }
   await backupCriticalFiles({ force: true }).catch(() => {
     // ignore startup backup errors
   });
+  if (String(process.env.MARCUS_STARTUP_CHECK || '').trim().toLowerCase() === 'true') {
+    console.log('M.A.R.C.U.S. startup validation completed.');
+    httpServer.close(() => process.exit(0));
+    return;
+  }
   startBackupScheduler();
   startGa4Scheduler();
   startAirtableRequestsAutoSyncScheduler();

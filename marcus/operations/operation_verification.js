@@ -1,0 +1,124 @@
+import { makeOperationId, normalizeVerificationResult, nowIso, safeObject, safeString } from './operation_types.js';
+
+export const VERIFICATION_TYPES = Object.freeze([
+  'build', 'test', 'lint', 'typecheck', 'repository_cleanliness', 'diff_review', 'manual_review', 'url_health', 'artifact_present',
+]);
+
+const SCRIPT_CHECKS = new Set(['build', 'test', 'lint', 'typecheck']);
+
+function requirementFrom(value) {
+  if (typeof value === 'string') return { type: value, required: true };
+  const raw = safeObject(value);
+  return {
+    type: VERIFICATION_TYPES.includes(safeString(raw.type, 100)) ? safeString(raw.type, 100) : 'manual_review',
+    required: raw.required !== false,
+    target: safeString(raw.target, 2_000),
+    command: safeString(raw.command, 500),
+  };
+}
+
+export class OperationVerification {
+  constructor({ queueDesktopAction = null } = {}) {
+    this.queueDesktopAction = typeof queueDesktopAction === 'function' ? queueDesktopAction : null;
+  }
+
+  buildRequirements(registryRecord, requested = []) {
+    const record = safeObject(registryRecord);
+    const commands = safeObject(record.commands);
+    const requirements = [];
+    for (const type of ['build', 'test', 'lint', 'typecheck']) {
+      if (safeString(commands[type], 500)) requirements.push({ type, required: true, command: commands[type] });
+    }
+    requirements.push({ type: 'artifact_present', required: true });
+    requirements.push({ type: 'diff_review', required: true });
+    if (!requirements.some((item) => SCRIPT_CHECKS.has(item.type))) requirements.push({ type: 'manual_review', required: true });
+    for (const item of Array.isArray(requested) ? requested : []) {
+      const requirement = requirementFrom(item);
+      const existing = requirements.find((candidate) => candidate.type === requirement.type);
+      if (existing) Object.assign(existing, requirement);
+      else requirements.push(requirement);
+    }
+    return requirements.slice(0, 20);
+  }
+
+  async run({ operation, step, registryRecord }) {
+    const requirements = (Array.isArray(step?.input?.requirements) ? step.input.requirements : [])
+      .map(requirementFrom);
+    const effective = requirements.length ? requirements : this.buildRequirements(registryRecord);
+    const current = Array.isArray(operation.verification) ? operation.verification : [];
+    const results = [];
+    let queuedDesktopAction = false;
+
+    for (const requirement of effective) {
+      const prior = current.find((item) => item.type === requirement.type && item.stepId === step.id)
+        || current.find((item) => item.type === requirement.type && ['passed', 'failed'].includes(item.status));
+      if (prior && (prior.status === 'passed' || prior.waived === true || prior.status === 'failed')) {
+        results.push(normalizeVerificationResult({ ...prior, required: requirement.required }, { operationId: operation.id, stepId: step.id }));
+        continue;
+      }
+
+      if (requirement.type === 'artifact_present') {
+        const evidenceArtifacts = (operation.artifacts || []).filter((artifact) => ['codex_result', 'codex_diff', 'commit', 'external_job', 'implementation_result'].includes(artifact.type));
+        results.push(normalizeVerificationResult({
+          id: prior?.id || makeOperationId('verify'), type: requirement.type, required: requirement.required,
+          status: evidenceArtifacts.length ? 'passed' : 'failed', startedAt: nowIso(), completedAt: nowIso(),
+          output: evidenceArtifacts.length ? `${evidenceArtifacts.length} implementation evidence artifact(s) registered.` : '',
+          error: evidenceArtifacts.length ? '' : 'No implementation result, diff, commit, or external job artifact is registered.',
+          evidence: evidenceArtifacts.map((artifact) => ({ id: artifact.id, type: artifact.type, name: artifact.name })),
+        }, { operationId: operation.id, stepId: step.id }));
+        continue;
+      }
+
+      if (SCRIPT_CHECKS.has(requirement.type)) {
+        const workspacePath = safeString(registryRecord?.localWorkspace?.path, 2_000);
+        const configured = safeString(registryRecord?.commands?.[requirement.type], 500);
+        if (workspacePath && configured && this.queueDesktopAction && !prior?.evidence?.actionId) {
+          const action = await this.queueDesktopAction({
+            type: 'run-project-script',
+            payload: { path: workspacePath, scriptName: requirement.type },
+            requestedBy: `operation:${operation.id}`,
+          });
+          results.push(normalizeVerificationResult({
+            id: prior?.id || makeOperationId('verify'), type: requirement.type, required: requirement.required,
+            status: 'running', command: configured, target: workspacePath, startedAt: nowIso(),
+            output: 'Verification was queued through the desktop agent. It has not been treated as passed.',
+            evidence: { actionId: action?.id || '', provider: 'desktop' },
+          }, { operationId: operation.id, stepId: step.id }));
+          queuedDesktopAction = true;
+        } else {
+          results.push(normalizeVerificationResult({
+            id: prior?.id || makeOperationId('verify'), type: requirement.type, required: requirement.required,
+            status: 'needs_manual_review', command: configured, target: workspacePath,
+            error: workspacePath && configured ? 'Desktop verification is not available.' : `No allowed ${requirement.type} script is configured in the project registry.`,
+          }, { operationId: operation.id, stepId: step.id }));
+        }
+        continue;
+      }
+
+      if (requirement.type === 'diff_review') {
+        const diff = (operation.artifacts || []).find((artifact) => artifact.type === 'codex_diff' || artifact.type === 'diff');
+        results.push(normalizeVerificationResult({
+          id: prior?.id || makeOperationId('verify'), type: requirement.type, required: requirement.required,
+          status: 'needs_manual_review',
+          output: diff ? 'A diff artifact is available for review.' : '',
+          error: diff ? '' : 'No diff artifact is available.',
+          evidence: diff ? { artifactId: diff.id, name: diff.name } : {},
+        }, { operationId: operation.id, stepId: step.id }));
+        continue;
+      }
+
+      results.push(normalizeVerificationResult({
+        id: prior?.id || makeOperationId('verify'), type: requirement.type, required: requirement.required,
+        status: 'needs_manual_review', target: requirement.target, command: requirement.command,
+        error: `${requirement.type} requires recorded external or manual evidence.`,
+      }, { operationId: operation.id, stepId: step.id }));
+    }
+
+    const required = results.filter((result) => result.required !== false);
+    const failed = required.filter((result) => result.status === 'failed' && !result.waived);
+    const pending = required.filter((result) => !['passed', 'failed'].includes(result.status) && !result.waived);
+    if (failed.length) return { status: 'failed', results, error: `${failed.length} required verification check(s) failed.` };
+    if (pending.length || queuedDesktopAction) return { status: 'waiting', results, error: `${pending.length || 1} required verification check(s) still need evidence.` };
+    return { status: 'completed', results, output: 'All required verification checks passed or were explicitly waived.' };
+  }
+}

@@ -140,6 +140,10 @@ Manual action creation is also supported through command language such as "creat
 
 Project creation language such as "turn this into a project" and "create a project for ..." creates a `create_project_draft` action in the same queue. It does not mutate project stores during this redesign phase; it records the intended project draft so future approved execution can create the real project cleanly.
 
+Lightweight handoff language such as "create a Codex goal" or "draft a Codex prompt" creates a `codex_goal` draft action when it does not request durable implementation. MARCUS uses the current ActiveBrief context, focus, attention items, decisions, systems, project name, and workspace path when available to produce that draft. A strict build/fix/deploy ownership request is routed to the Durable Operations Engine instead.
+
+Multi-step code/project ownership requests in Marcus chat now use the Durable Operations Engine. They resolve through the business project registry, persist a validated plan, run through runtime approval policy, store the Codex handoff as an artifact, and remain honestly blocked in `external_handoff` mode until a real Codex job or result is registered. The earlier `codex_goal` command action remains a lightweight draft surface; it is not treated as proof that execution started.
+
 Proactive mode can be changed from the command surface with explicit mode language such as "go quiet", "set focus mode", "switch to aggressive mode", "normal mode", and "away mode". This writes the same `proactiveMode` overlay used by the Control view and returns the resulting `attentionPolicy` in the command response.
 
 Current focus can be pinned from command language such as "set current focus to PoopSites redesign" or cleared with "clear current focus". Pinned focus writes to the `focus` control overlay, overrides inferred focus in the ActiveBrief, and affects Focus-mode attention filtering.

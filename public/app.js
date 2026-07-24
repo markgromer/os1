@@ -47,6 +47,11 @@ const state = {
     dashboardGhl: { loading: false, fetchedAt: 0, error: '', snapshot: null },
     dashboardAiPreviews: { loading: false, fetchedAt: 0, error: '', ai: false, tasks: {}, inbox: {} },
     marcusLiveDashboard: { loading: false, fetchedAt: 0, error: '', snapshot: null, selectedCommId: '' },
+    operations: [],
+    operationsLoading: false,
+    operationsFetchedAt: 0,
+    operationsError: '',
+    selectedOperationId: '',
 
     chatHistory: [],
     globalChatHistory: [],
@@ -971,6 +976,10 @@ async function setActiveBusinessKey(key, { persistServer = true } = {}) {
 
     state.currentProjectId = null;
     state.currentView = 'command';
+    state.operations = [];
+    state.operationsFetchedAt = 0;
+    state.operationsError = '';
+    state.selectedOperationId = '';
     showLoading();
     await Promise.all([
         fetchState(),
@@ -2169,6 +2178,13 @@ function getCommandPaletteItems() {
             run: async () => { await openActions(); },
         },
         {
+            id: 'go-operations',
+            label: 'Go to Operations',
+            hint: 'Navigation',
+            keywords: 'operations durable codex approvals verification running blocked',
+            run: async () => { await openOperations(); },
+        },
+        {
             id: 'go-systems',
             label: 'Go to Systems',
             hint: 'Navigation',
@@ -3270,6 +3286,229 @@ async function refreshMarcusLiveDashboard({ force = false } = {}) {
     }
 }
 
+async function refreshOperations({ force = false } = {}) {
+    const age = Date.now() - Number(state.operationsFetchedAt || 0);
+    if (!force && age < 15_000 && state.operations.length) return state.operations;
+    if (state.operationsLoading) return state.operations;
+    state.operationsLoading = true;
+    state.operationsError = '';
+    try {
+        const data = await apiJson('/api/operations?limit=250');
+        state.operations = Array.isArray(data?.operations) ? data.operations : [];
+        state.operationsFetchedAt = Date.now();
+        if (state.selectedOperationId && !state.operations.some((operation) => safeText(operation?.id) === state.selectedOperationId)) {
+            state.selectedOperationId = '';
+        }
+        return state.operations;
+    } catch (e) {
+        state.operationsError = safeText(e?.message) || 'Failed to load operations.';
+        return state.operations;
+    } finally {
+        state.operationsLoading = false;
+        if (state.currentView === 'operations' || state.currentView === 'marcus-live') renderMain();
+    }
+}
+
+function replaceOperationInState(operation) {
+    if (!operation || typeof operation !== 'object') return;
+    const index = state.operations.findIndex((item) => safeText(item?.id) === safeText(operation.id));
+    if (index >= 0) state.operations[index] = operation;
+    else state.operations.unshift(operation);
+    state.operations.sort((a, b) => safeText(b?.updatedAt).localeCompare(safeText(a?.updatedAt)));
+    state.operationsFetchedAt = Date.now();
+}
+
+async function runOperationApi(operationId, action, body = {}) {
+    const data = await apiJson(`/api/operations/${encodeURIComponent(operationId)}/${action}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+    });
+    if (data?.operation) replaceOperationInState(data.operation);
+    return data?.operation || null;
+}
+
+function operationProgress(operation) {
+    const steps = Array.isArray(operation?.steps) ? operation.steps : [];
+    const completed = steps.filter((step) => ['completed', 'skipped'].includes(safeText(step?.status))).length;
+    return { completed, total: steps.length, percent: steps.length ? Math.round((completed / steps.length) * 100) : 0 };
+}
+
+function operationStatusClass(status) {
+    const value = safeText(status).toLowerCase();
+    if (value === 'completed') return 'text-emerald-300 border-emerald-500/30 bg-emerald-500/10';
+    if (value === 'failed' || value === 'cancelled') return 'text-red-300 border-red-500/30 bg-red-500/10';
+    if (value === 'waiting_for_approval') return 'text-amber-200 border-amber-500/30 bg-amber-500/10';
+    if (value === 'blocked' || value === 'paused') return 'text-orange-200 border-orange-500/30 bg-orange-500/10';
+    if (value === 'running' || value === 'verifying') return 'text-blue-200 border-blue-500/30 bg-blue-500/10';
+    return 'text-zinc-300 border-zinc-600 bg-zinc-800/60';
+}
+
+function renderOperations(container) {
+    const titleEl = document.getElementById('page-title');
+    if (titleEl) titleEl.innerText = 'Operations';
+    const operations = Array.isArray(state.operations) ? state.operations : [];
+    const selectedId = state.selectedOperationId || safeText(operations[0]?.id);
+    const selected = operations.find((operation) => safeText(operation?.id) === selectedId) || null;
+    if (!state.selectedOperationId && selected) state.selectedOperationId = selected.id;
+    const formatDate = (value) => {
+        const parsed = Date.parse(safeText(value));
+        return Number.isFinite(parsed) ? new Date(parsed).toLocaleString() : '—';
+    };
+    const currentStep = selected?.steps?.find((step) => step.id === selected.currentStepId);
+    const handoff = selected?.artifacts?.find((artifact) => artifact.type === 'codex_handoff');
+    const pendingApprovals = (selected?.approvals || []).filter((approval) => approval.status === 'pending');
+    const activeBlockers = (selected?.blockers || []).filter((blocker) => blocker.status === 'active');
+    const waitsForEvidence = activeBlockers.some((blocker) => ['external_codex_required', 'verification_required'].includes(blocker.type));
+
+    container.innerHTML = `
+        <div class="h-full min-h-0 overflow-y-auto p-4 lg:p-6">
+            <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
+                <div>
+                    <div class="text-lg font-semibold text-white">Durable Operations</div>
+                    <div class="text-[11px] text-ops-light">Restart-safe plans, approvals, provider handoffs, and verification evidence.</div>
+                </div>
+                <div class="flex gap-2">
+                    <button id="operations-refresh" class="px-3 py-2 rounded border border-ops-border text-[11px] text-ops-light hover:text-white"><i class="fa-solid fa-rotate mr-1"></i>Refresh</button>
+                    <button id="operations-create" class="px-3 py-2 rounded bg-blue-600 text-[11px] text-white hover:bg-blue-500"><i class="fa-solid fa-plus mr-1"></i>New operation</button>
+                </div>
+            </div>
+            ${state.operationsError ? `<div class="mb-4 rounded border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-200">${escapeHtml(state.operationsError)}</div>` : ''}
+            <div class="grid grid-cols-1 xl:grid-cols-[360px_minmax(0,1fr)] gap-4 items-start">
+                <section class="rounded-xl border border-ops-border bg-ops-surface/30 overflow-hidden">
+                    <div class="px-3 py-2 border-b border-ops-border text-[10px] font-mono uppercase tracking-wider text-ops-light">${operations.length} operation${operations.length === 1 ? '' : 's'}</div>
+                    <div class="max-h-[72vh] overflow-y-auto divide-y divide-ops-border/70">
+                        ${operations.map((operation) => {
+                            const progress = operationProgress(operation);
+                            const current = operation.steps?.find((step) => step.id === operation.currentStepId);
+                            const waiting = operation.approvals?.some((approval) => approval.status === 'pending');
+                            return `<button data-operation-open="${escapeHtml(operation.id)}" class="w-full text-left p-3 hover:bg-ops-surface/70 ${operation.id === selectedId ? 'bg-blue-500/10' : ''}">
+                                <div class="flex items-start justify-between gap-2">
+                                    <div class="min-w-0"><div class="text-sm text-white truncate">${escapeHtml(operation.title || 'Untitled operation')}</div><div class="text-[10px] text-ops-light truncate">${escapeHtml(operation.projectName || 'Unresolved project')}</div></div>
+                                    <span class="shrink-0 px-2 py-0.5 rounded border text-[9px] font-mono ${operationStatusClass(operation.status)}">${escapeHtml(operation.status)}</span>
+                                </div>
+                                <div class="mt-2 h-1.5 rounded bg-zinc-800 overflow-hidden"><div class="h-full bg-blue-500" style="width:${progress.percent}%"></div></div>
+                                <div class="mt-1.5 flex justify-between gap-2 text-[9px] font-mono text-zinc-500"><span class="truncate">${escapeHtml(current?.title || 'No current step')}</span><span>${progress.completed}/${progress.total}</span></div>
+                                <div class="mt-1 flex items-center justify-between text-[9px] text-zinc-500"><span>${waiting ? '<span class="text-amber-300">Approval needed</span>' : `Risk: ${escapeHtml(operation.riskLevel)}`}</span><span>${escapeHtml(formatDate(operation.updatedAt))}</span></div>
+                            </button>`;
+                        }).join('') || `<div class="p-6 text-center text-xs text-zinc-500">No durable operations yet.</div>`}
+                    </div>
+                </section>
+                <section class="min-w-0">
+                    ${selected ? `
+                        <div class="rounded-xl border border-ops-border bg-ops-surface/30 p-4">
+                            <div class="flex flex-wrap items-start justify-between gap-3">
+                                <div class="min-w-0"><div class="text-lg text-white font-semibold">${escapeHtml(selected.title)}</div><div class="mt-1 text-[10px] font-mono text-zinc-500">${escapeHtml(selected.id)} · revision ${Number(selected.revision) || 1}</div></div>
+                                <span class="px-2 py-1 rounded border text-[10px] font-mono ${operationStatusClass(selected.status)}">${escapeHtml(selected.status)}</span>
+                            </div>
+                            <div class="mt-4 grid sm:grid-cols-3 gap-3 text-xs"><div><div class="text-[9px] uppercase tracking-wider text-zinc-500">Project</div><div class="mt-1 text-zinc-200">${escapeHtml(selected.projectName || 'Unresolved')}</div></div><div><div class="text-[9px] uppercase tracking-wider text-zinc-500">Risk</div><div class="mt-1 text-zinc-200">${escapeHtml(selected.riskLevel)}</div></div><div><div class="text-[9px] uppercase tracking-wider text-zinc-500">Current step</div><div class="mt-1 text-zinc-200">${escapeHtml(currentStep?.title || 'None')}</div></div></div>
+                            <div class="mt-4"><div class="text-[9px] uppercase tracking-wider text-zinc-500">Objective</div><div class="mt-1 text-sm text-zinc-200 whitespace-pre-wrap">${escapeHtml(selected.objective)}</div></div>
+                            <details class="mt-3"><summary class="cursor-pointer text-[10px] text-zinc-400">Original request</summary><div class="mt-2 rounded bg-black/20 p-3 text-xs text-zinc-300 whitespace-pre-wrap">${escapeHtml(selected.originalRequest)}</div></details>
+                            <div class="mt-4 flex flex-wrap gap-2">
+                                ${selected.status === 'draft' ? '<button data-operation-action="plan" class="stat-pill stat-pill--accent">Plan</button>' : ''}
+                                ${selected.status === 'planned' ? '<button data-operation-action="start" class="stat-pill stat-pill--accent">Start real cycle</button>' : ''}
+                                ${['queued', 'running', 'verifying'].includes(selected.status) ? '<button data-operation-action="tick" class="stat-pill stat-pill--accent">Run cycle</button><button data-operation-action="pause" class="stat-pill stat-pill--muted">Pause</button>' : ''}
+                                ${selected.status === 'paused' ? '<button data-operation-action="resume" class="stat-pill stat-pill--accent">Resume</button>' : ''}
+                                ${(selected.status === 'failed' || (selected.status === 'blocked' && !waitsForEvidence)) ? '<button data-operation-action="retry" class="stat-pill stat-pill--muted">Retry step</button>' : ''}
+                                ${!['completed', 'failed', 'cancelled'].includes(selected.status) ? '<button data-operation-action="cancel" class="stat-pill stat-pill--muted">Cancel</button>' : ''}
+                                ${handoff ? '<button id="operation-copy-handoff" class="stat-pill stat-pill--muted">Copy Codex handoff</button>' : ''}
+                                ${selected.steps?.some((step) => step.type === 'codex') && !['completed', 'cancelled'].includes(selected.status) ? '<button id="operation-register-codex" class="stat-pill stat-pill--muted">Register external Codex job</button>' : ''}
+                            </div>
+                        </div>
+                        <div class="mt-4 grid lg:grid-cols-2 gap-4">
+                            <div class="rounded-xl border border-ops-border bg-ops-surface/30 p-4"><div class="text-xs font-semibold text-white">Plan and step timeline</div><div class="mt-3 space-y-2">${(selected.steps || []).map((step) => `<div class="rounded border border-ops-border bg-black/10 p-3"><div class="flex justify-between gap-2"><div class="text-xs text-zinc-200">${step.sequence}. ${escapeHtml(step.title)}</div><span class="text-[9px] font-mono ${step.status === 'completed' ? 'text-emerald-300' : step.status === 'failed' ? 'text-red-300' : step.status === 'waiting_for_approval' ? 'text-amber-300' : 'text-zinc-400'}">${escapeHtml(step.status)}</span></div><div class="mt-1 text-[10px] text-zinc-500">${escapeHtml(step.provider)} · ${escapeHtml(step.riskLevel)} risk · attempt ${Number(step.attemptCount) || 0}/${Number(step.maxAttempts) || 0}</div>${step.error ? `<div class="mt-2 text-[10px] text-red-300">${escapeHtml(step.error)}</div>` : ''}</div>`).join('')}</div></div>
+                            <div class="space-y-4">
+                                <div class="rounded-xl border border-ops-border bg-ops-surface/30 p-4"><div class="flex justify-between"><div class="text-xs font-semibold text-white">Approvals</div><span class="text-[10px] text-zinc-500">${pendingApprovals.length} pending</span></div><div class="mt-3 space-y-2">${(selected.approvals || []).slice().reverse().map((approval) => `<div class="rounded border border-ops-border p-3"><div class="flex justify-between gap-2"><span class="text-xs text-zinc-200">${escapeHtml(approval.action)}</span><span class="text-[9px] font-mono">${escapeHtml(approval.status)}</span></div><div class="mt-1 text-[10px] text-zinc-500">${escapeHtml(approval.riskLevel)} · ${escapeHtml(approval.reason)}</div>${approval.status === 'pending' ? `<div class="mt-2 flex gap-2"><button data-approval-approve="${escapeHtml(approval.id)}" class="stat-pill stat-pill--accent">Approve</button><button data-approval-reject="${escapeHtml(approval.id)}" class="stat-pill stat-pill--muted">Reject</button></div>` : ''}</div>`).join('') || '<div class="text-xs text-zinc-500">No approvals.</div>'}</div></div>
+                                <div class="rounded-xl border border-ops-border bg-ops-surface/30 p-4"><div class="text-xs font-semibold text-white">Blockers</div><div class="mt-3 space-y-2">${activeBlockers.map((blocker) => `<div class="rounded border border-orange-500/20 bg-orange-500/5 p-3 text-xs text-orange-100">${escapeHtml(blocker.message)}</div>`).join('') || '<div class="text-xs text-zinc-500">No active blockers.</div>'}</div></div>
+                            </div>
+                        </div>
+                        <div class="mt-4 grid lg:grid-cols-2 gap-4">
+                            <div class="rounded-xl border border-ops-border bg-ops-surface/30 p-4"><div class="text-xs font-semibold text-white">Verification</div><div class="mt-3 space-y-2">${(selected.verification || []).map((result) => `<div class="rounded border border-ops-border p-3"><div class="flex justify-between gap-2"><span class="text-xs text-zinc-200">${escapeHtml(result.type)}</span><span class="text-[9px] font-mono ${result.status === 'passed' ? 'text-emerald-300' : result.status === 'failed' ? 'text-red-300' : 'text-amber-300'}">${escapeHtml(result.status)}${result.waived ? ' · waived' : ''}</span></div><div class="mt-1 text-[10px] text-zinc-500">${result.required ? 'Required' : 'Optional'}${result.error ? ` · ${escapeHtml(result.error)}` : ''}</div>${['needs_manual_review', 'running', 'failed'].includes(result.status) && !result.waived ? `<div class="mt-2 flex gap-2"><button data-verification-record="${escapeHtml(result.type)}" class="stat-pill stat-pill--muted">Record evidence</button><button data-verification-waive="${escapeHtml(result.id)}" class="stat-pill stat-pill--muted">Waive</button></div>` : ''}</div>`).join('') || '<div class="text-xs text-zinc-500">Verification has not started.</div>'}</div></div>
+                            <div class="rounded-xl border border-ops-border bg-ops-surface/30 p-4"><div class="text-xs font-semibold text-white">Artifacts</div><div class="mt-3 space-y-2">${(selected.artifacts || []).slice().reverse().map((artifact) => `<div class="rounded border border-ops-border p-3"><div class="text-xs text-zinc-200">${escapeHtml(artifact.name)}</div><div class="mt-1 text-[9px] font-mono text-zinc-500">${escapeHtml(artifact.type)} · ${escapeHtml(formatDate(artifact.createdAt))}</div></div>`).join('') || '<div class="text-xs text-zinc-500">No artifacts.</div>'}</div></div>
+                        </div>
+                        <details class="mt-4 rounded-xl border border-ops-border bg-ops-surface/30 p-4" open><summary class="cursor-pointer text-xs font-semibold text-white">Activity log (${selected.activityLog?.length || 0})</summary><div class="mt-3 space-y-2 max-h-80 overflow-y-auto">${(selected.activityLog || []).slice().reverse().map((event) => `<div class="border-l border-zinc-700 pl-3"><div class="text-[10px] text-zinc-300">${escapeHtml(event.message || event.type)}</div><div class="text-[9px] font-mono text-zinc-600">${escapeHtml(event.type)} · ${escapeHtml(formatDate(event.timestamp))}</div></div>`).join('')}</div></details>
+                    ` : '<div class="rounded-xl border border-ops-border bg-ops-surface/30 p-10 text-center text-sm text-zinc-500">Select or create an operation.</div>'}
+                </section>
+            </div>
+        </div>`;
+
+    if (!operations.length && !state.operationsLoading && !state.operationsError) setTimeout(() => refreshOperations({ force: true }), 0);
+    container.querySelector('#operations-refresh')?.addEventListener('click', () => refreshOperations({ force: true }));
+    container.querySelector('#operations-create')?.addEventListener('click', async () => {
+        const request = safeText(window.prompt('What outcome should M.A.R.C.U.S. own?') || '').trim();
+        if (!request) return;
+        try {
+            const data = await apiJson('/api/operations', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ originalRequest: request, requestedBy: 'mark', source: 'operations_ui', autoPlan: true }) });
+            replaceOperationInState(data.operation);
+            state.selectedOperationId = data.operation.id;
+            renderMain();
+        } catch (e) { alert(e?.message || 'Failed to create operation.'); }
+    });
+    container.querySelectorAll('[data-operation-open]').forEach((button) => button.addEventListener('click', () => { state.selectedOperationId = safeText(button.getAttribute('data-operation-open')); renderMain(); }));
+    container.querySelectorAll('[data-operation-action]').forEach((button) => button.addEventListener('click', async () => {
+        const action = safeText(button.getAttribute('data-operation-action'));
+        if (!selected || !action) return;
+        if (action === 'cancel' && !window.confirm('Cancel this durable operation?')) return;
+        button.disabled = true;
+        try { await runOperationApi(selected.id, action, { actor: 'mark' }); renderMain(); } catch (e) { alert(e?.message || `Failed to ${action} operation.`); } finally { button.disabled = false; }
+    }));
+    container.querySelectorAll('[data-approval-approve]').forEach((button) => button.addEventListener('click', async () => {
+        const approvalId = safeText(button.getAttribute('data-approval-approve'));
+        const approval = selected?.approvals?.find((item) => item.id === approvalId);
+        let message = safeText(window.prompt('Approval note (critical actions must include “I understand”):') || '').trim();
+        if (!approvalId) return;
+        try {
+            const data = await apiJson(`/api/operations/${encodeURIComponent(selected.id)}/approvals/${encodeURIComponent(approvalId)}/approve`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ approvedBy: 'mark', message, strongConfirmation: approval?.riskLevel === 'critical' && /i understand/i.test(message) }) });
+            replaceOperationInState(data.operation); renderMain();
+        } catch (e) { alert(e?.message || 'Approval failed.'); }
+    }));
+    container.querySelectorAll('[data-approval-reject]').forEach((button) => button.addEventListener('click', async () => {
+        const approvalId = safeText(button.getAttribute('data-approval-reject'));
+        const message = safeText(window.prompt('Why reject this action?') || '').trim();
+        if (!approvalId) return;
+        try {
+            const data = await apiJson(`/api/operations/${encodeURIComponent(selected.id)}/approvals/${encodeURIComponent(approvalId)}/reject`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rejectedBy: 'mark', message }) });
+            replaceOperationInState(data.operation); renderMain();
+        } catch (e) { alert(e?.message || 'Rejection failed.'); }
+    }));
+    container.querySelector('#operation-copy-handoff')?.addEventListener('click', async () => {
+        try { await navigator.clipboard.writeText(safeText(handoff?.content)); alert('Codex handoff copied.'); } catch { window.prompt('Copy Codex handoff:', safeText(handoff?.content)); }
+    });
+    container.querySelector('#operation-register-codex')?.addEventListener('click', async () => {
+        const jobId = safeText(window.prompt('Codex job/run ID (optional if registering a result):') || '').trim();
+        const status = safeText(window.prompt('Status: running, completed, failed, or cancelled', 'running') || '').trim().toLowerCase();
+        if (!['running', 'completed', 'failed', 'cancelled'].includes(status)) return alert('Invalid status.');
+        const branch = safeText(window.prompt('Branch (optional):') || '').trim();
+        const commit = status === 'completed' ? safeText(window.prompt('Commit SHA (optional):') || '').trim() : '';
+        const diffSummary = status === 'completed' ? safeText(window.prompt('Diff summary or evidence (recommended):') || '').trim() : '';
+        const result = status === 'completed' ? safeText(window.prompt('Completion result (what actually changed):') || '').trim() : '';
+        try {
+            const data = await apiJson(`/api/operations/${encodeURIComponent(selected.id)}/external-job`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jobId, status, branch, commit, diffSummary, result, registeredBy: 'mark' }) });
+            replaceOperationInState(data.operation); renderMain();
+        } catch (e) { alert(e?.message || 'Failed to register Codex job.'); }
+    });
+    container.querySelectorAll('[data-verification-record]').forEach((button) => button.addEventListener('click', async () => {
+        const type = safeText(button.getAttribute('data-verification-record'));
+        const passed = window.confirm(`Did ${type} pass? Choose Cancel to record a failure.`);
+        const evidence = safeText(window.prompt('Evidence (command output, reviewer, URL, or artifact reference):') || '').trim();
+        if (!evidence) return alert('Evidence is required.');
+        try {
+            const data = await apiJson(`/api/operations/${encodeURIComponent(selected.id)}/verification-results`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ actor: 'mark', results: [{ type, status: passed ? 'passed' : 'failed', required: true, completedAt: new Date().toISOString(), evidence: { note: evidence } }] }) });
+            replaceOperationInState(data.operation); renderMain();
+        } catch (e) { alert(e?.message || 'Failed to record verification.'); }
+    }));
+    container.querySelectorAll('[data-verification-waive]').forEach((button) => button.addEventListener('click', async () => {
+        const verificationId = safeText(button.getAttribute('data-verification-waive'));
+        const reason = safeText(window.prompt('Why should this required verification be waived? This will be recorded as an approval event.') || '').trim();
+        if (!verificationId || !reason) return;
+        if (!window.confirm('Explicitly waive this required verification check?')) return;
+        try {
+            const data = await apiJson(`/api/operations/${encodeURIComponent(selected.id)}/verification/${encodeURIComponent(verificationId)}/waive`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ actor: 'mark', reason }) });
+            replaceOperationInState(data.operation); renderMain();
+        } catch (e) { alert(e?.message || 'Failed to waive verification.'); }
+    }));
+}
+
 async function setMarcusPerformanceMode(mode) {
     return await apiJson('/api/marcus/live/performance', {
         method: 'POST',
@@ -3388,7 +3627,7 @@ function applyInitialDeepLinkFromUrl() {
         const view = safeText(params.get('view') || '').trim().toLowerCase();
         const pane = safeText(params.get('pane') || '').trim().toLowerCase();
         const allowedViews = new Set([
-            'command', 'now', 'focus', 'signals', 'people', 'work', 'actions', 'systems', 'memory', 'control',
+            'command', 'now', 'focus', 'signals', 'people', 'work', 'actions', 'operations', 'systems', 'memory', 'control',
             'dashboard', 'inbox', 'projects', 'clients', 'settings', 'godview', 'marcus-live',
         ]);
         if (allowedViews.has(view)) {
@@ -4454,6 +4693,18 @@ async function openActions() {
     broadcastMarcusContext();
 }
 
+async function openOperations(operationId = '') {
+    state.currentView = 'operations';
+    state.currentProjectId = null;
+    state.currentClientName = null;
+    if (operationId) state.selectedOperationId = safeText(operationId).trim();
+    await refreshOperations({ force: true }).catch(() => {});
+    renderNav();
+    renderMain();
+    renderChat();
+    broadcastMarcusContext();
+}
+
 async function openSystems() {
     state.currentView = 'systems';
     state.currentProjectId = null;
@@ -4524,6 +4775,7 @@ function renderNav() {
     nav.appendChild(createNavIcon("fa-address-book", "People", () => openPeople(), state.currentView === "people" || state.currentView === "clients" || state.currentView === "client"));
     nav.appendChild(createNavIcon("fa-briefcase", "Work", () => openWork(), state.currentView === "work" || state.currentView === "projects" || state.currentView === "project"));
     nav.appendChild(createNavIcon("fa-list-check", "Actions", () => openActions(), state.currentView === "actions"));
+    nav.appendChild(createNavIcon("fa-gears", "Operations", () => openOperations(), state.currentView === "operations"));
     nav.appendChild(createNavIcon("fa-server", "Systems", () => openSystems(), state.currentView === "systems"));
     nav.appendChild(createNavIcon("fa-brain", "Memory", () => openMemory(), state.currentView === "memory"));
 
@@ -4535,7 +4787,7 @@ function renderNav() {
 }
 
 function isOperationalCommandView(view = state.currentView) {
-    return ["command", "now", "focus", "signals", "people", "work", "actions", "systems", "memory", "control"].includes(safeText(view));
+    return ["command", "now", "focus", "signals", "people", "work", "actions", "operations", "systems", "memory", "control"].includes(safeText(view));
 }
 
 function updateHeaderOperationalChrome() {
@@ -4584,6 +4836,7 @@ async function openMarcusLive() {
     renderChat();
     broadcastMarcusContext();
     refreshMarcusLiveDashboard({ force: true }).catch(() => {});
+    refreshOperations({ force: true }).catch(() => {});
 }
 
 async function openInbox() {
@@ -4779,7 +5032,7 @@ function renderMain() {
     }
 
     // Reduce full-page scrolling: scroll inside panes for data-heavy views.
-    if (state.currentView === 'command' || state.currentView === 'now' || state.currentView === 'focus' || state.currentView === 'signals' || state.currentView === 'people' || state.currentView === 'work' || state.currentView === 'actions' || state.currentView === 'systems' || state.currentView === 'memory' || state.currentView === 'control' || state.currentView === 'project' || state.currentView === 'projects' || state.currentView === 'revisions' || state.currentView === 'dashboard' || state.currentView === 'marcus-live' || state.currentView === 'godview' || state.currentView === 'inbox' || state.currentView === 'calendar' || state.currentView === 'team') {
+    if (state.currentView === 'command' || state.currentView === 'now' || state.currentView === 'focus' || state.currentView === 'signals' || state.currentView === 'people' || state.currentView === 'work' || state.currentView === 'actions' || state.currentView === 'operations' || state.currentView === 'systems' || state.currentView === 'memory' || state.currentView === 'control' || state.currentView === 'project' || state.currentView === 'projects' || state.currentView === 'revisions' || state.currentView === 'dashboard' || state.currentView === 'marcus-live' || state.currentView === 'godview' || state.currentView === 'inbox' || state.currentView === 'calendar' || state.currentView === 'team') {
         setMainPortScrolling(false);
     } else {
         setMainPortScrolling(true);
@@ -4796,6 +5049,10 @@ function renderMain() {
             const stack = safeText(e?.stack).trim();
             showError(`Command surface render failed: ${msg}${stack ? `\n\n${stack}` : ''}`.slice(0, 4000));
         }
+    } else if (state.currentView === "operations") {
+        dockMarcusToPersistentSlot();
+        container.className = 'min-h-0 overflow-y-auto';
+        renderOperations(container);
     } else if (state.currentView === "godview") {
         dockMarcusToPersistentSlot();
         container.className = 'min-h-0 overflow-y-auto';
@@ -5383,6 +5640,7 @@ function renderActionsSurface(container, sidePort, brief, actionControls) {
                     </div>
                     <div class="flex flex-wrap gap-1.5 shrink-0">
                         <button type="button" data-command="Create a follow-up action from the current context." class="stat-pill stat-pill--accent">Create follow-up</button>
+                        <button type="button" data-command="Create a Codex goal from the current MARCUS plan." class="stat-pill stat-pill--muted">Codex goal</button>
                         <button type="button" data-command="Draft a reply but do not send it." class="stat-pill stat-pill--muted">Draft reply</button>
                         <button type="button" data-command="Show action queue." class="stat-pill stat-pill--muted">Ask MARCUS</button>
                         <button type="button" data-refresh-brief class="stat-pill stat-pill--muted">Refresh</button>
@@ -6625,6 +6883,8 @@ function buildClientsIndexFromProjects(projects) {
 }
 
 function renderMarcusLive(container) {
+    const titleEl = document.getElementById('page-title');
+    if (titleEl) titleEl.innerText = 'Marcus Live';
     const live = state.marcusLiveDashboard || {};
     const snapshot = live.snapshot || null;
     const health = snapshot?.systemHealth || null;
@@ -6632,6 +6892,13 @@ function renderMarcusLive(container) {
     const focus = Array.isArray(snapshot?.currentFocus) ? snapshot.currentFocus : [];
     const stale = Array.isArray(snapshot?.staleWebsiteProjects) ? snapshot.staleWebsiteProjects : [];
     const desktop = snapshot?.desktop || null;
+    const durableOperations = Array.isArray(state.operations) ? state.operations : [];
+    const recentlyCompletedCutoff = Date.now() - 24 * 60 * 60 * 1000;
+    const durableAttention = durableOperations.filter((operation) => {
+        if (['running', 'verifying', 'blocked', 'waiting_for_approval'].includes(operation.status)) return true;
+        if ((operation.verification || []).some((result) => result.required && result.status === 'failed')) return true;
+        return operation.status === 'completed' && Date.parse(operation.completedAt || operation.updatedAt || 0) >= recentlyCompletedCutoff;
+    }).slice(0, 8);
 
     const ring = (label, value, sub, color = '#22c55e') => {
         const n = Number(value);
@@ -6706,6 +6973,11 @@ function renderMarcusLive(container) {
         '+1 (520) 491-1540',
         ...(focus.slice(0, 5).map((p) => p.name)),
     ].filter(Boolean).slice(0, 9);
+    const durableRows = durableAttention.map((operation) => {
+        const failedVerification = (operation.verification || []).some((result) => result.required && result.status === 'failed');
+        const label = failedVerification ? 'failed verification' : safeText(operation.status).replaceAll('_', ' ');
+        return `<button data-live-operation="${escapeHtml(operation.id)}" class="w-full rounded border border-[#172b3b] bg-[#0c1824] p-2 text-left hover:bg-[#102235]"><div class="flex items-center justify-between gap-2"><span class="text-xs text-zinc-200 truncate">${escapeHtml(operation.title)}</span><span class="text-[9px] font-mono ${operation.status === 'completed' ? 'text-emerald-300' : operation.status === 'waiting_for_approval' ? 'text-amber-300' : operation.status === 'blocked' || failedVerification ? 'text-orange-300' : 'text-blue-300'}">${escapeHtml(label)}</span></div><div class="mt-1 text-[10px] text-zinc-500 truncate">${escapeHtml(operation.projectName || 'Unresolved project')}</div></button>`;
+    }).join('');
 
     container.innerHTML = `
         <div class="min-h-full bg-[#03070b] text-zinc-200 p-3">
@@ -6725,6 +6997,7 @@ function renderMarcusLive(container) {
                         <button onclick="promptNewTask()" class="rounded bg-[#132233] py-2 text-xs text-zinc-200"><i class="fa-regular fa-square-plus mr-1"></i>Task</button>
                     </div>
                     ${live.error ? `<div class="rounded border border-red-500/30 bg-red-500/10 p-2 text-xs text-red-200">${escapeHtml(live.error)}</div>` : ''}
+                    ${section('Durable Operations', durableAttention.length, `<div class="space-y-2">${durableRows || '<div class="text-xs text-zinc-500">No running, blocked, approval-gated, failed-verification, or recently completed operations.</div>'}</div>`)}
                     ${section('System Performance', '', `
                         <div class="grid grid-cols-3 gap-2">
                             ${ring('CPU', health?.cpuPercent, '', '#22d3ee')}
@@ -6758,7 +7031,12 @@ function renderMarcusLive(container) {
     `;
 
     if (!snapshot && !live.loading) refreshMarcusLiveDashboard({ force: true }).catch(() => {});
-    container.querySelector('#btn-live-refresh')?.addEventListener('click', () => refreshMarcusLiveDashboard({ force: true }));
+    if (!state.operationsFetchedAt && !state.operationsLoading) refreshOperations({ force: true }).catch(() => {});
+    container.querySelector('#btn-live-refresh')?.addEventListener('click', () => {
+        refreshMarcusLiveDashboard({ force: true });
+        refreshOperations({ force: true });
+    });
+    container.querySelectorAll('[data-live-operation]').forEach((button) => button.addEventListener('click', () => openOperations(safeText(button.getAttribute('data-live-operation')))));
     container.querySelectorAll('[data-live-performance]').forEach((btn) => {
         btn.addEventListener('click', async () => {
             const mode = safeText(btn.getAttribute('data-live-performance')).trim();
