@@ -228,11 +228,6 @@ const operationsEngine = createOperationsEngine({
 async function createOrReuseDurableOperationForMessage(message, { projectId = '', projectName = '', source = 'marcus_chat' } = {}) {
   const businessKey = getBusinessKeyFromContext();
   const originalRequest = String(message || '').trim();
-  const recent = await operationsEngine.listOperations(businessKey, { limit: 25 });
-  const duplicate = recent.find((operation) => operation.originalRequest === originalRequest
-    && (Date.now() - Date.parse(operation.createdAt || 0)) < 10 * 60_000
-    && !['completed', 'failed', 'cancelled'].includes(operation.status));
-  if (duplicate) return { operation: duplicate, resolution: null, reused: true };
   const created = await operationsEngine.createFromRequest(businessKey, {
     originalRequest,
     projectId,

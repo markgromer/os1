@@ -138,7 +138,7 @@ export class OperationReconciliation {
         }
         for (const blocker of operation.blockers) {
           if (blocker.stepId === targetCorrelation.stepId && blocker.status === 'active'
-            && ['verification_required', 'verification_failed'].includes(blocker.type)) {
+            && ['verification_required', 'verification_failed', 'recovery_required'].includes(blocker.type)) {
             blocker.status = 'resolved'; blocker.resolvedAt = timestamp; blocker.resolution = 'Desktop verification result reconciled.';
           }
         }
@@ -149,7 +149,7 @@ export class OperationReconciliation {
         targetStep.output = ok ? outputText : '';
         targetStep.error = ok ? '' : (errorText || 'Desktop action failed.');
         for (const blocker of operation.blockers) {
-          if (blocker.stepId === targetCorrelation.stepId && blocker.status === 'active' && blocker.type === 'provider_result_required') {
+          if (blocker.stepId === targetCorrelation.stepId && blocker.status === 'active' && ['provider_result_required', 'recovery_required'].includes(blocker.type)) {
             blocker.status = 'resolved'; blocker.resolvedAt = timestamp; blocker.resolution = 'Desktop provider result reconciled.';
           }
         }

@@ -402,6 +402,7 @@ All routes use the existing API authentication and active-business context. Look
 
 ```text
 GET    /api/operations
+GET    /api/operations/readiness
 POST   /api/operations
 GET    /api/operations/:id
 PATCH  /api/operations/:id

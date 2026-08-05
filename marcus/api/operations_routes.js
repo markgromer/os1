@@ -39,6 +39,11 @@ export function registerOperationsRoutes(app, { engine, getBusinessKey }) {
     res.json({ ok: true, businessKey: business(req), operations });
   }));
 
+  router.get('/operations/readiness', asyncRoute(async (req, res) => {
+    const readiness = await engine.readiness(business(req));
+    res.json({ ok: true, businessKey: business(req), readiness });
+  }));
+
   router.post('/operations', asyncRoute(async (req, res) => {
     const result = await engine.createFromRequest(business(req), req.body || {});
     res.status(201).json({ ok: true, ...result });

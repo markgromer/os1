@@ -555,6 +555,18 @@ export class OperationService {
   async completeOperation(businessKey, operationId, { actor = 'system' } = {}) {
     return this.store.update(businessKey, operationId, (operation) => {
       if (operation.status !== 'verifying') throw Object.assign(new Error(`Operation cannot complete from ${operation.status}.`), { code: 'INVALID_TRANSITION' });
+      const incompleteStep = operation.steps.find((step) => !['completed', 'skipped'].includes(step.status));
+      if (incompleteStep) {
+        throw Object.assign(new Error(`Operation cannot complete while step "${incompleteStep.title}" is ${incompleteStep.status}.`), { code: 'INCOMPLETE_STEPS' });
+      }
+      const pendingApproval = operation.approvals.find((approval) => approval.status === 'pending');
+      if (pendingApproval) {
+        throw Object.assign(new Error(`Operation cannot complete while approval "${pendingApproval.action}" is pending.`), { code: 'APPROVAL_PENDING' });
+      }
+      const activeBlocker = operation.blockers.find((blocker) => blocker.status === 'active');
+      if (activeBlocker) {
+        throw Object.assign(new Error(`Operation cannot complete while an active blocker remains: ${activeBlocker.message || activeBlocker.type}.`), { code: 'ACTIVE_BLOCKER' });
+      }
       if (!requiredVerificationPassed(operation)) throw Object.assign(new Error('Required verification has not passed or been explicitly waived.'), { code: 'VERIFICATION_REQUIRED' });
       transition(operation, 'completed');
       operation.currentStepId = '';

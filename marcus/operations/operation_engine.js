@@ -44,6 +44,40 @@ function acceptanceCriteriaFromRequest(request, objective) {
   return criteria.filter(Boolean);
 }
 
+const NONTERMINAL_STATUSES = new Set(['draft', 'planned', 'waiting_for_approval', 'queued', 'running', 'paused', 'blocked', 'verifying', 'awaiting_provider', 'recovery_required']);
+
+function duplicateText(value) {
+  const stop = new Set(['the', 'a', 'an', 'and', 'or', 'to', 'on', 'it', 'is', 'still', 'please', 'problem', 'own', 'working', 'work', 'get', 'with', 'for', 'of']);
+  return safeString(value, 20_000)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .split(/\s+/)
+    .filter((token) => token.length >= 3 && !stop.has(token))
+    .sort()
+    .join(' ');
+}
+
+function duplicateSimilarity(left, right) {
+  const a = new Set(duplicateText(left).split(' ').filter(Boolean));
+  const b = new Set(duplicateText(right).split(' ').filter(Boolean));
+  if (!a.size || !b.size) return 0;
+  let shared = 0;
+  for (const token of a) if (b.has(token)) shared += 1;
+  return shared / Math.max(a.size, b.size);
+}
+
+function findDuplicateOperation({ operations, projectRegistryId, objective, originalRequest }) {
+  const now = Date.now();
+  const targetText = `${objective}\n${originalRequest}`;
+  return (Array.isArray(operations) ? operations : []).find((operation) => {
+    if (!NONTERMINAL_STATUSES.has(operation.status)) return false;
+    if (projectRegistryId && operation.projectRegistryId !== projectRegistryId) return false;
+    if (Number.isFinite(Date.parse(operation.createdAt)) && now - Date.parse(operation.createdAt) > 7 * 24 * 60 * 60_000) return false;
+    const candidateText = `${operation.objective}\n${operation.originalRequest}`;
+    return duplicateSimilarity(targetText, candidateText) >= 0.45;
+  }) || null;
+}
+
 function deriveTrustedAuthorization({ request, businessKey, projectRegistryId }) {
   const text = safeString(request, 12_000).toLowerCase();
   const actionClasses = [];
@@ -164,6 +198,28 @@ export function createOperationsEngine({
       });
       const record = resolution.registryRecord;
       const authorizationProvenance = deriveTrustedAuthorization({ request: originalRequest, businessKey: key, projectRegistryId: record?.id || '' });
+      if (record?.id && raw.allowDuplicate !== true) {
+        const duplicate = findDuplicateOperation({
+          operations: await store.listAll(key, { nonterminal: true }),
+          projectRegistryId: record.id,
+          objective,
+          originalRequest,
+        });
+        if (duplicate) {
+          const operation = await store.update(key, duplicate.id, (draft) => {
+            if (!draft.activityLog.some((event) => event.type === 'duplicate_operation_reused' && event.data?.request === originalRequest)) {
+              draft.activityLog.push({
+                id: makeOperationId('evt'), operationId: draft.id, type: 'duplicate_operation_reused', actor: safeString(raw.requestedBy, 100) || 'mark',
+                message: 'A likely duplicate durable operation request reused this active operation.',
+                data: { request: originalRequest, similarity: duplicateSimilarity(`${objective}\n${originalRequest}`, `${draft.objective}\n${draft.originalRequest}`) },
+                timestamp: nowIso(),
+              });
+            }
+            return draft;
+          });
+          return { operation, resolution, reused: true };
+        }
+      }
       let operation = await service.createOperation(key, {
         businessKey: key,
         projectId: record?.projectId || safeString(raw.projectId, 160),
@@ -234,6 +290,27 @@ export function createOperationsEngine({
         needsApproval: operation.approvals.some((approval) => approval.status === 'pending'),
         needsRecovery: operation.status === 'recovery_required',
       }));
+    },
+
+    async readiness(businessKey) {
+      const key = safeBusinessKey(businessKey);
+      const operations = await store.listAll(key);
+      const nonterminal = operations.filter((operation) => NONTERMINAL_STATUSES.has(operation.status));
+      return {
+        operationStoreAvailable: true,
+        projectRegistryAvailable: true,
+        operationEngineInitialized: true,
+        runnerInitialized: Boolean(runner),
+        desktopQueueInitialized: typeof queueDesktopAction === 'function',
+        recoveryCompleted: true,
+        codex: {
+          mode: codex.mode,
+          directAdapterConfigured: codex.mode === 'direct',
+        },
+        recoveryRequiredCount: operations.filter((operation) => operation.status === 'recovery_required').length,
+        pendingApprovalCount: operations.reduce((count, operation) => count + operation.approvals.filter((approval) => approval.status === 'pending').length, 0),
+        pendingExternalCodexCount: nonterminal.filter((operation) => operation.blockers.some((blocker) => blocker.status === 'active' && blocker.type === 'external_codex_required')).length,
+      };
     },
 
     async getOperation(businessKey, operationId) {

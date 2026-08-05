@@ -3501,7 +3501,7 @@ function renderOperations(container) {
         const evidence = safeText(window.prompt('Evidence (command output, reviewer, URL, or artifact reference):') || '').trim();
         if (!evidence) return alert('Evidence is required.');
         try {
-            const data = await apiJson(`/api/operations/${encodeURIComponent(selected.id)}/verification-results`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ actor: 'mark', results: [{ type, status: passed ? 'passed' : 'failed', required: true, completedAt: new Date().toISOString(), evidence: { note: evidence } }] }) });
+            const data = await apiJson(`/api/operations/${encodeURIComponent(selected.id)}/manual-verification-evidence`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ actor: 'mark', results: [{ type, status: passed ? 'passed' : 'failed', required: true, completedAt: new Date().toISOString(), evidence: { note: evidence } }] }) });
             replaceOperationInState(data.operation); renderMain();
         } catch (e) { alert(e?.message || 'Failed to record verification.'); }
     }));
