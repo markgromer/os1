@@ -332,7 +332,7 @@ Marcus Live is the live operations cockpit for:
 
 - system performance from the desktop agent
 - one-click performance profiles: optimize, performance, balanced, and power saver
-- current focus projects based on desktop activity, recent work, urgent tasks, and pending communications
+- current focus, focus shifts, project momentum, staleness, and bottlenecks from normalized GitHub, Codex, desktop, operation, deployment, and browser evidence
 - pending communication pills linked to accounts/projects when possible
 - stale active website projects that are likely done and should stop polluting current context
 
@@ -438,6 +438,73 @@ npm run lint
 The test suite uses temporary data directories and covers normalization, terminal-state races, delayed launch/poll/artifact cancellation, pause/restart/resume without relaunch, business isolation, resolver scoring, authenticated authorization provenance, action-scoped publish approval, durable desktop dispatch leases and recovery, general desktop reconciliation, workspace approval challenges, independent verification, retry limits, external Codex handoffs, route authentication, and isolated startup.
 
 Dependency audit note: Nodemailer is upgraded to the fixed 9.x line. The remaining audit findings are moderate transitive `uuid`/Google API findings; npm currently requires a major `googleapis` upgrade to clear them, so that upgrade remains a separately testable compatibility change.
+
+## Project Evidence and Activity Intelligence
+
+Project activity is derived from observable evidence rather than task status. The implementation lives under `marcus/evidence/` and writes a separate, append-oriented business store:
+
+```text
+data/businesses/<businessKey>/project-evidence.json
+```
+
+The store uses serialized atomic writes, revision tracking, sibling backup recovery, source/external-ID deduplication, secret redaction, bounded history, and explicit reconciliation for desktop session aggregation. It does not mutate operation or task history. GitHub refreshes use a five-minute cache, last-seen branch heads, incremental time windows, and at most 25 branch-detail lookups when branch age is otherwise unavailable.
+
+Supported sources are `github`, `codex`, `desktop`, `render`, `cloudflare`, `browser`, `operations`, `airtable`, and `manual`. Evidence covers commits, branch/PR/issue activity, repository reads, Codex handoff and job lifecycle, desktop sessions and quality runs, deployment lifecycle, browser results, operation lifecycle, Airtable updates, and manual notes. The Codex provider emits a trusted lifecycle callback in direct and external-handoff modes, including follow-up, artifact, and diff receipt; durable operation reconciliation repairs missed callbacks. Follow-up evidence stores bounded metadata, not message content. A Codex handoff has zero activity weight: only a registered/running/completed job or implementation artifact proves work.
+
+### Weighting and decay
+
+Each evidence record exposes its raw signal count, configured base weight, half-life, recency decay, decayed contribution, confidence, and evidence IDs. The defaults are deterministic:
+
+| Signal | Weight | Half-life |
+| --- | ---: | ---: |
+| Git commit | 100 | 21 days |
+| Running Codex job | 95 | 2 days |
+| Completed Codex job | 85 | 14 days |
+| Desktop active session | 90 | 1 day |
+| Build/test/lint/typecheck | 90 | 7 days |
+| Completed deployment | 90 | 30 days |
+| Pull request activity | 85 | 14 days |
+| Branch activity | 80 | 14 days |
+| Browser verification | 90 | 30 days |
+| Operation activity | 70 | 7 days |
+| Airtable task update | 35 | 3 days |
+| Manual note | 20 | 3 days |
+| Codex handoff only | 0 | 1 day |
+
+Decay is `2 ^ (-ageDays / halfLifeDays)`. The model may explain a snapshot, but it does not choose the score, state, focus, or risk.
+
+### State and bottleneck rules
+
+The default inactivity thresholds are 21 days for `stale`, 45 days for `dormant`, and 60 days for `abandoned_candidate`. Paused/on-hold projects are not labeled abandoned. Fresh signals and operation state deterministically select `active`, `deep_implementation`, `reviewing`, `deploying`, `verifying`, `blocked`, `waiting`, or `maintenance` before inactivity states apply.
+
+Default bottlenecks include: 10 or more commits in 14 days without a deployment in 30 days; deployment without later browser verification; two Codex lifecycle signals in 14 days without commit/branch/diff proof; three commits without a later successful test; PR inactivity for 14 days; repeated failed builds or browser checks; desktop activity without repository changes; task-list motion without real activity; real activity without Airtable updates; and Airtable status contradicting observed activity. Every risk carries thresholds and evidence references.
+
+Current focus uses decayed non-Airtable, non-manual evidence across projects. A focus shift is recorded only when the new leader has sufficient confidence and a meaningful score lead; the previous focus, detection time, reason, and strongest evidence are retained.
+
+### Evidence APIs and chat tools
+
+All routes use existing authentication and active-business isolation:
+
+```text
+GET  /api/project-evidence
+GET  /api/project-evidence/:projectRegistryId
+POST /api/project-evidence/refresh
+POST /api/project-evidence/ingest
+POST /api/project-evidence/browser-verification
+
+GET  /api/project-activity
+GET  /api/project-activity/:projectRegistryId
+GET  /api/project-activity/current-focus
+GET  /api/project-activity/stale
+GET  /api/project-activity/bottlenecks
+POST /api/project-activity/recalculate
+```
+
+Manual ingestion requires actor and provenance fields and may only create `manual_note` records. It cannot assign GitHub, Codex, desktop, deployment, or browser authority. Browser results are explicitly labeled `external_manual` unless a direct browser adapter is configured.
+
+Marcus chat exposes `get_project_activity`, `list_project_activity`, `get_current_focus`, `list_stale_projects`, `list_project_bottlenecks`, `refresh_project_evidence`, `explain_project_state`, and `compare_project_activity`. Marcus Live consumes the same snapshots for current focus, active implementation, stale projects, and evidence-backed bottlenecks.
+
+Airtable is now low-weight supporting evidence and an optional reporting surface. `airtableDerivedStatusSync` defaults to `false`; no derived status is written back unless the setting is explicitly enabled and a write adapter is configured. Airtable status never overrides stronger observed evidence.
 
 ## AI help (optional)
 
@@ -552,9 +619,9 @@ Make sure:
 - Data lives in `data/tasks.json`.
 - The server still includes legacy `/api/tasks` endpoints from the original task-centric version, but the current UI is projects-first.
 
-## Optional upgrade path: Airtable “Command Center” (recommended long-term)
+## Optional Airtable reporting surface
 
-Since you already use Airtable + Slack with your VA, you can use this as your long-term home and keep this app as a lightweight backup.
+You can continue using Airtable + Slack with your VA for coordination and reporting. M.A.R.C.U.S. treats those records as supporting signals; observed project evidence remains authoritative for activity, focus, staleness, and bottlenecks.
 
 ### Airtable base structure
 

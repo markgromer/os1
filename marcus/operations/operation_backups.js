@@ -14,7 +14,11 @@ export async function discoverDurableBackupSources({ businessDataDir, configured
   }
   const sources = [];
   for (const businessKey of [...keys].sort()) {
-    for (const [fileName, prefix] of [['operations.json', `operations-${businessKey}`], ['project-registry.json', `project-registry-${businessKey}`]]) {
+    for (const [fileName, prefix] of [
+      ['operations.json', `operations-${businessKey}`],
+      ['project-registry.json', `project-registry-${businessKey}`],
+      ['project-evidence.json', `project-evidence-${businessKey}`],
+    ]) {
       const sourceFile = path.join(root, businessKey, fileName);
       try { await fs.access(sourceFile); sources.push({ businessKey, fileName, sourceFile, prefix }); } catch { /* absent files are not fabricated */ }
     }

@@ -1114,7 +1114,7 @@
     .signal-strip { grid-template-columns: 1fr; }
     .hud-shell { grid-template-columns: 1fr; }
     .drawer-body { grid-template-columns: 1fr; max-height: 260px; overflow-y: auto; }
-    .hud-items,
+    .hud-items { max-height: none; overflow: visible; }
     .next-moves,
     .action-tape { max-height: 132px; }
     .hud-card {
@@ -2298,7 +2298,9 @@
     const critical = items.filter(i => i.priority === 'critical').length;
     const warning = items.filter(i => i.priority === 'warning').length;
 
-    setSignal(signalFocus, liveState.context?.workspace ? `Focus: ${liveState.context.workspace}` : 'Focus: idle', liveState.context?.workspace ? 'good' : '');
+    const evidenceFocusName = String(liveState.activeBrief?.evidenceFocus?.currentFocusProject?.projectName || '').trim();
+    const focusName = evidenceFocusName || liveState.context?.workspace || '';
+    setSignal(signalFocus, focusName ? `Focus: ${focusName}` : 'Focus: idle', focusName ? 'good' : '');
     setSignal(signalContext, recentProjectLabel(), liveState.recentContexts.length > 1 ? 'warn' : 'good');
     setSignal(signalMessages, actionable ? `Messages: ${actionable} need action` : conversations.length ? `Messages: ${conversations.length} new` : 'Messages: clear', actionable ? 'warn' : conversations.length ? 'good' : '');
     setSignal(signalSystem, cpu || ram || disk ? `System: CPU ${cpu}% RAM ${ram}%` : 'System: waiting', cpu > 90 || ram > 90 || disk > 92 ? 'bad' : cpu > 75 || ram > 82 || disk > 85 ? 'warn' : cpu || ram ? 'good' : '');
@@ -2426,7 +2428,75 @@
       }
     }
 
-    if (brief.activeProject?.name) {
+    const projectActivity = brief.projectEvidenceActivity || {};
+    const activityFocus = projectActivity.currentFocus || brief.evidenceFocus || null;
+    const focusProject = activityFocus?.currentFocusProject;
+    const activitySnapshots = Array.isArray(projectActivity.snapshots) ? projectActivity.snapshots : [];
+    if (focusProject?.projectName) {
+      const snapshot = activitySnapshots.find((item) => item.projectRegistryId === focusProject.projectRegistryId) || {};
+      const metrics = [
+        snapshot.commitCount7d ? `${snapshot.commitCount7d} commits/7d` : '',
+        snapshot.codexJobs7d ? `${snapshot.codexJobs7d} Codex jobs/7d` : '',
+        snapshot.desktopActiveMinutes7d ? `${Math.round(snapshot.desktopActiveMinutes7d)} desktop min/7d` : '',
+      ].filter(Boolean).join(' | ');
+      items.push({
+        id: 'evidence-focus-' + focusProject.projectRegistryId,
+        kind: 'project-activity',
+        priority: 'active',
+        icon: 'fa-location-crosshairs',
+        title: focusProject.projectName + ' is the current focus.',
+        detail: metrics || activityFocus.reason || 'Recent observed activity is strongest here.',
+        reasons: (activityFocus.evidence || []).slice(0, 3).map((entry) => entry.summary),
+        targetType: 'project',
+        target: focusProject.projectId || focusProject.projectRegistryId,
+        prompt: `Explain why ${focusProject.projectName} is the current focus. Cite the project evidence and compare it with the previous focus.`,
+      });
+    }
+
+    activitySnapshots.filter((item) => ['deep_implementation', 'deploying', 'verifying', 'blocked'].includes(item.state))
+      .filter((item) => item.projectRegistryId !== focusProject?.projectRegistryId)
+      .slice(0, 2).forEach((project) => {
+        items.push({
+          id: 'evidence-active-' + project.projectRegistryId,
+          kind: 'project-activity',
+          priority: project.state === 'blocked' ? 'warning' : 'active',
+          icon: project.state === 'blocked' ? 'fa-triangle-exclamation' : project.state === 'deploying' ? 'fa-cloud-arrow-up' : 'fa-code-branch',
+          title: `${project.projectName}: ${String(project.state).replaceAll('_', ' ')}.`,
+          detail: `${project.commitCount7d} commits/7d | ${project.codexJobs7d} Codex jobs/7d | ${project.deployments30d} deployments/30d`,
+          reasons: (project.reasons || []).slice(0, 2),
+          prompt: `Explain the observed activity and next action for ${project.projectName}. Cite evidence.`,
+        });
+      });
+
+    (Array.isArray(projectActivity.bottlenecks) ? projectActivity.bottlenecks : []).slice(0, 2).forEach((project) => {
+      const firstRisk = project.risks?.[0];
+      if (!firstRisk) return;
+      items.push({
+        id: 'evidence-risk-' + project.projectRegistryId + '-' + firstRisk.code,
+        kind: 'project-bottleneck',
+        priority: 'warning',
+        icon: firstRisk.code === 'verification_gap' ? 'fa-magnifying-glass' : 'fa-triangle-exclamation',
+        title: `${project.projectName}: ${String(firstRisk.code).replaceAll('_', ' ')}.`,
+        detail: firstRisk.summary,
+        reasons: (firstRisk.evidence || []).slice(0, 2).map((entry) => entry.summary).filter(Boolean),
+        prompt: `Explain and resolve the ${firstRisk.code} bottleneck for ${project.projectName}. Cite the recorded evidence and threshold.`,
+      });
+    });
+
+    (Array.isArray(projectActivity.stale) ? projectActivity.stale : []).slice(0, 2).forEach((project) => {
+      items.push({
+        id: 'evidence-stale-' + project.projectRegistryId,
+        kind: 'project-stale',
+        priority: project.state === 'abandoned_candidate' ? 'warning' : 'normal',
+        icon: 'fa-clock-rotate-left',
+        title: `${project.projectName}: ${String(project.state).replaceAll('_', ' ')}.`,
+        detail: project.reasons?.[1] || 'No recent meaningful observed activity.',
+        reasons: (project.reasons || []).slice(0, 2),
+        prompt: `Explain why ${project.projectName} is ${project.state}. Cite evidence and thresholds, then recommend archive, pause, or resume.`,
+      });
+    });
+
+    if (!focusProject && brief.activeProject?.name) {
       items.push({
         id: 'life-active-' + brief.activeProject.businessKey + '-' + brief.activeProject.id,
         kind: 'life',
@@ -2511,7 +2581,12 @@
     const filtered = items
       .filter(item => item.id && !liveState.dismissed.has(item.id) && !liveState.resolved.has(item.id))
       .filter(item => !isLowConfidenceHudItem(item))
-      .sort((a, b) => severityRank(a.priority) - severityRank(b.priority));
+      .sort((a, b) => {
+        const aFocus = String(a.id || '').startsWith('evidence-focus-') ? 0 : 1;
+        const bFocus = String(b.id || '').startsWith('evidence-focus-') ? 0 : 1;
+        if (aFocus !== bFocus) return aFocus - bFocus;
+        return severityRank(a.priority) - severityRank(b.priority);
+      });
 
     if (!filtered.length && workspace) {
       filtered.push({

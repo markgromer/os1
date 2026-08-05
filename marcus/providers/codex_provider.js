@@ -18,6 +18,7 @@ function normalizeJob(rawJob, base = {}) {
     recordId: safeString(base.recordId, 120) || makeOperationId('codexjob'),
     jobId: safeString(raw.jobId || raw.id || base.jobId, 300),
     operationId: safeString(base.operationId || raw.operationId, 120),
+    businessKey: safeString(base.businessKey || raw.businessKey, 100),
     stepId: safeString(base.stepId || raw.stepId, 120),
     projectRegistryId: safeString(base.projectRegistryId || raw.projectRegistryId, 160),
     repository: safeString(base.repository || raw.repository, 1_000),
@@ -112,10 +113,35 @@ export function generateCodexHandoff({ operation, step, registryRecord, relevant
 }
 
 export class CodexProvider {
-  constructor({ mode = 'external_handoff', directAdapter = null } = {}) {
+  constructor({ mode = 'external_handoff', directAdapter = null, onLifecycleEvent = null } = {}) {
     this.mode = mode === 'direct' && directAdapter ? 'direct' : 'external_handoff';
     this.directAdapter = directAdapter;
+    this.onLifecycleEvent = typeof onLifecycleEvent === 'function' ? onLifecycleEvent : null;
     this.launchesByIdempotencyKey = new Map();
+  }
+
+  setLifecycleRecorder(recorder) {
+    this.onLifecycleEvent = typeof recorder === 'function' ? recorder : null;
+  }
+
+  async recordLifecycle(event, job, metadata = {}) {
+    if (!this.onLifecycleEvent) return;
+    try {
+      await this.onLifecycleEvent({
+        event,
+        businessKey: safeString(job?.businessKey, 100),
+        projectRegistryId: safeString(job?.projectRegistryId, 160),
+        operationId: safeString(job?.operationId, 120),
+        stepId: safeString(job?.stepId, 120),
+        codexJobId: safeString(job?.jobId || job?.recordId, 300),
+        provider: safeString(job?.provider, 100) || this.mode,
+        status: normalizeProviderStatus(job?.status),
+        timestamp: safeString(job?.updatedAt || job?.startedAt, 64) || nowIso(),
+        metadata: sanitizeStructured(metadata, 15_000),
+      });
+    } catch {
+      // Durable operation reconciliation repairs evidence if immediate recording fails.
+    }
   }
 
   async startJob({ operation, step, registryRecord, idempotencyKey }) {
@@ -133,6 +159,7 @@ export class CodexProvider {
       recordId: makeOperationId('codexjob'),
       jobId: '',
       operationId: operation.id,
+      businessKey: operation.businessKey,
       stepId: step.id,
       projectRegistryId: operation.projectRegistryId,
       repository: registryRecord?.repo?.fullName || registryRecord?.repo?.url || '',
@@ -158,8 +185,10 @@ export class CodexProvider {
       const job = normalizeJob(launched, base);
       const status = normalizeProviderStatus(launched?.status, 'started');
       job.status = status;
+      await this.recordLifecycle(status === 'completed' ? 'job_completed' : 'job_started', job);
       return { status, job, prompt };
     }
+    await this.recordLifecycle('handoff_created', base, { implementationProven: false });
     return {
       status: 'waiting_external',
       job: base,
@@ -173,28 +202,41 @@ export class CodexProvider {
   }
 
   async getJobStatus(job) {
-    if (this.mode === 'direct') return normalizeJob(await this.directAdapter.getJobStatus(job), job);
-    return normalizeJob(job, job);
+    const result = this.mode === 'direct'
+      ? normalizeJob(await this.directAdapter.getJobStatus(job), job)
+      : normalizeJob(job, job);
+    await this.recordLifecycle(result.status === 'completed' ? 'job_completed' : result.status === 'failed' ? 'job_failed' : 'status_updated', result);
+    return result;
   }
 
   async sendFollowup(job, message) {
-    if (this.mode === 'direct') return this.directAdapter.sendFollowup(job, message);
-    return { ...job, updatedAt: nowIso(), rawMetadata: { ...safeObject(job?.rawMetadata), followups: [...(job?.rawMetadata?.followups || []), safeString(message, 8_000)].slice(-20) } };
+    const result = this.mode === 'direct'
+      ? normalizeJob(await this.directAdapter.sendFollowup(job, message), job)
+      : { ...job, updatedAt: nowIso(), rawMetadata: { ...safeObject(job?.rawMetadata), followups: [...(job?.rawMetadata?.followups || []), safeString(message, 8_000)].slice(-20) } };
+    await this.recordLifecycle('follow_up_sent', result, { messageLength: safeString(message, 8_000).length });
+    return result;
   }
 
   async getArtifacts(job) {
     const artifacts = this.mode === 'direct' ? await this.directAdapter.getArtifacts(job) : job?.artifacts;
-    return Array.isArray(artifacts) ? sanitizeStructured(artifacts.slice(0, 50), 50_000) : [];
+    const result = Array.isArray(artifacts) ? sanitizeStructured(artifacts.slice(0, 50), 50_000) : [];
+    if (result.length) await this.recordLifecycle('artifact_received', job, { artifactCount: result.length });
+    return result;
   }
 
   async getDiff(job) {
     const diff = this.mode === 'direct' ? await this.directAdapter.getDiff(job) : { summary: job?.diffSummary };
-    return sanitizeStructured({ ...safeObject(diff), summary: safeString(diff?.summary || diff?.diffSummary, 40_000) }, 50_000);
+    const result = sanitizeStructured({ ...safeObject(diff), summary: safeString(diff?.summary || diff?.diffSummary, 40_000) }, 50_000);
+    if (result.summary) await this.recordLifecycle('diff_received', job, { summaryLength: result.summary.length });
+    return result;
   }
 
   async cancelJob(job) {
-    if (this.mode === 'direct') return normalizeJob(await this.directAdapter.cancelJob(job), job);
-    return normalizeJob({ ...job, status: 'cancelled' }, job);
+    const result = this.mode === 'direct'
+      ? normalizeJob(await this.directAdapter.cancelJob(job), job)
+      : normalizeJob({ ...job, status: 'cancelled' }, job);
+    await this.recordLifecycle('job_cancelled', result);
+    return result;
   }
 
   supportsPause() {
@@ -207,12 +249,17 @@ export class CodexProvider {
 
   async pauseJob(job) {
     if (!this.supportsPause()) return normalizeJob(job, job);
-    return normalizeJob(await this.directAdapter.pauseJob(job), job);
+    const result = normalizeJob(await this.directAdapter.pauseJob(job), job);
+    await this.recordLifecycle('job_paused', result);
+    return result;
   }
 
   async resumeJob(job) {
-    if (this.supportsResume()) return normalizeJob(await this.directAdapter.resumeJob(job), job);
-    if (this.mode === 'direct') return normalizeJob(job, job);
-    return { ...job, status: job?.jobId ? 'running' : 'waiting_external', updatedAt: nowIso() };
+    let result;
+    if (this.supportsResume()) result = normalizeJob(await this.directAdapter.resumeJob(job), job);
+    else if (this.mode === 'direct') result = normalizeJob(job, job);
+    else result = { ...job, status: job?.jobId ? 'running' : 'waiting_external', updatedAt: nowIso() };
+    await this.recordLifecycle('job_resumed', result);
+    return result;
   }
 }

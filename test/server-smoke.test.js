@@ -124,6 +124,39 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     }) });
     const registry = (await registryResponse.json()).project;
     assert.equal(registryResponse.status, 201);
+    const manualEvidence = await fetch(`${base}/api/project-evidence/ingest`, { method: 'POST', headers: agencyHeaders, body: JSON.stringify({
+      projectRegistryId: registry.id,
+      source: 'manual',
+      type: 'manual_note',
+      event: 'operator_note',
+      summary: 'Desktop Smoke is ready for evidence API verification.',
+      actor: 'mark',
+      provenance: { method: 'authenticated_smoke_test' },
+    }) });
+    assert.equal(manualEvidence.status, 201);
+    const forgedEvidence = await fetch(`${base}/api/project-evidence/ingest`, { method: 'POST', headers: agencyHeaders, body: JSON.stringify({
+      projectRegistryId: registry.id, source: 'github', type: 'commit', actor: 'mark', provenance: { method: 'manual' },
+    }) });
+    assert.equal(forgedEvidence.status, 403);
+    const browserEvidence = await fetch(`${base}/api/project-evidence/browser-verification`, { method: 'POST', headers: agencyHeaders, body: JSON.stringify({
+      projectRegistryId: registry.id, actor: 'mark', url: 'https://example.com/desktop-smoke', status: 'passed',
+      viewports: [{ width: 1440, height: 900 }], screenshots: ['external://desktop-smoke.png'],
+    }) });
+    assert.equal(browserEvidence.status, 201);
+    assert.equal((await browserEvidence.json()).mode, 'external_manual');
+    const recalculatedActivity = await fetch(`${base}/api/project-activity/recalculate`, { method: 'POST', headers: agencyHeaders, body: '{}' });
+    assert.equal(recalculatedActivity.status, 200);
+    const projectActivity = await fetch(`${base}/api/project-activity/${registry.id}`, { headers: agencyHeaders });
+    assert.equal(projectActivity.status, 200);
+    assert.equal((await projectActivity.json()).activity.projectRegistryId, registry.id);
+    const activeBrief = await fetch(`${base}/api/marcus/active-brief`, { headers: agencyHeaders });
+    const activeBriefBody = await activeBrief.json();
+    assert.equal(activeBrief.status, 200);
+    assert.ok(activeBriefBody.projectEvidenceActivity.snapshots.some((item) => item.projectRegistryId === registry.id));
+    assert.ok(Array.isArray(activeBriefBody.projectActivity));
+    assert.equal((await fetch(`${base}/api/project-activity/current-focus`, { headers: agencyHeaders })).status, 200);
+    assert.equal((await fetch(`${base}/api/project-activity/stale`, { headers: agencyHeaders })).status, 200);
+    assert.equal((await fetch(`${base}/api/project-activity/bottlenecks`, { headers: agencyHeaders })).status, 200);
     const approvedWorkspace = await fetch(`${base}/api/project-registry/${registry.id}/approve-workspace`, { method: 'POST', headers: agencyHeaders, body: JSON.stringify({ desktopAgentId: 'agent-smoke' }) });
     assert.equal(approvedWorkspace.status, 200);
     const operationResponse = await fetch(`${base}/api/operations`, { method: 'POST', headers: agencyHeaders, body: JSON.stringify({

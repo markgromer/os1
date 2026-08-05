@@ -16,8 +16,15 @@ import nodemailer from 'nodemailer';
 
 import { mcpCallTool, mcpListTools } from './mcpClient.js';
 import { registerOperationsRoutes } from './marcus/api/operations_routes.js';
+import { registerProjectEvidenceRoutes } from './marcus/api/project_evidence_routes.js';
 import { scopeAuthorizedPublishActions } from './marcus/approvals/publish_safeguard.js';
 import { buildMarcusSystemPrompt } from './marcus/core/build_system_prompt.js';
+import { ProjectEvidenceService } from './marcus/evidence/project_evidence_service.js';
+import {
+  executeMarcusProjectActivityTool,
+  getMarcusProjectActivityToolDefinitions,
+  isMarcusProjectActivityTool,
+} from './marcus/evidence/marcus_project_activity_tools.js';
 import { buildActiveBrief as buildOperationalActiveBrief } from './marcus/intelligence/active_brief.js';
 import { createOperationsEngine } from './marcus/operations/operation_engine.js';
 import { discoverDurableBackupSources } from './marcus/operations/operation_backups.js';
@@ -224,6 +231,18 @@ const operationsEngine = createOperationsEngine({
   allowedWorkspaceRoots: String(process.env.MARCUS_ALLOWED_WORKSPACE_ROOTS || '')
     .split(path.delimiter).map((value) => value.trim()).filter(Boolean),
 });
+
+const projectEvidenceService = new ProjectEvidenceService({
+  dataDir: DATA_DIR,
+  listProjects: (businessKey) => operationsEngine.listProjectRegistry(businessKey),
+  listOperations: (businessKey, filters) => operationsEngine.listOperations(businessKey, filters),
+  getLegacyStore: (businessKey) => readStoreForBusiness(businessKey),
+  getSettings: () => readSettings(),
+  githubApi: (pathPart) => githubApi(pathPart),
+  renderApi: (pathPart) => renderApi(pathPart),
+  cloudflareApi: (pathPart) => cloudflareApi(pathPart),
+});
+operationsEngine.setCodexLifecycleRecorder((event) => projectEvidenceService.recordCodexLifecycle(event));
 
 async function createOrReuseDurableOperationForMessage(message, { projectId = '', projectName = '', source = 'marcus_chat' } = {}) {
   const businessKey = getBusinessKeyFromContext();
@@ -627,6 +646,11 @@ registerOperationsRoutes(app, {
   getBusinessKey: () => getBusinessKeyFromContext(),
 });
 
+registerProjectEvidenceRoutes(app, {
+  service: projectEvidenceService,
+  getBusinessKey: () => getBusinessKeyFromContext(),
+});
+
 /**
  * File format:
  * {
@@ -715,6 +739,7 @@ function normalizeSettingsShape(settings) {
   const parsed = settings && typeof settings === 'object' ? settings : {};
   return {
     ...parsed,
+    airtableDerivedStatusSync: parsed.airtableDerivedStatusSync === true,
     agentSystemPrompt: normalizeAgentSystemPrompt(parsed.agentSystemPrompt),
     operatorVoice: normalizeOperatorVoice(parsed.operatorVoice),
     automationConfig: normalizeAutomationConfig(parsed.automationConfig),
@@ -7128,12 +7153,23 @@ async function buildMarcusActiveBrief() {
 
   // Doctrine guides behavior, but intelligence state drives the UI.
   // The ActiveBrief is structured first; chat/prompting explains or acts on it afterward.
-  return buildOperationalActiveBrief({
+  const brief = buildOperationalActiveBrief({
     stores,
     settings,
     desktopData,
     nowMs: Date.now(),
   });
+  let projectActivity = null;
+  try {
+    projectActivity = await projectEvidenceService.getActivity(getBusinessKeyFromContext());
+  } catch {
+    // The legacy brief remains available while evidence storage recovers.
+  }
+  return {
+    ...brief,
+    projectEvidenceActivity: projectActivity,
+    evidenceFocus: projectActivity?.currentFocus || null,
+  };
 }
 
 function messageNeedsProjectContext(message) {
@@ -12799,6 +12835,13 @@ app.post('/api/desktop-context/action-results', async (req, res) => {
       accepted = true;
     }
     if (accepted) {
+      if (businessKey && result.projectRegistryId && type !== 'validate-workspace') {
+        try {
+          await projectEvidenceService.recordDesktopActionResult(businessKey, result);
+        } catch {
+          // Desktop action reconciliation remains authoritative if evidence recording fails.
+        }
+      }
       try {
         await desktopActionQueue.acknowledge({ id, agentId: result.desktopAgentId, type, idempotencyKey: result.idempotencyKey });
       } catch (error) {
@@ -12993,6 +13036,14 @@ app.post('/api/desktop-context/relay', (req, res) => {
 
   // Also update the main cache so AI context injection picks it up
   desktopContextCache = { at: Date.now(), data };
+
+  const relayAgentId = typeof req.body?.agentId === 'string' ? req.body.agentId.trim().slice(0, 200) : '';
+  void projectEvidenceService.recordDesktopContext(getBusinessKeyFromContext(), {
+    agentId: relayAgentId,
+    context: data,
+  }).catch(() => {
+    // Desktop context delivery must not fail because evidence aggregation is unavailable.
+  });
 
   res.json({ ok: true, received: true });
 });
@@ -13430,12 +13481,33 @@ function buildMarcusLivePendingCommunications(store, settings, limit = 24) {
 
 async function sendMarcusLiveDashboardSnapshot(req, res) {
   try {
-    const [store, settings] = await Promise.all([readStore(), readSettings()]);
+    const businessKey = getBusinessKeyFromContext();
+    const [store, settings, projectActivity] = await Promise.all([
+      readStore(),
+      readSettings(),
+      projectEvidenceService.getActivity(businessKey).catch(() => null),
+    ]);
     const nowMs = Date.now();
     const dc = desktopRelayCache?.data || desktopContextCache?.data || null;
     const health = dc?.systemHealth || null;
     const projects = buildMarcusLiveProjectFocus(store, dc, nowMs);
     const pendingCommunications = buildMarcusLivePendingCommunications(store, settings, 30);
+    const evidenceSnapshots = Array.isArray(projectActivity?.snapshots) ? projectActivity.snapshots : [];
+    const evidenceFocus = projectActivity?.currentFocus?.currentFocusProject || null;
+    const evidenceFocusRows = evidenceSnapshots.filter((item) => !['stale', 'dormant', 'abandoned_candidate', 'unknown'].includes(item.state)).slice(0, 12).map((item) => ({
+      id: item.projectRegistryId,
+      name: item.projectName,
+      status: item.state,
+      reason: item.projectRegistryId === evidenceFocus?.projectRegistryId ? projectActivity.currentFocus.reason : item.reasons?.[0],
+      activityScore: item.activityScore,
+      focusScore: item.focusScore,
+      confidence: item.confidence,
+      commitCount7d: item.commitCount7d,
+      codexJobs7d: item.codexJobs7d,
+      desktopActiveMinutes7d: item.desktopActiveMinutes7d,
+      deployments30d: item.deployments30d,
+      risks: item.risks,
+    }));
     res.json({
       ok: true,
       generatedAt: new Date(nowMs).toISOString(),
@@ -13466,11 +13538,17 @@ async function sendMarcusLiveDashboardSnapshot(req, res) {
         uptimeHours: health.uptimeHours,
         collectedAt: health.collectedAt || '',
       } : null,
-      currentFocus: projects.focus,
+      currentFocus: evidenceFocusRows.length ? evidenceFocusRows : projects.focus,
+      evidenceFocus: projectActivity?.currentFocus || null,
+      projectActivity,
+      staleProjects: projectActivity?.stale || [],
+      projectBottlenecks: projectActivity?.bottlenecks || [],
       staleWebsiteProjects: projects.staleWebsite,
       pendingCommunications,
       counts: {
-        currentFocus: projects.focus.length,
+        currentFocus: evidenceFocusRows.length || projects.focus.length,
+        staleProjects: projectActivity?.stale?.length || 0,
+        projectBottlenecks: projectActivity?.bottlenecks?.length || 0,
         staleWebsiteProjects: projects.staleWebsite.length,
         pendingCommunications: pendingCommunications.length,
       },
@@ -16418,6 +16496,7 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
       "- Do not repeat the same recommendation unless new evidence materially changed.\n" +
       "- If the tracker looks stale or ambiguous, say so briefly and recommend cleanup instead of pretending certainty.\n" +
       "- Prefer concise, direct answers over performative coaching.\n" +
+      "- Project activity, focus, staleness, and bottleneck claims must come from ProjectActivitySnapshot evidence. Never use Airtable status alone as proof of real activity.\n" +
       "- Sound like a person, not a system. Use contractions, natural phrasing, and conversational flow.\n" +
       "- Never start with 'Certainly', 'Absolutely', 'Of course', or 'Sure thing'.\n" +
       "- Never use em dashes.\n" +
@@ -16435,6 +16514,24 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
     }
 
     let context = '';
+
+    try {
+      const activity = await projectEvidenceService.getActivity(getBusinessKeyFromContext());
+      const focus = activity?.currentFocus;
+      const active = (Array.isArray(activity?.snapshots) ? activity.snapshots : []).slice(0, 8).map((item) => ({
+        projectRegistryId: item.projectRegistryId,
+        projectName: item.projectName,
+        state: item.state,
+        activityScore: item.activityScore,
+        confidence: item.confidence,
+        evidenceCount: item.evidenceCount,
+        reasons: item.reasons?.slice(0, 3),
+        risks: item.risks?.map((risk) => ({ code: risk.code, summary: risk.summary })).slice(0, 5),
+      }));
+      context += `PROJECT EVIDENCE ACTIVITY (deterministic; cite these records for activity claims):\n${JSON.stringify({ currentFocus: focus, projects: active })}\n\n`;
+    } catch {
+      context += 'PROJECT EVIDENCE ACTIVITY: unavailable; do not infer activity from Airtable alone.\n\n';
+    }
 
     if (userMemory) {
       context += `GLOBAL MEMORY (user-provided; treat as true unless contradicted):\n${String(userMemory).slice(0, 12000)}\n\n`;
@@ -17269,6 +17366,7 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
       }
 
       tools.push(...getMarcusOperationToolDefinitions());
+      tools.push(...getMarcusProjectActivityToolDefinitions());
 
       const messages = [
         {
@@ -17277,7 +17375,7 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
             systemPrompt +
             (effectiveThreadId === 'operator_bio'
               ? "\n\nIMPORTANT: Use set_operator_bio to persist changes to the bio."
-              : "\n\nIMPORTANT: When Mark asks for an internal/admin action, use tools instead of only describing the action. Use create_operation for multi-step code/project work, work spanning systems, work that must survive interruption, approval-gated work, or work requiring later verification. Do not create operations for trivial questions. Use the operation lifecycle tools to report the resolved project, risk, approvals, and what is actually running versus waiting. For project updates use create_project / update_project / create_tasks. For local project work use open_project_in_vscode when a workspace path is available. If Mark names a GitHub repo that is not local and the desktop agent is available, use clone_github_project; if Mark is remote or the desktop is offline, use the GitHub cloud tools to inspect repos/files. For Cloudflare and Render questions, use the cloud read tools when configured. For build/test/lint/preview requests, use run_project_script with a package.json script name. For publish requests, use prepare_project_publish first unless Mark has already explicitly approved committing/pushing. publish_project_changes is server-guarded and requires explicit approval in Mark's message. For high-impact external actions like publish/deploy/merge/send/billing/delete/DNS changes, prepare the action and ask for explicit approval before executing. Never claim Codex or another provider is running unless an operation runner actually started that provider path. When Mark asks whether a queued local action finished, use get_desktop_action_results."),
+              : "\n\nIMPORTANT: When Mark asks for an internal/admin action, use tools instead of only describing the action. Use create_operation for multi-step code/project work, work spanning systems, work that must survive interruption, approval-gated work, or work requiring later verification. Do not create operations for trivial questions. Use the operation lifecycle tools to report the resolved project, risk, approvals, and what is actually running versus waiting. Use project activity tools for focus, staleness, momentum, and bottleneck questions, and cite their evidence instead of Airtable status. For project updates use create_project / update_project / create_tasks. For local project work use open_project_in_vscode when a workspace path is available. If Mark names a GitHub repo that is not local and the desktop agent is available, use clone_github_project; if Mark is remote or the desktop is offline, use the GitHub cloud tools to inspect repos/files. For Cloudflare and Render questions, use the cloud read tools when configured. For build/test/lint/preview requests, use run_project_script with a package.json script name. For publish requests, use prepare_project_publish first unless Mark has already explicitly approved committing/pushing. publish_project_changes is server-guarded and requires explicit approval in Mark's message. For high-impact external actions like publish/deploy/merge/send/billing/delete/DNS changes, prepare the action and ask for explicit approval before executing. Never claim Codex or another provider is running unless an operation runner actually started that provider path. When Mark asks whether a queued local action finished, use get_desktop_action_results."),
         },
       ];
 
@@ -17315,6 +17413,14 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
     };
 
     const execTool = async (toolName, args) => {
+      if (isMarcusProjectActivityTool(toolName)) {
+        return executeMarcusProjectActivityTool({
+          name: toolName,
+          args,
+          service: projectEvidenceService,
+          businessKey: getBusinessKeyFromContext(),
+        });
+      }
       if (isMarcusOperationTool(toolName)) {
         return executeMarcusOperationTool({
           name: toolName,
@@ -18065,6 +18171,34 @@ function startMarcusBriefScheduler() {
   setInterval(() => { void tick(); }, 30_000);
 }
 
+function startProjectEvidenceScheduler() {
+  let running = false;
+  const tick = async () => {
+    if (running) return;
+    running = true;
+    try {
+      const settings = await readSettings();
+      const cfg = getBusinessConfigFromSettings(settings);
+      const sources = ['operations', 'airtable'];
+      if (getGitHubCloudConfig().configured) sources.push('github');
+      if (getRenderCloudConfig().configured) sources.push('render');
+      if (getCloudflareConfig().configured) sources.push('cloudflare');
+      for (const business of cfg.businesses || []) {
+        const businessKey = normalizeBusinessKey(business?.key || '') || DEFAULT_BUSINESS_KEY;
+        await withBusinessKey(businessKey, () => projectEvidenceService.refresh(businessKey, { sources }));
+      }
+    } catch (error) {
+      console.error('Project evidence refresh failed:', error?.message || error);
+    } finally {
+      running = false;
+    }
+  };
+  const first = setTimeout(() => { void tick(); }, 5_000);
+  const interval = setInterval(() => { void tick(); }, 10 * 60_000);
+  if (typeof first.unref === 'function') first.unref();
+  if (typeof interval.unref === 'function') interval.unref();
+}
+
 const httpServer = app.listen(PORT, SERVER_HOST, async () => {
   await refreshBusinessCacheFromSettings();
   const businesses = Array.isArray(cachedBusinesses) ? cachedBusinesses : [{ key: DEFAULT_BUSINESS_KEY }];
@@ -18092,6 +18226,12 @@ const httpServer = app.listen(PORT, SERVER_HOST, async () => {
   } catch (error) {
     console.error('Durable operations startup recovery failed; operation files were left intact:', error);
   }
+  for (const business of businesses) {
+    const businessKey = normalizeBusinessKey(business?.key || '') || DEFAULT_BUSINESS_KEY;
+    await withBusinessKey(businessKey, () => projectEvidenceService.refresh(businessKey, { sources: ['operations', 'airtable'] })).catch((error) => {
+      console.error(`Project evidence startup reconciliation failed for ${businessKey}:`, error?.message || error);
+    });
+  }
   await backupCriticalFiles({ force: true }).catch(() => {
     // ignore startup backup errors
   });
@@ -18103,6 +18243,7 @@ const httpServer = app.listen(PORT, SERVER_HOST, async () => {
   startBackupScheduler();
   startGa4Scheduler();
   startAirtableRequestsAutoSyncScheduler();
+  startProjectEvidenceScheduler();
   startMarcusBriefScheduler();
   // eslint-disable-next-line no-console
   console.log(`M.A.R.C.U.S. running on http://${SERVER_HOST}:${PORT}`);

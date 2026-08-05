@@ -117,6 +117,7 @@ function normalizeDeployments(value = {}, legacy = {}) {
     renderServiceId: safeString(raw.renderServiceId || source.renderServiceId, 300),
     renderServiceName: safeString(raw.renderServiceName || source.renderServiceName, 300),
     cloudflareProject: safeString(raw.cloudflareProject || source.cloudflareProject, 300),
+    cloudflareAccountId: safeString(raw.cloudflareAccountId || source.cloudflareAccountId, 300),
     cloudflareZoneId: safeString(raw.cloudflareZoneId || source.cloudflareZoneId, 300),
     cloudflareZoneName: safeString(raw.cloudflareZoneName || source.cloudflareZoneName, 300),
   };
@@ -488,6 +489,7 @@ export class ProjectRegistry {
           renderServiceId: raw.renderServiceId,
           renderServiceName: raw.renderServiceName,
           cloudflareProject: raw.cloudflareProject,
+          cloudflareAccountId: raw.cloudflareAccountId,
           cloudflareZoneId: raw.cloudflareZoneId,
           cloudflareZoneName: raw.cloudflareZoneName,
           services: raw.services,

@@ -334,6 +334,7 @@ export function createOperationsEngine({
     approveOperationStep: (businessKey, id, approvalId, input) => service.approveOperationStep(businessKey, id, approvalId, input),
     rejectOperationStep: (businessKey, id, approvalId, input) => service.rejectOperationStep(businessKey, id, approvalId, input),
     registerExternalCodexJob: (businessKey, id, input) => service.registerExternalCodexJob(businessKey, id, input),
+    setCodexLifecycleRecorder: (recorder) => codex.setLifecycleRecorder(recorder),
     registerManualVerificationEvidence: (businessKey, id, results, input) => service.registerManualVerificationEvidence(businessKey, id, results, input),
     waiveVerification: (businessKey, id, verificationId, input) => service.waiveVerification(businessKey, id, verificationId, input),
     tick: (businessKey, id) => runner.tick(businessKey, id),
