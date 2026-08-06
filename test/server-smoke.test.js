@@ -87,6 +87,12 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
   try {
     await server.waitForReady();
     assert.equal((await fetch(`${base}/api/health`)).status, 200);
+    const livePage = await fetch(`${base}/live.html`);
+    const liveHtml = await livePage.text();
+    assert.equal(livePage.status, 200);
+    assert.match(liveHtml, /<body class="live-focus">/);
+    assert.match(liveHtml, /class="live-focus-hero"/);
+    assert.match(liveHtml, /body\.live-focus \.command-stage/);
     assert.equal((await fetch(`${base}/api/operations/summary`)).status, 401);
     assert.equal((await fetch(`${base}/api/tasks`, { headers: adminHeaders })).status, 200);
     assert.equal((await fetch(`${base}/api/projects`, { headers: adminHeaders })).status, 200);

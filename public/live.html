@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>M.A.R.C.U.S. Live</title>
+<link rel="icon" href="data:,">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
 <style>
   :root {
@@ -1253,9 +1254,261 @@
     padding: 14px;
     display: block;
   }
+
+  /* Focus-first Marcus Live. The legacy dashboard remains mounted but hidden. */
+  body.live-focus {
+    background: #080a0d;
+    color: #f4f7fa;
+    overflow: hidden;
+  }
+  body.live-focus::before { background: #080a0d; }
+  body.live-focus::after { display: none; }
+  body.live-focus .context-bar,
+  body.live-focus .command-stage,
+  body.live-focus .hud-shell,
+  body.live-focus .health-panel,
+  body.live-focus .secondary-drawer { display: none !important; }
+  body.live-focus .header {
+    min-height: 54px;
+    padding: 0 max(22px, calc((100vw - 1040px) / 2));
+    border-color: #20262d;
+    background: rgba(8,10,13,0.94);
+  }
+  body.live-focus .header .logo {
+    color: #f4f7fa;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+  }
+  body.live-focus .header .logo i { color: #37d3b1; filter: none; }
+  body.live-focus .header .assistant-line { color: #77818d; }
+  body.live-focus .header .status {
+    border: 0;
+    background: transparent;
+    padding: 4px 0;
+  }
+  body.live-focus #simple-live-root {
+    display: block;
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 0 24px 104px;
+    background: #080a0d;
+  }
+  .live-stage { max-width: 1040px; margin: 0 auto; }
+  .live-focus-hero {
+    min-height: 330px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 48px 0 38px;
+    border-bottom: 1px solid #20262d;
+  }
+  .live-kicker,
+  .live-section-label {
+    color: #788491;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+  .live-title-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 24px;
+    margin-top: 10px;
+  }
+  .live-project-name {
+    max-width: 780px;
+    color: #f8fafc;
+    font-size: 56px;
+    font-weight: 650;
+    line-height: 1.02;
+    letter-spacing: 0;
+    overflow-wrap: anywhere;
+  }
+  .live-voice-tools { display: flex; gap: 6px; padding-top: 4px; }
+  .live-icon-btn {
+    width: 36px;
+    height: 36px;
+    display: grid;
+    place-items: center;
+    border: 1px solid #29313a;
+    border-radius: 6px;
+    background: #101419;
+    color: #a8b1bb;
+    cursor: pointer;
+  }
+  .live-icon-btn:hover { color: #fff; border-color: #46515d; }
+  .live-state-line {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px 14px;
+    margin-top: 18px;
+    color: #8f9aa6;
+    font-size: 12px;
+  }
+  .live-state {
+    color: #49dfbd;
+    font-weight: 700;
+    text-transform: capitalize;
+  }
+  .live-focus-reason {
+    max-width: 760px;
+    margin-top: 18px;
+    color: #b8c0c8;
+    font-size: 16px;
+    line-height: 1.55;
+  }
+  .live-metrics {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 22px;
+    margin-top: 22px;
+    color: #788491;
+    font-size: 12px;
+  }
+  .live-metrics strong { color: #dbe1e7; font-weight: 650; }
+  .live-body-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+    gap: 52px;
+    padding: 34px 0;
+    border-bottom: 1px solid #20262d;
+  }
+  .live-decision-title {
+    margin-top: 12px;
+    color: #f0f3f6;
+    font-size: 20px;
+    font-weight: 600;
+    line-height: 1.35;
+  }
+  .live-decision-title.warning { color: #f5c568; }
+  .live-decision-copy {
+    margin-top: 9px;
+    color: #8f9aa6;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  .live-command-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+  .live-command {
+    min-height: 34px;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    border: 1px solid #303842;
+    border-radius: 6px;
+    background: #11161b;
+    color: #dbe1e7;
+    padding: 7px 11px;
+    font: inherit;
+    font-size: 11px;
+    cursor: pointer;
+  }
+  .live-command.primary { border-color: #2b6c61; color: #63e6c8; }
+  .live-command:hover { background: #171d23; }
+  .live-proof-list { list-style: none; display: grid; gap: 13px; margin-top: 13px; }
+  .live-proof-list li {
+    position: relative;
+    padding-left: 18px;
+    color: #aab3bd;
+    font-size: 13px;
+    line-height: 1.45;
+  }
+  .live-proof-list li::before {
+    content: "";
+    position: absolute;
+    left: 1px;
+    top: 7px;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: #37d3b1;
+  }
+  .live-shift {
+    margin-top: 16px;
+    padding-top: 14px;
+    border-top: 1px solid #1b2026;
+    color: #788491;
+    font-size: 11px;
+    line-height: 1.45;
+  }
+  .live-elsewhere { padding: 20px 0 26px; }
+  .live-elsewhere summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    color: #b6bec7;
+    font-size: 12px;
+    cursor: pointer;
+    list-style: none;
+  }
+  .live-elsewhere summary::-webkit-details-marker { display: none; }
+  .live-elsewhere-summary { color: #697480; font-size: 11px; text-align: right; }
+  .live-elsewhere[open] summary { margin-bottom: 18px; }
+  .live-secondary-list { display: grid; gap: 1px; background: #20262d; }
+  .live-secondary-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 150px;
+    gap: 16px;
+    padding: 12px 0;
+    background: #080a0d;
+    color: #aeb7c0;
+    font-size: 12px;
+  }
+  .live-secondary-meta { color: #697480; text-align: right; text-transform: capitalize; }
+  body.live-focus .chat-bar {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 12;
+    padding: 14px max(24px, calc((100vw - 1040px) / 2));
+    border-color: #20262d;
+    background: rgba(8,10,13,0.96);
+    backdrop-filter: blur(14px);
+  }
+  body.live-focus .chat-bar input {
+    min-height: 42px;
+    border-color: #29313a;
+    border-radius: 6px;
+    background: #101419;
+    padding: 10px 13px;
+    color: #eef2f6;
+    font-size: 13px;
+  }
+  body.live-focus .chat-bar input:focus { border-color: #3f8f80; box-shadow: 0 0 0 2px rgba(55,211,177,0.1); }
+  body.live-focus .chat-bar button {
+    width: 42px;
+    height: 42px;
+    justify-content: center;
+    border-radius: 6px;
+    background: #37d3b1;
+    color: #07100e;
+    padding: 0;
+  }
+  body.live-focus .chat-bar button span { display: none; }
+  @media (max-width: 700px) {
+    body.live-focus .header { min-height: 50px; padding: 0 14px; }
+    body.live-focus .header .assistant-line { display: none; }
+    body.live-focus .header .status { position: static; margin-left: auto; }
+    body.live-focus #simple-live-root { padding: 0 16px 94px; }
+    .live-focus-hero { min-height: 290px; padding: 36px 0 30px; }
+    .live-title-row { gap: 12px; }
+    .live-project-name { font-size: 38px; }
+    .live-voice-tools { flex-direction: column; }
+    .live-focus-reason { font-size: 15px; }
+    .live-body-grid { grid-template-columns: minmax(0, 1fr); gap: 30px; padding: 28px 0; }
+    .live-secondary-row { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+    .live-secondary-meta { text-align: left; }
+    body.live-focus .chat-bar { padding: 10px 14px; }
+    body.live-focus .chat-bar button { order: initial; }
+  }
 </style>
 </head>
-<body>
+<body class="live-focus">
 
 <div class="header">
   <span class="logo"><i class="fa-solid fa-circle-nodes"></i> M.A.R.C.U.S. LIVE</span>
@@ -1413,7 +1666,7 @@
 </div>
 
 <div class="chat-bar">
-  <input type="text" id="chat-input" placeholder="Ask for a readout, a risk scan, or the next move..." autocomplete="off" />
+  <input type="text" id="chat-input" placeholder="Ask Marcus..." autocomplete="off" />
   <button id="chat-send"><i class="fa-solid fa-paper-plane"></i> <span>Send</span></button>
 </div>
 
@@ -2224,6 +2477,7 @@
         liveState.activeBrief = data;
         assistantLine.textContent = data.narrativeSummary || 'Operational intelligence online';
         renderHud();
+        renderSimpleCockpit(data);
       }
     } catch {}
   }
@@ -3136,8 +3390,105 @@
   function renderSimpleCockpit(data) {
     const root = document.getElementById('simple-live-root');
     if (!root) return;
-    document.body.classList.remove('simple-cockpit');
-    root.innerHTML = '';
+    document.body.classList.add('live-focus');
+    const incoming = data && typeof data === 'object' ? data : {};
+    const brief = incoming.projectEvidenceActivity ? incoming : (liveState.activeBrief || {});
+    const activity = incoming.projectActivity || incoming.projectEvidenceActivity || brief.projectEvidenceActivity || {};
+    const focusState = activity.currentFocus || brief.evidenceFocus || {};
+    const focusProject = focusState.currentFocusProject || null;
+    const snapshots = Array.isArray(activity.snapshots) ? activity.snapshots : [];
+    const current = focusProject
+      ? snapshots.find((item) => item.projectRegistryId === focusProject.projectRegistryId) || focusProject
+      : null;
+    const projectName = current?.projectName || focusProject?.projectName || currentHumanProjectName() || 'No verified focus yet';
+    const state = String(current?.state || focusProject?.state || 'waiting for evidence').replaceAll('_', ' ');
+    const confidenceValue = Number(focusState.confidence);
+    const confidence = Number.isFinite(confidenceValue)
+      ? Math.round((confidenceValue <= 1 ? confidenceValue * 100 : confidenceValue))
+      : 0;
+    const metrics = [];
+    if (Number(current?.commitCount7d) > 0) metrics.push(`<span><strong>${Number(current.commitCount7d)}</strong> commits / 7d</span>`);
+    if (Number(current?.codexJobs7d) > 0) metrics.push(`<span><strong>${Number(current.codexJobs7d)}</strong> Codex jobs / 7d</span>`);
+    if (Number(current?.desktopActiveMinutes7d) > 0) metrics.push(`<span><strong>${(Number(current.desktopActiveMinutes7d) / 60).toFixed(1)}</strong> desktop hours / 7d</span>`);
+    if (Number(current?.deployments30d) > 0) metrics.push(`<span><strong>${Number(current.deployments30d)}</strong> deployments / 30d</span>`);
+    if (!metrics.length && Number(current?.evidenceCount) > 0) metrics.push(`<span><strong>${Number(current.evidenceCount)}</strong> observed signals</span>`);
+    const evidence = (Array.isArray(focusState.evidence) ? focusState.evidence : []).slice(0, 3);
+    const proof = evidence.length
+      ? evidence.map((item) => `<li>${esc(item.summary || item.event || item.type || 'Observed project activity')}</li>`).join('')
+      : `<li>${esc(focusState.reason || brief.narrativeSummary || 'Marcus is waiting for enough observed activity to name a current focus.')}</li>`;
+    const risks = Array.isArray(current?.risks) ? current.risks : [];
+    const primaryRisk = risks[0] || null;
+    const decisionTitle = primaryRisk?.summary || (current ? 'No evidence-backed blocker is active.' : 'Keep working normally while Marcus gathers evidence.');
+    const decisionCopy = primaryRisk
+      ? `Triggered by ${Array.isArray(primaryRisk.evidence) ? primaryRisk.evidence.length : 0} recorded signals. ${current?.suggestedAction || ''}`.trim()
+      : 'Stay on the current work. Marcus will interrupt only when the recorded evidence supports a clear next move.';
+    const previous = focusState.previousFocusProject;
+    const shifted = previous?.projectRegistryId && focusProject?.projectRegistryId
+      && previous.projectRegistryId !== focusProject.projectRegistryId && focusState.focusShiftDetectedAt;
+    const shift = shifted
+      ? `<div class="live-shift">Attention shifted from ${esc(previous.projectName || previous.projectRegistryId)}. Detected ${esc(new Date(focusState.focusShiftDetectedAt).toLocaleString())}.</div>`
+      : '';
+    const secondary = snapshots.filter((item) => item.projectRegistryId !== focusProject?.projectRegistryId).slice(0, 8);
+    const secondaryRows = secondary.map((item) => `
+      <div class="live-secondary-row">
+        <span>${esc(item.projectName || item.projectRegistryId || 'Unnamed project')}</span>
+        <span class="live-secondary-meta">${esc(String(item.state || 'unknown').replaceAll('_', ' '))}${Number.isFinite(Number(item.activityScore)) ? ` · ${Math.round(Number(item.activityScore))}` : ''}</span>
+      </div>`).join('');
+    const movingCount = snapshots.filter((item) => ['active', 'deep_implementation', 'reviewing', 'deploying', 'verifying'].includes(item.state)).length;
+    const staleCount = Array.isArray(activity.stale) ? activity.stale.length : 0;
+    const riskCount = (Array.isArray(activity.bottlenecks) ? activity.bottlenecks : []).reduce((count, item) => count + (Array.isArray(item.risks) ? item.risks.length : 0), 0);
+    assistantLine.textContent = focusProject ? `${projectName} is the strongest observed focus` : 'Waiting for enough project evidence';
+    root.innerHTML = `
+      <main class="live-stage">
+        <section class="live-focus-hero" aria-labelledby="live-project-name">
+          <div class="live-kicker">${focusProject ? 'Current focus' : 'Marcus is observing'}</div>
+          <div class="live-title-row">
+            <h1 class="live-project-name" id="live-project-name">${esc(projectName)}</h1>
+            <div class="live-voice-tools">
+              <button class="live-icon-btn" type="button" data-live-voice="brief" title="Speak current brief" aria-label="Speak current brief"><i class="fa-solid fa-volume-high"></i></button>
+              <button class="live-icon-btn" type="button" data-live-voice="listen" title="Talk to Marcus" aria-label="Talk to Marcus"><i class="fa-solid fa-microphone"></i></button>
+            </div>
+          </div>
+          <div class="live-state-line">
+            <span class="live-state">${esc(state)}</span>
+            ${focusProject ? `<span>${confidence}% evidence confidence</span><span>Focus score ${Math.round(Number(focusState.focusScore) || 0)}</span>` : ''}
+          </div>
+          <p class="live-focus-reason">${esc(focusState.reason || brief.narrativeSummary || 'Marcus is waiting for enough observed activity to identify what deserves your attention.')}</p>
+          ${metrics.length ? `<div class="live-metrics">${metrics.join('')}</div>` : ''}
+        </section>
+
+        <div class="live-body-grid">
+          <section aria-labelledby="live-decision-label">
+            <div class="live-section-label" id="live-decision-label">${primaryRisk ? 'Needs attention' : 'Marcus sees'}</div>
+            <div class="live-decision-title ${primaryRisk ? 'warning' : ''}">${esc(decisionTitle)}</div>
+            <div class="live-decision-copy">${esc(decisionCopy)}</div>
+            <div class="live-command-row">
+              <button class="live-command primary" type="button" data-command="What is the single best next move for ${esc(projectName)}? Cite the project evidence and keep it concise."><i class="fa-solid fa-arrow-right"></i> Next move</button>
+              <button class="live-command" type="button" data-command="Brief me on ${esc(projectName)}. Explain the focus, evidence, and any blocker without listing unrelated dashboard data."><i class="fa-solid fa-message"></i> Brief me</button>
+            </div>
+          </section>
+          <section aria-labelledby="live-proof-label">
+            <div class="live-section-label" id="live-proof-label">Why Marcus believes this</div>
+            <ol class="live-proof-list">${proof}</ol>
+            ${shift}
+          </section>
+        </div>
+
+        <details class="live-elsewhere">
+          <summary><span>Everything else</span><span class="live-elsewhere-summary">${movingCount} moving · ${riskCount} risks · ${staleCount} stale</span></summary>
+          <div class="live-secondary-list">${secondaryRows || '<div class="live-secondary-row"><span>No other registered project needs attention.</span><span class="live-secondary-meta">quiet</span></div>'}</div>
+        </details>
+      </main>`;
+    root.querySelectorAll('[data-command]').forEach((button) => {
+      button.addEventListener('click', () => {
+        input.value = button.getAttribute('data-command') || '';
+        sendChat();
+      });
+    });
+    root.querySelector('[data-live-voice="brief"]')?.addEventListener('click', () => {
+      speakText(`${projectName}. ${focusState.reason || decisionTitle}`, { force: true });
+    });
+    root.querySelector('[data-live-voice="listen"]')?.addEventListener('click', () => voiceListen.click());
     return;
     const health = data?.systemHealth || liveState.context?.systemHealth || {};
     const comms = Array.isArray(data?.pendingCommunications) ? data.pendingCommunications : [];
@@ -3278,11 +3629,13 @@
 
   // Initial connect
   renderHud();
+  renderSimpleCockpit({});
   renderActionTape();
   initVoiceLayer();
   publishLiveVoiceOwner();
   setInterval(publishLiveVoiceOwner, 3000);
   loadActiveBrief();
+  loadSimpleCockpit();
   setInterval(loadActiveBrief, 12_000);
   connect();
   input.focus();
