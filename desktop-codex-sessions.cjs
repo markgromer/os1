@@ -15,6 +15,17 @@ function humanizeWorkspaceName(value) {
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
+function parseGitStatus(value, limit = 30) {
+  const lines = String(value || '').split(/\r?\n/).filter(Boolean);
+  return {
+    count: lines.length,
+    entries: lines.slice(0, Math.max(1, Number(limit) || 30)).map((line) => ({
+      status: line.slice(0, 2).trim(),
+      file: line.slice(3).trim(),
+    })),
+  };
+}
+
 function sessionDayDirectories(root, nowMs, days) {
   const output = [];
   for (let offset = 0; offset < days; offset += 1) {
@@ -115,4 +126,4 @@ function discoverRecentCodexWorkspaces({
   return output;
 }
 
-module.exports = { discoverRecentCodexWorkspaces, humanizeWorkspaceName, parseSessionMetadata };
+module.exports = { discoverRecentCodexWorkspaces, humanizeWorkspaceName, parseGitStatus, parseSessionMetadata };

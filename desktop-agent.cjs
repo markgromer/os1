@@ -22,7 +22,7 @@ const http = require('http');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
-const { discoverRecentCodexWorkspaces } = require('./desktop-codex-sessions.cjs');
+const { discoverRecentCodexWorkspaces, parseGitStatus } = require('./desktop-codex-sessions.cjs');
 
 const SERVER_URL = (process.argv[2] || process.env.MARCUS_SERVER_URL || '').trim();
 const DEFAULT_ADMIN_TOKEN_FILE = path.join(
@@ -193,7 +193,7 @@ function gitCmd(cwd, args) {
   return new Promise((resolve) => {
     try {
       execFile('git', args, { cwd, windowsHide: true, timeout: 5000 }, (err, stdout) => {
-        resolve(err ? '' : String(stdout || '').trim());
+        resolve(err ? '' : String(stdout || '').trimEnd());
       });
     } catch {
       resolve('');
@@ -288,14 +288,12 @@ async function preparePublish(projectPath) {
   const branch = await gitCmd(cwd, ['rev-parse', '--abbrev-ref', 'HEAD']);
   const upstream = await gitCmd(cwd, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
   const remote = await gitCmd(cwd, ['remote', 'get-url', 'origin']);
-  const statusRaw = await gitCmd(cwd, ['status', '--porcelain', '-u']);
+  const statusRaw = await gitCmd(cwd, ['status', '--porcelain', '--untracked-files=normal']);
   const diffStat = await gitCmd(cwd, ['diff', '--stat', 'HEAD']);
   const recentCommitsRaw = await gitCmd(cwd, ['log', '--oneline', '-5', '--no-decorate']);
   const scripts = readPackageScripts(cwd);
 
-  const changes = statusRaw
-    ? statusRaw.split('\n').slice(0, 80).map((line) => ({ status: line.slice(0, 2), file: line.slice(3) }))
-    : [];
+  const changes = parseGitStatus(statusRaw, 80).entries;
 
   return {
     ok: true,
@@ -509,14 +507,8 @@ async function scanWorkspace(wsPath) {
   info.gitBranch = await gitCmd(wsPath, ['rev-parse', '--abbrev-ref', 'HEAD']);
 
   // Git status (changed/staged files)
-  const statusRaw = await gitCmd(wsPath, ['status', '--porcelain', '-u']);
-  if (statusRaw) {
-    info.gitStatus = statusRaw.split('\n').slice(0, 30).map(line => {
-      const status = line.slice(0, 2).trim();
-      const file = line.slice(3).trim();
-      return { status, file };
-    });
-  }
+  const statusRaw = await gitCmd(wsPath, ['status', '--porcelain', '--untracked-files=normal']);
+  info.gitStatus = parseGitStatus(statusRaw, 30).entries;
 
   // Recent commits (last 5)
   const logRaw = await gitCmd(wsPath, ['log', '--oneline', '-5', '--no-decorate']);
@@ -878,18 +870,16 @@ async function scanCodexWorkspaceSummary(session) {
   const [gitBranch, gitRemote, statusRaw, recentCommitsRaw] = await Promise.all([
     gitCmd(wsPath, ['rev-parse', '--abbrev-ref', 'HEAD']),
     gitCmd(wsPath, ['remote', 'get-url', 'origin']),
-    gitCmd(wsPath, ['status', '--porcelain', '-u']),
+    gitCmd(wsPath, ['status', '--porcelain', '--untracked-files=normal']),
     gitCmd(wsPath, ['log', '--oneline', '-3', '--no-decorate']),
   ]);
-  const gitStatus = statusRaw
-    ? statusRaw.split('\n').slice(0, 30).map((line) => ({ status: line.slice(0, 2).trim(), file: line.slice(3).trim() }))
-    : [];
+  const parsedStatus = parseGitStatus(statusRaw, 30);
   return {
     ...session,
     gitBranch,
     gitRemote,
-    gitStatusCount: statusRaw ? statusRaw.split('\n').filter(Boolean).length : 0,
-    gitStatus,
+    gitStatusCount: parsedStatus.count,
+    gitStatus: parsedStatus.entries,
     gitRecentCommits: recentCommitsRaw ? recentCommitsRaw.split('\n').map((line) => line.trim()).filter(Boolean) : [],
   };
 }

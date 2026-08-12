@@ -6,7 +6,15 @@ import path from 'node:path';
 import test from 'node:test';
 
 const require = createRequire(import.meta.url);
-const { discoverRecentCodexWorkspaces } = require('../desktop-codex-sessions.cjs');
+const { discoverRecentCodexWorkspaces, parseGitStatus } = require('../desktop-codex-sessions.cjs');
+
+test('git status parsing preserves leading-column status and dot-prefixed paths', () => {
+  const result = parseGitStatus(' D .github/workflows/deploy.yml\n M src/app/page.tsx\n?? output/', 30);
+  assert.equal(result.count, 3);
+  assert.deepEqual(result.entries[0], { status: 'D', file: '.github/workflows/deploy.yml' });
+  assert.deepEqual(result.entries[1], { status: 'M', file: 'src/app/page.tsx' });
+  assert.deepEqual(result.entries[2], { status: '??', file: 'output/' });
+});
 
 test('Codex workspace discovery reads only bounded session metadata and ignores subagents', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'marcus-codex-sessions-'));
