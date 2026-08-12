@@ -1,11 +1,16 @@
 param(
   [int]$Port = 4178,
-  [string]$HostName = "0.0.0.0"
+  [string]$HostName = "0.0.0.0",
+  [string]$AdminToken = ""
 )
 
 $ErrorActionPreference = "Stop"
 
 function Get-WranglerToken {
+  if ($env:CLOUDFLARE_API_TOKEN) {
+    return $env:CLOUDFLARE_API_TOKEN.Trim()
+  }
+
   $configPath = Join-Path $env:APPDATA "xdg.config\.wrangler\config\default.toml"
   if (-not (Test-Path $configPath)) {
     throw "Wrangler config not found. Run `npx wrangler login` first."
@@ -22,11 +27,77 @@ function Get-WranglerToken {
 }
 
 function Get-GitHubToken {
+  if ($env:GITHUB_TOKEN) {
+    return $env:GITHUB_TOKEN.Trim()
+  }
+
   $token = (& gh auth token).Trim()
   if (-not $token) {
     throw "GitHub CLI did not return a token. Run `gh auth login` first."
   }
   return $token
+}
+
+function Get-StableAdminToken($Override) {
+  if ($Override) { return $Override.Trim() }
+  if ($env:ADMIN_TOKEN) { return $env:ADMIN_TOKEN.Trim() }
+
+  $dir = Join-Path $env:APPDATA "M.A.R.C.U.S."
+  if (-not (Test-Path $dir)) {
+    New-Item -ItemType Directory -Path $dir | Out-Null
+  }
+
+  $path = Join-Path $dir "mobile-live-admin-token.txt"
+  if (Test-Path $path) {
+    $existing = (Get-Content -Raw $path).Trim()
+    if ($existing) { return $existing }
+  }
+
+  $token = "marcus-live-" + ([guid]::NewGuid().ToString("N"))
+  Set-Content -Path $path -Value $token -NoNewline
+  return $token
+}
+
+function Read-JsonFile($Path) {
+  if (-not (Test-Path $Path)) { return $null }
+  try {
+    return Get-Content -Raw $Path | ConvertFrom-Json
+  } catch {
+    return $null
+  }
+}
+
+function Read-EnvValue($Path, $Key) {
+  if (-not (Test-Path $Path)) { return "" }
+  $line = Select-String -LiteralPath $Path -Pattern "^\s*$Key\s*=" -ErrorAction SilentlyContinue | Select-Object -First 1
+  if (-not $line) { return "" }
+  $raw = $line.Line -replace "^\s*$Key\s*=\s*", ""
+  return $raw.Trim().Trim('"').Trim("'")
+}
+
+function Get-OpenAiConfig {
+  $settingsPaths = @(
+    (Join-Path $env:APPDATA "M.A.R.C.U.S.\settings.json"),
+    (Join-Path $env:APPDATA "Task Tracker\settings.json")
+  )
+
+  $apiKey = if ($env:OPENAI_API_KEY) { $env:OPENAI_API_KEY.Trim() } else { "" }
+  $model = if ($env:OPENAI_MODEL) { $env:OPENAI_MODEL.Trim() } else { "" }
+
+  foreach ($path in $settingsPaths) {
+    $settings = Read-JsonFile $path
+    if (-not $apiKey -and $settings.openaiApiKey) { $apiKey = [string]$settings.openaiApiKey }
+    if (-not $model -and $settings.openaiModel) { $model = [string]$settings.openaiModel }
+  }
+
+  $fallbackEnv = "C:\Users\markg\OneDrive\Documents\FastFoodSMS\.env"
+  if (-not $apiKey) { $apiKey = Read-EnvValue $fallbackEnv "OPENAI_API_KEY" }
+  if (-not $model) { $model = Read-EnvValue $fallbackEnv "OPENAI_MODEL" }
+
+  return @{
+    ApiKey = $apiKey
+    Model = if ($model) { $model } else { "gpt-4.1-mini" }
+  }
 }
 
 function Get-CloudflareAccountAndZone($Token) {
@@ -48,7 +119,8 @@ function Get-CloudflareAccountAndZone($Token) {
 $githubToken = Get-GitHubToken
 $cloudflareToken = Get-WranglerToken
 $cloudflare = Get-CloudflareAccountAndZone $cloudflareToken
-$adminToken = "marcus-live-" + ([guid]::NewGuid().ToString("N"))
+$adminToken = Get-StableAdminToken $AdminToken
+$openai = Get-OpenAiConfig
 
 $env:PORT = [string]$Port
 $env:MARCUS_HOST = $HostName
@@ -64,6 +136,12 @@ if ($cloudflare.ZoneId) {
 $env:MARCUS_CODEX_GITHUB_ACTIONS_ENABLED = "true"
 $env:MARCUS_CODEX_GITHUB_TOKEN = $githubToken
 $env:MARCUS_CODEX_RUNNER_REPO = "markgromer/Reggie"
+if ($openai.ApiKey) {
+  $env:OPENAI_API_KEY = $openai.ApiKey
+}
+if ($openai.Model) {
+  $env:OPENAI_MODEL = $openai.Model
+}
 
 Start-Process -FilePath node -ArgumentList "server.js" -WorkingDirectory (Get-Location) -WindowStyle Hidden
 Start-Sleep -Seconds 4
@@ -88,5 +166,7 @@ $lanIps = Get-NetIPAddress -AddressFamily IPv4 |
   CodexMode = $health.capabilities.projectOperator.mode
   CodexProvider = $health.capabilities.projectOperator.provider
   CanStartCodex = $health.capabilities.projectOperator.canStartCodexDirectly
+  OpenAiConfigured = $health.capabilities.openai.configured
+  OpenAiModel = $health.capabilities.openai.model
   RemainingBlockers = $health.blockers
 } | ConvertTo-Json -Depth 5

@@ -137,6 +137,7 @@
     refresh: document.getElementById('refreshBtn'),
   };
   let liveToken = '';
+  let adminToken = localStorage.getItem('marcus_mobile_admin_token') || '';
   let deferredInstall = null;
 
   function setStatus(text, cls = '') {
@@ -152,7 +153,8 @@
   }
   async function api(path, options = {}) {
     const headers = { ...(options.headers || {}) };
-    if (liveToken) headers.Authorization = `Bearer ${liveToken}`;
+    const authToken = liveToken || adminToken;
+    if (authToken) headers.Authorization = `Bearer ${authToken}`;
     const resp = await fetch(path, { ...options, headers, credentials: 'include' });
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok) throw new Error(data.error || data.message || `HTTP ${resp.status}`);
@@ -205,11 +207,14 @@
 
   els.loginBtn.addEventListener('click', async () => {
     try {
+      const enteredToken = String(els.adminToken.value || '').trim();
       await api('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token: els.adminToken.value, remember: true }),
+        body: JSON.stringify({ token: enteredToken, remember: true }),
       });
+      adminToken = enteredToken;
+      localStorage.setItem('marcus_mobile_admin_token', adminToken);
       els.adminToken.value = '';
       await refreshHealth();
     } catch (err) {

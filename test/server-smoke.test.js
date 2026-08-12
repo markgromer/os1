@@ -122,7 +122,7 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     assert.ok(manifest.icons.some((icon) => icon.src === '/icons/marcus.svg'));
     const serviceWorker = await fetch(`${base}/sw.js`);
     assert.equal(serviceWorker.status, 200);
-    assert.match(await serviceWorker.text(), /marcus-mobile-v1/);
+    assert.match(await serviceWorker.text(), /marcus-mobile-v2/);
     const mobileIcon = await fetch(`${base}/icons/marcus.svg`);
     assert.equal(mobileIcon.status, 200);
     assert.match(await mobileIcon.text(), /<svg/);
