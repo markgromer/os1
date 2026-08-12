@@ -64,6 +64,9 @@ Important concepts:
 - Verification.
 - Recovery.
 - Reconciliation.
+- Typed `github_write` and `cloudflare_write` steps.
+- Immutable project/provider execution targets.
+- Drift checks, idempotency, authoritative provider read-back, and recovery-required handling for uncertain post-mutation state.
 
 ## Project Operator
 
@@ -110,8 +113,13 @@ Current routes:
 - `POST /api/marcus/project-operator`
 - `POST /api/marcus/live/chat` for project operator requests
 - `POST /api/chat` for project operator requests
+- `POST /api/operations/provider-action` to prepare a durable provider mutation without approving it
+- `GET /api/integrations/github/pull-request`
+- `GET /api/integrations/cloudflare/workers`
+- `GET /api/integrations/cloudflare/worker-versions`
+- `GET /api/integrations/cloudflare/worker-deployments`
 
-`/api/marcus/operator-health` is the honest capability readout. It reports whether Marcus can audit, prepare Codex handoffs, start Codex directly, read GitHub/Cloudflare through server credentials, see the desktop agent, and handle email/text capabilities with approval gates.
+`/api/marcus/operator-health` is the honest capability readout. It reports whether Marcus can audit, prepare Codex handoffs, start Codex directly, read GitHub/Cloudflare through server credentials, prepare approved provider mutations, see the desktop agent, and handle email/text capabilities with approval gates.
 
 External communication routes:
 
@@ -135,6 +143,8 @@ Email uses SMTP. Text uses Quo's message API. Drafting and approval are durable;
 - GitHub Actions Codex adapter.
 - Desktop provider.
 - GitHub read provider.
+- GitHub write provider for exact-head pull-request merges.
+- Cloudflare write provider for project-bound DNS changes and Worker-version deployments.
 - Browser verification provider.
 
 The HTTP Codex adapter is enabled only when `MARCUS_CODEX_ADAPTER_URL` or `CODEX_ADAPTER_URL` is configured. It calls start/status/follow-up/artifact/diff/cancel endpoints and keeps the durable operation lifecycle in the existing provider runner.
@@ -149,7 +159,9 @@ Production acceptance operation `op_NfHu37cdF1aSjQ` exercised this path against 
 
 Production currently uses this GitHub Actions adapter. GitHub repository reads, repository dispatch, runner reconciliation, pull-request creation, and durable verification completion were exercised end to end on the Marcus demo project. Before deployment of the independent review change, the new collector was also exercised read-only against demo PR #3 and resolved its exact head commit, two complete changed-file patches, and GitHub check/status state without a write, merge, or launch action.
 
-Cloudflare production access uses a dedicated account token named `Marcus Production Operator`. It covers the Developer Services policy plus DNS write and zone read. It excludes billing, membership, and API-token administration. Production reads of all zones and the configured zone's DNS records have passed.
+Cloudflare production access uses a dedicated account token named `Marcus Production Operator`. It covers the Developer Services policy plus DNS write and zone read. It excludes billing, membership, and API-token administration. Production reads of all zones and the configured zone's DNS records have passed. Worker script, version, and deployment inspection also passed against `marcus-operator-demo-worker`; the current deployment pins version `a51aa87d-a3e8-4dc3-ab81-2b9577a5a17c` at 100 percent.
+
+Provider mutations run through `marcus/providers/github_provider.js`, `marcus/providers/cloudflare_provider.js`, and the durable operation runner. The project registry is the authority boundary. Successful completion requires a trusted `provider_readback` verification result and `provider_mutation_evidence` artifact. If a provider accepts a mutation but Marcus cannot prove final state, the operation enters recovery instead of retrying. The production demo merge and Worker deployment operations are prepared and waiting for explicit approval; no live provider mutation has been executed through these paths yet.
 
 ## Evidence
 

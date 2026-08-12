@@ -45,6 +45,12 @@ Provider onboarding is separate from external actions:
 
 A short-lived voice/Live token cannot configure or verify providers. Verification never creates, approves, or sends an external action.
 
+GitHub and Cloudflare mutations follow:
+
+`inspect provider -> resolve exact registered project -> create durable provider action -> freeze immutable target -> wait for action-specific approval -> re-read and refuse drift -> mutate once -> authoritative read-back -> provider evidence -> complete`
+
+The model cannot manufacture request authority: provider preparation requires the authenticated original request and a high-confidence project binding. GitHub merges are pinned to the expected PR head SHA. DNS changes are pinned to the account, zone, record identity, and expected state. Worker deployment is pinned to the account, script, version, and current deployment id. An idempotent already-in-state result is recorded without a duplicate mutation. Unknown post-mutation state enters recovery and is never automatically retried.
+
 Realtime voice follows:
 
 `microphone -> OpenAI Realtime WebRTC -> marcus_operator -> /api/marcus/live/chat -> durable Marcus result -> spoken response`
@@ -135,6 +141,7 @@ Completion requires evidence:
 - Test, lint, build, or manual verification.
 - Browser evidence when UI is involved.
 - Explicit note of any skipped verification.
+- Authoritative provider read-back for every GitHub or Cloudflare mutation.
 
 Production Reggie acceptance on 2026-08-12 exercised this complete loop:
 
@@ -147,3 +154,9 @@ Production Quo onboarding followed the separate provider path:
 `paired admin -> save redacted os1 credential -> query Quo phone numbers -> normalize the canonical E.164 sender -> persist resolved sender ids -> mark provider verified with sent=false`
 
 The real text acceptance draft remains `pending_approval`. SMTP setup and both provider sends still require explicit operator authority.
+
+Production provider-operation preparation on 2026-08-12 exercised the new boundary without mutating customer state:
+
+`live PR/Worker inspection -> exact Marcus Operator Demo registry binding -> GitHub merge operation op_wSMm8zWz7DGGiA -> Cloudflare deployment operation op_nA9c9c_bZYsMjg -> both waiting_for_approval -> authoritative re-inspection confirmed unchanged PR and deployment`
+
+The complete local suite passed `127/127`; GitHub CI passed for implementation commit `0409400` and Cloudflare version-shape correction `17769b0`. Live execution of either prepared provider action remains an explicit operator decision.

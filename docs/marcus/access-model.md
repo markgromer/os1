@@ -51,7 +51,21 @@ Local/saved settings are also supported for operator provider access:
 
 Environment variables win when both env and saved settings are present. `/api/settings` reports configured/source/hint fields but redacts the actual saved secrets.
 
-The backend exposes GitHub, Cloudflare, and Render status/list/read endpoints. The conversational project operator uses GitHub evidence automatically during preflight audits. Cloudflare and Render remain part of the project-evidence layer rather than the same recursive repository transaction.
+The backend exposes structured GitHub, Cloudflare, and Render status/list/read endpoints. The conversational project operator uses GitHub evidence automatically during preflight audits. Cloudflare and Render remain part of the project-evidence layer rather than the same recursive repository transaction.
+
+Authenticated provider inspection routes include:
+
+- `GET /api/integrations/github/pull-request` for the current PR head, merge state, and checks.
+- `GET /api/integrations/cloudflare/workers`.
+- `GET /api/integrations/cloudflare/worker-versions`.
+- `GET /api/integrations/cloudflare/worker-deployments`.
+
+`POST /api/operations/provider-action` prepares a durable, approval-gated provider operation. It cannot approve or execute the action. The implemented mutation allowlist is:
+
+- GitHub: `merge_pull_request`.
+- Cloudflare: `upsert_dns_record`, `delete_dns_record`, and `deploy_worker_version`.
+
+Every mutation is bound to one high-confidence project-registry record and an immutable execution target. GitHub merges require the exact registered repository, pull request, and expected 40-character head SHA. Cloudflare actions require the exact registered account plus zone/DNS record or Worker/version/current-deployment target. The runner re-reads provider state after approval, refuses drift, performs at most one mutation, and requires authoritative read-back before completion. DNS deletion also requires strong confirmation. An accepted mutation with unavailable read-back enters `recovery_required`; it is not blindly retried or reported as failed.
 
 Capability truth source:
 
@@ -64,8 +78,11 @@ Production status verified on 2026-08-12:
 - GitHub server access can enumerate repositories and read repository files.
 - GitHub Actions dispatch can start the Reggie `openai/codex-action` runner and reconcile its result.
 - Completed GitHub Actions jobs are independently resolved to target-repository PR, commit, diff, and check evidence before result review.
+- GitHub PR inspection resolved demo PR #4 as open, clean, checks-settled, and fixed at head `4ee4135eb98be5bc57385be0ff128ee78fa42729`.
 - Cloudflare server access can enumerate all 29 zones and read DNS records for the configured default zone.
+- Cloudflare Worker inspection resolved `marcus-operator-demo-worker`, two versions, and deployment `d8eb7206-6d65-434b-aaab-04cd51f62823` with version `a51aa87d-a3e8-4dc3-ab81-2b9577a5a17c` at 100 percent.
 - The Cloudflare credential is the dedicated account token `Marcus Production Operator`, not the local Wrangler OAuth token.
+- Operator health reports the approved GitHub and Cloudflare mutation paths available. Production preparation operations `op_wSMm8zWz7DGGiA` and `op_nA9c9c_bZYsMjg` stopped at `waiting_for_approval`; neither the PR nor Worker deployment changed.
 - Render admin authentication and the canonical `BASE_URL` point to `https://task-tracker-5wsa.onrender.com`.
 - `RENDER_API_KEY` remains unconfigured; Render management currently uses authenticated operator tooling rather than Marcus server API access.
 
@@ -109,7 +126,7 @@ Marcus can create email and text drafts with recipients, subject/body, project c
 
 The paired mobile client can configure these providers through `GET/PUT /api/marcus/providers/config` and verify them through `POST /api/marcus/providers/verify`. These routes require the durable admin token or pairing cookie; a Live-session token is deliberately insufficient. Read responses contain only non-secret fields, masked hints, and bounded verification evidence. Blank secret inputs preserve an existing secret. A provider setting change clears that provider's previous verification. A non-reversible fingerprint also binds verification to the exact effective credentials, host, account, and sender, preventing stale verified status after an environment or legacy-settings change. Verification performs a Quo sender lookup or SMTP authentication handshake and never creates, approves, or sends an external action.
 
-Production provider status on 2026-08-12: outbound code, admin-only mobile configuration, secret redaction, provider verification, and mock-provider send acceptance pass locally. Service worker `marcus-mobile-v12`, one-time pairing, the provider dialog, admin access, and Live-token rejection also pass on Render. Real SMTP and Quo credentials are not configured. Mark can enter them directly in Marcus Mobile under `Integrations`; Marcus must still report the unconfigured condition and must not claim a real message was sent until both live verification and approved-send acceptance pass.
+Production provider status on 2026-08-12: outbound code, admin-only mobile configuration, secret redaction, provider verification, and mock-provider send acceptance pass locally. Service worker `marcus-mobile-v12`, one-time pairing, the provider dialog, admin access, and Live-token rejection also pass on Render. Quo is configured and verified against the Operations line without sending; the exact acceptance text remains pending approval. SMTP remains unconfigured. Marcus must not claim either real message was sent until the corresponding explicit approval, provider acceptance, and receipt evidence exist.
 
 ## Desktop Relay Credential
 
@@ -119,10 +136,10 @@ The Windows desktop relay reads the durable admin credential from `%APPDATA%/M.A
 
 Full access should mean Marcus can inspect and prepare confidently. It should not mean every action is autonomous.
 
-Recommended policy:
+Implemented policy:
 
 - Read actions: allowed when authenticated.
 - Local workspace actions: allowed only for approved, attested workspace mappings.
 - Code edits through Codex: allowed after Marcus creates a durable operation.
 - External communication: explicit approval required.
-- Production mutation: explicit strong approval required.
+- GitHub, DNS, and Worker mutation: explicit action-specific approval required; critical deletion also requires strong confirmation.

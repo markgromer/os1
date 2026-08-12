@@ -1,5 +1,21 @@
 # Decision Log
 
+## 2026-08-12: Explicit Implementation Language Starts Codex Without A Redundant Approval
+
+Context: Marcus treated direct requests such as install the new system, replace the legacy system, get Codex fixing it, and get it going in Codex as an untrusted medium-risk step. The mobile conversation therefore stopped for a vague approval after Mark had already issued the implementation instruction, reproducing the shallow approval loop shown in the original screenshots.
+
+Decision: Derive Codex implementation authority only from the authenticated original request, recognize an explicit bounded set of implementation verbs and Codex execution phrases, and retain negation/read-only checks. Let that authority satisfy the medium-risk Codex step. Keep merge, deployment, DNS, publish, external communication, and all high/critical actions behind their separate runtime approvals.
+
+Consequence: Marcus can audit and start the requested Codex work from one clear instruction, while consequential follow-on actions still stop at their exact approval boundary. Immediate replies remain concise but include the measured audit summary. Regression coverage includes install/replace, get Codex fixing, get it going in Codex, read-only continuity, and the genuine unauthorised audit/plan approval path.
+
+## 2026-08-12: Provider Credentials Are Broad, Mutation Actions Are Narrow
+
+Context: Mark wants Marcus to operate GitHub and Cloudflare, but exposing arbitrary provider APIs to a conversation model would let a mistaken target or prompt become an account-wide mutation. Read-only credentials and Codex-created pull requests were not enough to merge reviewed work, manage project DNS, or promote a prepared Worker version.
+
+Decision: Keep account credentials server-side and expose only typed durable actions: exact-head GitHub PR merge, project-bound DNS upsert/delete, and exact-version Worker deployment. Bind each action to a high-confidence project-registry record and immutable target, require runtime approval, re-read provider state to reject drift, perform at most one mutation, and require authoritative read-back. Treat uncertain post-write state as recovery-required rather than failure or an automatic retry.
+
+Consequence: Marcus can prepare useful GitHub and Cloudflare work from conversation while the model never receives generic account authority. The production paths are deployed and two exact demo actions are waiting for approval; no live merge or Worker deployment occurred during preparation.
+
 ## 2026-08-12: Codex Completion Claims Do Not Verify Codex Work
 
 Context: The Reggie runner could complete, push a branch, and open a pull request, but the GitHub Actions adapter returned no artifacts and an empty diff. Marcus therefore had no independent target-repository evidence and could only wait for manually registered verification.

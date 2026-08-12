@@ -28,6 +28,8 @@ Production read-only deep-audit acceptance on 2026-08-12 resolved `markgromer/Re
 
 Mobile continuity status: implemented and covered by regression tests. Marcus stores a bounded recent transcript and active project, recognizes explicit GitHub `owner/repository` references, and carries earlier requirements into a later audit/Codex request. `Reggie` is registered in production as `markgromer/Reggie` with `connect.scooper.site` and `Sweep and Go` aliases.
 
+Execution-language status: explicit phrases such as install, replace, migrate, start Codex, get Codex fixing, and get it going in Codex authorize the medium-risk Codex implementation step from the authenticated request. They do not create a redundant approval loop before Codex starts. Read-only questions and explicit do-not-start instructions remain non-authorizing. High/critical merge, deployment, DNS, publish, and communication actions keep their independent approval boundary. Marcus's immediate reply now keeps a concise audit summary instead of dumping operation internals.
+
 ## Phase 1A: Durable Mission Memory
 
 Status: implemented and verified locally and in production. `MissionMemoryStore` persists the overall operator mission, standing instructions, preferences, decisions, and facts independently from the rolling chat and per-project requirements. It is business-scoped, revisioned, atomic, backup-aware, secret-rejecting, and available to Live voice/mobile chat, main chat, project audits, Codex handoffs, operator health, and combined acceptance.
@@ -128,6 +130,36 @@ Production acceptance on 2026-08-12:
 - No extra Reggie job was dispatched during evidence refresh. PR #4 remains unmerged and the live Cloudflare Worker remains unchanged.
 - Local regression passed `114/114`; GitHub CI run `31586173120` passed for implementation commit `4a98ffc` before the final production review.
 
+## Phase 4A: Approved GitHub And Cloudflare Mutations
+
+Status: implemented, locally mutation-tested, deployed, and production-prepared. Live consequential execution remains pending explicit approval.
+
+Implemented actions:
+
+- Merge one pull request in the exact registered GitHub repository at an exact expected head SHA.
+- Create or update one project-bound Cloudflare DNS record.
+- Delete one exact DNS record only when its expected state still matches and strong confirmation is present.
+- Promote one exact version of one registered Cloudflare Worker while pinning the expected current deployment.
+
+Control path:
+
+`authenticated request -> provider inspection -> high-confidence registry binding -> immutable durable operation -> runtime approval -> drift revalidation -> one provider call -> authoritative read-back -> evidence-backed completion`
+
+The action allowlist is deliberately narrower than the credentials. Marcus does not expose an arbitrary GitHub or Cloudflare request tool. Provider calls are idempotent where possible; accepted writes with uncertain read-back enter `recovery_required` and are not retried automatically.
+
+Verification on 2026-08-12:
+
+- The real-server integration harness performed a GitHub merge, DNS create, and Worker deployment exactly once against stateful mock providers, then verified provider read-back and evidence persistence.
+- Focused provider tests passed `7/7`; the complete local suite passed `127/127`; JavaScript syntax passed for 73 files.
+- GitHub CI runs `31615296935` and `31615747675` passed for commits `0409400` and `17769b0`.
+- Render deployed both commits. Production operator health reports GitHub merge plus Cloudflare DNS/Worker mutation paths available.
+- Live read-only inspection resolved demo PR #4 at exact head `4ee4135eb98be5bc57385be0ff128ee78fa42729`, with settled checks and no failures.
+- Live Cloudflare inspection resolved Worker version `a51aa87d-a3e8-4dc3-ab81-2b9577a5a17c` and deployment `d8eb7206-6d65-434b-aaab-04cd51f62823` at 100 percent.
+- `Marcus Operator Demo` is bound to the exact GitHub repository, Cloudflare account, Worker, and production URL.
+- Merge operation `op_wSMm8zWz7DGGiA` and Worker operation `op_nA9c9c_bZYsMjg` are both `waiting_for_approval`. Re-inspection proved the PR and deployment remained unchanged.
+
+Remaining acceptance: Mark must explicitly approve the exact demo PR merge and Worker deployment operations before Marcus may execute them. The Worker action targets the already-active version and should exercise the idempotent no-duplicate-write path. A separate approved future version is needed to prove a real Cloudflare production deployment mutation without intentionally rolling the demo backward.
+
 ## Phase 5: External Communication
 
 Marcus can draft text/email actions and execute an approved provider send. Approval remains mandatory and distinct from provider acceptance.
@@ -156,15 +188,15 @@ Added and tested locally on 2026-08-12:
 - Quo sender resolution and SMTP authentication persist bounded verification evidence and issue no message request or SMTP `DATA`.
 - The complete local suite passes `98/98` with provider setup, redaction, authorization, no-send verification, approved-send/idempotency checks, deep GitHub audits, and mobile acceptance aggregation.
 
-Production blocker: no real Quo outbound API key/sender or SMTP account is configured. Marcus Mobile now provides an admin-only `Integrations` dialog that stores write-only credentials and verifies Quo/SMTP without sending. Mark must enter both provider accounts there; live verification and one explicitly approved send through each provider remain required.
+Production blocker: Quo is configured and no-send verified against the Operations line, but its exact acceptance text remains pending approval. SMTP is not configured. The selected SMTP path is a dedicated Resend sending-only credential for `Marcus <marcus@gromore.media>`. One explicitly approved provider send through each channel remains required.
 
 Production provider-onboarding acceptance on 2026-08-12:
 
 - Render served service worker `marcus-mobile-v12` with the provider dialog at the canonical mobile URL.
 - A fresh one-time pairing code authenticated a 390 x 844 Chromium session; the dialog opened with zero browser errors or warnings and no local/session storage entries.
 - Unauthenticated and Live-session-only provider config requests returned 401; the paired durable-admin context succeeded.
-- Config responses exposed no API key or SMTP password and agreed with operator health that both providers are currently unconfigured and unverified.
-- A Quo no-send verification attempt returned 400 because the real credentials are absent; it did not create an external action or send a message.
+- Config responses expose no API key or SMTP password. A dedicated Quo `os1` credential was later saved and verified without sending.
+- Quo verification resolved the Operations line, phone-number id, and user id and retained `sent: false`. SMTP remains unconfigured.
 
 Production project-continuity acceptance on 2026-08-11:
 
@@ -228,7 +260,7 @@ Acceptance tests still required before this phase is complete:
 
 The production paired-admin `Verify` dashboard starts a fresh in-memory acceptance session, shows each voice/provider gate, and enables physical confirmation only after all eight Android voice gates pass in installed standalone mode. `GET /api/marcus/acceptance` combines that evidence with provider, approved-send, Codex, GitHub, Cloudflare, OpenAI, and desktop readiness. Service worker `marcus-mobile-v13` and the dashboard passed Render deployment and phone-size Chromium acceptance; the physical-phone run remains pending.
 
-Status: the official SDK, recovery, acceptance telemetry, and durable-work tracking pass the local `118/118` suite. At 390x844, an authenticated browser showed the active Reggie operation, persisted it across reload, displayed one blocked transition without repeated messages, loaded both tracker and announcer bundles, produced no horizontal overflow, and reported no browser warnings or errors. Production service-worker cache `marcus-mobile-v14`, the tracker bundle, and the active-work markup are live. The production safe summary reports Reggie operation `op_f6XKmXTWILGvpQ` completed with 3/3 steps and 3/3 required checks. Eight blocked/terminal operations retained identical status, revision, and update time across two monitor intervals. A real installed-Android speech, barge-in, and recovery conversation remains pending.
+Status: the official SDK, recovery, acceptance telemetry, and durable-work tracking remain covered in the current local `127/127` suite. At 390x844, an authenticated browser showed the active Reggie operation, persisted it across reload, displayed one blocked transition without repeated messages, loaded both tracker and announcer bundles, produced no horizontal overflow, and reported no browser warnings or errors. Production service-worker cache `marcus-mobile-v14`, the tracker bundle, and the active-work markup are live. The production safe summary reports Reggie operation `op_f6XKmXTWILGvpQ` completed with 3/3 steps and 3/3 required checks. Eight blocked/terminal operations retained identical status, revision, and update time across two monitor intervals. A real installed-Android speech, barge-in, and recovery conversation remains pending.
 
 Verified locally on 2026-08-12:
 
