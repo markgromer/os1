@@ -80,6 +80,36 @@ async function withMockCodexAdapter(callback) {
   }
 }
 
+async function withMockQuoApi(callback) {
+  const received = [];
+  const server = http.createServer((req, res) => {
+    if (req.method === 'GET' && req.url === '/v1/phone-numbers') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ data: [{ id: 'PN_TEST', formattedNumber: '+15550001111', users: [{ id: 'US_TEST' }] }] }));
+      return;
+    }
+    if (req.method === 'POST' && req.url === '/v1/messages') {
+      let body = '';
+      req.on('data', (chunk) => { body += String(chunk); });
+      req.on('end', () => {
+        received.push({ authorization: req.headers.authorization, body: JSON.parse(body || '{}') });
+        res.writeHead(202, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ data: { id: `MSG_${received.length}`, status: 'queued' } }));
+      });
+      return;
+    }
+    res.writeHead(404, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ error: 'not found' }));
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
+  try {
+    return await callback({ baseUrl: `http://127.0.0.1:${port}`, received });
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
+
 test('isolated server startup succeeds only for explicit loopback development or configured admin auth', async () => {
   const local = await spawnServer({ startupCheck: true, adminToken: '' });
   try {
@@ -427,6 +457,77 @@ test('Marcus Live approval follow-up advances a waiting project-operator operati
       assert.notEqual(approved.operation.status, 'waiting_for_approval');
       assert.match(approved.reply, /Approved/);
       assert.equal(Object.values(approved.operation.metadata.codexJobs || {}).some((job) => job.provider === 'mock_http_codex'), true);
+    } finally { await server.close(); }
+  });
+});
+
+test('Marcus Mobile remembers an explicit Reggie repo and carries requirements into the Codex operation', async () => {
+  await withMockCodexAdapter(async (adapterUrl) => {
+    const server = await spawnServer({ extraEnv: { MARCUS_CODEX_ADAPTER_URL: adapterUrl, MARCUS_CODEX_ADAPTER_TOKEN: 'test-token', GITHUB_TOKEN: 'test-github-token' } });
+    const base = `http://127.0.0.1:${server.port}`;
+    const headers = { authorization: 'Bearer test-admin-token', 'content-type': 'application/json' };
+    try {
+      await server.waitForReady();
+      const contextResponse = await fetch(`${base}/api/marcus/live/chat`, { method: 'POST', headers, body: JSON.stringify({
+        message: 'Reggie is my GitHub project at markgromer/Reggie.git. Sweep and Go needs a settings popup for its API token and slug.',
+      }) });
+      assert.equal(contextResponse.status, 200);
+      const context = await contextResponse.json();
+      assert.equal(context.status, 'project_context_set');
+      assert.equal(context.project.name, 'Reggie');
+
+      const operationResponse = await fetch(`${base}/api/marcus/live/chat`, { method: 'POST', headers, body: JSON.stringify({
+        message: 'Check the git repo and set up the plan, then get it going in Codex.',
+      }) });
+      assert.equal(operationResponse.status, 200);
+      const result = await operationResponse.json();
+      assert.equal(result.status, 'codex_prepared');
+      assert.equal(result.operation.projectName, 'Reggie');
+      assert.match(result.operation.originalRequest, /settings popup/i);
+      assert.match(result.operation.originalRequest, /API token and slug/i);
+      assert.equal(Object.values(result.operation.metadata.codexJobs || {}).some((job) => job.provider === 'mock_http_codex'), true);
+    } finally { await server.close(); }
+  });
+});
+
+test('approved Marcus text actions send exactly once through Quo', async () => {
+  await withMockQuoApi(async ({ baseUrl: quoBaseUrl, received }) => {
+    const server = await spawnServer({ extraEnv: {
+      QUO_API_KEY: 'test-quo-key',
+      QUO_DEFAULT_PHONE_NUMBER_ID: 'PN_TEST',
+      QUO_API_BASE_URL: quoBaseUrl,
+    } });
+    const base = `http://127.0.0.1:${server.port}`;
+    const headers = { authorization: 'Bearer test-admin-token', 'content-type': 'application/json' };
+    try {
+      await server.waitForReady();
+      const health = await (await fetch(`${base}/api/marcus/operator-health`, { headers })).json();
+      assert.equal(health.capabilities.communication.textSendConfigured, true);
+
+      const draftResponse = await fetch(`${base}/api/marcus/external-actions/draft`, { method: 'POST', headers, body: JSON.stringify({
+        type: 'text', to: '+15550002222', body: 'Marcus communication acceptance test.',
+      }) });
+      assert.equal(draftResponse.status, 201);
+      const draft = (await draftResponse.json()).action;
+
+      const unapproved = await fetch(`${base}/api/marcus/external-actions/${draft.id}/send`, { method: 'POST', headers, body: '{}' });
+      assert.equal(unapproved.status, 409);
+      assert.equal(received.length, 0);
+
+      const approval = await fetch(`${base}/api/marcus/external-actions/${draft.id}/approve`, { method: 'POST', headers, body: JSON.stringify({ message: 'Send the text now.' }) });
+      assert.equal(approval.status, 200);
+      const sent = await fetch(`${base}/api/marcus/external-actions/${draft.id}/send`, { method: 'POST', headers, body: '{}' });
+      assert.equal(sent.status, 200);
+      assert.equal((await sent.json()).action.status, 'sent');
+      assert.equal(received.length, 1);
+      assert.equal(received[0].authorization, 'test-quo-key');
+      assert.equal(received[0].body.content, 'Marcus communication acceptance test.');
+      assert.deepEqual(received[0].body.to, ['+15550002222']);
+
+      const replay = await fetch(`${base}/api/marcus/external-actions/${draft.id}/send`, { method: 'POST', headers, body: '{}' });
+      assert.equal(replay.status, 200);
+      assert.equal((await replay.json()).reused, true);
+      assert.equal(received.length, 1);
     } finally { await server.close(); }
   });
 });

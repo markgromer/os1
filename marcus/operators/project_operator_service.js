@@ -10,15 +10,15 @@ function repoParts(repo = {}) {
   const fullName = safeString(repo.fullName, 300);
   if (fullName.includes('/')) return { fullName };
   const url = safeString(repo.url, 1_000);
-  const match = url.match(/github\.com[:/]+([^/\s]+)\/([^/\s.git#?]+)/i);
-  return match ? { fullName: `${match[1]}/${match[2]}` } : { fullName: '' };
+  const match = url.match(/github\.com[:/]+([^/\s]+)\/([^/\s#?]+)/i);
+  return match ? { fullName: `${match[1]}/${match[2].replace(/\.git$/i, '')}` } : { fullName: '' };
 }
 
 function normalizeRepoFullName(value) {
-  const raw = safeString(value, 300).trim();
+  const raw = safeString(value, 300).trim().replace(/[?#].*$/, '').replace(/\/+$/, '').replace(/\.git$/i, '');
   if (/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(raw)) return raw;
-  const match = raw.match(/github\.com[:/]+([^/\s]+)\/([^/\s.git#?]+)/i);
-  return match ? `${match[1]}/${match[2]}` : '';
+  const match = raw.match(/github\.com[:/]+([^/\s]+)\/([^/\s#?]+)/i);
+  return match ? `${match[1]}/${match[2].replace(/\.git$/i, '')}` : '';
 }
 
 function repoNameTokens(value) {
@@ -32,8 +32,8 @@ function repoNameTokens(value) {
 function extractRepoSearchTerms(request) {
   const text = safeString(request, 2_000);
   const terms = new Set();
-  for (const match of text.matchAll(/github\.com[:/]+([^/\s]+)\/([^/\s.git#?]+)/gi)) terms.add(`${match[1]}/${match[2]}`);
-  for (const match of text.matchAll(/\b([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\b/g)) terms.add(match[1]);
+  for (const match of text.matchAll(/github\.com[:/]+([^/\s]+)\/([^/\s#?]+)/gi)) terms.add(`${match[1]}/${match[2].replace(/\.git$/i, '')}`);
+  for (const match of text.matchAll(/\b([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\.git)?)\b/g)) terms.add(match[1].replace(/\.git$/i, ''));
   for (const match of text.matchAll(/\b([a-z0-9.-]+\.[a-z]{2,})(?:\/[^\s]*)?/gi)) terms.add(match[1]);
 
   const phrases = [
@@ -235,6 +235,62 @@ export class ProjectOperatorService {
     return CODEX_OPERATOR_RE.test(safeString(message, 4_000));
   }
 
+  async ensureExplicitGithubProject(businessKey, request) {
+    const key = safeBusinessKey(businessKey);
+    const explicit = extractRepoSearchTerms(request)
+      .map((term) => normalizeRepoFullName(term))
+      .find(Boolean);
+    if (!explicit) return null;
+
+    const records = await this.operationsEngine.listProjectRegistry(key);
+    const existing = records.find((record) => repoParts(record.repo).fullName.toLowerCase() === explicit.toLowerCase());
+    if (existing) return existing;
+
+    const [owner, name] = explicit.split('/');
+    let repository = null;
+    if (this.githubApi) {
+      try {
+        repository = await this.githubApi(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`);
+      } catch {
+        // The authenticated user supplied an explicit target; preserve it even if
+        // metadata lookup is temporarily unavailable.
+      }
+    }
+    const canonicalName = safeString(repository?.name || name, 300);
+    try {
+      return await this.operationsEngine.createProjectRegistryRecord(key, {
+        canonicalName,
+        aliases: [...new Set([explicit, `${canonicalName} repo`, `${canonicalName} project`])],
+        description: safeString(repository?.description, 8_000),
+        repo: {
+          provider: 'github',
+          owner,
+          name: canonicalName,
+          fullName: explicit,
+          url: safeString(repository?.html_url, 1_000) || `https://github.com/${explicit}`,
+          defaultBranch: safeString(repository?.default_branch, 200) || 'main',
+        },
+        metadata: { discoveredBy: 'marcus_project_operator', discoveredFromExplicitRequest: true },
+      });
+    } catch (error) {
+      const refreshed = await this.operationsEngine.listProjectRegistry(key);
+      const raced = refreshed.find((record) => repoParts(record.repo).fullName.toLowerCase() === explicit.toLowerCase());
+      if (raced) return raced;
+      throw error;
+    }
+  }
+
+  async resolveProjectContext(businessKey, { message, projectId = '', projectRegistryId = '' } = {}) {
+    const key = safeBusinessKey(businessKey);
+    const request = safeString(message, 12_000);
+    const explicit = await this.ensureExplicitGithubProject(key, request);
+    const resolution = await this.operationsEngine.resolveProject(key, request, {
+      projectId,
+      registryId: explicit?.id || projectRegistryId,
+    });
+    return { resolution, project: resolution.registryRecord ? summarizeProject(resolution.registryRecord) : null, registered: Boolean(explicit) };
+  }
+
   async discoverRelatedRepos(request, project) {
     const primary = repoParts(project?.repo).fullName;
     const terms = extractRepoSearchTerms(request);
@@ -349,11 +405,16 @@ export class ProjectOperatorService {
     return { text, legacyRows, evidence, activity, desktopContext, repoFiles, audit };
   }
 
-  async prepareCodexOperation(businessKey, { message, projectId = '', source = 'project_operator' } = {}) {
+  async prepareCodexOperation(businessKey, { message, projectId = '', projectRegistryId = '', resolutionRequest = '', source = 'project_operator' } = {}) {
     const key = safeBusinessKey(businessKey);
     const request = safeString(message, 12_000);
     if (!request) throw new Error('message is required.');
-    const resolution = await this.operationsEngine.resolveProject(key, request, { projectId });
+    const resolverText = safeString(resolutionRequest, 12_000) || request;
+    const explicit = await this.ensureExplicitGithubProject(key, resolverText);
+    const resolution = await this.operationsEngine.resolveProject(key, resolverText, {
+      projectId,
+      registryId: explicit?.id || projectRegistryId,
+    });
     if (resolution.confidence === 'low' || !resolution.registryRecord) {
       const alternatives = (resolution.alternatives || []).map((item) => ({
         id: item.registryRecord?.id || '',

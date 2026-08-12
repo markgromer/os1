@@ -22,6 +22,8 @@ Primary integration point:
 
 Status: initial implementation exists in `marcus/operators/project_operator_service.js`. It deterministically resolves a project, gathers current context, writes an execution brief, composes a Codex prompt, and creates a durable Codex handoff operation.
 
+Mobile continuity status: implemented and covered by regression tests. Marcus stores a bounded recent transcript and active project, recognizes explicit GitHub `owner/repository` references, and carries earlier requirements into a later audit/Codex request. `Reggie` is registered in production as `markgromer/Reggie` with `connect.scooper.site` and `Sweep and Go` aliases.
+
 ## Phase 2: Context Gathering
 
 Add a reusable context gatherer that can pull:
@@ -85,7 +87,7 @@ Checks:
 
 ## Phase 5: External Communication
 
-Marcus can draft text/email actions now. Approval remains mandatory. Provider-specific sending is a later explicit action that must record sent-message evidence before Marcus can say a message was sent.
+Marcus can draft text/email actions and execute an approved provider send. Approval remains mandatory and distinct from provider acceptance.
 
 Flows:
 
@@ -94,6 +96,16 @@ Flows:
 - Ask for approval.
 - Send through configured provider as a separate approved provider action.
 - Attach sent-message evidence to the project.
+
+Implemented and tested locally on 2026-08-11:
+
+- Text drafts use Quo after explicit approval.
+- Email drafts use SMTP after explicit approval.
+- Send claims use `sending` to prevent concurrent duplicate provider calls.
+- Successful replay is idempotent and returns the stored receipt.
+- Operator health distinguishes inbound text webhooks from outbound text capability.
+
+Production blocker: no real Quo outbound API key/sender or SMTP account is configured. Live-provider acceptance remains required.
 
 ## Phase 6: Documentation Automation
 

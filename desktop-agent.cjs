@@ -24,7 +24,23 @@ const fs = require('fs');
 const os = require('os');
 
 const SERVER_URL = (process.argv[2] || process.env.MARCUS_SERVER_URL || '').trim();
-const ADMIN_TOKEN = (process.argv[3] || process.env.ADMIN_TOKEN || '').trim();
+const DEFAULT_ADMIN_TOKEN_FILE = path.join(
+  process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'),
+  'M.A.R.C.U.S',
+  'mobile-live-admin-token.txt',
+);
+
+function readAdminTokenFile() {
+  const tokenFile = String(process.env.MARCUS_ADMIN_TOKEN_FILE || DEFAULT_ADMIN_TOKEN_FILE).trim();
+  if (!tokenFile) return '';
+  try {
+    return fs.readFileSync(tokenFile, 'utf8').trim();
+  } catch {
+    return '';
+  }
+}
+
+const ADMIN_TOKEN = (process.argv[3] || process.env.ADMIN_TOKEN || readAdminTokenFile()).trim();
 const DESKTOP_AGENT_ID = String(process.env.MARCUS_DESKTOP_AGENT_ID || os.hostname()).trim().slice(0, 200);
 const ALLOWED_WORKSPACE_ROOT_VALUES = String(process.env.MARCUS_ALLOWED_WORKSPACE_ROOTS || '')
   .split(path.delimiter).map((value) => value.trim()).filter(Boolean);
@@ -32,7 +48,12 @@ const ALLOWED_WORKSPACE_ROOT_VALUES = String(process.env.MARCUS_ALLOWED_WORKSPAC
 if (!SERVER_URL) {
   console.error('Usage: node desktop-agent.cjs <SERVER_URL> [ADMIN_TOKEN]');
   console.error('  SERVER_URL: e.g. https://your-app.onrender.com');
-  console.error('  ADMIN_TOKEN: the same token your server uses for auth');
+  console.error(`  ADMIN_TOKEN: optional; defaults to ${DEFAULT_ADMIN_TOKEN_FILE}`);
+  process.exit(1);
+}
+
+if (!ADMIN_TOKEN && new URL(SERVER_URL).protocol === 'https:') {
+  console.error(`ADMIN_TOKEN is required for a remote server. Add it to ${DEFAULT_ADMIN_TOKEN_FILE}.`);
   process.exit(1);
 }
 
@@ -166,22 +187,30 @@ function findWorkspacePath(workspaceName) {
 // ── Run a git command in a directory ────────────────────────────
 function gitCmd(cwd, args) {
   return new Promise((resolve) => {
-    execFile('git', args, { cwd, windowsHide: true, timeout: 5000 }, (err, stdout) => {
-      resolve(err ? '' : String(stdout || '').trim());
-    });
+    try {
+      execFile('git', args, { cwd, windowsHide: true, timeout: 5000 }, (err, stdout) => {
+        resolve(err ? '' : String(stdout || '').trim());
+      });
+    } catch {
+      resolve('');
+    }
   });
 }
 
 function runLocalCommand(cwd, command, args, timeout = 60_000) {
   return new Promise((resolve) => {
-    execFile(command, args, { cwd, windowsHide: true, timeout }, (err, stdout, stderr) => {
-      resolve({
-        ok: !err,
-        code: err?.code ?? 0,
-        stdout: String(stdout || '').slice(-8000),
-        stderr: String(stderr || err?.message || '').slice(-8000),
+    try {
+      execFile(command, args, { cwd, windowsHide: true, timeout }, (err, stdout, stderr) => {
+        resolve({
+          ok: !err,
+          code: err?.code ?? 0,
+          stdout: String(stdout || '').slice(-8000),
+          stderr: String(stderr || err?.message || '').slice(-8000),
+        });
       });
-    });
+    } catch (error) {
+      resolve({ ok: false, code: error?.code || 1, stdout: '', stderr: String(error?.message || error) });
+    }
   });
 }
 
@@ -818,20 +847,24 @@ async function getGitDiff(wsPath) {
 // ── Capture desktop context via PowerShell ──────────────────────
 function captureDesktop() {
   return new Promise((resolve) => {
-    execFile(
-      'powershell.exe',
-      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', SCRIPT_PATH],
-      { windowsHide: true, timeout: 5000 },
-      (err, stdout) => {
-        if (err) return resolve(null);
-        const parts = String(stdout || '').trim().split('||');
-        resolve({
-          windowTitle: (parts[0] || '').trim(),
-          processName: (parts[1] || '').trim().toLowerCase(),
-          idleSeconds: Math.max(0, Number(parts[2]) || 0),
-        });
-      }
-    );
+    try {
+      execFile(
+        'powershell.exe',
+        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', SCRIPT_PATH],
+        { windowsHide: true, timeout: 5000 },
+        (err, stdout) => {
+          if (err) return resolve(null);
+          const parts = String(stdout || '').trim().split('||');
+          resolve({
+            windowTitle: (parts[0] || '').trim(),
+            processName: (parts[1] || '').trim().toLowerCase(),
+            idleSeconds: Math.max(0, Number(parts[2]) || 0),
+          });
+        }
+      );
+    } catch {
+      resolve(null);
+    }
   });
 }
 
@@ -993,21 +1026,25 @@ let lastSystemHealthAt = 0;
 
 function captureSystemHealth() {
   return new Promise((resolve) => {
-    execFile(
-      'powershell.exe',
-      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', HEALTH_SCRIPT_PATH],
-      { windowsHide: true, timeout: 15_000 },
-      (err, stdout) => {
-        if (err) return resolve(null);
-        try {
-          const data = JSON.parse(stdout.trim());
-          data.collectedAt = new Date().toISOString();
-          resolve(data);
-        } catch {
-          resolve(null);
+    try {
+      execFile(
+        'powershell.exe',
+        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', HEALTH_SCRIPT_PATH],
+        { windowsHide: true, timeout: 15_000 },
+        (err, stdout) => {
+          if (err) return resolve(null);
+          try {
+            const data = JSON.parse(stdout.trim());
+            data.collectedAt = new Date().toISOString();
+            resolve(data);
+          } catch {
+            resolve(null);
+          }
         }
-      }
-    );
+      );
+    } catch {
+      resolve(null);
+    }
   });
 }
 
@@ -1143,5 +1180,14 @@ console.log(`  Poll:   every ${POLL_MS / 1000}s`);
 console.log('  Press Ctrl+C to stop.');
 console.log('');
 
-tick();
-setInterval(tick, POLL_MS);
+async function runLoop() {
+  try {
+    await tick();
+  } catch (error) {
+    console.error(`[!] Relay tick failed: ${String(error?.message || error).slice(0, 200)}`);
+  } finally {
+    setTimeout(runLoop, POLL_MS);
+  }
+}
+
+runLoop();

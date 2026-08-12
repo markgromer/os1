@@ -1987,10 +1987,100 @@ function getCloudflareConfig(saved = {}) {
   };
 }
 
+function getQuoOutboundConfig(saved = {}) {
+  const envApiKey = firstNonEmptyString(process.env, ['QUO_API_KEY', 'OPENPHONE_API_KEY']);
+  const savedApiKey = typeof saved.quoApiKey === 'string' ? saved.quoApiKey.trim() : '';
+  const apiKey = envApiKey || savedApiKey;
+  const defaultPhoneNumberId = firstNonEmptyString(process.env, ['QUO_DEFAULT_PHONE_NUMBER_ID', 'OPENPHONE_DEFAULT_PHONE_NUMBER_ID'])
+    || (typeof saved.quoDefaultPhoneNumberId === 'string' ? saved.quoDefaultPhoneNumberId.trim() : '');
+  const from = firstNonEmptyString(process.env, ['QUO_FROM_NUMBER', 'OPENPHONE_FROM_NUMBER'])
+    || (typeof saved.quoFromNumber === 'string' ? saved.quoFromNumber.trim() : '');
+  const userId = firstNonEmptyString(process.env, ['QUO_USER_ID', 'OPENPHONE_USER_ID'])
+    || (typeof saved.quoUserId === 'string' ? saved.quoUserId.trim() : '');
+  const configuredBaseUrl = firstNonEmptyString(process.env, ['QUO_API_BASE_URL', 'OPENPHONE_API_BASE_URL'])
+    || (typeof saved.quoBaseUrl === 'string' ? saved.quoBaseUrl.trim() : '');
+  const baseUrl = normalizeBaseUrl(configuredBaseUrl) || 'https://api.openphone.com';
+  return {
+    apiKey,
+    baseUrl,
+    defaultPhoneNumberId,
+    from,
+    userId,
+    configured: Boolean(apiKey && (defaultPhoneNumberId || from)),
+    source: envApiKey ? 'env' : savedApiKey ? 'settings' : 'none',
+    keyHint: maskSecretHint(apiKey),
+  };
+}
+
+function normalizeExternalRecipient(type, value) {
+  const recipient = String(value || '').trim();
+  if (type === 'text' && !/^\+[1-9]\d{7,14}$/.test(recipient)) {
+    throw new Error('Text recipient must use E.164 format, for example +15555555555.');
+  }
+  if (type === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient)) {
+    throw new Error('Email recipient must be a valid email address.');
+  }
+  return recipient;
+}
+
+async function resolveQuoSender(config) {
+  if (!config?.apiKey) throw new Error('Quo API key is not configured.');
+  if (config.from && config.userId) return { from: config.from, userId: config.userId, phoneNumberId: config.defaultPhoneNumberId };
+  const { resp, data } = await fetchJsonWithTimeout(`${config.baseUrl}/v1/phone-numbers`, {
+    method: 'GET',
+    headers: { Authorization: config.apiKey, 'Content-Type': 'application/json' },
+    timeoutMs: 20_000,
+  });
+  if (!resp.ok) {
+    const detail = String(data?.message || data?.error?.message || data?.error || '').trim();
+    throw new Error(`Quo phone-number lookup failed (${resp.status})${detail ? `: ${detail}` : ''}`);
+  }
+  const numbers = Array.isArray(data?.data) ? data.data : [];
+  const normalizedFrom = String(config.from || '').replace(/[^\d+]/g, '');
+  const selected = numbers.find((item) => config.defaultPhoneNumberId && item?.id === config.defaultPhoneNumberId)
+    || numbers.find((item) => normalizedFrom && [item?.formattedNumber, item?.number].some((value) => String(value || '').replace(/[^\d+]/g, '') === normalizedFrom))
+    || (numbers.length === 1 ? numbers[0] : null);
+  if (!selected) throw new Error('Quo sender could not be resolved. Configure QUO_DEFAULT_PHONE_NUMBER_ID or QUO_FROM_NUMBER.');
+  const from = String(selected.formattedNumber || selected.number || config.from || '').trim();
+  const userId = String(config.userId || selected.users?.[0]?.id || '').trim();
+  if (!/^\+[1-9]\d{7,14}$/.test(from)) throw new Error('Quo sender phone number is missing or invalid.');
+  if (!userId) throw new Error('Quo sender user could not be resolved. Configure QUO_USER_ID.');
+  return { from, userId, phoneNumberId: String(selected.id || config.defaultPhoneNumberId || '').trim() };
+}
+
+async function sendQuoText(config, { to, content }) {
+  const recipient = normalizeExternalRecipient('text', to);
+  const text = String(content || '').trim();
+  if (!text || text.length > 1_600) throw new Error('Text content must contain 1 to 1600 characters.');
+  const sender = await resolveQuoSender(config);
+  const { resp, data } = await fetchJsonWithTimeout(`${config.baseUrl}/v1/messages`, {
+    method: 'POST',
+    headers: { Authorization: config.apiKey, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      content: text,
+      from: sender.from,
+      to: [recipient],
+      userId: sender.userId,
+      ...(sender.phoneNumberId ? { phoneNumberId: sender.phoneNumberId } : {}),
+    }),
+    timeoutMs: 25_000,
+  });
+  if (!resp.ok) {
+    const detail = String(data?.message || data?.error?.message || data?.error || '').trim();
+    throw new Error(`Quo message send failed (${resp.status})${detail ? `: ${detail}` : ''}`);
+  }
+  return {
+    provider: 'quo',
+    messageId: String(data?.data?.id || '').trim(),
+    status: String(data?.data?.status || 'queued').trim(),
+    accepted: true,
+  };
+}
+
 function normalizeExternalActionDraft(input = {}) {
   const raw = input && typeof input === 'object' ? input : {};
   const type = safeEnum(raw.type, ['email', 'text'], 'email');
-  const to = String(raw.to || raw.recipient || '').trim().slice(0, 500);
+  const to = normalizeExternalRecipient(type, String(raw.to || raw.recipient || '').trim().slice(0, 500));
   const subject = String(raw.subject || '').trim().slice(0, 300);
   const body = String(raw.body || raw.text || raw.message || '').trim().slice(0, 8_000);
   const projectId = String(raw.projectId || '').trim().slice(0, 160);
@@ -2031,7 +2121,7 @@ function normalizeExternalActionDrafts(input) {
       projectId: String(item.projectId || '').trim().slice(0, 160),
       projectName: String(item.projectName || '').trim().slice(0, 300),
       reason: String(item.reason || '').trim().slice(0, 1_000),
-      status: safeEnum(item.status, ['pending_approval', 'approved', 'rejected', 'sent', 'failed'], 'pending_approval'),
+      status: safeEnum(item.status, ['pending_approval', 'approved', 'sending', 'rejected', 'sent', 'failed'], 'pending_approval'),
       requiresApproval: true,
       createdAt: typeof item.createdAt === 'string' ? item.createdAt : nowIso(),
       updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : '',
@@ -2049,6 +2139,193 @@ function normalizeExternalActionDrafts(input) {
     .slice(-200);
 }
 
+async function createExternalActionDraft(input = {}) {
+  const draft = normalizeExternalActionDraft(input);
+  let created = null;
+  writeLock = writeLock.then(async () => {
+    const settings = await readSettings();
+    const existing = normalizeExternalActionDrafts(settings.externalActionDrafts);
+    await writeSettings({
+      ...settings,
+      externalActionDrafts: [...existing, draft].slice(-200),
+      updatedAt: nowIso(),
+    });
+    created = draft;
+  });
+  await writeLock;
+  return created;
+}
+
+async function updateExternalAction(id, updater) {
+  let updated = null;
+  writeLock = writeLock.then(async () => {
+    const settings = await readSettings();
+    const actions = normalizeExternalActionDrafts(settings.externalActionDrafts);
+    const index = actions.findIndex((item) => item.id === id);
+    if (index < 0) throw Object.assign(new Error('External action draft not found.'), { statusCode: 404 });
+    const next = await updater(actions[index], settings);
+    if (!next) {
+      updated = actions[index];
+      return;
+    }
+    actions[index] = { ...next, updatedAt: nowIso() };
+    await writeSettings({ ...settings, externalActionDrafts: actions, updatedAt: nowIso() });
+    updated = actions[index];
+  });
+  await writeLock;
+  return updated;
+}
+
+async function approveExternalAction(id, message) {
+  const approvalMessage = String(message || '').trim().slice(0, 1_000);
+  if (!isExternalActionApprovalMessage(approvalMessage)) {
+    throw Object.assign(new Error('Approval message must explicitly approve this external action.'), { statusCode: 409, approvalRequired: true });
+  }
+  return updateExternalAction(id, (action) => {
+    if (action.status !== 'pending_approval') {
+      throw Object.assign(new Error(`External action cannot be approved from ${action.status}.`), { statusCode: 409 });
+    }
+    return { ...action, status: 'approved', approvedAt: nowIso(), approvedBy: 'mark', approvalMessage };
+  });
+}
+
+async function persistExternalActionSendResult(id, status, sendResult) {
+  return updateExternalAction(id, (action) => ({
+    ...action,
+    status,
+    ...(status === 'sent' ? { sentAt: nowIso() } : {}),
+    sendResult: sendResult && typeof sendResult === 'object' ? sendResult : {},
+  }));
+}
+
+async function sendApprovedExternalAction(id) {
+  const settings = await readSettings();
+  const existing = normalizeExternalActionDrafts(settings.externalActionDrafts).find((item) => item.id === id);
+  if (!existing) throw Object.assign(new Error('External action draft not found.'), { statusCode: 404 });
+  if (existing.status === 'sent') return { action: existing, reused: true };
+  if (existing.status !== 'approved') {
+    throw Object.assign(new Error(`External action cannot be sent from ${existing.status}. Explicit approval is required first.`), { statusCode: 409, approvalRequired: true });
+  }
+
+  const email = getEmailConfig(settings);
+  const quo = getQuoOutboundConfig(settings);
+  if (existing.type === 'email' && !email.smtpConfigured) {
+    throw Object.assign(new Error('SMTP email sending is not configured.'), { statusCode: 503 });
+  }
+  if (existing.type === 'text' && !quo.configured) {
+    throw Object.assign(new Error('Quo outbound text sending is not configured.'), { statusCode: 503 });
+  }
+
+  const claimed = await updateExternalAction(id, (action) => {
+    if (action.status === 'sent') return null;
+    if (action.status !== 'approved') {
+      throw Object.assign(new Error(`External action cannot be claimed from ${action.status}.`), { statusCode: 409 });
+    }
+    return { ...action, status: 'sending', sendResult: {} };
+  });
+  if (claimed.status === 'sent') return { action: claimed, reused: true };
+
+  try {
+    let result;
+    if (claimed.type === 'email') {
+      const smtpResult = await withSmtpTransport(email, async (transport) => transport.sendMail({
+        from: email.fromAddress,
+        to: claimed.to,
+        subject: claimed.subject,
+        text: claimed.body,
+      }));
+      result = {
+        provider: 'smtp',
+        messageId: String(smtpResult.value?.messageId || '').trim(),
+        accepted: Array.isArray(smtpResult.value?.accepted) ? smtpResult.value.accepted : [],
+        rejected: Array.isArray(smtpResult.value?.rejected) ? smtpResult.value.rejected : [],
+        response: String(smtpResult.value?.response || '').slice(0, 500),
+        profile: describeSmtpProfile(smtpResult.profile),
+      };
+    } else {
+      result = await sendQuoText(quo, { to: claimed.to, content: claimed.body });
+    }
+    const action = await persistExternalActionSendResult(id, 'sent', result);
+    return { action, result, reused: false };
+  } catch (error) {
+    const failure = { provider: claimed.type === 'email' ? 'smtp' : 'quo', error: String(error?.message || error).slice(0, 1_000) };
+    await persistExternalActionSendResult(id, 'failed', failure);
+    throw Object.assign(new Error(failure.error), { statusCode: 502 });
+  }
+}
+
+function isExternalCommunicationRequest(message) {
+  const text = String(message || '').trim();
+  return /\b(email|e-mail|text|sms|message)\b/i.test(text)
+    && /\b(send|write|draft|reply|respond|compose|prepare)\b/i.test(text);
+}
+
+function isExternalActionApprovalMessage(message) {
+  const text = String(message || '').trim();
+  return /\b(approve|approved|go ahead|proceed|send it|send this|send that|send (?:the )?(?:email|text|message))\b/i.test(text);
+}
+
+function externalActionTargetsMessage(message, action) {
+  const text = String(message || '').trim().toLowerCase();
+  return [action.id, action.to, action.projectName, action.subject]
+    .map((value) => String(value || '').trim().toLowerCase())
+    .filter((value) => value.length >= 3)
+    .some((value) => text.includes(value));
+}
+
+async function maybeApproveAndSendExternalActionFromMessage(message) {
+  if (!isExternalActionApprovalMessage(message)) return null;
+  const settings = await readSettings();
+  const candidates = normalizeExternalActionDrafts(settings.externalActionDrafts)
+    .filter((action) => ['pending_approval', 'approved'].includes(action.status));
+  if (!candidates.length) return null;
+  const targeted = candidates.filter((action) => externalActionTargetsMessage(message, action));
+  const selected = targeted.length === 1 ? targeted[0] : (candidates.length === 1 ? candidates[0] : null);
+  if (!selected) {
+    const choices = candidates.slice(-8).reverse().map((action) => `- ${action.id}: ${action.type} to ${action.to}${action.subject ? ` - ${action.subject}` : ''}`).join('\n');
+    return { ok: false, approvalRequired: true, reply: `I need which message you want me to approve and send.\n${choices}` };
+  }
+  try {
+    if (selected.status === 'pending_approval') await approveExternalAction(selected.id, message);
+    const sent = await sendApprovedExternalAction(selected.id);
+    return {
+      ok: true,
+      externalAction: sent.action,
+      reply: `${sent.reused ? 'Already sent' : 'Sent'} ${sent.action.type} to ${sent.action.to}.${sent.action.sendResult?.messageId ? ` Provider receipt: ${sent.action.sendResult.messageId}.` : ''}`,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      externalAction: selected,
+      providerConfigurationRequired: Number(error?.statusCode) === 503,
+      reply: `I recorded the approval, but did not send the ${selected.type}: ${String(error?.message || error)}`,
+    };
+  }
+}
+
+function getExternalMessageDraftToolDefinition() {
+  return {
+    type: 'function',
+    function: {
+      name: 'draft_external_message',
+      description: 'Create an approval-gated email or text draft. This never sends the message. Use whenever Mark asks to draft, write, reply, email, text, or send an external message.',
+      parameters: {
+        type: 'object',
+        properties: {
+          type: { type: 'string', enum: ['email', 'text'] },
+          to: { type: 'string', description: 'Email address or E.164 phone number.' },
+          subject: { type: 'string', description: 'Required for email; omit for text.' },
+          body: { type: 'string' },
+          projectId: { type: 'string' },
+          projectName: { type: 'string' },
+          reason: { type: 'string', description: 'Why this external communication should be sent.' },
+        },
+        required: ['type', 'to', 'body'],
+      },
+    },
+  };
+}
+
 function getRenderCloudConfig(saved = {}) {
   const token = typeof process.env.RENDER_API_KEY === 'string' ? process.env.RENDER_API_KEY.trim() : '';
   const savedToken = typeof saved.renderApiKey === 'string' ? saved.renderApiKey.trim() : '';
@@ -2063,16 +2340,16 @@ async function buildMarcusOperatorHealth() {
   ]);
   const ai = await getAiConfig();
   const email = getEmailConfig(settings);
+  const quoOutbound = getQuoOutboundConfig(settings);
   const github = getGitHubCloudConfig(settings);
   const cloudflare = getCloudflareConfig(settings);
   const render = getRenderCloudConfig(settings);
   const desktopAgeMs = desktopRelayCache?.at ? Date.now() - desktopRelayCache.at : null;
   const desktopOnline = Number.isFinite(desktopAgeMs) && desktopAgeMs <= DESKTOP_RELAY_TTL_MS;
-  const quoConfigured = Boolean(
+  const quoWebhookConfigured = Boolean(
     (typeof process.env.TWILIO_AUTH_TOKEN === 'string' && process.env.TWILIO_AUTH_TOKEN.trim())
     || (typeof process.env.QUO_WEBHOOK_TOKEN === 'string' && process.env.QUO_WEBHOOK_TOKEN.trim())
     || (typeof settings.quoAuthToken === 'string' && settings.quoAuthToken.trim())
-    || (typeof settings.quoApiKey === 'string' && settings.quoApiKey.trim())
   );
   const canAuditAndPrepareCodex = Boolean(readiness.operationEngineInitialized && readiness.projectRegistryAvailable);
   const directCodex = readiness.codex?.directAdapterConfigured === true;
@@ -2131,7 +2408,9 @@ async function buildMarcusOperatorHealth() {
       communication: {
         emailReadConfigured: email.imapConfigured,
         emailSendConfigured: email.smtpConfigured,
-        textWebhookConfigured: quoConfigured,
+        textSendConfigured: quoOutbound.configured,
+        textProvider: quoOutbound.configured ? 'quo' : 'none',
+        textWebhookConfigured: quoWebhookConfigured,
         externalSendRequiresApproval: true,
       },
     },
@@ -2141,6 +2420,8 @@ async function buildMarcusOperatorHealth() {
       !ai.apiKey ? 'OpenAI is not configured; AI chat, transcription, and model-assisted drafting will be limited.' : '',
       !directCodex ? 'No direct Codex launch adapter is configured; Marcus can prepare durable handoffs and track registered Codex results, but cannot honestly claim a real session started.' : '',
       !desktopOnline ? 'Desktop agent relay is not currently online; local workspace context/actions may be stale or unavailable.' : '',
+      !email.smtpConfigured ? 'SMTP is not configured; Marcus can draft and approve email but cannot send it yet.' : '',
+      !quoOutbound.configured ? 'Quo outbound API credentials are not configured; Marcus can draft and approve text messages but cannot send them yet.' : '',
     ].filter(Boolean),
   };
 }
@@ -3363,6 +3644,7 @@ function sanitizeSettingsForClient(settings) {
   delete clone.slackClientSecret;
   delete clone.slackBotToken;
   delete clone.quoAuthToken;
+  delete clone.quoApiKey;
   delete clone.ghlApiKey;
   delete clone.githubToken;
   delete clone.cloudflareApiToken;
@@ -13461,6 +13743,88 @@ let lastProactiveHash = '';
 let lastProactiveAt = 0;
 const PROACTIVE_COOLDOWN_MS = 20_000;  // keep up when Mark bounces between projects
 let proactiveRunning = false;
+const MARCUS_LIVE_CONVERSATION_MAX_MESSAGES = 80;
+const MARCUS_LIVE_CONTEXT_WINDOW_MS = 45 * 60_000;
+
+function normalizeMarcusLiveConversation(input) {
+  const raw = input && typeof input === 'object' ? input : {};
+  const messages = (Array.isArray(raw.messages) ? raw.messages : [])
+    .map((message) => ({
+      role: message?.role === 'assistant' ? 'assistant' : 'user',
+      content: String(message?.content || '').trim().slice(0, 4_000),
+      timestamp: typeof message?.timestamp === 'string' ? message.timestamp : nowIso(),
+      metadata: message?.metadata && typeof message.metadata === 'object' ? message.metadata : {},
+    }))
+    .filter((message) => message.content)
+    .slice(-MARCUS_LIVE_CONVERSATION_MAX_MESSAGES);
+  const active = raw.activeProject && typeof raw.activeProject === 'object' ? raw.activeProject : {};
+  return {
+    messages,
+    activeProject: {
+      projectRegistryId: String(active.projectRegistryId || '').trim().slice(0, 160),
+      projectId: String(active.projectId || '').trim().slice(0, 160),
+      name: String(active.name || '').trim().slice(0, 300),
+      repo: String(active.repo || '').trim().slice(0, 500),
+    },
+    updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : '',
+  };
+}
+
+async function readMarcusLiveConversation() {
+  const settings = await readSettings();
+  return normalizeMarcusLiveConversation(settings.marcusLiveConversation);
+}
+
+async function recordMarcusLiveExchange(message, reply, metadata = {}) {
+  writeLock = writeLock.then(async () => {
+    const settings = await readSettings();
+    const conversation = normalizeMarcusLiveConversation(settings.marcusLiveConversation);
+    const timestamp = nowIso();
+    conversation.messages.push(
+      { role: 'user', content: String(message || '').trim().slice(0, 4_000), timestamp, metadata: {} },
+      { role: 'assistant', content: String(reply || '').trim().slice(0, 4_000), timestamp, metadata: metadata && typeof metadata === 'object' ? metadata : {} },
+    );
+    conversation.messages = conversation.messages.filter((item) => item.content).slice(-MARCUS_LIVE_CONVERSATION_MAX_MESSAGES);
+    const project = metadata?.project && typeof metadata.project === 'object' ? metadata.project : null;
+    if (project && (project.id || project.projectRegistryId || project.name)) {
+      conversation.activeProject = {
+        projectRegistryId: String(project.projectRegistryId || project.registryId || project.id || '').trim().slice(0, 160),
+        projectId: String(project.projectId || '').trim().slice(0, 160),
+        name: String(project.name || project.canonicalName || '').trim().slice(0, 300),
+        repo: String(project.repo || project.fullName || '').trim().slice(0, 500),
+      };
+    }
+    conversation.updatedAt = timestamp;
+    await writeSettings({ ...settings, marcusLiveConversation: conversation, updatedAt: timestamp });
+  });
+  await writeLock;
+}
+
+function recentMarcusLiveMessages(conversation, nowMs = Date.now()) {
+  return (Array.isArray(conversation?.messages) ? conversation.messages : []).filter((message) => {
+    const timestamp = Date.parse(message.timestamp || '');
+    return Number.isFinite(timestamp) && nowMs - timestamp <= MARCUS_LIVE_CONTEXT_WINDOW_MS;
+  }).slice(-16);
+}
+
+function buildMarcusLiveProjectRequest(conversation, message) {
+  const current = String(message || '').trim();
+  const prior = recentMarcusLiveMessages(conversation)
+    .filter((item) => item.role === 'user')
+    .slice(-7)
+    .map((item) => item.content);
+  const active = conversation?.activeProject || {};
+  const projectLine = [active.name, active.repo].filter(Boolean).length
+    ? `Active project from this conversation: ${[active.name, active.repo].filter(Boolean).join(' / ')}.`
+    : '';
+  return [projectLine, ...prior, current].filter(Boolean).join('\n').slice(-12_000);
+}
+
+function isProjectContextDeclaration(message) {
+  const text = String(message || '').trim();
+  const explicitRepo = /(?:github\.com[/:]|\b[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\.git)?\b)/i.test(text);
+  return explicitRepo || (/\b(project|repo|repository)\b/i.test(text) && /\bgithub\b/i.test(text));
+}
 
 function rememberMarcusLiveAction(action) {
   const entry = {
@@ -15266,19 +15630,8 @@ app.get('/api/marcus/external-actions', async (req, res) => {
 
 app.post('/api/marcus/external-actions/draft', async (req, res) => {
   try {
-    const draft = normalizeExternalActionDraft(req.body || {});
-    writeLock = writeLock.then(async () => {
-      const settings = await readSettings();
-      const existing = normalizeExternalActionDrafts(settings.externalActionDrafts);
-      const next = {
-        ...settings,
-        externalActionDrafts: [...existing, draft].slice(-200),
-        updatedAt: nowIso(),
-      };
-      await writeSettings(next);
-      res.status(201).json({ ok: true, action: draft });
-    });
-    await writeLock;
+    const draft = await createExternalActionDraft(req.body || {});
+    res.status(201).json({ ok: true, action: draft });
   } catch (err) {
     res.status(400).json({ ok: false, error: String(err?.message || err) });
   }
@@ -15288,30 +15641,23 @@ app.post('/api/marcus/external-actions/:id/approve', async (req, res) => {
   const id = String(req.params.id || '').trim();
   const message = String(req.body?.message || '').trim().slice(0, 1_000);
   if (!id) return res.status(400).json({ ok: false, error: 'Action id is required.' });
-  if (!/\b(approve|approved|send it|go ahead|proceed)\b/i.test(message)) {
-    return res.status(409).json({ ok: false, approvalRequired: true, error: 'Approval message must explicitly approve this external action.' });
+  try {
+    const action = await approveExternalAction(id, message);
+    res.json({ ok: true, action, note: 'Approval recorded. Sending remains a separate explicit provider action.' });
+  } catch (err) {
+    res.status(Number(err?.statusCode) || 400).json({ ok: false, approvalRequired: err?.approvalRequired === true, error: String(err?.message || err) });
   }
-  writeLock = writeLock.then(async () => {
-    const settings = await readSettings();
-    const actions = normalizeExternalActionDrafts(settings.externalActionDrafts);
-    const idx = actions.findIndex((item) => item.id === id);
-    if (idx < 0) return res.status(404).json({ ok: false, error: 'External action draft not found.' });
-    if (actions[idx].status !== 'pending_approval') {
-      return res.status(409).json({ ok: false, error: `External action cannot be approved from ${actions[idx].status}.` });
-    }
-    const now = nowIso();
-    actions[idx] = {
-      ...actions[idx],
-      status: 'approved',
-      approvedAt: now,
-      approvedBy: 'mark',
-      approvalMessage: message,
-      updatedAt: now,
-    };
-    await writeSettings({ ...settings, externalActionDrafts: actions, updatedAt: now });
-    res.json({ ok: true, action: actions[idx], note: 'Approval recorded. Sending remains a separate explicit provider action.' });
-  });
-  await writeLock;
+});
+
+app.post('/api/marcus/external-actions/:id/send', async (req, res) => {
+  const id = String(req.params.id || '').trim();
+  if (!id) return res.status(400).json({ ok: false, error: 'Action id is required.' });
+  try {
+    const result = await sendApprovedExternalAction(id);
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    res.status(Number(err?.statusCode) || 400).json({ ok: false, approvalRequired: err?.approvalRequired === true, error: String(err?.message || err) });
+  }
 });
 
 app.post('/api/marcus/external-actions/:id/reject', async (req, res) => {
@@ -15363,16 +15709,60 @@ app.post('/api/marcus/live/chat', async (req, res) => {
   if (!message) return res.status(400).json({ error: 'Empty message' });
 
   try {
+    const conversation = await readMarcusLiveConversation();
+    const projectRequest = buildMarcusLiveProjectRequest(conversation, message);
+
+    const sentExternalAction = await maybeApproveAndSendExternalActionFromMessage(message);
+    if (sentExternalAction) {
+      await recordMarcusLiveExchange(message, sentExternalAction.reply, { externalActionId: sentExternalAction.externalAction?.id || '' });
+      pushLiveEvent({ type: 'chat', from: 'marcus', text: sentExternalAction.reply, ts: Date.now() });
+      return res.json(sentExternalAction);
+    }
+
     const approvedOperation = await maybeApprovePendingOperationFromMessage(message);
     if (approvedOperation) {
+      await recordMarcusLiveExchange(message, approvedOperation.reply, {
+        operationId: approvedOperation.operation?.id || '',
+        project: approvedOperation.operation ? {
+          projectRegistryId: approvedOperation.operation.projectRegistryId,
+          projectId: approvedOperation.operation.projectId,
+          name: approvedOperation.operation.projectName,
+        } : null,
+      });
       pushLiveEvent({ type: 'chat', from: 'marcus', text: approvedOperation.reply, ts: Date.now() });
       return res.json(approvedOperation);
     }
 
+    if (isProjectContextDeclaration(message) && !projectOperatorService.shouldHandle(message)) {
+      const contextResult = await projectOperatorService.resolveProjectContext(getBusinessKeyFromContext(), {
+        message: projectRequest,
+        projectId: conversation.activeProject.projectId,
+        projectRegistryId: conversation.activeProject.projectRegistryId,
+      });
+      const project = contextResult.project;
+      const reply = project
+        ? `I resolved this conversation to ${project.name}${project.repo ? ` at ${project.repo}` : ''} and set it as the active project. I will carry that context into the repository audit and Codex prompt.`
+        : 'I could not verify that GitHub project yet. Give me the exact owner/repository name so I can inspect the right code instead of guessing.';
+      await recordMarcusLiveExchange(message, reply, { project });
+      pushLiveEvent({ type: 'chat', from: 'marcus', text: reply, ts: Date.now() });
+      return res.json({ ok: Boolean(project), status: project ? 'project_context_set' : 'needs_project', project, reply });
+    }
+
     if (projectOperatorService.shouldHandle(message)) {
       const result = await projectOperatorService.prepareCodexOperation(getBusinessKeyFromContext(), {
-        message,
+        message: projectRequest,
+        resolutionRequest: projectRequest,
+        projectId: conversation.activeProject.projectId,
+        projectRegistryId: conversation.activeProject.projectRegistryId,
         source: 'marcus_live_project_operator',
+      });
+      await recordMarcusLiveExchange(message, result.reply, {
+        operationId: result.operation?.id || '',
+        project: result.project || (result.operation ? {
+          projectRegistryId: result.operation.projectRegistryId,
+          projectId: result.operation.projectId,
+          name: result.operation.projectName,
+        } : null),
       });
       pushLiveEvent({ type: 'chat', from: 'marcus', text: result.reply, ts: Date.now() });
       return res.json(result);
@@ -15380,9 +15770,21 @@ app.post('/api/marcus/live/chat', async (req, res) => {
 
     // Marcus Live is a second chat surface, so durable work requests must enter the
     // same operation engine instead of being answered as if an AI chat executed them.
-    if (shouldCreateDurableOperationForRequest(message)) {
-      const result = await createOrReuseDurableOperationForMessage(message, { source: 'marcus_live' });
+    if (!isExternalCommunicationRequest(message) && shouldCreateDurableOperationForRequest(message)) {
+      const result = await createOrReuseDurableOperationForMessage(projectRequest, {
+        projectId: conversation.activeProject.projectId,
+        projectName: conversation.activeProject.name,
+        source: 'marcus_live',
+      });
       const reply = formatOperationStatusForMarcus(result.operation, result.resolution, { reused: result.reused });
+      await recordMarcusLiveExchange(message, reply, {
+        operationId: result.operation?.id || '',
+        project: result.operation ? {
+          projectRegistryId: result.operation.projectRegistryId,
+          projectId: result.operation.projectId,
+          name: result.operation.projectName,
+        } : null,
+      });
       pushLiveEvent({ type: 'chat', from: 'marcus', text: reply, ts: Date.now() });
       return res.json({ ok: true, reply, operation: result.operation });
     }
@@ -15390,6 +15792,15 @@ app.post('/api/marcus/live/chat', async (req, res) => {
     // Build context from current workspace
     const ws = desktopRelayCache?.data?.workspace;
     const contextParts = [];
+    if (conversation.activeProject.name || conversation.activeProject.repo) {
+      contextParts.push(`ACTIVE CONVERSATION PROJECT: ${conversation.activeProject.name || 'unnamed'}${conversation.activeProject.repo ? ` (${conversation.activeProject.repo})` : ''}`);
+    }
+    try {
+      const registeredProjects = await operationsEngine.listProjectRegistry(getBusinessKeyFromContext());
+      if (registeredProjects.length) {
+        contextParts.push(`REGISTERED PROJECTS:\n${registeredProjects.slice(0, 30).map((project) => `- ${project.canonicalName}${project.repo?.fullName ? `: ${project.repo.fullName}` : ''}${project.aliases?.length ? `; aliases ${project.aliases.slice(0, 6).join(', ')}` : ''}`).join('\n')}`);
+      }
+    } catch {}
     if (ws) {
       contextParts.push(`WORKSPACE: ${ws.folderName || 'unknown'} (${ws.workspacePath || ''})`);
       if (ws.gitBranch) contextParts.push(`GIT BRANCH: ${ws.gitBranch}`);
@@ -15458,17 +15869,25 @@ RULES:
 - When asked about the code, use the actual file contents you can see.
 - If Mark asks for a readout, lead with what matters now, then the next best move.
 - Avoid robotic phrasing like "I have identified" or "it is recommended."
+- Preserve the recent conversation. Resolve short follow-ups such as "Reggie", "that repo", or "do it" from prior turns and the active conversation project instead of restarting clarification.
+- When Mark asks to draft, email, text, reply, or send an external message, call draft_external_message. The first call only creates an approval-gated draft and must never claim the message was sent.
 
 CURRENT WORKSPACE CONTEXT:
 ${contextParts.join('\n')}`;
 
-    const saved = await readSettings();
+    const recentConversation = recentMarcusLiveMessages(conversation);
+    const externalCommunicationRequest = isExternalCommunicationRequest(message);
     const result = await aiChatCompletion({
       routeKey: 'marcusChat',
       messages: [
         { role: 'system', content: systemPrompt },
+        ...recentConversation.map((item) => ({ role: item.role, content: item.content })),
         { role: 'user', content: message },
       ],
+      tools: [getExternalMessageDraftToolDefinition()],
+      tool_choice: externalCommunicationRequest
+        ? { type: 'function', function: { name: 'draft_external_message' } }
+        : 'auto',
       timeoutMs: 25_000,
     });
 
@@ -15476,7 +15895,21 @@ ${contextParts.join('\n')}`;
       return res.json({ ok: false, error: result.error || 'AI call failed' });
     }
 
+    const draftCall = (Array.isArray(result.message?.tool_calls) ? result.message.tool_calls : [])
+      .find((call) => call?.function?.name === 'draft_external_message');
+    if (draftCall) {
+      let args = {};
+      try { args = JSON.parse(draftCall.function.arguments || '{}'); }
+      catch { return res.json({ ok: false, error: 'Marcus could not parse the external message draft.' }); }
+      const draft = await createExternalActionDraft(args);
+      const reply = `I drafted the ${draft.type} to ${draft.to}${draft.subject ? ` with subject "${draft.subject}"` : ''}. Nothing has been sent. Say "approve and send ${draft.id}" after you review it.`;
+      await recordMarcusLiveExchange(message, reply, { externalActionId: draft.id, project: conversation.activeProject });
+      pushLiveEvent({ type: 'chat', from: 'marcus', text: reply, ts: Date.now() });
+      return res.json({ ok: true, reply, externalAction: draft, approvalRequired: true });
+    }
+
     const reply = result.message?.content || '';
+    await recordMarcusLiveExchange(message, reply, { project: conversation.activeProject });
     pushLiveEvent({ type: 'chat', from: 'marcus', text: reply, ts: Date.now() });
     res.json({ ok: true, reply });
   } catch (err) {

@@ -36,6 +36,7 @@ The server already has environment-driven provider config for:
 - Email IMAP/SMTP settings
 - Slack credentials
 - Twilio/Quo webhook verification
+- Quo outbound API settings: `QUO_API_KEY`, `QUO_DEFAULT_PHONE_NUMBER_ID`, `QUO_FROM_NUMBER`, and `QUO_USER_ID`
 
 Local/saved settings are also supported for operator provider access:
 
@@ -82,9 +83,16 @@ External communication draft source:
 - `GET /api/marcus/external-actions`
 - `POST /api/marcus/external-actions/draft`
 - `POST /api/marcus/external-actions/:id/approve`
+- `POST /api/marcus/external-actions/:id/send`
 - `POST /api/marcus/external-actions/:id/reject`
 
-Marcus can create email and text drafts with recipients, subject/body, project context, and the reason approval is needed. Approval changes the draft status to `approved`; sending through an email or text provider remains a separate explicit provider action so there is no ambiguity between "approved to send" and "sent."
+Marcus can create email and text drafts with recipients, subject/body, project context, and the reason approval is needed. Approval changes the draft status to `approved`. A separate send call uses SMTP for email or Quo for text, records provider evidence, and changes the status to `sent`. Provider credentials remain server-side and are never exposed to the mobile browser or Realtime model.
+
+Production provider status on 2026-08-11: the outbound code and mock-provider acceptance tests pass, but real SMTP and Quo outbound credentials are not configured. Marcus must report that condition and must not claim a real message was sent.
+
+## Desktop Relay Credential
+
+The Windows desktop relay reads the durable admin credential from `%APPDATA%/M.A.R.C.U.S/mobile-live-admin-token.txt`. The scheduled task contains the server URL and agent path only. This avoids placing the credential in Task Scheduler arguments or process command lines.
 
 ## Security Posture
 

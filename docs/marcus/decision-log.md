@@ -1,5 +1,29 @@
 # Decision Log
 
+## 2026-08-11: Mobile Conversation State Owns The Active Project
+
+Context: Marcus answered each mobile message independently. A request could name `markgromer/Reggie`, then a follow-up such as "check the repo" would lose that context and fall back to the only previously registered demo project.
+
+Decision: Persist a bounded Marcus Mobile transcript and active project on the server. Resolve explicit GitHub `owner/repository` references into the durable project registry and include recent user requirements when preparing the audit and Codex operation.
+
+Consequence: Short follow-ups reuse the correct project and earlier requirements. Explicit repositories no longer depend on a manually pre-populated registry entry, while the durable operation still owns execution and verification.
+
+## 2026-08-11: External Communication Uses A Provider-Receipt State Machine
+
+Context: The external-action ledger supported drafts and approvals but could not execute a provider send. The previous health field also conflated inbound webhook authentication with outbound text capability.
+
+Decision: Add a separate approved send action with `pending_approval -> approved -> sending -> sent/failed` states. Use SMTP for email and Quo for text, store provider receipts, and make successful replay idempotent. Report inbound webhook and outbound text capabilities separately.
+
+Consequence: Marcus can send only after explicit approval and only claims `sent` after provider acceptance. Production remains blocked until real SMTP and Quo credentials pass live acceptance.
+
+## 2026-08-11: Desktop Relay Credentials Stay Out Of Process Arguments
+
+Context: The Windows startup task targeted a retired Render host, exposed the admin credential in its arguments, overlapped long polling cycles, and could exit on a transient process-spawn error.
+
+Decision: Point the task at the canonical Render service, read the token from the protected Marcus application-data file, serialize polling, catch synchronous spawn failures, and configure task restart behavior.
+
+Consequence: The desktop relay resumes at login without putting the token in the task or process command line and tolerates transient local command failures.
+
 ## 2026-08-12: Android Uses One-Time Pairing Instead Of A Copied Admin Secret
 
 Context: The original mobile login required the same durable admin token used by the server operator, which was awkward on Android and caused stale-token unauthorized failures.

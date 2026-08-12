@@ -38,6 +38,26 @@ services:
         sync: false
       - key: QUO_WEBHOOK_TOKEN
         sync: false
+      - key: QUO_API_KEY
+        sync: false
+      - key: QUO_DEFAULT_PHONE_NUMBER_ID
+        sync: false
+      - key: QUO_FROM_NUMBER
+        sync: false
+      - key: QUO_USER_ID
+        sync: false
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        value: "465"
+      - key: SMTP_SECURE
+        value: "true"
+      - key: SMTP_USERNAME
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: SMTP_FROM_ADDRESS
+        sync: false
       - key: OPENAI_API_KEY
         sync: false
       - key: OPENAI_MODEL

@@ -46,6 +46,8 @@ Settings:
 
 The legacy settings file currently contains richer integration/business configuration than the newer settings path.
 
+Marcus Mobile conversation state is stored under `marcusLiveConversation` in settings. It retains a bounded recent transcript and one active project binding. Recent context is limited to 45 minutes when requirements are assembled for a project operation; stored messages are capped at 80.
+
 ## Marcus Operations
 
 `marcus/operations` contains the durable operation engine.
@@ -73,6 +75,10 @@ It owns:
 - Writing a Marcus Project Execution Brief.
 - Composing a Codex-ready prompt.
 - Creating a durable operation and either starting a direct Codex job through the configured adapter or creating an external Codex handoff.
+- Auto-registering an authenticated user's explicit GitHub `owner/repository` target when it is not already in the project registry.
+- Reusing the active mobile project and recent requirements when a follow-up says "check the repo", "do it", or otherwise omits the project name.
+
+The production project registry includes `Reggie` at `markgromer/Reggie`, with `connect.scooper.site` and `Sweep and Go` aliases.
 
 Current routes:
 
@@ -82,6 +88,16 @@ Current routes:
 - `POST /api/chat` for project operator requests
 
 `/api/marcus/operator-health` is the honest capability readout. It reports whether Marcus can audit, prepare Codex handoffs, start Codex directly, read GitHub/Cloudflare through server credentials, see the desktop agent, and handle email/text capabilities with approval gates.
+
+External communication routes:
+
+- `GET /api/marcus/external-actions`
+- `POST /api/marcus/external-actions/draft`
+- `POST /api/marcus/external-actions/:id/approve`
+- `POST /api/marcus/external-actions/:id/send`
+- `POST /api/marcus/external-actions/:id/reject`
+
+Email uses SMTP. Text uses Quo's message API. Drafting and approval are durable; provider acceptance moves the action through `sending` to `sent` and records the provider receipt. Production credentials are still required before either provider can send.
 
 ## Providers
 
@@ -151,11 +167,15 @@ It uses:
 
 Realtime voice uses `gpt-realtime-2.1` by default with voice `marin`. Its only operational function is `marcus_operator`, which sends substantive spoken requests back through `/api/marcus/live/chat`. The voice model does not own GitHub, Cloudflare, Codex, external communication, or approval authority.
 
+`/api/marcus/live/chat` keeps recent conversation turns and an active project on the server. The project operator receives the accumulated user requirements rather than only the latest short follow-up.
+
 The mobile app is a PWA first. Pairing sets the existing secure HttpOnly authentication cookie; the six-digit code is not retained. It does not add a separate Android credential store or native notification channel yet.
 
 ## Desktop Agent
 
 `desktop-agent.cjs` relays local context and executes queued desktop actions.
+
+The Windows scheduled task `MARCUS-DesktopAgent` targets the canonical Render host. It reads the admin credential from `%APPDATA%/M.A.R.C.U.S/mobile-live-admin-token.txt`, so the secret is not present in Task Scheduler arguments or the `node.exe` command line. Polling is serialized and transient process-spawn failures do not terminate the relay.
 
 It can:
 

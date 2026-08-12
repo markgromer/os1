@@ -17,15 +17,15 @@
 
 The first working slice is:
 
-`conversation -> project resolution -> context audit -> Codex prompt -> durable operation -> external Codex handoff`
+`conversation -> active-project memory -> project resolution -> context audit -> Codex prompt -> durable operation -> direct Codex or external handoff`
 
-This is implemented without relying on a model call for the core control flow. Direct Codex launch remains adapter-dependent.
+This is implemented without relying on a model call for the core control flow. Explicit GitHub `owner/repository` references can be added to the project registry, and short mobile follow-ups reuse the active project plus recent requirements. Direct Codex launch remains adapter-dependent.
 
 External communication now follows:
 
-`conversation -> draft email/text -> pending approval -> approved/rejected -> separate send action`
+`conversation -> draft email/text -> pending approval -> approved/rejected -> provider send -> sent/failed evidence`
 
-The approval endpoint records Mark's explicit approval but does not mark a message sent. Provider-specific sending should be added as a later action with its own result evidence.
+Approval does not mark a message sent. The separate send action claims an approved draft as `sending`, invokes SMTP or Quo, then stores `sent` only after provider acceptance. Repeating a successful send request returns the existing receipt instead of sending twice.
 
 Realtime voice follows:
 

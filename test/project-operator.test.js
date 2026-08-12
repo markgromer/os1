@@ -47,6 +47,9 @@ async function withProjectOperator(callback, { directCodexAdapter = null } = {})
         { full_name: 'markgromer/reggie', name: 'reggie', description: 'New Reggie agent runtime', default_branch: 'main' },
         { full_name: 'markgromer/reggie-hub', name: 'reggie-hub', description: 'Reggie hub control plane', default_branch: 'main' },
       ];
+      if (pathPart.toLowerCase() === '/repos/markgromer/reggie') return {
+        full_name: 'markgromer/Reggie', name: 'Reggie', description: 'New Reggie agent runtime', default_branch: 'main', html_url: 'https://github.com/markgromer/Reggie',
+      };
       if (pathPart.includes('/reggie/contents/README.md')) return { content: Buffer.from('# Reggie\nNew agent runtime.').toString('base64') };
       if (pathPart.includes('/reggie-hub/contents/README.md')) return { content: Buffer.from('# Reggie Hub\nControl plane for Reggie.').toString('base64') };
       if (pathPart.endsWith('/README.md')) return { content: Buffer.from('# Royal Doody\nBooking app.').toString('base64') };
@@ -159,6 +162,32 @@ test('project operator detects website install and replace requests', async () =
       service.shouldHandle('The Freedom Scoopers website needs the new Reggie and Reggie hub installed and replace the legacy Reggie.'),
       true,
     );
+  });
+});
+
+test('project operator auto-registers an explicit GitHub repo and reuses it as conversation context', async () => {
+  await withProjectOperator(async ({ engine, service }) => {
+    assert.equal(service.shouldHandle('Can we discuss a settings popup for Sweep and Go?'), false);
+
+    const context = await service.resolveProjectContext('personal', {
+      message: 'Reggie is my GitHub project at markgromer/Reggie.git. Sweep and Go needs a settings popup for its API token and slug.',
+    });
+    assert.equal(context.registered, true);
+    assert.equal(context.project.name, 'Reggie');
+    assert.equal(context.project.repo, 'markgromer/Reggie');
+
+    const registered = await engine.listProjectRegistry('personal');
+    const reggie = registered.find((project) => project.repo.fullName === 'markgromer/Reggie');
+    assert.ok(reggie);
+
+    const result = await service.prepareCodexOperation('personal', {
+      message: 'Reggie is my GitHub project at markgromer/Reggie.git. Sweep and Go needs a settings popup for its API token and slug. Check the git repo and set up the implementation plan.',
+      projectRegistryId: reggie.id,
+    });
+    assert.equal(result.status, 'codex_prepared');
+    assert.equal(result.project.name, 'Reggie');
+    assert.match(result.codexPrompt, /settings popup/i);
+    assert.match(result.codexPrompt, /API token and slug/i);
   });
 });
 

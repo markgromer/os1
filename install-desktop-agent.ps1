@@ -1,69 +1,52 @@
-# ─────────────────────────────────────────────────────────────
-# Install M.A.R.C.U.S. Desktop Agent as a Windows startup task
-# ─────────────────────────────────────────────────────────────
-# Run this ONCE from PowerShell (inside the Task Tracker folder):
-#   powershell -ExecutionPolicy Bypass -File install-desktop-agent.ps1
-#
-# It creates a Windows Scheduled Task that launches the desktop
-# agent at login, running hidden in the background. The agent
-# relays your active window info to the Render server every 5s.
-#
-# To uninstall:
-#   Unregister-ScheduledTask -TaskName "MARCUS-DesktopAgent" -Confirm:$false
-# ─────────────────────────────────────────────────────────────
+param(
+    [string]$ServerUrl = "https://task-tracker-5wsa.onrender.com",
+    [string]$TokenFile = (Join-Path $env:APPDATA "M.A.R.C.U.S\mobile-live-admin-token.txt"),
+    [switch]$StartNow
+)
 
 $ErrorActionPreference = "Stop"
-
-# --- Config ---
-$serverUrl = "https://os1-q78n.onrender.com"
-$taskName  = "MARCUS-DesktopAgent"
+$taskName = "MARCUS-DesktopAgent"
 $scriptDir = $PSScriptRoot
 $agentPath = Join-Path $scriptDir "desktop-agent.cjs"
 
-if (-not (Test-Path $agentPath)) {
-    Write-Host "ERROR: desktop-agent.cjs not found at $agentPath" -ForegroundColor Red
-    exit 1
+if (-not (Test-Path -LiteralPath $agentPath)) {
+    throw "desktop-agent.cjs was not found at $agentPath"
 }
 
-# Prompt for the admin token (stored in the task, not visible in plain text in task scheduler)
-$token = Read-Host "Enter your ADMIN_TOKEN for the Render server" -AsSecureString
-$bstr  = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($token)
-$plain = [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
-[System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
-
-if (-not $plain) {
-    Write-Host "ERROR: Token cannot be empty." -ForegroundColor Red
-    exit 1
+if (-not (Test-Path -LiteralPath $TokenFile)) {
+    throw "Marcus admin token file was not found at $TokenFile"
 }
 
-# Find node.exe
+if ([string]::IsNullOrWhiteSpace((Get-Content -LiteralPath $TokenFile -Raw))) {
+    throw "Marcus admin token file is empty."
+}
+
 $nodePath = (Get-Command node -ErrorAction SilentlyContinue).Source
 if (-not $nodePath) {
-    Write-Host "ERROR: node.exe not found in PATH." -ForegroundColor Red
-    exit 1
+    throw "node.exe was not found in PATH."
 }
 
-# Remove existing task if present
 $existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
 if ($existing) {
+    Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
     Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
-    Write-Host "Removed existing scheduled task." -ForegroundColor Yellow
 }
 
-# Create the task
-$action  = New-ScheduledTaskAction `
+# The agent reads the token file itself so no credential appears in Task Scheduler
+# arguments or the node.exe process command line.
+$action = New-ScheduledTaskAction `
     -Execute $nodePath `
-    -Argument "`"$agentPath`" `"$serverUrl`" `"$plain`"" `
+    -Argument "`"$agentPath`" `"$ServerUrl`"" `
     -WorkingDirectory $scriptDir
 
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
-
 $settings = New-ScheduledTaskSettingsSet `
     -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries `
     -StartWhenAvailable `
     -ExecutionTimeLimit (New-TimeSpan -Hours 0) `
-    -RestartCount 3 `
+    -MultipleInstances IgnoreNew `
+    -RestartCount 20 `
     -RestartInterval (New-TimeSpan -Minutes 1)
 
 Register-ScheduledTask `
@@ -71,13 +54,16 @@ Register-ScheduledTask `
     -Action $action `
     -Trigger $trigger `
     -Settings $settings `
-    -Description "Relays desktop context to M.A.R.C.U.S. on Render" `
+    -Description "Relays local desktop and workspace context to Marcus production" `
     -RunLevel Limited | Out-Null
 
-Write-Host ""
-Write-Host "Desktop Agent installed as startup task: $taskName" -ForegroundColor Green
-Write-Host "It will start automatically at your next login." -ForegroundColor Green
-Write-Host ""
-Write-Host "To start it now:  Start-ScheduledTask -TaskName '$taskName'" -ForegroundColor Cyan
-Write-Host "To stop it:       Stop-ScheduledTask  -TaskName '$taskName'" -ForegroundColor Cyan
-Write-Host "To uninstall:     Unregister-ScheduledTask -TaskName '$taskName' -Confirm:`$false" -ForegroundColor Cyan
+if ($StartNow) {
+    Start-ScheduledTask -TaskName $taskName
+}
+
+[pscustomobject]@{
+    TaskName = $taskName
+    ServerUrl = $ServerUrl
+    TokenSource = $TokenFile
+    Started = [bool]$StartNow
+}
