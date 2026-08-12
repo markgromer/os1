@@ -243,6 +243,30 @@ test('Codex lifecycle is reconstructed without counting a handoff as implementat
   }
 });
 
+test('archived projects remain queryable but are excluded from activity and collection', async () => {
+  const root = await temporaryDataDir();
+  try {
+    const active = project('active', 'Active Project');
+    const archived = project('archived', 'Archived Project', { status: 'archived' });
+    const service = new ProjectEvidenceService({
+      dataDir: root,
+      listProjects: async () => [active, archived],
+      listOperations: async () => [{
+        id: 'op-archived', projectRegistryId: archived.id, projectId: archived.projectId,
+        title: 'Historical operation', status: 'completed', updatedAt: '2026-08-05T19:30:00Z',
+        activityLog: [{ id: 'evt-archived', type: 'operation_completed', timestamp: '2026-08-05T19:30:00Z' }],
+      }],
+    });
+
+    assert.equal((await service.assertProject('personal', archived.id)).id, archived.id);
+    const refreshed = await service.refresh('personal', { sources: ['operations'], nowMs: NOW });
+    assert.deepEqual(refreshed.activity.snapshots.map((item) => item.projectRegistryId), [active.id]);
+    assert.equal((await service.listEvidence('personal', { projectRegistryId: archived.id })).length, 0);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test('desktop activity aggregates bounded sessions and deployment ingestion requires exact mappings', async () => {
   const root = await temporaryDataDir();
   try {

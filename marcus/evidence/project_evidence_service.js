@@ -13,6 +13,10 @@ const CODEX_LIFECYCLE_EVENTS = new Set([
   'job_completed', 'job_failed', 'job_cancelled', 'job_paused', 'job_resumed',
 ]);
 
+function isArchivedProject(project) {
+  return safeString(project?.status, 100).toLowerCase() === 'archived';
+}
+
 function projectPathKey(value) {
   return safeString(value, 2_000).replaceAll('\\', '/').replace(/\/+$/g, '').toLowerCase();
 }
@@ -104,6 +108,10 @@ export class ProjectEvidenceService {
 
   async projects(businessKey) {
     return this.listProjects(safeBusinessKey(businessKey));
+  }
+
+  async activeProjects(businessKey) {
+    return (await this.projects(businessKey)).filter((project) => !isArchivedProject(project));
   }
 
   async assertProject(businessKey, projectRegistryId) {
@@ -498,7 +506,7 @@ export class ProjectEvidenceService {
   async recalculate(businessKey, { nowMs = Date.now() } = {}) {
     const key = safeBusinessKey(businessKey);
     const [projects, operations, document, settings] = await Promise.all([
-      this.projects(key), this.listOperations(key, { limit: 5_000 }), this.store.readDocument(key), this.getSettings(),
+      this.activeProjects(key), this.listOperations(key, { limit: 5_000 }), this.store.readDocument(key), this.getSettings(),
     ]);
     const config = safeObject(settings?.projectEvidence);
     const configuredWeights = safeObject(config.weights);
@@ -538,7 +546,7 @@ export class ProjectEvidenceService {
     if (previous) return previous;
     const run = (async () => {
       const selected = new Set((Array.isArray(sources) ? sources : ['operations', 'airtable', 'github', 'render', 'cloudflare']).map((item) => safeString(item, 80).toLowerCase()));
-      const [projects, operations, legacyStore] = await Promise.all([this.projects(key), this.listOperations(key, { limit: 5_000 }), this.getLegacyStore(key)]);
+      const [projects, operations, legacyStore] = await Promise.all([this.activeProjects(key), this.listOperations(key, { limit: 5_000 }), this.getLegacyStore(key)]);
       const result = {};
       if (selected.has('operations') || selected.has('codex') || selected.has('browser')) result.operations = await this.collectOperations(key, projects, operations);
       if (selected.has('airtable')) result.airtable = await this.collectAirtable(key, projects, legacyStore);
@@ -556,7 +564,7 @@ export class ProjectEvidenceService {
     const [document, operations] = await Promise.all([this.store.readDocument(key), this.listOperations(key, { limit: 5_000 })]);
     const analysis = safeObject(document.analysis);
     if (analysis.operationsWatermark !== operationsWatermark(operations)) {
-      await this.collectOperations(key, await this.projects(key), operations);
+      await this.collectOperations(key, await this.activeProjects(key), operations);
       return this.recalculate(key);
     }
     if (recalculate || !analysis.calculatedAt || !Array.isArray(analysis.snapshots)
