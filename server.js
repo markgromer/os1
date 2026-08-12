@@ -2358,7 +2358,9 @@ async function sendApprovedExternalAction(id) {
   const existing = normalizeExternalActionDrafts(settings.externalActionDrafts).find((item) => item.id === id);
   if (!existing) throw Object.assign(new Error('External action draft not found.'), { statusCode: 404 });
   if (existing.status === 'sent') return { action: existing, reused: true };
-  if (existing.status !== 'approved') {
+  const retryingApprovedFailure = existing.status === 'failed'
+    && Boolean(existing.approvedAt && existing.approvalMessage);
+  if (existing.status !== 'approved' && !retryingApprovedFailure) {
     throw Object.assign(new Error(`External action cannot be sent from ${existing.status}. Explicit approval is required first.`), { statusCode: 409, approvalRequired: true });
   }
 
@@ -2373,7 +2375,9 @@ async function sendApprovedExternalAction(id) {
 
   const claimed = await updateExternalAction(id, (action) => {
     if (action.status === 'sent') return null;
-    if (action.status !== 'approved') {
+    const retryableFailure = action.status === 'failed'
+      && Boolean(action.approvedAt && action.approvalMessage);
+    if (action.status !== 'approved' && !retryableFailure) {
       throw Object.assign(new Error(`External action cannot be claimed from ${action.status}.`), { statusCode: 409 });
     }
     return { ...action, status: 'sending', sendResult: {} };
@@ -8484,6 +8488,10 @@ async function updateMarcusProviderConfiguration(input = {}) {
   writeLock = writeLock.catch(() => {}).then(async () => {
     const saved = await readSettings();
     const next = { ...saved, updatedAt: nowIso() };
+    const previousFingerprints = {
+      text: marcusProviderConfigurationFingerprint('text', saved),
+      email: marcusProviderConfigurationFingerprint('email', saved),
+    };
 
     if (text) {
       const apiKey = normalizeProviderTextField(text.apiKey, 'Quo API key', 1_000);
@@ -8500,7 +8508,6 @@ async function updateMarcusProviderConfiguration(input = {}) {
       if (Object.hasOwn(text, 'userId')) {
         next.quoUserId = normalizeProviderTextField(text.userId, 'Quo user ID', 200);
       }
-      next.marcusProviderVerification = { ...(next.marcusProviderVerification || {}), text: null };
     }
 
     if (email) {
@@ -8522,8 +8529,16 @@ async function updateMarcusProviderConfiguration(input = {}) {
         if (fromAddress) normalizeEmailFromAddress(fromAddress);
         next.smtpFromAddress = fromAddress;
       }
-      next.marcusProviderVerification = { ...(next.marcusProviderVerification || {}), email: null };
     }
+
+    const verification = { ...(next.marcusProviderVerification || {}) };
+    if (text && marcusProviderConfigurationFingerprint('text', next) !== previousFingerprints.text) {
+      verification.text = null;
+    }
+    if (email && marcusProviderConfigurationFingerprint('email', next) !== previousFingerprints.email) {
+      verification.email = null;
+    }
+    next.marcusProviderVerification = verification;
 
     await writeSettings(next);
   });

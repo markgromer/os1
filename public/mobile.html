@@ -708,7 +708,8 @@
   async function loadPendingMessageActions() {
     const data = await adminApi('/api/marcus/external-actions');
     pendingMessageActions = (Array.isArray(data.actions) ? data.actions : [])
-      .filter((action) => ['pending_approval', 'approved'].includes(action.status));
+      .filter((action) => ['pending_approval', 'approved'].includes(action.status)
+        || (action.status === 'failed' && action.approvedAt && action.approvalMessage));
     els.reviewMessage.hidden = pendingMessageActions.length === 0;
     els.reviewMessage.textContent = pendingMessageActions.length > 1
       ? `Review ${pendingMessageActions.length} pending messages`
@@ -726,9 +727,11 @@
     selectedMessageAction = actions[0] || null;
     if (!selectedMessageAction) throw new Error('There are no pending messages to review.');
     const action = selectedMessageAction;
-    els.messageApprovalSummary.textContent = action.status === 'approved'
-      ? 'This exact draft is approved but has not been sent.'
-      : 'This draft has not been approved or sent.';
+    els.messageApprovalSummary.textContent = action.status === 'failed'
+      ? 'This exact draft was approved, but its last delivery attempt failed. Review it before retrying.'
+      : action.status === 'approved'
+        ? 'This exact draft is approved but has not been sent.'
+        : 'This draft has not been approved or sent.';
     els.messageApprovalType.textContent = approvalLabel(action.type);
     els.messageApprovalRecipient.textContent = action.to || '-';
     els.messageApprovalSubject.textContent = action.subject || 'Not applicable';
@@ -739,7 +742,9 @@
     els.messageApprovalConfirmed.checked = false;
     els.messageApprovalResult.classList.remove('error');
     els.messageApprovalResult.textContent = '';
-    els.sendMessageApproval.textContent = action.status === 'approved' ? 'Send approved message' : 'Approve and send';
+    els.sendMessageApproval.textContent = action.status === 'failed'
+      ? 'Retry approved message'
+      : action.status === 'approved' ? 'Send approved message' : 'Approve and send';
     updateMessageCommandState();
     if (els.acceptanceDialog.open) els.acceptanceDialog.close();
     els.messageApprovalDialog.showModal();

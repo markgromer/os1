@@ -113,6 +113,7 @@ async function withMockQuoApi(callback) {
 
 async function withMockSmtp(callback) {
   const received = [];
+  let rejectedMessages = 0;
   const server = net.createServer((socket) => {
     let buffer = '';
     let dataLines = null;
@@ -126,9 +127,15 @@ async function withMockSmtp(callback) {
         buffer = buffer.slice(separator + 2);
         if (dataLines) {
           if (line === '.') {
-            received.push(dataLines.join('\r\n'));
+            const message = dataLines.join('\r\n');
             dataLines = null;
-            socket.write(`250 2.0.0 queued as TEST_${received.length}\r\n`);
+            if (rejectedMessages > 0) {
+              rejectedMessages -= 1;
+              socket.write('550 5.7.1 sender is not authorized\r\n');
+            } else {
+              received.push(message);
+              socket.write(`250 2.0.0 queued as TEST_${received.length}\r\n`);
+            }
           } else {
             dataLines.push(line);
           }
@@ -147,7 +154,11 @@ async function withMockSmtp(callback) {
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const port = server.address().port;
   try {
-    return await callback({ port, received });
+    return await callback({
+      port,
+      received,
+      rejectNextMessage() { rejectedMessages += 1; },
+    });
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
@@ -221,7 +232,7 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     const serviceWorker = await fetch(`${base}/sw.js`);
     assert.equal(serviceWorker.status, 200);
     const serviceWorkerText = await serviceWorker.text();
-    assert.match(serviceWorkerText, /marcus-mobile-v18/);
+    assert.match(serviceWorkerText, /marcus-mobile-v19/);
     assert.match(serviceWorkerText, /marcus-maskable-512\.png/);
     const mobileIcon = await fetch(`${base}/icons/marcus.svg`);
     assert.equal(mobileIcon.status, 200);
@@ -869,8 +880,8 @@ test('approved Marcus text actions send exactly once through Quo', async () => {
   });
 });
 
-test('approved Marcus email actions send exactly once through SMTP', async () => {
-  await withMockSmtp(async ({ port, received }) => {
+test('approved Marcus email actions can retry a provider failure and then send exactly once through SMTP', async () => {
+  await withMockSmtp(async ({ port, received, rejectNextMessage }) => {
     const server = await spawnServer({ extraEnv: {
       SMTP_HOST: '127.0.0.1',
       SMTP_PORT: String(port),
@@ -895,6 +906,17 @@ test('approved Marcus email actions send exactly once through SMTP', async () =>
       const approval = await fetch(`${base}/api/marcus/external-actions/${draft.id}/approve`, { method: 'POST', headers, body: JSON.stringify({ message: 'Approve and send the email.' }) });
       const approvalBody = await approval.json();
       assert.equal(approval.status, 200, JSON.stringify(approvalBody));
+      rejectNextMessage();
+      const failed = await fetch(`${base}/api/marcus/external-actions/${draft.id}/send`, { method: 'POST', headers, body: '{}' });
+      assert.equal(failed.status, 502);
+      assert.match((await failed.json()).error, /sender is not authorized/i);
+      assert.equal(received.length, 0);
+
+      const failedAction = (await (await fetch(`${base}/api/marcus/external-actions`, { headers })).json()).actions
+        .find((action) => action.id === draft.id);
+      assert.equal(failedAction.status, 'failed');
+      assert.match(failedAction.approvedAt, /^\d{4}-\d{2}-\d{2}T/);
+
       const sent = await fetch(`${base}/api/marcus/external-actions/${draft.id}/send`, { method: 'POST', headers, body: '{}' });
       assert.equal(sent.status, 200);
       const sentBody = await sent.json();
@@ -981,6 +1003,20 @@ test('paired admin can configure, verify, and acceptance-test Quo and SMTP safel
         assert.equal(verifiedConfiguration.email.verification.verified, true);
         assert.match(verifiedConfiguration.text.verification.verifiedAt, /^\d{4}-\d{2}-\d{2}T/);
         assert.match(verifiedConfiguration.email.verification.verifiedAt, /^\d{4}-\d{2}-\d{2}T/);
+
+        const unchangedUpdateResponse = await fetch(`${base}/api/marcus/providers/config`, {
+          method: 'PUT', headers, body: JSON.stringify({
+            text: { apiKey: '', defaultPhoneNumberId: 'PN_TEST', fromNumber: '+15550001111', userId: 'US_TEST' },
+            email: {
+              host: '127.0.0.1', port: smtpPort, secure: false,
+              username: 'marcus@example.com', password: '', fromAddress: 'Marcus <marcus@example.com>',
+            },
+          }),
+        });
+        const unchangedConfiguration = await unchangedUpdateResponse.json();
+        assert.equal(unchangedUpdateResponse.status, 200, JSON.stringify(unchangedConfiguration));
+        assert.equal(unchangedConfiguration.text.verification.verifiedAt, verifiedConfiguration.text.verification.verifiedAt);
+        assert.equal(unchangedConfiguration.email.verification.verifiedAt, verifiedConfiguration.email.verification.verifiedAt);
 
         const storedSettings = await (await fetch(`${base}/api/settings`, { headers })).json();
         assert.equal(storedSettings.quoApiKey, undefined);

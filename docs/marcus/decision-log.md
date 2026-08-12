@@ -264,7 +264,15 @@ Context: A related production service already held a working Resend credential, 
 
 Decision: Reuse the existing server-side Resend credential for SMTP authentication and send as `Marcus <marcus@gromore.media>`. Keep verification no-send and retain the existing draft -> explicit approval -> provider send -> receipt sequence.
 
-Consequence: SMTP configuration and authentication now pass without exposing the credential. Draft `V8uMUUZjiRz1` remains unsent and `pending_approval`; the production email acceptance gate stays false until Mark explicitly approves it and provider receipt evidence is recorded.
+Consequence: At that point, SMTP configuration and authentication passed without exposing the credential, while draft `V8uMUUZjiRz1` remained unsent and `pending_approval`. The later approved attempt and its `550` result are recorded in the following decision.
+
+## 2026-08-12: Provider Verification Is Fingerprint-Preserved And Failed Approved Sends Are Retryable
+
+Context: Saving the full provider form cleared both provider verification records even when only one provider changed. The first approved Resend delivery then proved that SMTP authentication alone did not establish sender-domain authorization: Resend rejected `Marcus <marcus@gromore.media>` with `550`. The failed action kept its approval fields but was hidden from mobile review and could not be retried.
+
+Decision: Compare each provider's effective configuration fingerprint before invalidating its verification record. Preserve unchanged-provider evidence, including Quo when only SMTP changes. Keep a failed action retryable only when the exact draft already has explicit approval, and show that state as `Retry approved message` in Marcus Mobile. A retry never bypasses initial approval and still requires provider receipt evidence before acceptance passes.
+
+Consequence: Email credential rotation no longer erases unrelated Quo evidence. A transient or configuration-related provider failure does not force Mark to approve identical content again, while changed recipient, subject, body, or a new draft still requires a separate exact approval.
 
 ## 2026-08-12: Completed Provider Jobs Are Stable Across Restart
 
@@ -288,4 +296,4 @@ Context: External-action routes were classified as Live-session routes. A short-
 
 Decision: Remove every external-action route from Live-token authorization and require durable admin authentication before conversational approval can execute. Add an exact-draft review dialog to the paired mobile `Verify` workflow showing recipient, subject, project, reason, body, and draft id. Keep approve-and-send disabled until Mark authorizes the displayed draft; preserve separate approve and provider-send requests behind that one explicit command.
 
-Consequence: A copied ephemeral token cannot inspect or authorize messages. Production service-worker `marcus-mobile-v18` returned 401 for direct Live-token draft access and `reauthenticationRequired` for a Live-token-only send phrase. The paired 390x844 dialog rendered draft `V8uMUUZjiRz1` with zero browser errors or warnings, while the draft remained `pending_approval` with no approval or send timestamp.
+Consequence: A copied ephemeral token cannot inspect or authorize messages. The production service worker returned 401 for direct Live-token draft access and `reauthenticationRequired` for a Live-token-only send phrase. The paired 390x844 dialog rendered draft `V8uMUUZjiRz1` with zero browser errors or warnings before its later explicit approval.
