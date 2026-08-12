@@ -273,3 +273,11 @@ Context: Startup recovery included provider jobs with status `completed` even wh
 Decision: Reconcile a completed provider job only when its bound step is not complete. Treat an already blocked operation with completed implementation and an active verification blocker as stable. Deduplicate active runner and recovery blockers by type and bound step, and emit the corresponding event only when the blocker is first created.
 
 Consequence: Process replacement no longer rewrites settled implementation state or grows blocker noise. After deployment, two superseded Reggie acceptance operations were cancelled with no external provider action, and the mobile tracker returned to the legitimate pending demo approval.
+
+## 2026-08-12: Mobile Approval Is Exact-Target And Admin-Authenticated
+
+Context: Marcus Mobile could report that a durable operation needed approval, but Mark had to copy operation ids into chat. That made a consequential action difficult to inspect and easy to approve ambiguously from a phone.
+
+Decision: Add a redacted pending-approval descriptor to the Live-token-safe operation summary and an exact-target review dialog to Marcus Mobile. Show the immutable operation target, action, risk, reason, and operation id. Keep approval disabled until an explicit authorization checkbox is selected, require typed strong confirmation for critical actions, and submit approve/reject only through paired durable-admin routes.
+
+Consequence: Mark can review and authorize one exact GitHub or Cloudflare action from the installed PWA without exposing prompts, artifacts, provider input, or credentials to the read-only feed. Production service-worker `marcus-mobile-v17` rendered both pending targets at 390x844; neither was executed during validation, and an unauthenticated approval attempt returned 401.
