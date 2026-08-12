@@ -11,6 +11,7 @@ import { withoutProjectExecutionDeferrals } from '../marcus/core/request_intent.
 import { createOperationsEngine } from '../marcus/operations/operation_engine.js';
 import { executeMarcusOperationTool, formatOperationStatusForMarcus, shouldCreateDurableOperationForRequest } from '../marcus/operations/marcus_operation_tools.js';
 import { normalizeOperation, requiredVerificationPassed } from '../marcus/operations/operation_types.js';
+import { generateCodexHandoff } from '../marcus/providers/codex_provider.js';
 
 async function withEngine(callback, options = {}) {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'marcus-operations-test-'));
@@ -190,6 +191,22 @@ test('Marcus operation status is concise for voice', () => {
   assert.match(reply, /provider/i);
   assert.doesNotMatch(reply, /Outcome:|Risk:|Progress:|op_123/);
   assert.ok(reply.length < 180);
+});
+
+test('Codex handoff permits only the scoped review branch and preserves consequential approvals', () => {
+  const handoff = generateCodexHandoff({
+    operation: {
+      id: 'op_scope', businessKey: 'personal', projectName: 'Demo', projectId: 'demo',
+      title: 'Scoped demo change', objective: 'Add one document.', originalRequest: 'Add one document and start Codex.',
+      riskLevel: 'medium', acceptanceCriteria: ['The document is accurate.'], verification: [], metadata: {},
+    },
+    step: { description: 'Add one document.', verificationRequirements: ['test'] },
+    registryRecord: { canonicalName: 'Demo', repo: { fullName: 'markgromer/demo', defaultBranch: 'main', workingBranchPattern: 'marcus/{operationId}' } },
+  });
+  assert.match(handoff, /scoped commits and pushes only to the suggested nonproduction work branch/i);
+  assert.match(handoff, /creation or update of its review pull request/i);
+  assert.match(handoff, /Do not push to the default, protected, or production branch; merge; deploy; change DNS/i);
+  assert.doesNotMatch(handoff, /Do not push, merge, deploy/i);
 });
 
 test('runtime policy overrides model risk and always gates high and critical actions', async () => {
