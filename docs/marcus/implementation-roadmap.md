@@ -93,7 +93,7 @@ When this adapter is configured, `/api/marcus/operator-health` reports provider 
 
 Marcus should audit Codex output before reporting success.
 
-Status: implemented locally and verified against the real Marcus demo PR #3. Production deployment and a fresh production operation acceptance remain pending.
+Status: implemented and accepted in production. Marcus now separates semantic code review from deterministic control-plane evidence binding, so a model cannot invent that an audit, handoff, verification, merge boundary, or deployment boundary occurred.
 
 Checks:
 
@@ -108,12 +108,25 @@ Implemented path:
 - Collect target PR, head commit, changed files, bounded patches, check runs, and commit statuses directly from GitHub after the Reggie runner completes.
 - Bind the stored diff and independent review with a SHA-256 evidence digest.
 - Treat repository patches as untrusted input to a separate AI reviewer.
+- Use OpenAI strict structured output for semantic implementation criteria, with one schema-required coverage entry per criterion and evidence references restricted to exact catalog ids.
+- Bind Marcus-generated audit, Codex-handoff, and completion-control criteria deterministically to durable operation metadata, provider job identity, GitHub artifacts, and authenticated verification evidence.
+- Exclude prior `diff_review` results from the evidence catalog so result review cannot prove itself.
 - Require explicit coverage of every acceptance criterion with validated evidence-catalog references, no high/blocker finding, no unsupported execution claim, and at least 0.8 confidence before passing `diff_review`.
 - Fail closed on missing/truncated evidence, pending/failed target checks, invalid review output, or provenance mismatch.
 - Refresh GitHub evidence and the independent review on verification retry without relaunching Codex.
 - Keep build, test, lint, typecheck, browser, deployment, merge, and communication gates independent.
 
-Remaining acceptance: deploy this implementation, confirm `/api/marcus/operator-health` reports `codexResultReview.available`, and run a fresh bounded production Codex operation through evidence collection and independent review without merging or deploying the result.
+Production acceptance on 2026-08-12:
+
+- Durable operation `op_NfHu37cdF1aSjQ` audited one repository, indexed six paths, read six files through eleven GitHub API calls, and carried all four mission-memory records into an 11,281-character Codex prompt.
+- The first Reggie dispatch, run `31584286489`, failed before Codex when Reggie Hub correctly refused to mint a target-repository token for an unenrolled site. The demo repository was then enrolled through the authenticated Hub provisioning path; no credential was printed or stored in documentation.
+- Existing operation attempt two dispatched Reggie run `31584535255`, completed `openai/codex-action`, and opened PR #4 at exact head `4ee4135eb98be5bc57385be0ff128ee78fa42729` without creating a second operation.
+- GitHub evidence resolved two complete patches, the open PR, commit, checks, and SHA-256 digest `99dc7a16679924e30285fff2b3fb1baaff9b24379e73d5f6d35332c4104c8d1b`.
+- An early reviewer output claimed success with blank citations. Marcus's independent build/test/lint gates kept the operation blocked. The corrected reviewer then rejected two uncited structured responses instead of accepting them.
+- Independent verification at the exact PR head passed five of five tests, `wrangler deploy --dry-run`, JavaScript syntax, and clean-worktree checks. A separate production observation confirmed PR #4 remained open and unmerged while live `/version` returned HTTP 404.
+- The final strict review cited both changed files plus build, test, lint, and URL-health evidence; all four criteria were grounded, no unsupported claims remained, and the operation completed.
+- No extra Reggie job was dispatched during evidence refresh. PR #4 remains unmerged and the live Cloudflare Worker remains unchanged.
+- Local regression passed `114/114`; GitHub CI run `31586173120` passed for implementation commit `4a98ffc` before the final production review.
 
 ## Phase 5: External Communication
 
@@ -267,3 +280,13 @@ Production Codex acceptance evidence:
 - Result: operation completed with build, test, syntax/lint substitute, artifact, and diff-review evidence passed
 - Verified branch: five tests passed and `wrangler deploy --dry-run` passed
 - The pull request remains unmerged and undeployed, preserving the review and production-approval boundary.
+
+Independent result-review acceptance evidence:
+
+- Durable operation: `op_NfHu37cdF1aSjQ`
+- Codex runner: `https://github.com/markgromer/Reggie/actions/runs/31584535255`
+- Review pull request: `https://github.com/markgromer/marcus-operator-demo-worker/pull/4`
+- Exact head: `4ee4135eb98be5bc57385be0ff128ee78fa42729`
+- Evidence digest: `99dc7a16679924e30285fff2b3fb1baaff9b24379e73d5f6d35332c4104c8d1b`
+- Result: four of four acceptance criteria grounded; five of five tests, Wrangler dry-run, syntax, artifact, diff-review, and unchanged-production evidence passed
+- Boundary proof: PR #4 is open and unmerged; live `/version` returns HTTP 404 because the acceptance change was not deployed

@@ -6,7 +6,7 @@ Context: The Reggie runner could complete, push a branch, and open a pull reques
 
 Decision: After runner completion, query GitHub directly for the target branch, pull request, head commit, changed files, bounded patches, check runs, and commit statuses. Bind that evidence to a separate AI review with a SHA-256 digest. Quarantine provider-supplied review artifacts, treat repository patches as untrusted model input, and permit the independent review to satisfy only `diff_review` when every acceptance criterion is visibly met. Keep all runtime, browser, deployment, merge, communication, and production gates independent.
 
-Consequence: A successful runner no longer stands in for a successful implementation. Missing/truncated evidence, failed or pending target checks, malformed review output, incomplete criterion coverage, and digest mismatches fail closed. The target collector passed read-only against the real Marcus demo PR #3 before production deployment; production operation acceptance remains required.
+Consequence: A successful runner no longer stands in for a successful implementation. Missing/truncated evidence, failed or pending target checks, malformed review output, incomplete criterion coverage, and digest mismatches fail closed. The target collector passed read-only against real demo PR #3 before deployment, and operation `op_NfHu37cdF1aSjQ` later passed the full production acceptance against PR #4.
 
 Production correction: The first live review of demo PR #4 exposed a false-positive model response: it marked criteria met with blank evidence and claimed tests passed without target test evidence. The operation remained blocked on independent build/test/lint gates. Marcus now supplies a validated evidence catalog, requires every `met` criterion to reference one or more exact catalog IDs, rejects invented/blank references, and rejects execution claims that lack successful target checks or authenticated verification evidence.
 
@@ -137,6 +137,14 @@ Context: A configured adapter is not proof that execution works. The initial acc
 Decision: Require a demo operation to survive dispatch failure, retry the same durable step, complete Reggie's `openai/codex-action`, open a review pull request, and pass independent build, test, syntax, artifact, and diff review evidence. Add `NODE_OPTIONS=--use-system-ca` to the Reggie runner and exclude the internal Codex report from generated pull requests.
 
 Consequence: Operation `op_N_PUttVpm72mWw` completed with a real runner URL and PR rather than a handoff claim. Future runner jobs inherit the certificate and artifact fixes.
+
+## 2026-08-12: Codex Result Review Separates Semantic Judgment From Durable Proof
+
+Context: The first independent production reviewer described the demo change correctly but returned blank evidence for every acceptance criterion and claimed tests passed without target test-check evidence. Independent verification gates prevented operation completion. A stricter prompt then produced valid JSON but omitted the criterion array twice, correctly leaving the operation blocked and showing that free-form model compliance was not a reliable control boundary.
+
+Decision: Use OpenAI strict structured output for semantic code-review coverage. Limit model evidence references to exact ids from a validated catalog. Prove Marcus-generated audit, handoff, and completion-control criteria deterministically from durable audit metadata, launched job identity, GitHub artifacts, and authenticated verification evidence. Exclude prior `diff_review` evidence to prevent circular proof. Keep build, test, lint, browser, deployment, merge, and communication verification independent from the AI review.
+
+Consequence: Production operation `op_NfHu37cdF1aSjQ` completed only after PR #4's two patches, exact head and digest, five passing tests, Wrangler dry-run, syntax check, and open/unmerged plus live-404 evidence all agreed. Evidence refresh did not relaunch Codex, and the live Cloudflare Worker was not changed.
 
 ## 2026-08-12: OpenAI Realtime Is Marcus's Primary Voice Layer
 
