@@ -80,6 +80,8 @@ An authenticated operator can request one active six-digit code from `POST /api/
 
 Local operator helper: `scripts/create-marcus-mobile-pairing-code.ps1`.
 
+Production process-replacement acceptance passed on 2026-08-12: a code minted before deployment `858a0ba` was accepted by the replacement process, the issued cookie authenticated successfully, and replay from a fresh session returned 401.
+
 External communication draft source:
 
 - `GET /api/marcus/external-actions`

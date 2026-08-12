@@ -14,7 +14,7 @@ Context: A production browser acceptance minted a valid pairing code while Rende
 
 Decision: Persist only the HMAC hash and expiration in `data/mobile-pairing.json`. Serialize creation and consumption with an exclusive cross-process lock, delete the record after the first successful use, and cover mint -> process stop -> process start -> consume -> replay with an acceptance test.
 
-Consequence: Deploys and process restarts no longer invalidate an otherwise valid mobile pairing challenge. The six-digit code and durable admin credential are still not persisted together or returned to the browser.
+Consequence: Deploys and process restarts no longer invalidate an otherwise valid mobile pairing challenge. Production accepted a pre-deploy code after process replacement and rejected replay on 2026-08-12. The six-digit code and durable admin credential are still not persisted together or returned to the browser.
 
 ## 2026-08-11: Marcus Voice Uses The Official Realtime SDK And Recoverable Sessions
 

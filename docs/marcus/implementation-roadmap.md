@@ -177,6 +177,7 @@ Verified against production on 2026-08-12:
 - The browser reported no warnings or errors and stored no durable token in local storage.
 - Production operator health reported `direct_codex`, GitHub ready, and Cloudflare ready.
 - One-time six-digit mobile pairing was exercised against production. Cookie authentication succeeded, code reuse returned 401, no durable token was stored in browser storage, and the paired session established the Realtime call.
+- A separate code minted before deployment `858a0ba` survived Render process replacement, authenticated with HTTP 200 on the replacement process, and returned 401 on replay from a fresh session.
 
 ## Demo Deployment
 
