@@ -51,7 +51,7 @@ Local/saved settings are also supported for operator provider access:
 
 Environment variables win when both env and saved settings are present. `/api/settings` reports configured/source/hint fields but redacts the actual saved secrets.
 
-The backend already exposes GitHub, Cloudflare, and Render status/list/read endpoints. The next step is to make the conversational operator use those capabilities automatically during project execution planning.
+The backend exposes GitHub, Cloudflare, and Render status/list/read endpoints. The conversational project operator uses GitHub evidence automatically during preflight audits. Cloudflare and Render remain part of the project-evidence layer rather than the same recursive repository transaction.
 
 Capability truth source:
 
@@ -63,6 +63,7 @@ Production status verified on 2026-08-12:
 
 - GitHub server access can enumerate repositories and read repository files.
 - GitHub Actions dispatch can start the Reggie `openai/codex-action` runner and reconcile its result.
+- Completed GitHub Actions jobs are independently resolved to target-repository PR, commit, diff, and check evidence before result review.
 - Cloudflare server access can enumerate all 29 zones and read DNS records for the configured default zone.
 - The Cloudflare credential is the dedicated account token `Marcus Production Operator`, not the local Wrangler OAuth token.
 - Render admin authentication and the canonical `BASE_URL` point to `https://task-tracker-5wsa.onrender.com`.

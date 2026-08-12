@@ -59,7 +59,9 @@ export class OperationVerification {
       }
 
       if (requirement.type === 'artifact_present') {
-        const evidenceArtifacts = (operation.artifacts || []).filter((artifact) => ['codex_result', 'codex_diff', 'commit', 'external_job', 'implementation_result'].includes(artifact.type));
+        const evidenceArtifacts = (operation.artifacts || []).filter((artifact) => [
+          'codex_result', 'codex_diff', 'commit', 'external_job', 'implementation_result', 'github_result_evidence', 'github_pull_request',
+        ].includes(artifact.type));
         results.push(normalizeVerificationResult({
           id: prior?.id || makeOperationId('verify'), type: requirement.type, required: requirement.required,
           status: evidenceArtifacts.length ? 'passed' : 'failed', startedAt: nowIso(), completedAt: nowIso(),
@@ -149,13 +151,33 @@ export class OperationVerification {
       }
 
       if (requirement.type === 'diff_review') {
-        const diff = (operation.artifacts || []).find((artifact) => artifact.type === 'codex_diff' || artifact.type === 'diff');
+        const diff = (operation.artifacts || []).filter((artifact) => artifact.type === 'codex_diff' || artifact.type === 'diff').reverse()[0];
+        const reviews = (operation.artifacts || []).filter((artifact) => artifact.type === 'codex_result_review').reverse();
+        const review = reviews.find((artifact) => {
+          const reviewMetadata = safeObject(artifact.metadata);
+          const diffMetadata = safeObject(diff?.metadata);
+          return reviewMetadata.source === 'independent_ai_review'
+            && reviewMetadata.evidenceSource === 'github_api'
+            && reviewMetadata.authoritativeEvidence === true
+            && safeString(reviewMetadata.evidenceDigest, 100)
+            && reviewMetadata.evidenceDigest === diffMetadata.evidenceDigest
+            && diffMetadata.source === 'github_api'
+            && diffMetadata.authoritative === true;
+        });
+        const reviewStatus = safeString(review?.metadata?.reviewStatus, 80);
         results.push(normalizeVerificationResult({
           id: prior?.id || makeOperationId('verify'), type: requirement.type, required: requirement.required,
-          status: 'needs_manual_review',
-          output: diff ? 'A diff artifact is available for review.' : '',
-          error: diff ? '' : 'No diff artifact is available.',
-          evidence: diff ? { artifactId: diff.id, name: diff.name } : {},
+          status: reviewStatus === 'passed' ? 'passed' : reviewStatus === 'failed' ? 'failed' : 'needs_manual_review',
+          output: reviewStatus === 'passed'
+            ? 'An independent AI reviewer matched every acceptance criterion to the authoritative GitHub diff.'
+            : diff ? 'A diff artifact is available, but independent review did not prove it complete and correct.' : '',
+          error: reviewStatus === 'failed'
+            ? 'Independent review found unmet requirements, severe findings, or failed target checks.'
+            : reviewStatus === 'passed' ? '' : diff ? 'Independent review still requires human evidence.' : 'No diff artifact is available.',
+          evidence: {
+            ...(diff ? { diffArtifactId: diff.id, diffName: diff.name } : {}),
+            ...(review ? { reviewArtifactId: review.id, reviewName: review.name, evidenceDigest: review.metadata.evidenceDigest } : {}),
+          },
         }, { operationId: operation.id, stepId: step.id }));
         continue;
       }

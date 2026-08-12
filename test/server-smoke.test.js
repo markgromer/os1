@@ -649,6 +649,8 @@ test('server enables direct Codex mode when HTTP adapter URL is configured', asy
       assert.equal(health.capabilities.projectOperator.mode, 'direct_codex');
       assert.equal(health.capabilities.projectOperator.canStartCodexDirectly, true);
       assert.equal(health.capabilities.projectOperator.provider, 'http_codex');
+      assert.equal(health.capabilities.codexResultReview.authoritativeEvidence, false);
+      assert.equal(health.capabilities.codexResultReview.available, false);
       assert.equal(health.blockers.some((item) => /direct Codex launch adapter/i.test(item)), false);
     } finally { await server.close(); }
   });
@@ -990,6 +992,9 @@ test('server enables Reggie-style GitHub Actions Codex mode when configured', as
     assert.equal(health.capabilities.projectOperator.mode, 'direct_codex');
     assert.equal(health.capabilities.projectOperator.canStartCodexDirectly, true);
     assert.equal(health.capabilities.projectOperator.provider, 'github_actions_codex');
+    assert.equal(health.capabilities.codexResultReview.authoritativeEvidence, true);
+    assert.equal(health.capabilities.codexResultReview.independentReviewerConfigured, true);
+    assert.equal(health.capabilities.codexResultReview.available, health.capabilities.openai.configured);
     assert.equal(health.blockers.some((item) => /direct Codex launch adapter/i.test(item)), false);
   } finally { await server.close(); }
 });

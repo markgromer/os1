@@ -13,6 +13,7 @@ import { OperationRunner } from './operation_runner.js';
 import { OperationService } from './operation_service.js';
 import { OperationStore } from './operation_store.js';
 import { OperationVerification } from './operation_verification.js';
+import { CodexResultReviewer } from './codex_result_reviewer.js';
 import { makeOperationId, nowIso, safeBusinessKey, safeObject, safeString, summarizeOperationProgress } from './operation_types.js';
 
 function objectiveFromRequest(request) {
@@ -110,6 +111,7 @@ export function createOperationsEngine({
   queueDesktopAction = null,
   githubReadAdapter = null,
   directCodexAdapter = null,
+  reviewCodexResult = null,
   providerTimeoutMs = 45_000,
   allowedWorkspaceRoots = [],
 } = {}) {
@@ -122,10 +124,12 @@ export function createOperationsEngine({
   const codex = new CodexProvider({ mode: directCodexAdapter ? 'direct' : 'external_handoff', directAdapter: directCodexAdapter });
   const desktop = new DesktopProvider({ queueAction: queueDesktopAction });
   const githubRead = new GitHubReadProvider({ readAdapter: githubReadAdapter });
+  const codexResultReviewer = typeof reviewCodexResult === 'function' ? new CodexResultReviewer({ complete: reviewCodexResult }) : null;
   const service = new OperationService({ store, registry, resolver, policy, approvalService, verification });
   const runner = new OperationRunner({
     store, registry, service, policy, approvalService, verification,
     providers: { codex, desktop, github_read: githubRead },
+    codexResultReviewer,
     providerTimeoutMs,
   });
   service.setRunner(runner);
@@ -307,6 +311,8 @@ export function createOperationsEngine({
           mode: codex.mode,
           directAdapterConfigured: codex.mode === 'direct',
           provider: codex.providerName || codex.mode,
+          authoritativeResultEvidence: typeof directCodexAdapter?.collectTargetEvidence === 'function',
+          independentResultReviewerConfigured: Boolean(codexResultReviewer),
         },
         recoveryRequiredCount: operations.filter((operation) => operation.status === 'recovery_required').length,
         pendingApprovalCount: operations.reduce((count, operation) => count + operation.approvals.filter((approval) => approval.status === 'pending').length, 0),

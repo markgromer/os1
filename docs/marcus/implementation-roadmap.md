@@ -93,6 +93,8 @@ When this adapter is configured, `/api/marcus/operator-health` reports provider 
 
 Marcus should audit Codex output before reporting success.
 
+Status: implemented locally and verified against the real Marcus demo PR #3. Production deployment and a fresh production operation acceptance remain pending.
+
 Checks:
 
 - Did the result address the original request?
@@ -100,6 +102,18 @@ Checks:
 - Were tests/build/lint run?
 - Is browser verification needed?
 - Is deployment or client communication still pending approval?
+
+Implemented path:
+
+- Collect target PR, head commit, changed files, bounded patches, check runs, and commit statuses directly from GitHub after the Reggie runner completes.
+- Bind the stored diff and independent review with a SHA-256 evidence digest.
+- Treat repository patches as untrusted input to a separate AI reviewer.
+- Require explicit coverage of every acceptance criterion, no high/blocker finding, and at least 0.8 confidence before passing `diff_review`.
+- Fail closed on missing/truncated evidence, pending/failed target checks, invalid review output, or provenance mismatch.
+- Refresh GitHub evidence and the independent review on verification retry without relaunching Codex.
+- Keep build, test, lint, typecheck, browser, deployment, merge, and communication gates independent.
+
+Remaining acceptance: deploy this implementation, confirm `/api/marcus/operator-health` reports `codexResultReview.available`, and run a fresh bounded production Codex operation through evidence collection and independent review without merging or deploying the result.
 
 ## Phase 5: External Communication
 

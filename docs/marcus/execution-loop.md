@@ -75,6 +75,12 @@ Repository audit and Codex handoff follow:
 
 Codex treats the brief as preflight evidence and must reopen relevant files, callers, dependents, and tests. Related repositories remain explicit scope; the runner may not silently reduce a multi-repository request to the primary checkout.
 
+Direct GitHub Actions result review follows:
+
+`runner reports success -> query target repository through GitHub API -> resolve PR/branch/head SHA -> collect bounded redacted patches and target checks -> calculate evidence digest -> independent acceptance-criteria review -> retain build/test/browser/deployment gates`
+
+The runner's success proves only that the runner completed. Codex output and provider-supplied review claims remain untrusted. The independent reviewer may pass `diff_review` only when all changed files and patches are present, the digest matches the stored diff, every acceptance criterion is explicitly covered, confidence is at least 0.8, and no high/blocker finding or failed/pending target check exists. Otherwise the operation remains blocked for stronger evidence. Retrying the verification step invalidates the short evidence cache, re-queries GitHub, and re-runs review without launching Codex again, so checks that were merely settling can advance honestly.
+
 ## Execution Brief Contents
 
 Every Codex-bound job should include:
@@ -118,7 +124,8 @@ Marcus should not treat a Codex handoff as completed work.
 
 Completion requires evidence:
 
-- Codex result or diff.
+- Authoritative result/diff provenance, not only a Codex completion claim.
+- Independent criterion-by-criterion diff review or explicit human review.
 - Test, lint, build, or manual verification.
 - Browser evidence when UI is involved.
 - Explicit note of any skipped verification.

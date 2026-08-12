@@ -261,6 +261,11 @@ const operationsEngine = createOperationsEngine({
   queueDesktopAction: async (action) => queueDesktopAction(action),
   githubReadAdapter: async (input) => githubOperationsReadAdapter(input),
   directCodexAdapter,
+  reviewCodexResult: async ({ messages, timeoutMs }) => aiChatCompletion({
+    routeKey: 'marcusChat',
+    messages,
+    timeoutMs,
+  }),
   allowedWorkspaceRoots: String(process.env.MARCUS_ALLOWED_WORKSPACE_ROOTS || '')
     .split(path.delimiter).map((value) => value.trim()).filter(Boolean),
 });
@@ -2467,6 +2472,10 @@ async function buildMarcusOperatorHealth() {
   );
   const canAuditAndPrepareCodex = Boolean(readiness.operationEngineInitialized && readiness.projectRegistryAvailable);
   const directCodex = readiness.codex?.directAdapterConfigured === true;
+  const codexResultReviewReady = directCodex
+    && readiness.codex?.authoritativeResultEvidence === true
+    && readiness.codex?.independentResultReviewerConfigured === true
+    && Boolean(ai.apiKey);
   const activeMissionMemories = missionMemory.memories || [];
   const missionMemoryReady = activeMissionMemories.some((item) => item.kind === 'mission')
     && activeMissionMemories.some((item) => item.kind === 'standing_instruction');
@@ -2492,6 +2501,14 @@ async function buildMarcusOperatorHealth() {
         canStartCodexDirectly: directCodex,
         canPrepareCodexHandoff: canAuditAndPrepareCodex,
         pendingExternalCodexCount: readiness.pendingExternalCodexCount,
+      },
+      codexResultReview: {
+        available: codexResultReviewReady,
+        authoritativeEvidence: readiness.codex?.authoritativeResultEvidence === true,
+        evidenceSource: readiness.codex?.authoritativeResultEvidence === true ? 'github_api' : 'not_configured',
+        independentReviewerConfigured: readiness.codex?.independentResultReviewerConfigured === true,
+        failClosed: true,
+        targetChecksRemainIndependent: true,
       },
       github: {
         backendTokenConfigured: github.configured,
@@ -2549,6 +2566,7 @@ async function buildMarcusOperatorHealth() {
       !cloudflare.configured ? 'CLOUDFLARE_API_TOKEN is not configured for the Marcus server; Cloudflare reads rely on route/user tooling instead of backend provider access.' : '',
       !ai.apiKey ? 'OpenAI is not configured; AI chat, transcription, and model-assisted drafting will be limited.' : '',
       !directCodex ? 'No direct Codex launch adapter is configured; Marcus can prepare durable handoffs and track registered Codex results, but cannot honestly claim a real session started.' : '',
+      directCodex && !codexResultReviewReady ? 'Independent Codex result review is not fully configured with authoritative GitHub evidence and AI review.' : '',
       !desktopOnline ? 'Desktop agent relay is not currently online; local workspace context/actions may be stale or unavailable.' : '',
       !email.smtpConfigured ? 'SMTP is not configured; Marcus can draft and approve email but cannot send it yet.' : '',
       !quoOutbound.configured ? 'Quo outbound API credentials are not configured; Marcus can draft and approve text messages but cannot send them yet.' : '',
@@ -2583,6 +2601,7 @@ async function buildMarcusAcceptanceReport({ sessionId = '' } = {}) {
   const gates = {
     missionMemoryReady: health.capabilities?.missionMemory?.available === true,
     projectOperatorReady: health.capabilities?.projectOperator?.canStartCodexDirectly === true,
+    codexResultReviewReady: health.capabilities?.codexResultReview?.available === true,
     githubReady: health.capabilities?.github?.backendTokenConfigured === true,
     cloudflareReady: health.capabilities?.cloudflare?.backendTokenConfigured === true,
     openaiReady: health.capabilities?.openai?.configured === true,
@@ -2596,6 +2615,7 @@ async function buildMarcusAcceptanceReport({ sessionId = '' } = {}) {
   const labels = {
     missionMemoryReady: 'Durable mission memory',
     projectOperatorReady: 'Direct Codex operator',
+    codexResultReviewReady: 'Independent Codex result review',
     githubReady: 'GitHub',
     cloudflareReady: 'Cloudflare',
     openaiReady: 'OpenAI',

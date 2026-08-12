@@ -1,5 +1,13 @@
 # Decision Log
 
+## 2026-08-12: Codex Completion Claims Do Not Verify Codex Work
+
+Context: The Reggie runner could complete, push a branch, and open a pull request, but the GitHub Actions adapter returned no artifacts and an empty diff. Marcus therefore had no independent target-repository evidence and could only wait for manually registered verification.
+
+Decision: After runner completion, query GitHub directly for the target branch, pull request, head commit, changed files, bounded patches, check runs, and commit statuses. Bind that evidence to a separate AI review with a SHA-256 digest. Quarantine provider-supplied review artifacts, treat repository patches as untrusted model input, and permit the independent review to satisfy only `diff_review` when every acceptance criterion is visibly met. Keep all runtime, browser, deployment, merge, communication, and production gates independent.
+
+Consequence: A successful runner no longer stands in for a successful implementation. Missing/truncated evidence, failed or pending target checks, malformed review output, incomplete criterion coverage, and digest mismatches fail closed. The target collector passed read-only against the real Marcus demo PR #3 before production deployment; production operation acceptance remains required.
+
 ## 2026-08-12: Mission Memory Is Durable Data, Not A Prompt Constant
 
 Context: Marcus retained recent conversation and project requirements, but his overall mission, Mark's standing instructions, and cross-project preferences existed only in code, documentation, or the current conversation. That did not prove durable recall across chat eviction, process restart, business switching, or a later Codex handoff.

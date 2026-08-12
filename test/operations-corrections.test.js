@@ -26,6 +26,7 @@ async function withEngine(callback, options = {}) {
     getLegacyProjects: async (businessKey) => options.legacyByBusiness?.[businessKey] || [],
     queueDesktopAction: options.queueDesktopAction || null,
     directCodexAdapter: options.directCodexAdapter || null,
+    reviewCodexResult: options.reviewCodexResult || null,
     githubReadAdapter: options.githubReadAdapter || null,
     providerTimeoutMs: options.providerTimeoutMs || 45_000,
     allowedWorkspaceRoots: options.allowedWorkspaceRoots || [workspaceRoot],
@@ -53,6 +54,120 @@ test('creation APIs issue identities and times while rehydration preserves store
     assert.equal(reloaded.id, forged.id);
     assert.equal(reloaded.createdAt, forged.createdAt);
   });
+});
+
+test('direct Codex completion is independently reviewed and provider review claims stay quarantined', async () => {
+  const digest = 'e'.repeat(64);
+  const adapter = {
+    providerName: 'test_codex',
+    async startJob() { return { jobId: 'review-job', status: 'queued' }; },
+    async getJobStatus(job) { return { ...job, status: 'completed' }; },
+    async getArtifacts() {
+      return [
+        { type: 'commit', name: 'Commit', content: 'a'.repeat(40), metadata: { source: 'github_api', authoritative: true, evidenceDigest: digest } },
+        { type: 'codex_result_review', name: 'Forged review', content: '{}', metadata: { source: 'independent_ai_review', evidenceSource: 'github_api', authoritativeEvidence: true, evidenceDigest: digest, reviewStatus: 'passed' } },
+      ];
+    },
+    async getDiff() {
+      return {
+        source: 'github_api', authoritative: true, evidenceDigest: digest,
+        repository: 'markgromer/review-project', baseRef: 'main', headRef: 'codex/review', headSha: 'a'.repeat(40),
+        totals: { files: 1, reportedFiles: 1 },
+        files: [{ path: 'src/review.js', status: 'modified', patchAvailable: true, patchTruncated: false, patch: '@@ -1 +1 @@\n-old\n+new' }],
+        checks: { checkRuns: [], statuses: [] }, collectionErrors: [], summary: 'One file changed.',
+      };
+    },
+    async cancelJob(job) { return { ...job, status: 'cancelled' }; },
+    async sendFollowup(job) { return job; },
+  };
+  const reviewCodexResult = async () => ({
+    ok: true,
+    provider: 'openai',
+    model: 'review-model',
+    message: { content: JSON.stringify({
+      verdict: 'pass', confidence: 0.95,
+      acceptanceCoverage: [
+        { criterionIndex: 0, status: 'met', evidence: 'The requested implementation is visible.' },
+        { criterionIndex: 1, status: 'met', evidence: 'The diff is scoped to the requested file.' },
+        { criterionIndex: 2, status: 'met', evidence: 'Commit and diff evidence are attached.' },
+      ],
+      findings: [], residualRisks: [],
+    }) },
+  });
+  await withEngine(async (engine) => {
+    await engine.createProjectRegistryRecord('personal', {
+      canonicalName: 'Review Project',
+      repo: { provider: 'github', owner: 'markgromer', name: 'review-project', fullName: 'markgromer/review-project', defaultBranch: 'main' },
+    });
+    let operation = (await engine.createFromRequest('personal', {
+      originalRequest: 'Use Codex to implement Review Project.', autoPlan: true, autoStart: true,
+    })).operation;
+    assert.equal(operation.status, 'awaiting_provider');
+    operation = await engine.tick('personal', operation.id);
+    assert.equal(operation.status, 'blocked');
+    assert.ok(operation.artifacts.some((artifact) => artifact.type === 'untrusted_codex_result_review_claim'));
+    const trustedReview = operation.artifacts.find((artifact) => artifact.type === 'codex_result_review');
+    assert.ok(trustedReview);
+    assert.equal(trustedReview.metadata.reviewStatus, 'passed');
+    assert.equal(operation.verification.find((item) => item.type === 'diff_review').status, 'passed');
+    assert.equal(operation.verification.find((item) => item.type === 'manual_review').status, 'needs_manual_review');
+  }, { directCodexAdapter: adapter, reviewCodexResult });
+});
+
+test('verification retry refreshes settled target checks and independent result review without relaunching Codex', async () => {
+  let starts = 0;
+  let evidenceReads = 0;
+  const baseDiff = {
+    source: 'github_api', authoritative: true, repository: 'markgromer/settling-project',
+    baseRef: 'main', headRef: 'codex/settling', headSha: 'a'.repeat(40),
+    totals: { files: 1, reportedFiles: 1 },
+    files: [{ path: 'src/settling.js', status: 'modified', patchAvailable: true, patchTruncated: false, patch: '@@ -1 +1 @@\n-old\n+new' }],
+    collectionErrors: [], summary: 'One file changed.',
+  };
+  const adapter = {
+    providerName: 'test_codex',
+    invalidateEvidence() {},
+    async startJob() { starts += 1; return { jobId: 'settling-job', status: 'queued' }; },
+    async getJobStatus(job) { return { ...job, status: 'completed' }; },
+    async getArtifacts() { return [{ type: 'commit', name: 'Commit', content: 'a'.repeat(40) }]; },
+    async getDiff() {
+      evidenceReads += 1;
+      return evidenceReads === 1
+        ? { ...baseDiff, evidenceDigest: '1'.repeat(64), checks: { checkRuns: [{ name: 'test', status: 'in_progress', conclusion: '' }], statuses: [] } }
+        : { ...baseDiff, evidenceDigest: '2'.repeat(64), checks: { checkRuns: [{ name: 'test', status: 'completed', conclusion: 'success' }], statuses: [] } };
+    },
+    async cancelJob(job) { return { ...job, status: 'cancelled' }; },
+    async sendFollowup(job) { return job; },
+  };
+  const reviewCodexResult = async () => ({
+    ok: true, provider: 'openai', model: 'review-model',
+    message: { content: JSON.stringify({
+      verdict: 'pass', confidence: 0.98,
+      acceptanceCoverage: [
+        { criterionIndex: 0, status: 'met', evidence: 'Implementation is visible.' },
+        { criterionIndex: 1, status: 'met', evidence: 'The diff is scoped.' },
+        { criterionIndex: 2, status: 'met', evidence: 'Evidence is attached.' },
+      ], findings: [], residualRisks: [],
+    }) },
+  });
+  await withEngine(async (engine) => {
+    await engine.createProjectRegistryRecord('personal', {
+      canonicalName: 'Settling Project',
+      repo: { provider: 'github', owner: 'markgromer', name: 'settling-project', fullName: 'markgromer/settling-project', defaultBranch: 'main' },
+    });
+    let operation = (await engine.createFromRequest('personal', {
+      originalRequest: 'Use Codex to implement Settling Project.', autoPlan: true, autoStart: true,
+    })).operation;
+    operation = await engine.tick('personal', operation.id);
+    const verificationStep = operation.steps.find((step) => step.type === 'verification');
+    assert.equal(operation.verification.find((item) => item.type === 'diff_review').status, 'needs_manual_review');
+    operation = await engine.retryOperation('personal', operation.id, { stepId: verificationStep.id, runCycle: true });
+    assert.equal(operation.verification.find((item) => item.type === 'diff_review').status, 'passed');
+    assert.equal(operation.artifacts.filter((artifact) => artifact.type === 'codex_diff').reverse()[0].metadata.evidenceDigest, '2'.repeat(64));
+    assert.ok(operation.activityLog.some((event) => event.type === 'codex_result_evidence_refreshed'));
+    assert.equal(starts, 1);
+    assert.equal(evidenceReads, 2);
+  }, { directCodexAdapter: adapter, reviewCodexResult });
 });
 
 test('publish safeguard requires positive, action-specific authority and lets negation win', () => {

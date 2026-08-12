@@ -12,6 +12,7 @@ import {
   TERMINAL_OPERATION_STATUSES,
 } from './operation_types.js';
 import { normalizeProviderStatus } from '../providers/codex_provider.js';
+import { createUnavailableCodexReviewArtifact } from './codex_result_reviewer.js';
 import { appendEvent, transition } from './operation_service.js';
 
 function promiseWithTimeout(promise, timeoutMs) {
@@ -36,9 +37,25 @@ function activeCodexStep(operation) {
     && safeObject(operation.metadata?.codexJobs)[step.id]);
 }
 
+function createCodexDiffArtifact(diff, defaults = {}) {
+  return createArtifact({
+    type: 'codex_diff',
+    name: 'Codex diff',
+    mimeType: 'application/json',
+    content: JSON.stringify(diff),
+    metadata: {
+      source: safeString(diff?.source, 100),
+      authoritative: diff?.authoritative === true,
+      evidenceDigest: safeString(diff?.evidenceDigest, 100),
+      repository: safeString(diff?.repository, 500),
+      headSha: safeString(diff?.headSha, 100),
+    },
+  }, defaults);
+}
+
 export class OperationRunner {
-  constructor({ store, registry, service, policy, approvalService, providers, verification, maxStepsPerCycle = 10, cycleTimeoutMs = 60_000, providerTimeoutMs = 45_000 }) {
-    Object.assign(this, { store, registry, service, policy, approvalService, providers, verification });
+  constructor({ store, registry, service, policy, approvalService, providers, verification, codexResultReviewer = null, maxStepsPerCycle = 10, cycleTimeoutMs = 60_000, providerTimeoutMs = 45_000 }) {
+    Object.assign(this, { store, registry, service, policy, approvalService, providers, verification, codexResultReviewer });
     this.maxStepsPerCycle = Math.max(1, Math.min(25, Number(maxStepsPerCycle) || 10));
     this.cycleTimeoutMs = Math.max(1_000, Math.min(5 * 60_000, Number(cycleTimeoutMs) || 60_000));
     this.providerTimeoutMs = Math.max(1_000, Math.min(2 * 60_000, Number(providerTimeoutMs) || 45_000));
@@ -183,7 +200,12 @@ export class OperationRunner {
         return draft;
       });
 
-      const runningStep = operation.steps.find((step) => step.id === next.id);
+      let runningStep = operation.steps.find((step) => step.id === next.id);
+      if (runningStep.type === 'verification' && runningStep.attemptCount > 1 && this.codexResultReviewer) {
+        operation = await this.refreshCodexCompletionEvidence(businessKey, operation, runningStep, registryRecord);
+        if (!['running', 'verifying'].includes(operation.status)) return operation;
+        runningStep = operation.steps.find((step) => step.id === next.id);
+      }
       let result;
       try {
         result = await promiseWithTimeout(this.invokeProvider({ operation, step: runningStep, registryRecord }), this.providerTimeoutMs);
@@ -191,7 +213,8 @@ export class OperationRunner {
         result = { status: error?.code === 'PROVIDER_TIMEOUT' ? 'unknown' : 'failed', error: error?.message || 'Provider failed.' };
       }
       if (runningStep.type === 'codex' && normalizeProviderStatus(result?.status) === 'completed' && result?.job) {
-        result = await this.collectCodexCompletion(result).catch((error) => ({ status: 'unknown', job: result.job, error: `Codex completed but its artifacts could not be collected: ${error?.message || 'unknown error'}` }));
+        result = await this.collectCodexCompletion(result, { operation, step: runningStep, registryRecord })
+          .catch((error) => ({ status: 'unknown', job: result.job, error: `Codex completed but its artifacts could not be collected: ${error?.message || 'unknown error'}` }));
       }
       executed += 1;
       operation = await this.applyProviderResult(businessKey, operationId, runningStep, result);
@@ -209,13 +232,77 @@ export class OperationRunner {
     return operation;
   }
 
-  async collectCodexCompletion(result) {
+  async collectCodexCompletion(result, { operation = null, step = null, registryRecord = null } = {}) {
     const provider = this.providers.codex;
     const [artifacts, diff] = await Promise.all([
       promiseWithTimeout(provider.getArtifacts(result.job), this.providerTimeoutMs),
       promiseWithTimeout(provider.getDiff(result.job), this.providerTimeoutMs),
     ]);
-    return { ...result, status: 'completed', artifacts, diff };
+    const collectedArtifacts = (Array.isArray(artifacts) ? artifacts : []).map((artifact) => {
+      const raw = safeObject(artifact);
+      if (safeString(raw.type, 100) !== 'codex_result_review') return raw;
+      return {
+        ...raw,
+        type: 'untrusted_codex_result_review_claim',
+        name: 'Provider-supplied result review claim (untrusted)',
+        metadata: { ...safeObject(raw.metadata), trustedForVerification: false },
+      };
+    });
+    if (this.codexResultReviewer) {
+      try {
+        const review = await this.codexResultReviewer.review({ operation, step, registryRecord, job: result.job, artifacts: collectedArtifacts, diff });
+        if (review) collectedArtifacts.push(review);
+      } catch (error) {
+        collectedArtifacts.push(createUnavailableCodexReviewArtifact({
+          diff,
+          reason: `Independent result review failed: ${error?.message || 'unknown error'}`,
+        }));
+      }
+    }
+    return { ...result, status: 'completed', artifacts: collectedArtifacts, diff };
+  }
+
+  async refreshCodexCompletionEvidence(businessKey, operation, verificationStep, registryRecord) {
+    const codexStep = operation.steps.find((step) => step.type === 'codex' && step.status === 'completed');
+    const job = codexStep ? safeObject(operation.metadata?.codexJobs)[codexStep.id] : null;
+    if (!codexStep || !job || this.providers.codex?.mode !== 'direct') return operation;
+    let result;
+    try {
+      if (typeof this.providers.codex.directAdapter?.invalidateEvidence === 'function') {
+        this.providers.codex.directAdapter.invalidateEvidence(job);
+      }
+      result = await this.collectCodexCompletion({ status: 'completed', job }, { operation, step: codexStep, registryRecord });
+    } catch (error) {
+      return this.store.update(businessKey, operation.id, (draft) => {
+        appendEvent(draft, {
+          type: 'codex_result_evidence_refresh_failed',
+          actor: 'runner',
+          stepId: verificationStep.id,
+          message: `Codex result evidence refresh failed: ${safeString(error?.message, 2_000) || 'unknown error'}`,
+        });
+        return draft;
+      });
+    }
+    return this.store.update(businessKey, operation.id, (draft) => {
+      const liveStep = draft.steps.find((step) => step.id === verificationStep.id);
+      if (!liveStep || liveStep.status !== 'running' || liveStep.idempotencyKey !== verificationStep.idempotencyKey
+        || !['running', 'verifying'].includes(draft.status)) return draft;
+      for (const artifact of Array.isArray(result.artifacts) ? result.artifacts : []) {
+        draft.artifacts.push(createArtifact(artifact, { operationId: draft.id, stepId: codexStep.id }));
+      }
+      if (result.diff && (result.diff.summary || Object.keys(result.diff).length)) {
+        draft.artifacts.push(createCodexDiffArtifact(result.diff, { operationId: draft.id, stepId: codexStep.id }));
+      }
+      draft.verification = draft.verification.filter((item) => !(item.stepId === liveStep.id && item.type === 'diff_review'));
+      appendEvent(draft, {
+        type: 'codex_result_evidence_refreshed',
+        actor: 'runner',
+        stepId: liveStep.id,
+        message: 'Refreshed authoritative Codex result evidence before verification retry.',
+        data: { codexStepId: codexStep.id, evidenceDigest: safeString(result.diff?.evidenceDigest, 100) },
+      });
+      return draft;
+    });
   }
 
   async pollCodexJob(businessKey, operation, step) {
@@ -231,7 +318,10 @@ export class OperationRunner {
     const status = normalizeProviderStatus(polled?.status);
     if (status === 'completed') {
       let result;
-      try { result = await this.collectCodexCompletion({ status, job: { ...job, ...polled } }); }
+      try {
+        const registryRecord = operation.projectRegistryId ? await this.registry.get(businessKey, operation.projectRegistryId) : null;
+        result = await this.collectCodexCompletion({ status, job: { ...job, ...polled } }, { operation, step, registryRecord });
+      }
       catch (error) { result = { status: 'unknown', job: { ...job, ...polled }, error: `Codex completion evidence could not be collected: ${error?.message || 'unknown error'}` }; }
       return this.applyProviderResult(businessKey, operation.id, step, result);
     }
@@ -328,7 +418,9 @@ export class OperationRunner {
       if (status === 'completed') {
         step.status = 'completed'; step.completedAt = timestamp; step.output = typeof result.output === 'string' ? result.output : JSON.stringify(sanitizeStructured(result.output ?? {}, 20_000)); step.error = '';
         for (const artifact of Array.isArray(result.artifacts) ? result.artifacts : []) draft.artifacts.push(createArtifact(artifact, { operationId, stepId: step.id }));
-        if (result.diff && (result.diff.summary || Object.keys(result.diff).length)) draft.artifacts.push(createArtifact({ type: 'codex_diff', name: 'Codex diff', mimeType: 'application/json', content: JSON.stringify(result.diff) }, { operationId, stepId: step.id }));
+        if (result.diff && (result.diff.summary || Object.keys(result.diff).length)) {
+          draft.artifacts.push(createCodexDiffArtifact(result.diff, { operationId, stepId: step.id }));
+        }
         draft.status = step.type === 'verification' ? 'verifying' : 'running';
         appendEvent(draft, { type: 'step_completed', actor: 'runner', stepId: step.id, message: `Completed ${step.title}.`, data: { attempt: step.attemptCount } });
         return draft;
