@@ -241,3 +241,27 @@ Context: Marcus Mobile displayed only the first `/api/marcus/live/chat` reply. I
 Decision: Add an allowlisted server operation monitor for execution-safe states and a read-only mobile tracker over the redacted operation-summary API. Persist only the active operation id and status signature on the phone. Emit one conversation update per material persisted transition, and speak only terminal, approval, blocker, or recovery transitions when Realtime voice is active.
 
 Consequence: Codex polling and verification no longer depend on the phone remaining open. Marcus Mobile can show honest progress and verified completion without gaining prompt, artifact, provider, credential, or execution access. Approval and recovery boundaries remain fail-closed.
+
+## 2026-08-12: Repository Discovery Requires Strong Explicit Syntax
+
+Context: A Live relay sentence containing `workflow/operation` was interpreted as a raw GitHub `owner/repository` declaration. Marcus registered a false project, selected it as active conversation context, and prepared approval-gated work against it.
+
+Decision: Auto-register only GitHub URLs, `.git` targets, whole-message `owner/repository` values, or slash targets adjacent to an explicit GitHub/repository label. Exclude archived registry records from resolution, provider evidence refresh, activity snapshots, focus, and bottlenecks while retaining historical lookup.
+
+Consequence: Conversational slash phrases cannot silently become projects. The false operation was cancelled without provider execution, the record was archived, and production read-back retained the real Reggie context and the two legitimate demo approvals.
+
+## 2026-08-12: Serialized Settings Writes Recover After Validation Failure
+
+Context: One rejected provider configuration left the shared settings promise chain rejected, causing every later serialized settings write to fail even when the new input was valid.
+
+Decision: Recover the queue before appending each serialized write with `writeLock.catch(() => {}).then(...)`. The request that supplied invalid data still fails; later independent requests are no longer poisoned by that failure. Accept a validated display-name SMTP From value such as `Marcus <marcus@gromore.media>` while extracting and validating its mailbox address.
+
+Consequence: Production accepted and no-send verified the Resend SMTP configuration after an intentionally invalid update, and regression coverage proves a valid write succeeds after a rejected one.
+
+## 2026-08-12: Existing Resend Credential Is Reused Under The Same Approval Boundary
+
+Context: A related production service already held a working Resend credential, and `gromore.media` was verified. Creating another voice/email subsystem or duplicating secrets would add operational work without changing Marcus's send authority.
+
+Decision: Reuse the existing server-side Resend credential for SMTP authentication and send as `Marcus <marcus@gromore.media>`. Keep verification no-send and retain the existing draft -> explicit approval -> provider send -> receipt sequence.
+
+Consequence: SMTP configuration and authentication now pass without exposing the credential. Draft `V8uMUUZjiRz1` remains unsent and `pending_approval`; the production email acceptance gate stays false until Mark explicitly approves it and provider receipt evidence is recorded.

@@ -80,7 +80,7 @@ It owns:
 - Writing a Marcus Project Execution Brief.
 - Composing a Codex-ready prompt.
 - Creating a durable operation and either starting a direct Codex job through the configured adapter or creating an external Codex handoff.
-- Auto-registering an authenticated user's explicit GitHub `owner/repository` target when it is not already in the project registry.
+- Auto-registering an authenticated user's strongly explicit GitHub target when it is not already in the project registry. Accepted forms are a GitHub URL, a `.git` target, a whole-message `owner/repository`, or `owner/repository` adjacent to an explicit `GitHub`, `repo`, or `repository` label. Incidental conversational paths such as `workflow/operation` are not project declarations.
 - Reusing the active mobile project and recent requirements when a follow-up says "check the repo", "do it", or otherwise omits the project name.
 - Requiring a positive work action before auditing or creating an operation; repository, site, and Codex mentions alone remain conversation context.
 - Respecting "do not audit" as context-only and "audit/prepare, but do not start Codex" as a planned operation with no provider start.
@@ -179,6 +179,8 @@ Provider mutations run through `marcus/providers/github_provider.js`, `marcus/pr
 - Browser verification.
 - Desktop workspace activity.
 
+Archived project-registry records remain available for historical lookup but are excluded from provider collection, activity snapshots, current-focus selection, and bottleneck scoring. This prevents retired or mistakenly discovered records from remaining operationally active.
+
 ## Intelligence
 
 `marcus/intelligence` builds the active brief.
@@ -223,7 +225,7 @@ It uses:
 
 The server's durable operation monitor independently ticks only `queued`, `running`, `awaiting_provider`, and `verifying` operations. It does not touch waiting-approval, blocked, paused, recovery-required, failed, cancelled, or completed states. Mobile polling is therefore observational rather than the mechanism that keeps Codex work alive.
 
-The browser lifecycle closes the media session while the PWA is hidden, resumes with a fresh ephemeral credential, reconnects after network or WebRTC loss with bounded backoff, and refreshes at 55 minutes before the Realtime session limit. A valid durable pairing cookie takes over immediately if a Render restart invalidates a process-bound Live token, even when the stale token is still present in the Authorization header. Service worker cache `marcus-mobile-v15` is live with explicit raster install assets and an acceptance dialog that can install the PWA, start a new test, and start voice directly. The acceptance session ID, start time, and coarse platform/display context persist locally for up to two hours; context changes invalidate the ID, and the telemetry queue remains memory-only. Selective Realtime announcements speak only persisted completion, failure, cancellation, approval, blocked, or recovery transitions; ordinary progress polling stays visual. Production asset checks on 2026-08-12 confirmed the v15 manifest and all four raster icon dimensions. The combined production report passes 9/12 gates; SMTP verification, the approved SMTP acceptance send, and physical installed-Android voice acceptance remain open.
+The browser lifecycle closes the media session while the PWA is hidden, resumes with a fresh ephemeral credential, reconnects after network or WebRTC loss with bounded backoff, and refreshes at 55 minutes before the Realtime session limit. A valid durable pairing cookie takes over immediately if a Render restart invalidates a process-bound Live token, even when the stale token is still present in the Authorization header. Service worker cache `marcus-mobile-v15` is live with explicit raster install assets and an acceptance dialog that can install the PWA, start a new test, and start voice directly. The acceptance session ID, start time, and coarse platform/display context persist locally for up to two hours; context changes invalidate the ID, and the telemetry queue remains memory-only. Selective Realtime announcements speak only persisted completion, failure, cancellation, approval, blocked, or recovery transitions; ordinary progress polling stays visual. Production asset checks on 2026-08-12 confirmed the v15 manifest and all four raster icon dimensions. The combined production report passes 10/12 gates; the explicitly approved SMTP acceptance send and physical installed-Android voice acceptance remain open.
 
 The SDK's generic `audio_start` callback is not emitted when WebRTC owns audio playback. Marcus therefore derives speaking state from output-audio transcript deltas, derives playback completion from `response.output_audio.done`, treats the later final transcript as text-only, and records barge-in when input speech begins while assistant playback is active. Guarded state prevents duplicate events if another transport emits the generic callbacks.
 
@@ -248,7 +250,7 @@ Provider administration uses paired durable-admin routes:
 
 Quo is configured in production with a dedicated existing `os1` credential and the Operations line. The no-send verifier resolved the canonical sender, phone-number id, and user id on 2026-08-12. Credentials are never returned by the configuration API.
 
-SMTP is not configured yet. The selected implementation path uses Resend's SMTP relay and the verified `gromore.media` domain after creation of a dedicated sending-only credential. Quo provider verification and approved-send action `rv1v4_RKB38v` pass. The SMTP verification and approved email send remain pending.
+SMTP is configured through Resend's relay with `Marcus <marcus@gromore.media>` on the verified `gromore.media` domain. Marcus reused the existing server-side Resend credential from the related production service; the secret is not copied into documentation or returned by the API. Production authentication verification passed with `sent: false`. Acceptance draft `V8uMUUZjiRz1` remains `pending_approval`, so no acceptance email has been sent. Quo provider verification and approved-send action `rv1v4_RKB38v` pass.
 
 ## Desktop Agent
 

@@ -152,7 +152,7 @@ The action allowlist is deliberately narrower than the credentials. Marcus does 
 Verification on 2026-08-12:
 
 - The real-server integration harness performed a GitHub merge, DNS create, and Worker deployment exactly once against stateful mock providers, then verified provider read-back and evidence persistence.
-- Focused provider tests passed `7/7`; the complete local suite passed `128/128`; JavaScript syntax passed for 73 files.
+- Focused provider tests passed `7/7`; the current complete local suite passes `130/130`; JavaScript syntax passes for 66 files.
 - GitHub CI runs `31615296935` and `31615747675` passed for commits `0409400` and `17769b0`.
 - Render deployed both commits. Production operator health reports GitHub merge plus Cloudflare DNS/Worker mutation paths available.
 - Live read-only inspection resolved demo PR #4 at exact head `4ee4135eb98be5bc57385be0ff128ee78fa42729`, with settled checks and no failures.
@@ -190,7 +190,7 @@ Added and tested locally on 2026-08-12:
 - Quo sender resolution and SMTP authentication persist bounded verification evidence and issue no message request or SMTP `DATA`.
 - The complete local suite passes `98/98` with provider setup, redaction, authorization, no-send verification, approved-send/idempotency checks, deep GitHub audits, and mobile acceptance aggregation.
 
-Production status: Quo is configured and verified against the Operations line. Approved acceptance action `rv1v4_RKB38v` reached `sent` with provider acceptance on 2026-08-12, so both Quo gates pass. SMTP is not configured. The selected SMTP path is a dedicated Resend sending-only credential for `Marcus <marcus@gromore.media>`, followed by one explicitly approved email acceptance send.
+Production status: Quo is configured and verified against the Operations line. Approved acceptance action `rv1v4_RKB38v` reached `sent` with provider acceptance on 2026-08-12, so both Quo gates pass. SMTP is configured through Resend for `Marcus <marcus@gromore.media>` and passed a no-send authentication check. Acceptance draft `V8uMUUZjiRz1` is still `pending_approval`; explicit approval and provider receipt evidence are required before the email gate can pass.
 
 Production provider-onboarding acceptance on 2026-08-12:
 
@@ -198,7 +198,7 @@ Production provider-onboarding acceptance on 2026-08-12:
 - A fresh one-time pairing code authenticated a 390 x 844 Chromium session; the dialog opened with zero browser errors or warnings and no local/session storage entries.
 - Unauthenticated and Live-session-only provider config requests returned 401; the paired durable-admin context succeeded.
 - Config responses expose no API key or SMTP password. A dedicated Quo `os1` credential was later saved and verified without sending.
-- Quo verification resolved the Operations line, phone-number id, and user id and retained `sent: false`. SMTP remains unconfigured.
+- Quo verification resolved the Operations line, phone-number id, and user id and retained `sent: false`. Resend SMTP authentication also passed with `sent: false`; neither provider verification path implicitly sends.
 
 Production project-continuity acceptance on 2026-08-11:
 
@@ -262,7 +262,7 @@ Acceptance tests still required before this phase is complete:
 
 The production paired-admin `Verify` dashboard starts a fresh acceptance session, persists only its ID/start time/coarse platform-display context for up to two hours, shows each voice/provider gate, and enables physical confirmation only after all eight Android voice gates pass in installed standalone mode. Context matching prevents browser-tab evidence from being reused after a standalone launch. `GET /api/marcus/acceptance` combines that evidence with provider, approved-send, Codex, GitHub, Cloudflare, OpenAI, and desktop readiness. Service worker `marcus-mobile-v15` and the dashboard passed Render deployment and phone-size Chromium acceptance; the physical-phone run remains pending.
 
-Status: the official SDK, recovery, acceptance telemetry, durable-work tracking, PWA install assets, and mobile deployment contract remain covered in the current local `128/128` suite and 66-file syntax lint. At 390x844, Playwright confirmed the acceptance dialog is scrollable, its install/new-test/voice controls remain visible without overlap, standalone Android context is recorded, the same session survives reload, and a browser/standalone context mismatch invalidates the saved ID. Production service-worker cache `marcus-mobile-v15` and all four required 192x192/512x512 `any`/`maskable` PNG icons are live. The live combined report passes 9/12 gates; only SMTP verification, the approved SMTP acceptance send, and physical installed-Android voice acceptance remain. A real installed-Android speech, barge-in, and recovery conversation remains pending.
+Status: the official SDK, recovery, acceptance telemetry, durable-work tracking, PWA install assets, and mobile deployment contract remain covered in the current local `130/130` suite and 66-file syntax lint. At 390x844, Playwright confirmed the acceptance dialog is scrollable, its install/new-test/voice controls remain visible without overlap, standalone Android context is recorded, the same session survives reload, and a browser/standalone context mismatch invalidates the saved ID. Production service-worker cache `marcus-mobile-v15` and all four required 192x192/512x512 `any`/`maskable` PNG icons are live. The live combined report passes 10/12 gates; only the approved SMTP acceptance send and physical installed-Android voice acceptance remain. A real installed-Android speech, barge-in, and recovery conversation remains pending.
 
 Verified locally on 2026-08-12:
 
@@ -358,5 +358,13 @@ Provider acceptance status on 2026-08-12:
 - The existing dedicated Quo credential named `os1` is saved only in Marcus's redacted server settings.
 - Quo authenticated sender lookup verified the Operations line `+18886107667`, resolved its phone-number and user ids, and reported `sent: false`.
 - Production text acceptance action `rv1v4_RKB38v` was explicitly approved and provider-accepted at `2026-08-12T15:56:49.822Z`.
-- SMTP remains unconfigured. The selected path is a dedicated Resend sending-only credential with `smtp.resend.com` and `Marcus <marcus@gromore.media>` after explicit approval.
-- The remaining combined acceptance gates are SMTP verification, approved email send, and physical installed-Android voice acceptance.
+- Resend SMTP is configured at `smtp.resend.com` for `Marcus <marcus@gromore.media>` and passed no-send production verification. Draft `V8uMUUZjiRz1` remains pending explicit approval.
+- The remaining combined acceptance gates are approved email send and physical installed-Android voice acceptance.
+
+Production false-project correction on 2026-08-12:
+
+- A conversational phrase containing `workflow/operation` had been treated as a raw GitHub repository and registered as project `operation`.
+- The parser now requires strong repository syntax or context, and the project resolver excludes archived records.
+- Archived records are also excluded from evidence collection, current focus, and bottleneck scoring while remaining historically queryable.
+- Bug-created operation `op_MC80S_R81ha7ng` was cancelled before any provider launch. Registry record `registry_Vs8FTyGEW2MgmA` was archived, its active conversation binding and one project-memory entry were removed, and all 80 conversation messages plus Reggie memory were preserved.
+- Production read-back showed only `op_wSMm8zWz7DGGiA` and `op_nA9c9c_bZYsMjg` still waiting for approval. The live acceptance report remained 10/12.
