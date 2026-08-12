@@ -107,6 +107,13 @@ Implemented and tested locally on 2026-08-11:
 
 Production blocker: no real Quo outbound API key/sender or SMTP account is configured. Live-provider acceptance remains required.
 
+Production project-continuity acceptance on 2026-08-11:
+
+- A first mobile API turn set `Reggie` / `markgromer/Reggie` as the active project with the Sweep and Go API-token/slug popup requirement.
+- A read-only follow-up named the correct active project and repeated the exact requirements without creating an operation.
+- A separate audit request inspected one repository and three files before producing a 4,563-character Codex prompt containing the popup, API-token, and slug requirements.
+- Acceptance operation `op_AxhGdUBf5tlB6g` stopped at `waiting_for_approval` and was cancelled without launching Codex or modifying the repository.
+
 ## Phase 6: Documentation Automation
 
 Keep this Obsidian-compatible folder current.

@@ -110,6 +110,48 @@ async function withMockQuoApi(callback) {
   }
 }
 
+async function withMockSmtp(callback) {
+  const received = [];
+  const server = net.createServer((socket) => {
+    let buffer = '';
+    let dataLines = null;
+    socket.setEncoding('utf8');
+    socket.write('220 mock-smtp ESMTP\r\n');
+    socket.on('data', (chunk) => {
+      buffer += chunk;
+      while (buffer.includes('\r\n')) {
+        const separator = buffer.indexOf('\r\n');
+        const line = buffer.slice(0, separator);
+        buffer = buffer.slice(separator + 2);
+        if (dataLines) {
+          if (line === '.') {
+            received.push(dataLines.join('\r\n'));
+            dataLines = null;
+            socket.write(`250 2.0.0 queued as TEST_${received.length}\r\n`);
+          } else {
+            dataLines.push(line);
+          }
+          continue;
+        }
+        if (/^(EHLO|HELO)\b/i.test(line)) socket.write('250-mock-smtp\r\n250-AUTH PLAIN\r\n250 PIPELINING\r\n');
+        else if (/^AUTH PLAIN\b/i.test(line)) socket.write('235 2.7.0 authenticated\r\n');
+        else if (/^MAIL FROM:/i.test(line) || /^RCPT TO:/i.test(line)) socket.write('250 2.1.0 ok\r\n');
+        else if (/^DATA$/i.test(line)) { dataLines = []; socket.write('354 End data with <CR><LF>.<CR><LF>\r\n'); }
+        else if (/^QUIT$/i.test(line)) { socket.write('221 2.0.0 bye\r\n'); socket.end(); }
+        else if (/^(RSET|NOOP)\b/i.test(line)) socket.write('250 2.0.0 ok\r\n');
+        else socket.write('250 2.0.0 ok\r\n');
+      }
+    });
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
+  try {
+    return await callback({ port, received });
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
+
 test('isolated server startup succeeds only for explicit loopback development or configured admin auth', async () => {
   const local = await spawnServer({ startupCheck: true, adminToken: '' });
   try {
@@ -523,6 +565,47 @@ test('approved Marcus text actions send exactly once through Quo', async () => {
       assert.equal(received[0].authorization, 'test-quo-key');
       assert.equal(received[0].body.content, 'Marcus communication acceptance test.');
       assert.deepEqual(received[0].body.to, ['+15550002222']);
+
+      const replay = await fetch(`${base}/api/marcus/external-actions/${draft.id}/send`, { method: 'POST', headers, body: '{}' });
+      assert.equal(replay.status, 200);
+      assert.equal((await replay.json()).reused, true);
+      assert.equal(received.length, 1);
+    } finally { await server.close(); }
+  });
+});
+
+test('approved Marcus email actions send exactly once through SMTP', async () => {
+  await withMockSmtp(async ({ port, received }) => {
+    const server = await spawnServer({ extraEnv: {
+      SMTP_HOST: '127.0.0.1',
+      SMTP_PORT: String(port),
+      SMTP_SECURE: 'false',
+      SMTP_USERNAME: 'marcus@example.com',
+      SMTP_PASSWORD: 'test-password',
+      SMTP_FROM_ADDRESS: 'marcus@example.com',
+    } });
+    const base = `http://127.0.0.1:${server.port}`;
+    const headers = { authorization: 'Bearer test-admin-token', 'content-type': 'application/json' };
+    try {
+      await server.waitForReady();
+      const health = await (await fetch(`${base}/api/marcus/operator-health`, { headers })).json();
+      assert.equal(health.capabilities.communication.emailSendConfigured, true);
+
+      const draftResponse = await fetch(`${base}/api/marcus/external-actions/draft`, { method: 'POST', headers, body: JSON.stringify({
+        type: 'email', to: 'client@example.com', subject: 'Marcus acceptance', body: 'The approved email path is working.',
+      }) });
+      assert.equal(draftResponse.status, 201);
+      const draft = (await draftResponse.json()).action;
+
+      const approval = await fetch(`${base}/api/marcus/external-actions/${draft.id}/approve`, { method: 'POST', headers, body: JSON.stringify({ message: 'Approve and send the email.' }) });
+      assert.equal(approval.status, 200);
+      const sent = await fetch(`${base}/api/marcus/external-actions/${draft.id}/send`, { method: 'POST', headers, body: '{}' });
+      assert.equal(sent.status, 200);
+      const sentBody = await sent.json();
+      assert.equal(sentBody.action.status, 'sent');
+      assert.equal(received.length, 1);
+      assert.match(received[0], /Subject: Marcus acceptance/i);
+      assert.match(received[0], /The approved email path is working\./i);
 
       const replay = await fetch(`${base}/api/marcus/external-actions/${draft.id}/send`, { method: 'POST', headers, body: '{}' });
       assert.equal(replay.status, 200);
