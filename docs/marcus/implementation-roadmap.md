@@ -140,11 +140,11 @@ Verified locally on 2026-08-12:
 Verified against production on 2026-08-12:
 
 - The durable mobile admin credential authenticated on the canonical Render host.
-- The PWA loaded under service worker cache `marcus-mobile-v4`.
+- The PWA loaded under service worker cache `marcus-mobile-v5`.
 - Production minted a short-lived `gpt-realtime-2.1` / `marin` client secret.
 - A mobile Chromium session started voice, reached `Voice on` / `Listening`, and established the OpenAI WebRTC call with HTTP 201 and no browser warnings or errors.
 - Production operator health reported `direct_codex`, GitHub ready, and Cloudflare ready.
-- One-time six-digit mobile pairing is implemented so the Android device does not need the durable admin token.
+- One-time six-digit mobile pairing was exercised against production. Cookie authentication succeeded, code reuse returned 401, no durable token was stored in browser storage, and the paired session established the Realtime call.
 
 ## Demo Deployment
 

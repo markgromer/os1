@@ -57,11 +57,11 @@ The browser receives a short-lived client secret from `POST /api/marcus/realtime
 
 ## Production Evidence
 
-On 2026-08-12 the canonical Render PWA authenticated, obtained a short-lived Realtime client secret, created an OpenAI WebRTC call with HTTP 201, and reached `Voice on` / `Listening`. The browser reported no warning or error console messages. Service worker `marcus-mobile-v4` controlled the page.
+On 2026-08-12 the canonical Render PWA authenticated, obtained a short-lived Realtime client secret, created an OpenAI WebRTC call with HTTP 201, and reached `Voice on` / `Listening`. The browser reported no warning or error console messages. Service worker `marcus-mobile-v5` controlled the page.
 
 This proves production authentication, PWA assets, ephemeral-key minting, and WebRTC signaling. It does not prove actual Android microphone quality, spoken tool invocation, barge-in, phone-lock recovery, or network handoff; those remain in the completion gate.
 
-Android authentication uses the one-time pairing flow in [[access-model]], so voice setup does not require copying the durable server credential to the device.
+Android authentication uses the one-time pairing flow in [[access-model]], so voice setup does not require copying the durable server credential to the device. The production pairing-to-voice path passed with no durable token in browser storage.
 
 ## Completion Gate
 
