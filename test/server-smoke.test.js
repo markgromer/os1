@@ -901,12 +901,18 @@ test('paired admin can configure, verify, and acceptance-test Quo and SMTP safel
         assert.equal((await fetch(`${base}/api/marcus/providers/config`, { method: 'PUT', headers: liveHeaders, body: '{}' })).status, 401);
         assert.equal((await fetch(`${base}/api/marcus/providers/verify`, { method: 'POST', headers: liveHeaders, body: JSON.stringify({ type: 'text' }) })).status, 401);
 
+        const invalidUpdate = await fetch(`${base}/api/marcus/providers/config`, {
+          method: 'PUT', headers, body: JSON.stringify({ email: { fromAddress: 'not-an-email' } }),
+        });
+        assert.equal(invalidUpdate.status, 400);
+        assert.match((await invalidUpdate.json()).error, /valid email address/i);
+
         const updateResponse = await fetch(`${base}/api/marcus/providers/config`, {
           method: 'PUT', headers, body: JSON.stringify({
             text: { apiKey: 'saved-quo-key', defaultPhoneNumberId: '', fromNumber: '', userId: '' },
             email: {
               host: '127.0.0.1', port: smtpPort, secure: false,
-              username: 'marcus@example.com', password: 'saved-smtp-password', fromAddress: 'marcus@example.com',
+              username: 'marcus@example.com', password: 'saved-smtp-password', fromAddress: 'Marcus <marcus@example.com>',
             },
           }),
         });
@@ -916,6 +922,7 @@ test('paired admin can configure, verify, and acceptance-test Quo and SMTP safel
         assert.equal(configured.text.apiKey, undefined);
         assert.equal(configured.email.passwordConfigured, true);
         assert.equal(configured.email.password, undefined);
+        assert.equal(configured.email.fromAddress, 'Marcus <marcus@example.com>');
 
         const textVerifyResponse = await fetch(`${base}/api/marcus/providers/verify`, {
           method: 'POST', headers, body: JSON.stringify({ type: 'text' }),

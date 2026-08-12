@@ -2144,6 +2144,13 @@ function normalizeExternalRecipient(type, value) {
   return recipient;
 }
 
+function normalizeEmailFromAddress(value) {
+  const fromAddress = String(value || '').trim();
+  const displayNameMatch = fromAddress.match(/^[^<>\r\n]{1,200}\s*<([^<>\r\n]+)>$/);
+  normalizeExternalRecipient('email', displayNameMatch ? displayNameMatch[1].trim() : fromAddress);
+  return fromAddress;
+}
+
 async function resolveQuoSender(config) {
   if (!config?.apiKey) throw new Error('Quo API key is not configured.');
   if (config.from && config.userId) return { from: config.from, userId: config.userId, phoneNumberId: config.defaultPhoneNumberId };
@@ -2272,7 +2279,7 @@ function normalizeExternalActionDrafts(input) {
 async function createExternalActionDraft(input = {}) {
   const draft = normalizeExternalActionDraft(input);
   let created = null;
-  writeLock = writeLock.then(async () => {
+  writeLock = writeLock.catch(() => {}).then(async () => {
     const settings = await readSettings();
     const existing = normalizeExternalActionDrafts(settings.externalActionDrafts);
     await writeSettings({
@@ -2288,7 +2295,7 @@ async function createExternalActionDraft(input = {}) {
 
 async function updateExternalAction(id, updater) {
   let updated = null;
-  writeLock = writeLock.then(async () => {
+  writeLock = writeLock.catch(() => {}).then(async () => {
     const settings = await readSettings();
     const actions = normalizeExternalActionDrafts(settings.externalActionDrafts);
     const index = actions.findIndex((item) => item.id === id);
@@ -4992,7 +4999,7 @@ async function addInboxIntegrationItem({ source, externalId, text, projectId = '
 
   const targetBusinessKey = normalizeBusinessKey(businessKey) || getBusinessKeyFromContext();
 
-  writeLock = writeLock.then(() => withBusinessKey(targetBusinessKey, async () => {
+  writeLock = writeLock.catch(() => {}).then(() => withBusinessKey(targetBusinessKey, async () => {
     const store = await readStore();
     const list = Array.isArray(store.inboxItems) ? store.inboxItems : [];
     const existingIdx = cleanExternalId ? list.findIndex((x) => String(x?.id || '') === id) : -1;
@@ -6137,7 +6144,7 @@ async function googleSyncProjects({ req }) {
   // 2) Pull: update project dueDate if the synced event date changed.
   // Only for projects that already have a mapped event.
   let pulledUpdates = 0;
-  writeLock = writeLock.then(async () => {
+  writeLock = writeLock.catch(() => {}).then(async () => {
     const working = await readStore();
     let changed = false;
     const nextProjects = [...(working.projects || [])];
@@ -7302,7 +7309,7 @@ app.post('/api/team', async (req, res) => {
     return;
   }
 
-  writeLock = writeLock.then(async () => {
+  writeLock = writeLock.catch(() => {}).then(async () => {
     const store = await readStore();
     if (Number.isFinite(baseRevision) && baseRevision !== store.revision) {
       res.status(409).json({ ok: false, error: 'Revision mismatch. Reload and try again.', currentRevision: store.revision });
@@ -7338,7 +7345,7 @@ app.put('/api/team/:id', async (req, res) => {
     return;
   }
 
-  writeLock = writeLock.then(async () => {
+  writeLock = writeLock.catch(() => {}).then(async () => {
     const store = await readStore();
     if (Number.isFinite(baseRevision) && baseRevision !== store.revision) {
       res.status(409).json({ ok: false, error: 'Revision mismatch. Reload and try again.', currentRevision: store.revision });
@@ -7395,7 +7402,7 @@ app.delete('/api/team/:id', async (req, res) => {
     return;
   }
 
-  writeLock = writeLock.then(async () => {
+  writeLock = writeLock.catch(() => {}).then(async () => {
     const store = await readStore();
     if (Number.isFinite(baseRevision) && baseRevision !== store.revision) {
       res.status(409).json({ ok: false, error: 'Revision mismatch. Reload and try again.', currentRevision: store.revision });
@@ -8447,7 +8454,7 @@ async function updateMarcusProviderConfiguration(input = {}) {
   const email = input?.email && typeof input.email === 'object' && !Array.isArray(input.email) ? input.email : null;
   if (!text && !email) throw new Error('Text or email provider settings are required.');
 
-  writeLock = writeLock.then(async () => {
+  writeLock = writeLock.catch(() => {}).then(async () => {
     const saved = await readSettings();
     const next = { ...saved, updatedAt: nowIso() };
 
@@ -8485,7 +8492,7 @@ async function updateMarcusProviderConfiguration(input = {}) {
       }
       if (Object.hasOwn(email, 'fromAddress')) {
         const fromAddress = normalizeProviderTextField(email.fromAddress, 'SMTP from address', 320);
-        if (fromAddress) normalizeExternalRecipient('email', fromAddress);
+        if (fromAddress) normalizeEmailFromAddress(fromAddress);
         next.smtpFromAddress = fromAddress;
       }
       next.marcusProviderVerification = { ...(next.marcusProviderVerification || {}), email: null };
@@ -8501,7 +8508,7 @@ async function persistResolvedQuoSender(sender = {}) {
   const envPhoneNumberId = firstNonEmptyString(process.env, ['QUO_DEFAULT_PHONE_NUMBER_ID', 'OPENPHONE_DEFAULT_PHONE_NUMBER_ID']);
   const envFrom = firstNonEmptyString(process.env, ['QUO_FROM_NUMBER', 'OPENPHONE_FROM_NUMBER']);
   const envUserId = firstNonEmptyString(process.env, ['QUO_USER_ID', 'OPENPHONE_USER_ID']);
-  writeLock = writeLock.then(async () => {
+  writeLock = writeLock.catch(() => {}).then(async () => {
     const saved = await readSettings();
     const next = { ...saved };
     let changed = false;
@@ -8523,7 +8530,7 @@ async function persistResolvedQuoSender(sender = {}) {
 }
 
 async function persistMarcusProviderVerification(type, details = {}) {
-  writeLock = writeLock.then(async () => {
+  writeLock = writeLock.catch(() => {}).then(async () => {
     const saved = await readSettings();
     const existing = saved.marcusProviderVerification && typeof saved.marcusProviderVerification === 'object'
       ? saved.marcusProviderVerification
@@ -9440,7 +9447,7 @@ app.get('/api/settings', async (req, res) => {
 app.put('/api/settings', async (req, res) => {
   const body = req.body || {};
   
-  writeLock = writeLock.then(async () => {
+  writeLock = writeLock.catch(() => {}).then(async () => {
     const saved = await readSettings();
     const next = { ...saved, ...body, updatedAt: nowIso() };
     next.automationConfig = normalizeAutomationConfig(next.automationConfig);
@@ -9510,7 +9517,7 @@ app.put('/api/businesses', async (req, res) => {
   const incomingBusinesses = Array.isArray(req.body?.businesses) ? req.body.businesses : [];
   const incomingActive = normalizeBusinessKey(req.body?.activeBusinessKey || req.body?.activeBusiness || '');
 
-  writeLock = writeLock.then(async () => {
+  writeLock = writeLock.catch(() => {}).then(async () => {
     const saved = await readSettings();
     const currentCfg = getBusinessConfigFromSettings(saved);
 
@@ -9539,7 +9546,7 @@ app.post('/api/businesses/active', async (req, res) => {
     return;
   }
 
-  writeLock = writeLock.then(async () => {
+  writeLock = writeLock.catch(() => {}).then(async () => {
     const saved = await readSettings();
     const cfg = getBusinessConfigFromSettings(saved);
 
@@ -9595,7 +9602,7 @@ app.put('/api/integrations/airtable/config', async (req, res) => {
   const incoming = normalizeAirtableBusinessConfig(body);
   const key = getBusinessKeyFromContext();
 
-  writeLock = writeLock.then(async () => {
+  writeLock = writeLock.catch(() => {}).then(async () => {
     const settings = await readSettings();
     const map = settings.airtableByBusinessKey && typeof settings.airtableByBusinessKey === 'object' ? settings.airtableByBusinessKey : {};
     const current = getAirtableConfigForBusiness(settings, key);
@@ -9675,7 +9682,7 @@ app.post('/api/integrations/airtable/clients/sync', async (req, res) => {
   const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(500, Math.floor(limitRaw))) : 200;
   const key = getBusinessKeyFromContext();
 
-  writeLock = writeLock.then(async () => {
+  writeLock = writeLock.catch(() => {}).then(async () => {
     const settings = await readSettings();
     const cfg = getAirtableConfigForBusiness(settings, key);
     if (!cfg.pat || !cfg.baseId || !cfg.clientsTableId) {
@@ -10383,7 +10390,7 @@ app.post('/api/integrations/airtable/requests/sync', async (req, res) => {
   const limitRaw = Number(req.body?.limit);
   const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(500, Math.floor(limitRaw))) : 200;
 
-  writeLock = writeLock.then(async () => {
+  writeLock = writeLock.catch(() => {}).then(async () => {
     try {
       const payload = await runAirtableRevisionRequestsSync({ businessKey: key, limit });
       res.json(payload);
@@ -10408,7 +10415,7 @@ function startAirtableRequestsAutoSyncScheduler() {
     if (airtableAutoSyncRunning) return;
     airtableAutoSyncRunning = true;
 
-    writeLock = writeLock.then(async () => {
+    writeLock = writeLock.catch(() => {}).then(async () => {
       const settings = await readSettings();
       if (!shouldMaterializeAirtableRevisionRequests(settings)) return;
       const businesses = Array.isArray(cachedBusinesses) ? cachedBusinesses : [];
@@ -11027,7 +11034,7 @@ app.post('/api/projects/:id/drive-folder/create', async (req, res) => {
     return;
   }
 
-  writeLock = writeLock.then(async () => {
+  writeLock = writeLock.catch(() => {}).then(async () => {
     try {
       const store = await readStore();
       const idx = (store.projects || []).findIndex((p) => p.id === projectId);
@@ -11373,7 +11380,7 @@ app.post('/api/integrations/fireflies/ingest', async (req, res) => {
     ? `meeting:${meetingId}`
     : `summary:${crypto.createHash('sha1').update(`${title}|${summary}|${transcriptUrl}|${date}`).digest('hex')}`;
 
-  writeLock = writeLock.then(async () => {
+  writeLock = writeLock.catch(() => {}).then(async () => {
     const store = await readStore();
     const projects = Array.isArray(store.projects) ? store.projects : [];
 
@@ -12213,7 +12220,7 @@ app.put('/api/settings/openai', async (req, res) => {
   const openaiModel = typeof req.body?.openaiModel === 'string' ? req.body.openaiModel.trim() : '';
 
   // Avoid accidentally returning secrets back to the browser.
-  writeLock = writeLock.then(async () => {
+  writeLock = writeLock.catch(() => {}).then(async () => {
     const saved = await readSettings();
     const next = {
       ...saved,
@@ -12242,7 +12249,7 @@ app.get('/api/tasks', async (req, res) => {
   let outStore = null;
   let outError = null;
 
-  writeLock = writeLock.then(async () => {
+  writeLock = writeLock.catch(() => {}).then(async () => {
     let store = await readStore();
     const repaired = repairProjectsMissingIds(store);
     if (repaired.changed) {
@@ -12283,7 +12290,7 @@ app.get('/api/inbox', async (req, res) => {
 });
 
 app.post('/api/inbox/marcus-filter', async (req, res) => {
-  writeLock = writeLock.then(async () => {
+  writeLock = writeLock.catch(() => {}).then(async () => {
     const store = await readStore();
     const collapsed = collapseSmsInboxThreads(store);
     const workingStore = collapsed.changed ? collapsed.store : store;
@@ -12408,7 +12415,7 @@ app.post('/api/inbox/automation/digest/:id/decision', async (req, res) => {
     return;
   }
 
-  writeLock = writeLock.then(async () => {
+  writeLock = writeLock.catch(() => {}).then(async () => {
     const store = await readStore();
     const settings = await readSettings();
     const cfg = normalizeAutomationConfig(settings?.automationConfig);
@@ -12537,7 +12544,7 @@ app.post('/api/inbox/automation/run', async (req, res) => {
     ? (approvalOverrideRaw === 'dailydigest' ? 'dailyDigest' : approvalOverrideRaw)
     : '';
 
-  writeLock = writeLock.then(async () => {
+  writeLock = writeLock.catch(() => {}).then(async () => {
     const store = await readStore();
     const settings = await readSettings();
     const cfg = normalizeAutomationConfig(settings?.automationConfig);
@@ -13047,7 +13054,7 @@ app.post('/api/inbox', async (req, res) => {
     return;
   }
 
-  writeLock = writeLock.then(async () => {
+  writeLock = writeLock.catch(() => {}).then(async () => {
     const store = await readStore();
     if (Number.isFinite(baseRevision) && baseRevision !== store.revision) {
       res.status(409).json({ ok: false, error: 'Revision mismatch. Reload and try again.', currentRevision: store.revision });
@@ -13099,7 +13106,7 @@ app.put('/api/inbox/:id', async (req, res) => {
     return;
   }
 
-  writeLock = writeLock.then(async () => {
+  writeLock = writeLock.catch(() => {}).then(async () => {
     const store = await readStore();
     if (Number.isFinite(baseRevision) && baseRevision !== store.revision) {
       res.status(409).json({ ok: false, error: 'Revision mismatch. Reload and try again.', currentRevision: store.revision });
@@ -13153,7 +13160,7 @@ app.post('/api/inbox/:id/link-project', async (req, res) => {
     return;
   }
 
-  writeLock = writeLock.then(async () => {
+  writeLock = writeLock.catch(() => {}).then(async () => {
     const store = await readStore();
     if (Number.isFinite(baseRevision) && baseRevision !== store.revision) {
       res.status(409).json({ ok: false, error: 'Revision mismatch. Reload and try again.', currentRevision: store.revision });
@@ -13252,7 +13259,7 @@ app.post('/api/inbox/:id/link-contact', async (req, res) => {
     return;
   }
 
-  writeLock = writeLock.then(async () => {
+  writeLock = writeLock.catch(() => {}).then(async () => {
     const store = await readStore();
     if (Number.isFinite(baseRevision) && baseRevision !== store.revision) {
       res.status(409).json({ ok: false, error: 'Revision mismatch. Reload and try again.', currentRevision: store.revision });
@@ -13329,7 +13336,7 @@ app.post('/api/inbox/:id/create-project', async (req, res) => {
     return;
   }
 
-  writeLock = writeLock.then(async () => {
+  writeLock = writeLock.catch(() => {}).then(async () => {
     const store = await readStore();
     if (Number.isFinite(baseRevision) && baseRevision !== store.revision) {
       res.status(409).json({ ok: false, error: 'Revision mismatch. Reload and try again.', currentRevision: store.revision });
@@ -13424,7 +13431,7 @@ app.post('/api/inbox/:id/convert', async (req, res) => {
     return;
   }
 
-  writeLock = writeLock.then(async () => {
+  writeLock = writeLock.catch(() => {}).then(async () => {
     const store = await readStore();
     if (Number.isFinite(baseRevision) && baseRevision !== store.revision) {
       res.status(409).json({ ok: false, error: 'Revision mismatch. Reload and try again.', currentRevision: store.revision });
@@ -13577,7 +13584,7 @@ app.post('/api/projects', async (req, res) => {
   const baseRevision = Number(req.body?.baseRevision);
   const data = req.body?.project ?? {};
 
-  writeLock = writeLock.then(async () => {
+  writeLock = writeLock.catch(() => {}).then(async () => {
     const store = await readStore();
     if (Number.isFinite(baseRevision) && baseRevision !== store.revision) {
       res.status(409).json({ error: 'Revision mismatch. Reload and try again.', currentRevision: store.revision });
@@ -13618,7 +13625,7 @@ app.put('/api/projects/:id', async (req, res) => {
   const baseRevision = Number(req.body?.baseRevision);
   const patch = req.body?.patch ?? {};
 
-  writeLock = writeLock.then(async () => {
+  writeLock = writeLock.catch(() => {}).then(async () => {
     const store = await readStore();
     if (Number.isFinite(baseRevision) && baseRevision !== store.revision) {
       res.status(409).json({ error: 'Revision mismatch. Reload and try again.', currentRevision: store.revision });
@@ -13671,7 +13678,7 @@ app.post('/api/projects/bulk-update', async (req, res) => {
 
   const patch = patchRaw && typeof patchRaw === 'object' && !Array.isArray(patchRaw) ? patchRaw : {};
 
-  writeLock = writeLock.then(async () => {
+  writeLock = writeLock.catch(() => {}).then(async () => {
     const store = await readStore();
     if (Number.isFinite(baseRevision) && baseRevision !== store.revision) {
       res.status(409).json({ error: 'Revision mismatch. Reload and try again.', currentRevision: store.revision });
@@ -13733,7 +13740,7 @@ app.post('/api/projects/archive-stale', async (req, res) => {
     ? Math.max(1, Math.min(60, Math.floor(dueSoonDaysRaw)))
     : 14;
 
-  writeLock = writeLock.then(async () => {
+  writeLock = writeLock.catch(() => {}).then(async () => {
     const store = await readStore();
     if (Number.isFinite(baseRevision) && baseRevision !== store.revision) {
       res.status(409).json({ error: 'Revision mismatch. Reload and try again.', currentRevision: store.revision });
@@ -13846,7 +13853,7 @@ app.post('/api/projects/bulk-delete', async (req, res) => {
     ? projectIdsRaw.map((v) => String(v || '').trim()).filter(Boolean)
     : [];
 
-  writeLock = writeLock.then(async () => {
+  writeLock = writeLock.catch(() => {}).then(async () => {
     const store = await readStore();
     if (Number.isFinite(baseRevision) && baseRevision !== store.revision) {
       res.status(409).json({ error: 'Revision mismatch. Reload and try again.', currentRevision: store.revision });
@@ -13917,7 +13924,7 @@ app.post('/api/projects/:id/move', async (req, res) => {
   const sourceBusinessKey = getBusinessKeyFromContext();
   const destinationBusinessKey = normalizeBusinessKey(req.body?.destinationBusinessKey || req.body?.businessKey || '');
 
-  writeLock = writeLock.then(async () => {
+  writeLock = writeLock.catch(() => {}).then(async () => {
     try {
       if (!projectId) {
         res.status(400).json({ error: 'Project id is required' });
@@ -13967,7 +13974,7 @@ app.post('/api/projects/bulk-move', async (req, res) => {
     ? req.body.projectIds.map((v) => String(v || '').trim()).filter(Boolean)
     : [];
 
-  writeLock = writeLock.then(async () => {
+  writeLock = writeLock.catch(() => {}).then(async () => {
     try {
       if (!projectIds.length) {
         const store = await readStore();
@@ -14045,7 +14052,7 @@ app.post('/api/projects/:id/auto-suggest-tasks', async (req, res) => {
   const projectId = req.params.id;
   const baseRevision = Number(req.body?.baseRevision);
 
-  writeLock = writeLock.then(async () => {
+  writeLock = writeLock.catch(() => {}).then(async () => {
     const store = await readStore();
     if (Number.isFinite(baseRevision) && baseRevision !== store.revision) {
       res.status(409).json({ error: 'Revision mismatch. Reload and try again.', currentRevision: store.revision });
@@ -14558,7 +14565,7 @@ async function readMarcusLiveConversation() {
 }
 
 async function recordMarcusLiveExchange(message, reply, metadata = {}) {
-  writeLock = writeLock.then(async () => {
+  writeLock = writeLock.catch(() => {}).then(async () => {
     const settings = await readSettings();
     const conversation = normalizeMarcusLiveConversation(settings.marcusLiveConversation);
     const timestamp = nowIso();
@@ -16786,7 +16793,7 @@ app.post('/api/marcus/external-actions/:id/reject', async (req, res) => {
   const id = String(req.params.id || '').trim();
   const message = String(req.body?.message || '').trim().slice(0, 1_000);
   if (!id) return res.status(400).json({ ok: false, error: 'Action id is required.' });
-  writeLock = writeLock.then(async () => {
+  writeLock = writeLock.catch(() => {}).then(async () => {
     const settings = await readSettings();
     const actions = normalizeExternalActionDrafts(settings.externalActionDrafts);
     const idx = actions.findIndex((item) => item.id === id);
@@ -17344,7 +17351,7 @@ app.post('/api/projects/:id/template', async (req, res) => {
   const projectId = req.params.id;
   const baseRevision = Number(req.body?.baseRevision);
 
-  writeLock = writeLock.then(async () => {
+  writeLock = writeLock.catch(() => {}).then(async () => {
     const store = await readStore();
     if (Number.isFinite(baseRevision) && baseRevision !== store.revision) {
       res.status(409).json({ error: 'Revision mismatch', currentRevision: store.revision });
@@ -17433,7 +17440,7 @@ app.put('/api/projects/:id/scratchpad', async (req, res) => {
   const baseRevision = Number(req.body?.baseRevision);
   const text = normalizeNotes(req.body?.text);
 
-  writeLock = writeLock.then(async () => {
+  writeLock = writeLock.catch(() => {}).then(async () => {
     const store = await readStore();
     if (Number.isFinite(baseRevision) && baseRevision !== store.revision) {
       res.status(409).json({ error: 'Revision mismatch. Reload and try again.', currentRevision: store.revision });
@@ -17469,7 +17476,7 @@ app.post('/api/projects/:id/notes', async (req, res) => {
   const baseRevision = Number(req.body?.baseRevision);
   const entry = req.body?.entry ?? {};
 
-  writeLock = writeLock.then(async () => {
+  writeLock = writeLock.catch(() => {}).then(async () => {
     const store = await readStore();
     if (Number.isFinite(baseRevision) && baseRevision !== store.revision) {
       res.status(409).json({ error: 'Revision mismatch. Reload and try again.', currentRevision: store.revision });
@@ -17531,7 +17538,7 @@ app.get('/api/projects/:id/marcus-notes', async (req, res) => {
 async function appendMarcusNote(projectId, note) {
   if (!projectId || !note) return;
   return new Promise((resolve) => {
-    writeLock = writeLock.then(async () => {
+    writeLock = writeLock.catch(() => {}).then(async () => {
       try {
         const store = await readStore();
         const existing = Array.isArray(store.marcusNotes?.[projectId]) ? store.marcusNotes[projectId] : [];
@@ -17576,7 +17583,7 @@ app.post('/api/projects/:id/chat', async (req, res) => {
     return;
   }
 
-  writeLock = writeLock.then(async () => {
+  writeLock = writeLock.catch(() => {}).then(async () => {
     try {
       const store = await readStore();
       if (Number.isFinite(baseRevision) && baseRevision !== store.revision) {
@@ -17713,7 +17720,7 @@ app.post('/api/projects/:id/transcript/apply', async (req, res) => {
     return;
   }
 
-  writeLock = writeLock.then(async () => {
+  writeLock = writeLock.catch(() => {}).then(async () => {
     const store = await readStore();
     if (Number.isFinite(baseRevision) && baseRevision !== store.revision) {
       res.status(409).json({ ok: false, error: 'Revision mismatch. Reload and try again.', currentRevision: store.revision });
@@ -17848,7 +17855,7 @@ app.post('/api/projects/:id/transcript/undo', async (req, res) => {
   const baseRevision = Number(req.body?.baseRevision);
   const undoId = typeof req.body?.undoId === 'string' ? req.body.undoId.trim() : '';
 
-  writeLock = writeLock.then(async () => {
+  writeLock = writeLock.catch(() => {}).then(async () => {
     const store = await readStore();
     if (Number.isFinite(baseRevision) && baseRevision !== store.revision) {
       res.status(409).json({ ok: false, error: 'Revision mismatch. Reload and try again.', currentRevision: store.revision });
@@ -17929,7 +17936,7 @@ app.post('/api/projects/:id/communications', async (req, res) => {
   const baseRevision = Number(req.body?.baseRevision);
   const data = req.body?.communication ?? {};
 
-  writeLock = writeLock.then(async () => {
+  writeLock = writeLock.catch(() => {}).then(async () => {
     const store = await readStore();
     if (Number.isFinite(baseRevision) && baseRevision !== store.revision) {
       res.status(409).json({ error: 'Revision mismatch', currentRevision: store.revision });
@@ -17978,7 +17985,7 @@ app.put('/api/project-notes/:project', async (req, res) => {
   const baseRevision = Number(req.body?.baseRevision);
   const notes = normalizeNotes(req.body?.notes);
 
-  writeLock = writeLock.then(async () => {
+  writeLock = writeLock.catch(() => {}).then(async () => {
     const store = await readStore();
     if (Number.isFinite(baseRevision) && baseRevision !== store.revision) {
       res.status(409).json({ error: 'Revision mismatch. Reload and try again.', currentRevision: store.revision });
@@ -18017,7 +18024,7 @@ app.post('/api/ai/agent', async (req, res) => {
     return;
   }
 
-  writeLock = writeLock.then(async () => {
+  writeLock = writeLock.catch(() => {}).then(async () => {
     const store = await readStore();
     
     // We want the LLM to return a JSON action
@@ -18175,7 +18182,7 @@ app.post('/api/dashboard/ai-previews', async (req, res) => {
   const taskIds = Array.isArray(req.body?.taskIds) ? req.body.taskIds.map((v) => String(v || '').trim()).filter(Boolean).slice(0, 24) : [];
   const inboxIds = Array.isArray(req.body?.inboxIds) ? req.body.inboxIds.map((v) => String(v || '').trim()).filter(Boolean).slice(0, 24) : [];
 
-  writeLock = writeLock.then(async () => {
+  writeLock = writeLock.catch(() => {}).then(async () => {
     const store = await readStore();
     const tasks = Array.isArray(store.tasks) ? store.tasks : [];
     const inbox = Array.isArray(store.inboxItems) ? store.inboxItems : [];
@@ -18319,7 +18326,7 @@ app.post('/api/tasks', async (req, res) => {
   const baseRevision = Number(req.body?.baseRevision);
   const data = req.body?.task ?? {};
 
-  writeLock = writeLock.then(async () => {
+  writeLock = writeLock.catch(() => {}).then(async () => {
     const store = await readStore();
     if (Number.isFinite(baseRevision) && baseRevision !== store.revision) {
       res.status(409).json({
@@ -18358,7 +18365,7 @@ app.put('/api/tasks/:id', async (req, res) => {
   const baseRevision = Number(req.body?.baseRevision);
   const patch = req.body?.patch ?? {};
 
-  writeLock = writeLock.then(async () => {
+  writeLock = writeLock.catch(() => {}).then(async () => {
     const store = await readStore();
     if (Number.isFinite(baseRevision) && baseRevision !== store.revision) {
       res.status(409).json({
@@ -18417,7 +18424,7 @@ app.delete('/api/tasks/:id', async (req, res) => {
   const taskId = req.params.id;
   const baseRevision = Number(req.body?.baseRevision);
 
-  writeLock = writeLock.then(async () => {
+  writeLock = writeLock.catch(() => {}).then(async () => {
     const store = await readStore();
     if (Number.isFinite(baseRevision) && baseRevision !== store.revision) {
       res.status(409).json({
@@ -20072,7 +20079,7 @@ app.post('/api/chat', async (req, res) => {
 
   if (!message.trim()) return res.status(400).json({ error: 'Message required' });
 
-  writeLock = writeLock.then(async () => {
+  writeLock = writeLock.catch(() => {}).then(async () => {
     try {
       const store = await readStore();
 
