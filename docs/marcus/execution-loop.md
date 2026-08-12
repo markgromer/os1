@@ -159,7 +159,7 @@ Production Quo onboarding followed the separate provider path:
 
 `paired admin -> save redacted os1 credential -> query Quo phone numbers -> normalize the canonical E.164 sender -> persist resolved sender ids -> mark provider verified with sent=false`
 
-Production Quo acceptance action `rv1v4_RKB38v` passed the full approval and provider-receipt path on 2026-08-12. SMTP setup and the approved email send still require explicit operator authority.
+Production Quo acceptance action `rv1v4_RKB38v` passed the full approval and provider-receipt path on 2026-08-12. SMTP setup and no-send verification pass; the acceptance email send still requires explicit operator authority.
 
 Production provider-operation preparation on 2026-08-12 exercised the new boundary without mutating customer state:
 

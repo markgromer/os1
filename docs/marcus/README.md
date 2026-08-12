@@ -9,6 +9,7 @@ This folder is an Obsidian-compatible documentation space for Marcus.
 - [[access-model]]
 - [[current-system-map]]
 - [[implementation-roadmap]]
+- [[completion-audit]]
 - [[decision-log]]
 - [[voice-interface]]
 

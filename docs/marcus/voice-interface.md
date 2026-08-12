@@ -1,6 +1,6 @@
 # Voice Interface
 
-Status: primary architecture selected and deployed. The official SDK signaling and recovery paths and the v15 physical-phone acceptance dashboard are verified in production Chromium; installed-Android speech, interruption, and physical phone-lock/network-handoff verification remain open.
+Status: primary architecture selected and deployed. The official SDK signaling and recovery paths and the v18 physical-phone acceptance dashboard are verified in production Chromium; installed-Android speech, interruption, and physical phone-lock/network-handoff verification remain open.
 
 ## Objective
 
