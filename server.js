@@ -15155,7 +15155,7 @@ app.post('/api/marcus/live/chat', async (req, res) => {
   if (!message) return res.status(400).json({ error: 'Empty message' });
 
   try {
-    if (projectOperatorService.shouldHandle(message) && /\b(codex|audit|repo|repository|fix|build|implement|get .* working|start .* session)\b/i.test(message)) {
+    if (projectOperatorService.shouldHandle(message)) {
       const result = await projectOperatorService.prepareCodexOperation(getBusinessKeyFromContext(), {
         message,
         source: 'marcus_live_project_operator',

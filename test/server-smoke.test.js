@@ -294,6 +294,22 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     assert.match(operatorBody.codexPrompt, /Goal for Codex/);
     assert.match(operatorBody.auditBrief, /Operator Smoke/);
     assert.equal(operatorBody.operation.status, 'blocked');
+    const freedomRegistryResponse = await fetch(`${base}/api/project-registry`, { method: 'POST', headers: agencyHeaders, body: JSON.stringify({
+      canonicalName: 'Freedom Scoopers',
+      aliases: ['Freedom Scoopers website', 'freedom scoopers website'],
+      repo: { fullName: 'markgromer/freedom-scoopers' },
+    }) });
+    const freedomRegistry = (await freedomRegistryResponse.json()).project;
+    assert.equal(freedomRegistryResponse.status, 201);
+    const liveOperatorResponse = await fetch(`${base}/api/marcus/live/chat`, { method: 'POST', headers: agencyHeaders, body: JSON.stringify({
+      message: 'The Freedom Scoopers website needs the new Reggie and Reggie hub installed and replace the legacy Reggie.',
+    }) });
+    assert.equal(liveOperatorResponse.status, 200);
+    const liveOperatorBody = await liveOperatorResponse.json();
+    assert.equal(liveOperatorBody.status, 'codex_prepared');
+    assert.equal(liveOperatorBody.project.name, 'Freedom Scoopers');
+    assert.equal(liveOperatorBody.operation.projectRegistryId, freedomRegistry.id);
+    assert.match(liveOperatorBody.reply, /audited the available context/i);
     const operationResponse = await fetch(`${base}/api/operations`, { method: 'POST', headers: agencyHeaders, body: JSON.stringify({
       originalRequest: 'Verify Desktop Smoke tests.', projectRegistryId: registry.id, autoPlan: false,
     }) });

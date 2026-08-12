@@ -1,6 +1,6 @@
 import { safeBusinessKey, safeObject, safeString } from '../operations/operation_types.js';
 
-const CODEX_OPERATOR_RE = /\b(codex|audit|repo|repository|fix|build|implement|worker|cloudflare|deploy|mobile|broken|get .* working|start .* session)\b/i;
+const CODEX_OPERATOR_RE = /\b(codex|audit|repo|repository|fix|build|implement|install|replace|migrate|upgrade|website|site|worker|cloudflare|deploy|mobile|broken|get .* working|start .* session)\b/i;
 
 function preview(value, max = 240) {
   return safeString(value, max).replace(/\s+/g, ' ').trim();

@@ -146,3 +146,12 @@ test('project operator asks for project clarification when confidence is low', a
     assert.match(result.reply, /project clarified/i);
   });
 });
+
+test('project operator detects website install and replace requests', async () => {
+  await withProjectOperator(async ({ service }) => {
+    assert.equal(
+      service.shouldHandle('The Freedom Scoopers website needs the new Reggie and Reggie hub installed and replace the legacy Reggie.'),
+      true,
+    );
+  });
+});
