@@ -1,5 +1,13 @@
 # Decision Log
 
+## 2026-08-12: Mobile Pairing Survives Render Process Replacement
+
+Context: A production browser acceptance minted a valid pairing code while Render was replacing the application process. The code existed only in the old process's memory, so a pairing request routed to the replacement process returned `Invalid or expired pairing code`.
+
+Decision: Persist only the HMAC hash and expiration in `data/mobile-pairing.json`. Serialize creation and consumption with an exclusive cross-process lock, delete the record after the first successful use, and cover mint -> process stop -> process start -> consume -> replay with an acceptance test.
+
+Consequence: Deploys and process restarts no longer invalidate an otherwise valid mobile pairing challenge. The six-digit code and durable admin credential are still not persisted together or returned to the browser.
+
 ## 2026-08-11: Marcus Voice Uses The Official Realtime SDK And Recoverable Sessions
 
 Context: The first mobile voice client hand-built a raw WebRTC connection and treated a disconnect as a permanent stop. Phone lock, backgrounding, network changes, ephemeral-token expiry, and the Realtime session limit could leave voice unavailable or race a stale setup against a newer connection.

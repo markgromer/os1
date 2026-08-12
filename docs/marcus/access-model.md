@@ -76,7 +76,7 @@ Every initial connection, reconnect, foreground resume, and scheduled session re
 
 ## Mobile Pairing
 
-An authenticated operator can request one active six-digit code from `POST /api/auth/pairing-code`. The code expires after ten minutes, is stored only as a keyed hash, and is consumed by the first successful `POST /api/auth/pair` request. Failed attempts are limited per client. Successful pairing sets the secure HttpOnly admin cookie; the durable admin token is not returned to or stored by the phone.
+An authenticated operator can request one active six-digit code from `POST /api/auth/pairing-code`. The code expires after ten minutes and is stored only as an HMAC hash in `data/mobile-pairing.json`. An exclusive file lock makes replacement and consumption single-use across Node process replacement. Failed attempts are limited per client. Successful pairing sets the secure HttpOnly admin cookie; the durable admin token is not returned to or stored by the phone.
 
 Local operator helper: `scripts/create-marcus-mobile-pairing-code.ps1`.
 

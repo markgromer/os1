@@ -152,7 +152,7 @@ Acceptance tests still required before this phase is complete:
 - Confirm external communication and production mutations still pause for explicit approval.
 - Verify recovery after phone lock, network interruption, and an expired Live token.
 
-Status: the original Realtime integration is live at `https://task-tracker-5wsa.onrender.com/mobile.html`. The official SDK and recovery upgrade passes the local `89/89` suite but still requires Render deployment and production browser validation. A real installed-Android speech, barge-in, and recovery conversation is not yet verified.
+Status: the original Realtime integration is live at `https://task-tracker-5wsa.onrender.com/mobile.html`. The official SDK and recovery upgrade passes the local `90/90` suite but still requires Render deployment and production browser validation. A real installed-Android speech, barge-in, and recovery conversation is not yet verified.
 
 Verified locally on 2026-08-12:
 

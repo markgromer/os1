@@ -18,8 +18,8 @@ async function freePort() {
   return port;
 }
 
-async function spawnServer({ startupCheck = false, adminToken = 'test-admin-token', production = false, extraEnv = {} } = {}) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'marcus-server-smoke-'));
+async function spawnServer({ startupCheck = false, adminToken = 'test-admin-token', production = false, extraEnv = {}, testRoot = '' } = {}) {
+  const root = testRoot || await fs.mkdtemp(path.join(os.tmpdir(), 'marcus-server-smoke-'));
   const workspaceRoot = path.join(root, 'workspaces');
   await fs.mkdir(workspaceRoot, { recursive: true });
   const port = await freePort();
@@ -46,7 +46,8 @@ async function spawnServer({ startupCheck = false, adminToken = 'test-admin-toke
   let output = '';
   child.stdout.on('data', (chunk) => { output += String(chunk); });
   child.stderr.on('data', (chunk) => { output += String(chunk); });
-  const waitForExit = () => child.exitCode !== null
+  const hasExited = () => child.exitCode !== null || child.signalCode !== null;
+  const waitForExit = () => hasExited()
     ? Promise.resolve({ code: child.exitCode, signal: child.signalCode, output })
     : new Promise((resolve) => child.once('exit', (code, signal) => resolve({ code, signal, output })));
   const waitForReady = async () => {
@@ -58,10 +59,10 @@ async function spawnServer({ startupCheck = false, adminToken = 'test-admin-toke
     }
     throw new Error(`Timed out waiting for server.\n${output}`);
   };
-  const close = async () => {
-    if (child.exitCode === null) child.kill();
-    if (child.exitCode === null) await waitForExit();
-    await fs.rm(root, { recursive: true, force: true });
+  const close = async ({ preserveRoot = false } = {}) => {
+    if (!hasExited()) child.kill();
+    if (!hasExited()) await waitForExit();
+    if (!preserveRoot) await fs.rm(root, { recursive: true, force: true });
   };
   return { child, port, root, workspaceRoot, get output() { return output; }, waitForExit, waitForReady, close };
 }
@@ -449,6 +450,36 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     }] }) });
     assert.equal((await unknownResult.json()).rejected[0].code, 'DESKTOP_ACTION_UNKNOWN');
   } finally { await server.close(); }
+});
+
+test('mobile pairing survives a server restart and remains single-use', async () => {
+  const first = await spawnServer();
+  const headers = { authorization: 'Bearer test-admin-token', 'content-type': 'application/json' };
+  let second = null;
+  try {
+    await first.waitForReady();
+    const pairingResponse = await fetch(`http://127.0.0.1:${first.port}/api/auth/pairing-code`, { method: 'POST', headers, body: '{}' });
+    assert.equal(pairingResponse.status, 201);
+    const pairing = await pairingResponse.json();
+    await first.close({ preserveRoot: true });
+
+    second = await spawnServer({ testRoot: first.root });
+    await second.waitForReady();
+    const base = `http://127.0.0.1:${second.port}`;
+    const accepted = await fetch(`${base}/api/auth/pair`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: pairing.code }),
+    });
+    assert.equal(accepted.status, 200);
+    assert.match(accepted.headers.get('set-cookie') || '', /ops_admin_token=/);
+    const replay = await fetch(`${base}/api/auth/pair`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: pairing.code }),
+    });
+    assert.equal(replay.status, 401);
+  } finally {
+    if (first.child.exitCode === null && first.child.signalCode === null) await first.close();
+    if (second) await second.close();
+    else await fs.rm(first.root, { recursive: true, force: true });
+  }
 });
 
 test('server enables direct Codex mode when HTTP adapter URL is configured', async () => {

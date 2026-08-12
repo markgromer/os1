@@ -20,6 +20,7 @@ import { registerOperationsRoutes } from './marcus/api/operations_routes.js';
 import { registerProjectEvidenceRoutes } from './marcus/api/project_evidence_routes.js';
 import { scopeAuthorizedPublishActions } from './marcus/approvals/publish_safeguard.js';
 import { buildMarcusSystemPrompt } from './marcus/core/build_system_prompt.js';
+import { explicitlyDefersCodexStart, explicitlyDefersProjectAudit } from './marcus/core/request_intent.js';
 import { ProjectEvidenceService } from './marcus/evidence/project_evidence_service.js';
 import {
   executeMarcusProjectActivityTool,
@@ -571,7 +572,8 @@ const AUTH_COOKIE_MAX_AGE_SEC = 60 * 60 * 24 * 30;
 const MOBILE_PAIRING_CODE_TTL_MS = 10 * 60 * 1000;
 const MOBILE_PAIRING_ATTEMPT_WINDOW_MS = 10 * 60 * 1000;
 const MOBILE_PAIRING_MAX_FAILURES = 8;
-const mobilePairingCodes = new Map();
+const MOBILE_PAIRING_FILE = path.join(DATA_DIR, 'mobile-pairing.json');
+const MOBILE_PAIRING_LOCK_FILE = `${MOBILE_PAIRING_FILE}.lock`;
 const mobilePairingAttempts = new Map();
 
 function parseCookies(req) {
@@ -617,9 +619,6 @@ function pairingCodeHash(code) {
 
 function pruneMobilePairingState() {
   const now = Date.now();
-  for (const [hash, record] of mobilePairingCodes.entries()) {
-    if (!Number.isFinite(record?.expiresAt) || record.expiresAt <= now) mobilePairingCodes.delete(hash);
-  }
   for (const [key, record] of mobilePairingAttempts.entries()) {
     if (!Number.isFinite(record?.startedAt) || record.startedAt + MOBILE_PAIRING_ATTEMPT_WINDOW_MS <= now) {
       mobilePairingAttempts.delete(key);
@@ -645,6 +644,77 @@ function recordMobilePairingFailure(req) {
 function mobilePairingIsRateLimited(req) {
   pruneMobilePairingState();
   return (mobilePairingAttempts.get(mobilePairingAttemptKey(req))?.count || 0) >= MOBILE_PAIRING_MAX_FAILURES;
+}
+
+async function withMobilePairingFileLock(callback) {
+  await fs.mkdir(DATA_DIR, { recursive: true });
+  let lockHandle = null;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    try {
+      lockHandle = await fs.open(MOBILE_PAIRING_LOCK_FILE, 'wx');
+      break;
+    } catch (error) {
+      if (error?.code !== 'EEXIST') throw error;
+      try {
+        const stat = await fs.stat(MOBILE_PAIRING_LOCK_FILE);
+        if (Date.now() - stat.mtimeMs > 30_000) await fs.unlink(MOBILE_PAIRING_LOCK_FILE);
+      } catch (statError) {
+        if (statError?.code !== 'ENOENT') throw statError;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20 + (attempt * 5)));
+    }
+  }
+  if (!lockHandle) throw Object.assign(new Error('Mobile pairing is busy. Request a new code shortly.'), { statusCode: 503 });
+  try {
+    return await callback();
+  } finally {
+    await lockHandle.close().catch(() => {});
+    await fs.unlink(MOBILE_PAIRING_LOCK_FILE).catch(() => {});
+  }
+}
+
+async function readMobilePairingRecord() {
+  try {
+    const parsed = JSON.parse(await fs.readFile(MOBILE_PAIRING_FILE, 'utf8'));
+    const codeHash = typeof parsed?.codeHash === 'string' ? parsed.codeHash : '';
+    const expiresAt = Number(parsed?.expiresAt);
+    if (!/^[a-f0-9]{64}$/i.test(codeHash) || !Number.isFinite(expiresAt)) return null;
+    return { codeHash: codeHash.toLowerCase(), expiresAt };
+  } catch (error) {
+    if (error?.code === 'ENOENT' || error instanceof SyntaxError) return null;
+    throw error;
+  }
+}
+
+async function createMobilePairingCode() {
+  return withMobilePairingFileLock(async () => {
+    const code = String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');
+    const expiresAt = Date.now() + MOBILE_PAIRING_CODE_TTL_MS;
+    const tmpFile = `${MOBILE_PAIRING_FILE}.tmp-${crypto.randomBytes(6).toString('hex')}`;
+    await fs.writeFile(tmpFile, JSON.stringify({
+      version: 1,
+      codeHash: pairingCodeHash(code),
+      expiresAt,
+      createdAt: nowIso(),
+    }, null, 2) + '\n', 'utf8');
+    await replaceFileAtomically(tmpFile, MOBILE_PAIRING_FILE);
+    return { code, expiresAt };
+  });
+}
+
+async function consumeMobilePairingCode(code) {
+  const submittedHash = /^\d{6}$/.test(code) ? pairingCodeHash(code) : '';
+  if (!submittedHash) return false;
+  return withMobilePairingFileLock(async () => {
+    const record = await readMobilePairingRecord();
+    if (!record || record.expiresAt <= Date.now()) {
+      if (record) await fs.unlink(MOBILE_PAIRING_FILE).catch(() => {});
+      return false;
+    }
+    if (!safeTimingEqual(submittedHash, record.codeHash)) return false;
+    await fs.unlink(MOBILE_PAIRING_FILE);
+    return true;
+  });
 }
 
 function isPublicApiRoute(req) {
@@ -777,30 +847,31 @@ app.post('/api/auth/login', (req, res) => {
   res.json({ ok: true, authRequired: true, authenticated: true });
 });
 
-app.post('/api/auth/pairing-code', (req, res) => {
+app.post('/api/auth/pairing-code', async (req, res) => {
   if (!ADMIN_TOKEN) return res.status(400).json({ ok: false, error: 'Mobile pairing requires admin authentication.' });
-  pruneMobilePairingState();
-  mobilePairingCodes.clear();
-  const code = String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');
-  const expiresAt = Date.now() + MOBILE_PAIRING_CODE_TTL_MS;
-  mobilePairingCodes.set(pairingCodeHash(code), { expiresAt });
-  res.setHeader('Cache-Control', 'no-store');
-  res.status(201).json({ ok: true, code, expiresAt, ttlMs: MOBILE_PAIRING_CODE_TTL_MS });
+  try {
+    const { code, expiresAt } = await createMobilePairingCode();
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(201).json({ ok: true, code, expiresAt, ttlMs: MOBILE_PAIRING_CODE_TTL_MS });
+  } catch (error) {
+    res.status(Number(error?.statusCode) || 500).json({ ok: false, error: String(error?.message || error) });
+  }
 });
 
-app.post('/api/auth/pair', (req, res) => {
+app.post('/api/auth/pair', async (req, res) => {
   if (!ADMIN_TOKEN) return res.json({ ok: true, authRequired: false, authenticated: true });
   if (mobilePairingIsRateLimited(req)) {
     return res.status(429).json({ ok: false, error: 'Too many pairing attempts. Request a new code later.' });
   }
   const code = typeof req.body?.code === 'string' ? req.body.code.trim() : '';
-  const hash = /^\d{6}$/.test(code) ? pairingCodeHash(code) : '';
-  const record = hash ? mobilePairingCodes.get(hash) : null;
-  if (!record || record.expiresAt <= Date.now()) {
-    recordMobilePairingFailure(req);
-    return res.status(401).json({ ok: false, error: 'Invalid or expired pairing code.' });
+  try {
+    if (!await consumeMobilePairingCode(code)) {
+      recordMobilePairingFailure(req);
+      return res.status(401).json({ ok: false, error: 'Invalid or expired pairing code.' });
+    }
+  } catch (error) {
+    return res.status(Number(error?.statusCode) || 500).json({ ok: false, error: String(error?.message || error) });
   }
-  mobilePairingCodes.delete(hash);
   mobilePairingAttempts.delete(mobilePairingAttemptKey(req));
   res.setHeader('Cache-Control', 'no-store');
   res.setHeader('Set-Cookie', buildAuthCookie({ req, token: ADMIN_TOKEN, remember: true }));
@@ -15713,6 +15784,7 @@ app.post('/api/marcus/project-operator', async (req, res) => {
       message,
       projectId,
       source: 'project_operator_api',
+      autoStart: req.body?.autoStart !== false && !explicitlyDefersCodexStart(message),
     });
     res.status(result.status === 'needs_project' ? 200 : 201).json(result);
   } catch (err) {
@@ -15757,8 +15829,9 @@ app.post('/api/marcus/live/chat', async (req, res) => {
         projectRegistryId: conversation.activeProject.projectRegistryId,
       });
       const project = contextResult.project;
+      const executionDeferred = explicitlyDefersProjectAudit(message) || explicitlyDefersCodexStart(message);
       const reply = project
-        ? `I resolved this conversation to ${project.name}${project.repo ? ` at ${project.repo}` : ''} and set it as the active project. I will carry that context into the repository audit and Codex prompt.`
+        ? `I resolved this conversation to ${project.name}${project.repo ? ` at ${project.repo}` : ''} and set it as the active project. Current request retained: ${message}${executionDeferred ? ' I did not audit the repository or start Codex.' : ' I will carry these requirements into a later repository audit and Codex prompt.'}`
         : 'I could not verify that GitHub project yet. Give me the exact owner/repository name so I can inspect the right code instead of guessing.';
       await recordMarcusLiveExchange(message, reply, { project });
       pushLiveEvent({ type: 'chat', from: 'marcus', text: reply, ts: Date.now() });
@@ -15772,6 +15845,7 @@ app.post('/api/marcus/live/chat', async (req, res) => {
         projectId: conversation.activeProject.projectId,
         projectRegistryId: conversation.activeProject.projectRegistryId,
         source: 'marcus_live_project_operator',
+        autoStart: !explicitlyDefersCodexStart(message),
       });
       await recordMarcusLiveExchange(message, result.reply, {
         operationId: result.operation?.id || '',
@@ -18907,6 +18981,7 @@ app.post('/api/chat', async (req, res) => {
           message,
           projectId: projectId || '',
           source: 'main_chat_project_operator',
+          autoStart: !explicitlyDefersCodexStart(message),
         });
         const reply = String(result.reply || '').trim();
         if (result.operation?.projectId) {

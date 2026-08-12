@@ -38,6 +38,7 @@ Session/control data:
 
 - `data/marcus-operational-controls.json`
 - `data/marcus-session-state.json`
+- `data/mobile-pairing.json` for the active hash-only, short-lived Android pairing challenge
 
 Settings:
 
@@ -172,6 +173,8 @@ The browser lifecycle closes the media session while the PWA is hidden, resumes 
 `/api/marcus/live/chat` keeps recent conversation turns and an active project on the server. The project operator receives the accumulated user requirements rather than only the latest short follow-up.
 
 The mobile app is a PWA first. Pairing sets the existing secure HttpOnly authentication cookie; the six-digit code is not retained. It does not add a separate Android credential store or native notification channel yet.
+
+Pairing state is persisted on the Render data volume under an exclusive file lock. A code minted before a Render process replacement can be consumed once by the replacement process; a replay is rejected.
 
 ## Desktop Agent
 
