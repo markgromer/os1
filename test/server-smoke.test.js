@@ -604,6 +604,10 @@ test('Marcus Mobile remembers an explicit Reggie repo and carries requirements i
       const context = await contextResponse.json();
       assert.equal(context.status, 'project_context_set');
       assert.equal(context.project.name, 'Reggie');
+      const settingsWithMemory = await (await fetch(`${base}/api/settings`, { headers })).json();
+      const reggieMemory = settingsWithMemory.marcusLiveConversation.projectMemories.find((memory) => memory.project.name === 'Reggie');
+      assert.match(reggieMemory.requirements.join(' '), /settings popup/i);
+      assert.match(reggieMemory.requirements.join(' '), /API token and slug/i);
 
       const atlasResponse = await fetch(`${base}/api/marcus/live/chat`, { method: 'POST', headers, body: JSON.stringify({
         message: 'Atlas is my GitHub project at markgromer/Atlas. Atlas needs a blue launch banner.',
@@ -645,6 +649,27 @@ test('Marcus Mobile remembers an explicit Reggie repo and carries requirements i
       assert.match(result.operation.originalRequest, /API token and slug/i);
       assert.doesNotMatch(result.operation.originalRequest, /blue launch banner/i);
       assert.equal(Object.values(result.operation.metadata.codexJobs || {}).some((job) => job.provider === 'mock_http_codex'), true);
+
+      const settingsBeforeMigrationCheck = await (await fetch(`${base}/api/settings`, { headers })).json();
+      const resetConversationResponse = await fetch(`${base}/api/settings`, { method: 'PUT', headers, body: JSON.stringify({
+        marcusLiveConversation: {
+          messages: [],
+          activeProject: settingsBeforeMigrationCheck.marcusLiveConversation.activeProject,
+          projectMemories: [],
+          updatedAt: new Date().toISOString(),
+        },
+      }) });
+      assert.equal(resetConversationResponse.status, 200);
+      const recoveredResponse = await fetch(`${base}/api/marcus/live/chat`, { method: 'POST', headers, body: JSON.stringify({
+        message: 'For a read-only continuity check, use Reggie at markgromer/Reggie. Repeat the saved Sweep and Go requirements. Do not audit or start Codex.',
+      }) });
+      assert.equal(recoveredResponse.status, 200);
+      const recovered = await recoveredResponse.json();
+      assert.match(recovered.reply, /settings popup/i);
+      assert.match(recovered.reply, /API token and slug/i);
+      assert.doesNotMatch(recovered.reply, /blue launch banner/i);
+      const afterRecovery = await (await fetch(`${base}/api/operations`, { headers })).json();
+      assert.equal(afterRecovery.operations.length, 1);
     } finally { await server.close(); }
   });
 });

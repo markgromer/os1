@@ -13837,6 +13837,17 @@ const PROACTIVE_COOLDOWN_MS = 20_000;  // keep up when Mark bounces between proj
 let proactiveRunning = false;
 const MARCUS_LIVE_CONVERSATION_MAX_MESSAGES = 80;
 const MARCUS_LIVE_CONTEXT_WINDOW_MS = 45 * 60_000;
+const MARCUS_LIVE_PROJECT_MEMORY_MAX = 40;
+const MARCUS_LIVE_PROJECT_REQUIREMENTS_MAX = 12;
+
+function conversationProjectReference(project = {}) {
+  return {
+    projectRegistryId: String(project.projectRegistryId || project.registryId || project.id || '').trim().slice(0, 160),
+    projectId: String(project.projectId || '').trim().slice(0, 160),
+    name: String(project.name || project.canonicalName || project.projectName || '').trim().slice(0, 300),
+    repo: String(project.repo || project.fullName || '').trim().replace(/\.git$/i, '').slice(0, 500),
+  };
+}
 
 function normalizeMarcusLiveConversation(input) {
   const raw = input && typeof input === 'object' ? input : {};
@@ -13850,14 +13861,20 @@ function normalizeMarcusLiveConversation(input) {
     .filter((message) => message.content)
     .slice(-MARCUS_LIVE_CONVERSATION_MAX_MESSAGES);
   const active = raw.activeProject && typeof raw.activeProject === 'object' ? raw.activeProject : {};
+  const projectMemories = (Array.isArray(raw.projectMemories) ? raw.projectMemories : [])
+    .map((memory) => ({
+      project: conversationProjectReference(memory?.project),
+      requirements: [...new Set((Array.isArray(memory?.requirements) ? memory.requirements : [])
+        .map((item) => String(item || '').replace(/\s+/g, ' ').trim().slice(0, 500))
+        .filter(Boolean))].slice(-MARCUS_LIVE_PROJECT_REQUIREMENTS_MAX),
+      updatedAt: typeof memory?.updatedAt === 'string' ? memory.updatedAt : '',
+    }))
+    .filter((memory) => Object.values(normalizeConversationProject(memory.project)).some(Boolean) && memory.requirements.length)
+    .slice(-MARCUS_LIVE_PROJECT_MEMORY_MAX);
   return {
     messages,
-    activeProject: {
-      projectRegistryId: String(active.projectRegistryId || '').trim().slice(0, 160),
-      projectId: String(active.projectId || '').trim().slice(0, 160),
-      name: String(active.name || '').trim().slice(0, 300),
-      repo: String(active.repo || '').trim().slice(0, 500),
-    },
+    activeProject: conversationProjectReference(active),
+    projectMemories,
     updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : '',
   };
 }
@@ -13872,7 +13889,8 @@ async function recordMarcusLiveExchange(message, reply, metadata = {}) {
     const settings = await readSettings();
     const conversation = normalizeMarcusLiveConversation(settings.marcusLiveConversation);
     const timestamp = nowIso();
-    const exchangeMetadata = metadata && typeof metadata === 'object' ? metadata : {};
+    const rawMetadata = metadata && typeof metadata === 'object' ? metadata : {};
+    const { requirements: suppliedRequirements, ...exchangeMetadata } = rawMetadata;
     conversation.messages.push(
       { role: 'user', content: String(message || '').trim().slice(0, 4_000), timestamp, metadata: exchangeMetadata },
       { role: 'assistant', content: String(reply || '').trim().slice(0, 4_000), timestamp, metadata: exchangeMetadata },
@@ -13880,12 +13898,11 @@ async function recordMarcusLiveExchange(message, reply, metadata = {}) {
     conversation.messages = conversation.messages.filter((item) => item.content).slice(-MARCUS_LIVE_CONVERSATION_MAX_MESSAGES);
     const project = metadata?.project && typeof metadata.project === 'object' ? metadata.project : null;
     if (project && (project.id || project.projectRegistryId || project.name)) {
-      conversation.activeProject = {
-        projectRegistryId: String(project.projectRegistryId || project.registryId || project.id || '').trim().slice(0, 160),
-        projectId: String(project.projectId || '').trim().slice(0, 160),
-        name: String(project.name || project.canonicalName || '').trim().slice(0, 300),
-        repo: String(project.repo || project.fullName || '').trim().slice(0, 500),
-      };
+      conversation.activeProject = conversationProjectReference(project);
+      const requirements = Array.isArray(suppliedRequirements)
+        ? suppliedRequirements
+        : extractMarcusLiveRequirementSentences([message], { limit: MARCUS_LIVE_PROJECT_REQUIREMENTS_MAX });
+      mergeMarcusLiveProjectMemory(conversation, conversation.activeProject, requirements, timestamp);
     }
     conversation.updatedAt = timestamp;
     await writeSettings({ ...settings, marcusLiveConversation: conversation, updatedAt: timestamp });
@@ -13909,10 +13926,41 @@ function normalizeConversationProject(project = {}) {
   };
 }
 
+function mergeMarcusLiveProjectMemory(conversation, project, requirements, updatedAt = nowIso()) {
+  const reference = conversationProjectReference(project);
+  if (!Object.values(normalizeConversationProject(reference)).some(Boolean)) return;
+  const incoming = (Array.isArray(requirements) ? requirements : [])
+    .map((item) => String(item || '').replace(/\s+/g, ' ').trim().slice(0, 500))
+    .filter(Boolean);
+  if (!incoming.length) return;
+  const memories = Array.isArray(conversation.projectMemories) ? conversation.projectMemories : [];
+  const index = memories.findIndex((memory) => conversationProjectsMatch(memory.project, reference));
+  const existing = index >= 0 ? memories.splice(index, 1)[0] : { project: reference, requirements: [] };
+  const merged = [];
+  const seen = new Set();
+  for (const requirement of [...(existing.requirements || []), ...incoming]) {
+    const key = requirement.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    merged.push(requirement);
+  }
+  memories.push({
+    project: reference,
+    requirements: merged.slice(-MARCUS_LIVE_PROJECT_REQUIREMENTS_MAX),
+    updatedAt,
+  });
+  conversation.projectMemories = memories.slice(-MARCUS_LIVE_PROJECT_MEMORY_MAX);
+}
+
 function conversationProjectsMatch(left, right) {
   const a = normalizeConversationProject(left);
   const b = normalizeConversationProject(right);
   return ['projectRegistryId', 'projectId', 'repo', 'name'].some((key) => a[key] && b[key] && a[key] === b[key]);
+}
+
+function rememberedMarcusLiveProjectRequirements(conversation, targetProject) {
+  const memories = Array.isArray(conversation?.projectMemories) ? conversation.projectMemories : [];
+  return memories.find((memory) => conversationProjectsMatch(memory.project, targetProject))?.requirements || [];
 }
 
 function scopedMarcusLiveUserMessages(conversation, targetProject = conversation?.activeProject || {}) {
@@ -13933,11 +13981,10 @@ function scopedMarcusLiveUserMessages(conversation, targetProject = conversation
   return scoped;
 }
 
-function summarizeMarcusLiveRequirements(conversation, currentMessage, targetProject) {
-  const messages = [...scopedMarcusLiveUserMessages(conversation, targetProject), String(currentMessage || '').trim()].filter(Boolean);
+function extractMarcusLiveRequirementSentences(messages, { limit = 3 } = {}) {
   const candidates = [];
   let sequence = 0;
-  for (const message of messages) {
+  for (const message of (Array.isArray(messages) ? messages : [])) {
     const cleaned = withoutProjectExecutionDeferrals(message);
     const sentences = cleaned.split(/(?<=[.!?])\s+|[\r\n]+/).map((item) => item.trim()).filter(Boolean);
     for (const sentence of sentences) {
@@ -13956,22 +14003,61 @@ function summarizeMarcusLiveRequirements(conversation, currentMessage, targetPro
     const duplicate = selected.some((item) => item.key === candidate.key
       || (item.key.length >= 30 && candidate.key.length >= 30 && (item.key.includes(candidate.key) || candidate.key.includes(item.key))));
     if (!duplicate) selected.push(candidate);
-    if (selected.length >= 3) break;
+    if (selected.length >= Math.max(1, Math.min(MARCUS_LIVE_PROJECT_REQUIREMENTS_MAX, Number(limit) || 3))) break;
   }
   return selected.sort((a, b) => a.sequence - b.sequence).map((item) => item.text);
 }
 
-function buildMarcusLiveProjectRequest(conversation, message, targetProject = conversation?.activeProject || {}) {
+function summarizeMarcusLiveRequirements(conversation, currentMessage, targetProject, additionalMessages = [], { limit = 3 } = {}) {
+  const messages = [
+    ...rememberedMarcusLiveProjectRequirements(conversation, targetProject),
+    ...(Array.isArray(additionalMessages) ? additionalMessages : []),
+    ...scopedMarcusLiveUserMessages(conversation, targetProject),
+    String(currentMessage || '').trim(),
+  ].filter(Boolean);
+  return extractMarcusLiveRequirementSentences(messages, { limit });
+}
+
+async function collectMarcusLiveProjectRequirements(businessKey, conversation, currentMessage, targetProject, { limit = 8 } = {}) {
+  let operationRequests = [];
+  if (Object.values(normalizeConversationProject(targetProject)).some(Boolean)) {
+    try {
+      const operations = await operationsEngine.listOperations(businessKey, { limit: 100 });
+      operationRequests = operations
+        .filter((operation) => conversationProjectsMatch({
+          projectRegistryId: operation.projectRegistryId,
+          projectId: operation.projectId,
+          name: operation.projectName,
+        }, targetProject))
+        .map((operation) => operation.originalRequest)
+        .filter(Boolean);
+    } catch {}
+  }
+  return summarizeMarcusLiveRequirements(conversation, currentMessage, targetProject, operationRequests, { limit });
+}
+
+function isMarcusLiveAcceptanceOnlyMessage(message) {
+  const text = String(message || '');
+  return /\b(read[- ]only|acceptance test)\b/i.test(text) && /\b(tell|identify|repeat|show|do not|don't)\b/i.test(text);
+}
+
+function buildMarcusLiveProjectRequest(conversation, message, targetProject = conversation?.activeProject || {}, retainedRequirements = []) {
   const current = String(message || '').trim();
   const prior = scopedMarcusLiveUserMessages(conversation, targetProject)
     .slice(-7)
     .map((item) => withoutProjectExecutionDeferrals(item))
-    .filter(Boolean);
+    .filter((item) => item && !isMarcusLiveAcceptanceOnlyMessage(item));
   const active = targetProject || {};
   const projectLine = [active.name, active.repo].filter(Boolean).length
     ? `Active project from this conversation: ${[active.name, active.repo].filter(Boolean).join(' / ')}.`
     : '';
-  return [projectLine, ...prior, current].filter(Boolean).join('\n').slice(-12_000);
+  const requirements = (Array.isArray(retainedRequirements) ? retainedRequirements : [])
+    .map((item) => String(item || '').trim())
+    .filter(Boolean);
+  const requirementsBlock = requirements.length
+    ? `Durable project requirements:\n${requirements.map((item) => `- ${item}`).join('\n')}`
+    : '';
+  return [projectLine, requirementsBlock, ...prior, current].filter(Boolean).join('\n').slice(-12_000);
 }
 
 function isProjectContextDeclaration(message) {
@@ -15919,21 +16005,25 @@ app.post('/api/marcus/live/chat', async (req, res) => {
         projectRegistryId: conversation.activeProject.projectRegistryId,
       })
       : null;
-    const requestProject = declaredContext?.project || conversation.activeProject;
-    const projectRequest = buildMarcusLiveProjectRequest(conversation, message, requestProject);
+    const requestProject = declaresProjectContext ? (declaredContext?.project || {}) : conversation.activeProject;
+    const createsDurableRequest = !isExternalCommunicationRequest(message) && shouldCreateDurableOperationForRequest(message);
+    const retainedRequirements = (declaresProjectContext || handlesProjectRequest || createsDurableRequest)
+      ? await collectMarcusLiveProjectRequirements(getBusinessKeyFromContext(), conversation, message, requestProject, { limit: 8 })
+      : [];
+    const projectRequest = buildMarcusLiveProjectRequest(conversation, message, requestProject, retainedRequirements);
 
     if (declaresProjectContext && !handlesProjectRequest) {
       const project = declaredContext?.project || null;
       const executionDeferred = explicitlyDefersProjectAudit(message) || explicitlyDefersCodexStart(message);
-      const retainedRequirements = summarizeMarcusLiveRequirements(conversation, message, project);
+      const replyRequirements = retainedRequirements.slice(0, 3);
       const reply = project
         ? [
             `Active project: ${project.name}${project.repo ? ` (${project.repo})` : ''}.`,
-            retainedRequirements.length ? `Retained requirements:\n${retainedRequirements.map((item) => `- ${item}`).join('\n')}` : 'I retained the current project context.',
+            replyRequirements.length ? `Retained requirements:\n${replyRequirements.map((item) => `- ${item}`).join('\n')}` : 'I retained the current project context.',
             executionDeferred ? 'I did not audit the repository or start Codex.' : 'I will carry these requirements into a later repository audit and Codex prompt.',
           ].join('\n')
         : 'I could not verify that GitHub project yet. Give me the exact owner/repository name so I can inspect the right code instead of guessing.';
-      await recordMarcusLiveExchange(message, reply, { project });
+      await recordMarcusLiveExchange(message, reply, { project, requirements: retainedRequirements });
       pushLiveEvent({ type: 'chat', from: 'marcus', text: reply, ts: Date.now() });
       return res.json({ ok: Boolean(project), status: project ? 'project_context_set' : 'needs_project', project, reply });
     }
@@ -15954,6 +16044,7 @@ app.post('/api/marcus/live/chat', async (req, res) => {
           projectId: result.operation.projectId,
           name: result.operation.projectName,
         } : null),
+        requirements: retainedRequirements,
       });
       pushLiveEvent({ type: 'chat', from: 'marcus', text: result.reply, ts: Date.now() });
       return res.json(result);
@@ -15961,7 +16052,7 @@ app.post('/api/marcus/live/chat', async (req, res) => {
 
     // Marcus Live is a second chat surface, so durable work requests must enter the
     // same operation engine instead of being answered as if an AI chat executed them.
-    if (!isExternalCommunicationRequest(message) && shouldCreateDurableOperationForRequest(message)) {
+    if (createsDurableRequest) {
       const result = await createOrReuseDurableOperationForMessage(projectRequest, {
         projectId: requestProject.projectId,
         projectName: requestProject.name,
@@ -15975,6 +16066,7 @@ app.post('/api/marcus/live/chat', async (req, res) => {
           projectId: result.operation.projectId,
           name: result.operation.projectName,
         } : null,
+        requirements: retainedRequirements,
       });
       pushLiveEvent({ type: 'chat', from: 'marcus', text: reply, ts: Date.now() });
       return res.json({ ok: true, reply, operation: result.operation });

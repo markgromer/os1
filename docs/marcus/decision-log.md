@@ -4,9 +4,9 @@
 
 Context: A deterministic production speech test correctly reached OpenAI Realtime and the Marcus operator, but the answer replayed stale requirements from another project because Live chat assembled recent history before resolving the explicitly named Reggie repository.
 
-Decision: Store project metadata on both turns of every exchange, resolve an explicitly named project before assembling the operator request, select only matching user requirements, and generate a short requirement summary for context-only replies. Preserve compatibility with older exchanges by pairing a user turn with its assistant turn's project metadata.
+Decision: Store project metadata on both turns of every exchange, resolve an explicitly named project before assembling the operator request, select only matching user requirements, and generate a short requirement summary for context-only replies. Keep up to 12 deduplicated requirements for each of 40 projects. Preserve compatibility with older exchanges by pairing a user turn with its assistant turn's project metadata and by reconstructing missing requirements from matching durable operation requests. Exclude read-only and acceptance commands from requirement memory.
 
-Consequence: A single spoken or typed command can switch projects and immediately request an audit or Codex handoff without contaminating the prompt with the formerly active project. Regression coverage now switches Reggie to Atlas and back, verifies zero work for an explicit read-only request, and verifies a direct Reggie audit contains no Atlas requirement.
+Consequence: A single spoken or typed command can switch projects and immediately request an audit or Codex handoff without contaminating the prompt with the formerly active project. Requirement recall no longer depends on the 80-turn rolling transcript. Regression coverage switches Reggie to Atlas and back, verifies zero work for an explicit read-only request, verifies a direct Reggie audit contains no Atlas requirement, erases chat and project memory, and then recovers Reggie's saved requirement from its durable operation without creating new work.
 
 ## 2026-08-12: Voice Acceptance Uses Redacted Durable Telemetry
 

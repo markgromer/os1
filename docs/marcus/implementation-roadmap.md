@@ -146,7 +146,7 @@ Implemented slice:
 - Network and WebRTC disconnect recovery with bounded backoff.
 - Scheduled renewal at 55 minutes before the Realtime session limit.
 - A single `marcus_operator` bridge back to the durable Live chat and approval flow.
-- Project-scoped conversation memory that resolves the current explicit repository before selecting retained requirements.
+- Project-scoped conversation memory that resolves the current explicit repository before selecting retained requirements, with bounded per-project requirement storage and durable-operation recovery.
 - Bounded context replies and direct project-switch regression coverage to prevent stale requirements from entering Codex prompts.
 - Authenticated, business-scoped acceptance telemetry with strict field allowlisting and 1,000-event retention.
 - Derived gates for speech recognition, assistant audio, interruption, operator completion, network/background recovery, and installed Android context.

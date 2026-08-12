@@ -47,9 +47,9 @@ The active project and recent requirements remain server-side during transport r
 
 Project continuity follows:
 
-`explicit project in current turn -> resolve target -> select only target-project user requirements -> audit/plan/execute against that target`
+`explicit project in current turn -> resolve target -> merge durable project memory and matching operation evidence -> select only target-project requirements -> audit/plan/execute against that target`
 
-The current explicit project wins over an older active project. Context-only requests return a bounded requirement summary; they do not echo unrelated conversation history or imply that an audit or Codex session ran.
+The current explicit project wins over an older active project. Context-only requests return a bounded requirement summary; they do not echo unrelated conversation history or imply that an audit or Codex session ran. Requirement memory is bounded and survives rolling chat eviction. Matching durable operations provide a migration/recovery source when older conversations predate project memory.
 
 Voice acceptance evidence follows:
 
