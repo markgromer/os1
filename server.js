@@ -14447,7 +14447,33 @@ app.post('/api/desktop-context/relay', (req, res) => {
     }
   }
 
-  const data = { ok: true, windowTitle: wt, processName: pn, idleSeconds: idle, source: 'relay', workspace };
+  const codexWorkspaces = (Array.isArray(req.body?.codexWorkspaces) ? req.body.codexWorkspaces : [])
+    .slice(0, 12)
+    .map((raw) => {
+      const item = raw && typeof raw === 'object' ? raw : {};
+      return {
+        sessionId: typeof item.sessionId === 'string' ? item.sessionId.trim().slice(0, 160) : '',
+        workspacePath: typeof item.workspacePath === 'string' ? item.workspacePath.trim().slice(0, 512) : '',
+        folderName: typeof item.folderName === 'string' ? item.folderName.trim().slice(0, 128) : '',
+        projectName: typeof item.projectName === 'string' ? item.projectName.trim().slice(0, 160) : '',
+        modifiedAt: typeof item.modifiedAt === 'string' ? item.modifiedAt.trim().slice(0, 40) : '',
+        source: typeof item.source === 'string' ? item.source.trim().slice(0, 80) : '',
+        originator: typeof item.originator === 'string' ? item.originator.trim().slice(0, 120) : '',
+        gitBranch: typeof item.gitBranch === 'string' ? item.gitBranch.trim().slice(0, 128) : '',
+        gitRemote: typeof item.gitRemote === 'string' ? item.gitRemote.trim().slice(0, 512) : '',
+        gitStatusCount: Math.max(0, Math.min(10_000, Number(item.gitStatusCount) || 0)),
+        gitStatus: Array.isArray(item.gitStatus) ? item.gitStatus.slice(0, 30).map((entry) => ({
+          status: typeof entry?.status === 'string' ? entry.status.slice(0, 4) : '',
+          file: typeof entry?.file === 'string' ? entry.file.slice(0, 256) : '',
+        })) : [],
+        gitRecentCommits: Array.isArray(item.gitRecentCommits)
+          ? item.gitRecentCommits.slice(0, 3).map((entry) => typeof entry === 'string' ? entry.slice(0, 240) : '').filter(Boolean)
+          : [],
+      };
+    })
+    .filter((item) => item.workspacePath && item.folderName);
+
+  const data = { ok: true, windowTitle: wt, processName: pn, idleSeconds: idle, source: 'relay', workspace, codexWorkspaces };
 
   // System health telemetry from the desktop agent
   if (req.body?.systemHealth && typeof req.body.systemHealth === 'object') {
@@ -16916,16 +16942,25 @@ app.post('/api/marcus/live/chat', async (req, res) => {
       return res.status(memoryResult.ok ? 200 : 400).json(memoryResult);
     }
 
+    if (projectOperatorService.shouldHandleStatus(message)) {
+      const result = await projectOperatorService.readProjectStatus(getBusinessKeyFromContext(), {
+        message,
+        currentProjectId: conversation.activeProject.projectRegistryId || conversation.activeProject.projectId,
+      });
+      await recordMarcusLiveExchange(message, result.reply, { project: result.project || null });
+      pushLiveEvent({ type: 'chat', from: 'marcus', text: result.reply, ts: Date.now() });
+      return res.json(result);
+    }
+
     const declaresProjectContext = isProjectContextDeclaration(message);
     const handlesProjectRequest = projectOperatorService.shouldHandle(message);
-    const declaredContext = declaresProjectContext
+    const resolvedRequestContext = (declaresProjectContext || handlesProjectRequest)
       ? await projectOperatorService.resolveProjectContext(getBusinessKeyFromContext(), {
         message,
-        projectId: conversation.activeProject.projectId,
-        projectRegistryId: conversation.activeProject.projectRegistryId,
+        currentProjectId: conversation.activeProject.projectRegistryId || conversation.activeProject.projectId,
       })
       : null;
-    const requestProject = declaresProjectContext ? (declaredContext?.project || {}) : conversation.activeProject;
+    const requestProject = resolvedRequestContext?.project || conversation.activeProject;
     const createsDurableRequest = !isExternalCommunicationRequest(message) && shouldCreateDurableOperationForRequest(message);
     const retainedRequirements = (declaresProjectContext || handlesProjectRequest || createsDurableRequest)
       ? await collectMarcusLiveProjectRequirements(getBusinessKeyFromContext(), conversation, message, requestProject, { limit: 8 })
@@ -16933,7 +16968,7 @@ app.post('/api/marcus/live/chat', async (req, res) => {
     const projectRequest = buildMarcusLiveProjectRequest(conversation, message, requestProject, retainedRequirements);
 
     if (declaresProjectContext && !handlesProjectRequest) {
-      const project = declaredContext?.project || null;
+      const project = resolvedRequestContext?.project || null;
       const executionDeferred = explicitlyDefersProjectAudit(message) || explicitlyDefersCodexStart(message);
       const replyRequirements = retainedRequirements.slice(0, 3);
       const reply = project
@@ -17009,6 +17044,17 @@ app.post('/api/marcus/live/chat', async (req, res) => {
         contextParts.push(`REGISTERED PROJECTS:\n${registeredProjects.slice(0, 30).map((project) => `- ${project.canonicalName}${project.repo?.fullName ? `: ${project.repo.fullName}` : ''}${project.aliases?.length ? `; aliases ${project.aliases.slice(0, 6).join(', ')}` : ''}`).join('\n')}`);
       }
     } catch {}
+    const recentCodexWorkspaces = Array.isArray(desktopRelayCache?.data?.codexWorkspaces)
+      ? desktopRelayCache.data.codexWorkspaces
+      : [];
+    if (recentCodexWorkspaces.length) {
+      contextParts.push(`RECENT CODEX WORKSPACES (metadata only):\n${recentCodexWorkspaces.slice(0, 12).map((item) => {
+        const branch = item.gitBranch ? `; branch ${item.gitBranch}` : '';
+        const changes = Number(item.gitStatusCount || 0) ? `; ${Number(item.gitStatusCount)} local change(s)` : '';
+        const repo = item.gitRemote ? `; ${item.gitRemote}` : '';
+        return `- ${item.projectName || item.folderName}: ${item.workspacePath}${branch}${changes}${repo}; last active ${item.modifiedAt || 'unknown'}`;
+      }).join('\n')}`);
+    }
     if (ws) {
       contextParts.push(`WORKSPACE: ${ws.folderName || 'unknown'} (${ws.workspacePath || ''})`);
       if (ws.gitBranch) contextParts.push(`GIT BRANCH: ${ws.gitBranch}`);

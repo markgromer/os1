@@ -22,6 +22,7 @@ const http = require('http');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const { discoverRecentCodexWorkspaces } = require('./desktop-codex-sessions.cjs');
 
 const SERVER_URL = (process.argv[2] || process.env.MARCUS_SERVER_URL || '').trim();
 const DEFAULT_ADMIN_TOKEN_FILE = path.join(
@@ -59,6 +60,7 @@ if (!ADMIN_TOKEN && new URL(SERVER_URL).protocol === 'https:') {
 
 const POLL_MS = 5000;
 const WORKSPACE_SCAN_INTERVAL_MS = 30_000; // full workspace scan every 30s
+const CODEX_WORKSPACE_SCAN_INTERVAL_MS = 30_000;
 const SYSTEM_HEALTH_INTERVAL_MS = 60_000; // system health check every 60s
 const RELAY_PATH = '/api/desktop-context/relay';
 const ALLOWED_NPM_SCRIPTS = new Set(['install', 'dev', 'build', 'test', 'lint', 'typecheck']);
@@ -109,6 +111,8 @@ let cachedWorkspaceInfo = null;
 let cachedFileContents = null;
 let cachedGitDiff = '';
 let lastFileContentsAt = 0;
+let cachedCodexWorkspaces = [];
+let lastCodexWorkspaceScanAt = 0;
 
 function extractWorkspaceFromTitle(windowTitle) {
   const parts = windowTitle.split(' - ').map(p => p.trim()).filter(Boolean);
@@ -868,6 +872,28 @@ function captureDesktop() {
   });
 }
 
+async function scanCodexWorkspaceSummary(session) {
+  const wsPath = String(session?.workspacePath || '').trim();
+  if (!wsPath) return session;
+  const [gitBranch, gitRemote, statusRaw, recentCommitsRaw] = await Promise.all([
+    gitCmd(wsPath, ['rev-parse', '--abbrev-ref', 'HEAD']),
+    gitCmd(wsPath, ['remote', 'get-url', 'origin']),
+    gitCmd(wsPath, ['status', '--porcelain', '-u']),
+    gitCmd(wsPath, ['log', '--oneline', '-3', '--no-decorate']),
+  ]);
+  const gitStatus = statusRaw
+    ? statusRaw.split('\n').slice(0, 30).map((line) => ({ status: line.slice(0, 2).trim(), file: line.slice(3).trim() }))
+    : [];
+  return {
+    ...session,
+    gitBranch,
+    gitRemote,
+    gitStatusCount: statusRaw ? statusRaw.split('\n').filter(Boolean).length : 0,
+    gitStatus,
+    gitRecentCommits: recentCommitsRaw ? recentCommitsRaw.split('\n').map((line) => line.trim()).filter(Boolean) : [],
+  };
+}
+
 // ── Send data to the server ─────────────────────────────────────
 function relay(data, customPath) {
   return new Promise((resolve) => {
@@ -1134,11 +1160,18 @@ async function tick() {
   }
 
   // Build relay payload
+  const codexNow = Date.now();
+  if (!cachedCodexWorkspaces.length || (codexNow - lastCodexWorkspaceScanAt) > CODEX_WORKSPACE_SCAN_INTERVAL_MS) {
+    const sessions = discoverRecentCodexWorkspaces({ maxResults: 12 });
+    cachedCodexWorkspaces = await Promise.all(sessions.map((session) => scanCodexWorkspaceSummary(session)));
+    lastCodexWorkspaceScanAt = codexNow;
+  }
   const payload = {
     agentId: DESKTOP_AGENT_ID,
     windowTitle: ctx.windowTitle,
     processName: ctx.processName,
     idleSeconds: ctx.idleSeconds,
+    codexWorkspaces: cachedCodexWorkspaces,
   };
   if (workspace) {
     payload.workspace = workspace;

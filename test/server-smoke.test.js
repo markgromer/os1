@@ -515,6 +515,30 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     assert.equal((await fetch(`${base}/api/operations`, { method: 'POST', headers: liveHeaders, body: JSON.stringify({ originalRequest: 'mutate' }) })).status, 401);
 
     const agencyHeaders = { ...adminHeaders, 'x-business-key': 'agency' };
+    const codexWorkspace = path.join(server.workspaceRoot, 'scoopFairies');
+    await fs.mkdir(codexWorkspace, { recursive: true });
+    const relayResponse = await fetch(`${base}/api/desktop-context/relay`, { method: 'POST', headers: agencyHeaders, body: JSON.stringify({
+      agentId: 'agent-smoke', windowTitle: 'Codex', processName: 'ChatGPT', idleSeconds: 1,
+      codexWorkspaces: [{
+        sessionId: 'session-smoke', workspacePath: codexWorkspace, folderName: 'scoopFairies', projectName: 'Scoop Fairies',
+        modifiedAt: new Date().toISOString(), source: 'vscode', originator: 'codex_vscode', gitBranch: 'main',
+        gitRemote: 'https://github.com/markgromer/scoopfairies.git', gitStatusCount: 2,
+        gitStatus: [{ status: 'M', file: 'src/app/page.tsx' }], gitRecentCommits: ['abc1234 Current work'],
+        transcript: 'must-not-be-relayed',
+      }],
+    }) });
+    assert.equal(relayResponse.status, 200);
+    const relayedContext = await (await fetch(`${base}/api/desktop-context`, { headers: agencyHeaders })).json();
+    assert.equal(relayedContext.codexWorkspaces[0].projectName, 'Scoop Fairies');
+    assert.equal(Object.hasOwn(relayedContext.codexWorkspaces[0], 'transcript'), false);
+    const liveStatusResponse = await fetch(`${base}/api/marcus/live/chat`, { method: 'POST', headers: agencyHeaders, body: JSON.stringify({
+      message: 'What is the status of the Scoop Fairies project?',
+    }) });
+    const liveStatus = await liveStatusResponse.json();
+    assert.equal(liveStatusResponse.status, 200);
+    assert.equal(liveStatus.status, 'project_status');
+    assert.equal(liveStatus.project.name, 'Scoop Fairies');
+    assert.match(liveStatus.reply, /Codex workspace/i);
     const workspace = path.join(server.workspaceRoot, 'desktop-smoke');
     await fs.mkdir(workspace, { recursive: true });
     await fs.writeFile(path.join(workspace, 'package.json'), JSON.stringify({ scripts: { test: 'node --test' } }));

@@ -108,6 +108,21 @@ function scoreRecord({ request, record, legacyProject, context }) {
     reasons.push('current desktop activity');
   }
 
+  const codexWorkspaces = Array.isArray(desktop.codexWorkspaces) ? desktop.codexWorkspaces : [];
+  const normalizedWorkspace = normalizeText(workspace);
+  const codexMatch = codexWorkspaces.find((candidate) => {
+    const item = safeObject(candidate);
+    const candidatePath = normalizeText(item.workspacePath);
+    const candidateText = [item.projectName, item.folderName, item.gitRemote, item.repoFullName].filter(Boolean).join(' ');
+    return (normalizedWorkspace && candidatePath === normalizedWorkspace)
+      || names.some((name) => includesPhrase(candidateText, name))
+      || repoNames.some((repoName) => includesPhrase(candidateText, repoName));
+  });
+  if (codexMatch) {
+    score += 28;
+    reasons.push('recent Codex workspace');
+  }
+
   const notes = [legacyProject?.agentBrief, legacyProject?.description, record.description].filter(Boolean).join(' ');
   const notesOverlap = tokenOverlap(requestNormalized, notes);
   if (notesOverlap >= 0.15) {

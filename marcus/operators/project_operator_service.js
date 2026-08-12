@@ -142,6 +142,60 @@ function normalizeRepoFullName(value) {
   return match ? `${match[1]}/${match[2].replace(/\.git$/i, '')}` : '';
 }
 
+function normalizeProjectName(value) {
+  return safeString(value, 2_000).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, ' ');
+}
+
+function compactProjectName(value) {
+  return normalizeProjectName(value).replace(/\s+/g, '');
+}
+
+function humanizeWorkspaceName(value) {
+  return safeString(value, 300)
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function codexWorkspaceMatchesRequest(request, workspace = {}) {
+  const requestNormalized = normalizeProjectName(request);
+  const requestCompact = compactProjectName(request);
+  const names = [workspace.projectName, humanizeWorkspaceName(workspace.folderName), workspace.folderName]
+    .map((value) => safeString(value, 300))
+    .filter(Boolean);
+  return names.some((name) => {
+    const normalized = normalizeProjectName(name);
+    const compact = compactProjectName(name);
+    return normalized.length >= 4 && (` ${requestNormalized} `.includes(` ${normalized} `)
+      || (compact.length >= 5 && requestCompact.includes(compact)));
+  });
+}
+
+function codexWorkspaceMatchesProject(workspace = {}, project = {}) {
+  const projectPath = safeString(project.localWorkspace?.canonicalPath || project.localWorkspace?.path, 2_000).toLowerCase();
+  const candidatePath = safeString(workspace.workspacePath, 2_000).toLowerCase();
+  if (projectPath && candidatePath && projectPath === candidatePath) return true;
+  const projectRepo = repoParts(project.repo).fullName.toLowerCase();
+  const candidateRepo = normalizeRepoFullName(workspace.gitRemote).toLowerCase();
+  if (projectRepo && candidateRepo && projectRepo === candidateRepo) return true;
+  const candidateNames = [workspace.projectName, workspace.folderName].map(compactProjectName).filter(Boolean);
+  return [project.canonicalName, ...(Array.isArray(project.aliases) ? project.aliases : [])]
+    .map(compactProjectName)
+    .some((name) => name && candidateNames.includes(name));
+}
+
+function relativeSessionDescription(modifiedAt) {
+  const ageMs = Date.now() - Date.parse(safeString(modifiedAt, 64));
+  if (!Number.isFinite(ageMs) || ageMs < 0) return 'recent';
+  const minutes = Math.floor(ageMs / 60_000);
+  if (minutes < 2) return 'active now';
+  if (minutes < 60) return `active ${minutes} minutes ago`;
+  const hours = Math.floor(minutes / 60);
+  return hours === 1 ? 'active an hour ago' : `active ${hours} hours ago`;
+}
+
 export function extractExplicitGitHubRepositories(request) {
   const text = safeString(request, 2_000);
   const repositories = new Set();
@@ -400,6 +454,13 @@ export class ProjectOperatorService {
     return PROJECT_OPERATOR_ACTION_RE.test(withoutExplicitlyNegatedClauses(text));
   }
 
+  shouldHandleStatus(message) {
+    const text = safeString(message, 4_000);
+    const asksForStatus = /\b(status|progress|state|standing|where (?:is|are|does)|how (?:is|are).{0,60}(?:going|doing))\b/i.test(text);
+    const namesProjectSurface = /\b(project|repo|repository|site|website|app|codex)\b/i.test(text);
+    return asksForStatus && namesProjectSurface;
+  }
+
   async ensureExplicitGithubProject(businessKey, request) {
     const key = safeBusinessKey(businessKey);
     const explicit = extractExplicitGitHubRepositories(request)[0] || '';
@@ -443,15 +504,172 @@ export class ProjectOperatorService {
     }
   }
 
-  async resolveProjectContext(businessKey, { message, projectId = '', projectRegistryId = '' } = {}) {
+  async ensureExplicitDesktopProject(businessKey, request) {
+    const key = safeBusinessKey(businessKey);
+    const desktop = await this.getDesktopContext().catch(() => ({}));
+    const candidates = (Array.isArray(desktop?.codexWorkspaces) ? desktop.codexWorkspaces : [])
+      .filter((workspace) => codexWorkspaceMatchesRequest(request, workspace));
+    const candidate = candidates[0];
+    if (!candidate) return null;
+
+    const records = await this.operationsEngine.listProjectRegistry(key);
+    const candidatePath = safeString(candidate.workspacePath, 2_000).toLowerCase();
+    const candidateRepo = normalizeRepoFullName(candidate.gitRemote);
+    const existing = records.find((record) => {
+      const recordPath = safeString(record.localWorkspace?.canonicalPath || record.localWorkspace?.path, 2_000).toLowerCase();
+      const recordRepo = repoParts(record.repo).fullName;
+      return (candidatePath && recordPath === candidatePath)
+        || (candidateRepo && recordRepo.toLowerCase() === candidateRepo.toLowerCase());
+    });
+    if (existing) return existing;
+
+    const canonicalName = safeString(candidate.projectName, 300)
+      || humanizeWorkspaceName(candidate.folderName)
+      || safeString(candidate.folderName, 300);
+    const repo = candidateRepo ? {
+      provider: 'github',
+      owner: candidateRepo.split('/')[0],
+      name: candidateRepo.split('/')[1],
+      fullName: candidateRepo,
+      url: `https://github.com/${candidateRepo}`,
+      defaultBranch: safeString(candidate.gitBranch, 200) || 'main',
+    } : {};
+    try {
+      return await this.operationsEngine.createProjectRegistryRecord(key, {
+        canonicalName,
+        aliases: [...new Set([
+          safeString(candidate.folderName, 300),
+          `${canonicalName} project`,
+          candidateRepo,
+        ].filter(Boolean))],
+        repo,
+        localWorkspace: { path: safeString(candidate.workspacePath, 2_000), platform: 'win32' },
+        metadata: {
+          discoveredBy: 'marcus_codex_workspace',
+          discoveredFromExplicitRequest: true,
+          codexSessionId: safeString(candidate.sessionId, 160),
+          codexSessionModifiedAt: safeString(candidate.modifiedAt, 64),
+        },
+      });
+    } catch (error) {
+      const refreshed = await this.operationsEngine.listProjectRegistry(key);
+      const raced = refreshed.find((record) => {
+        const recordPath = safeString(record.localWorkspace?.path, 2_000).toLowerCase();
+        return candidatePath && recordPath === candidatePath;
+      });
+      if (raced) return raced;
+      throw error;
+    }
+  }
+
+  async resolveProjectContext(businessKey, { message, projectId = '', projectRegistryId = '', currentProjectId = '' } = {}) {
     const key = safeBusinessKey(businessKey);
     const request = safeString(message, 12_000);
-    const explicit = await this.ensureExplicitGithubProject(key, request);
+    const explicit = await this.ensureExplicitGithubProject(key, request)
+      || await this.ensureExplicitDesktopProject(key, request);
     const resolution = await this.operationsEngine.resolveProject(key, request, {
       projectId,
       registryId: explicit?.id || projectRegistryId,
+      currentProjectId,
     });
     return { resolution, project: resolution.registryRecord ? summarizeProject(resolution.registryRecord) : null, registered: Boolean(explicit) };
+  }
+
+  async readProjectStatus(businessKey, { message, projectId = '', projectRegistryId = '', currentProjectId = '' } = {}) {
+    const key = safeBusinessKey(businessKey);
+    const context = await this.resolveProjectContext(key, { message, projectId, projectRegistryId, currentProjectId });
+    const { resolution } = context;
+    if (resolution.confidence === 'low' || !resolution.registryRecord) {
+      const alternatives = (resolution.alternatives || []).map((item) => ({
+        id: item.registryRecord?.id || '',
+        name: item.registryRecord?.canonicalName || '',
+        score: item.score,
+      })).slice(0, 8);
+      return { ok: true, status: 'needs_project', resolution, alternatives, reply: replyForResult({ status: 'needs_project', alternatives }) };
+    }
+
+    const project = resolution.registryRecord;
+    const [desktop, operations, activity, audit] = await Promise.all([
+      this.getDesktopContext().catch(() => ({})),
+      this.operationsEngine.listOperations(key, { limit: 100 }).catch(() => []),
+      this.projectEvidenceService?.getProjectActivity(key, project.id).catch(() => null) || null,
+      this.buildGithubAudit(message, project).catch(() => ({ repos: [], files: [], findings: [], coverage: {} })),
+    ]);
+    const codexWorkspace = (Array.isArray(desktop?.codexWorkspaces) ? desktop.codexWorkspaces : [])
+      .find((workspace) => codexWorkspaceMatchesProject(workspace, project));
+    const projectOperations = (Array.isArray(operations) ? operations : [])
+      .filter((operation) => operation.projectRegistryId === project.id || (project.projectId && operation.projectId === project.projectId))
+      .sort((left, right) => String(right.updatedAt || '').localeCompare(String(left.updatedAt || '')));
+    const latestOperation = projectOperations[0] || null;
+    const primaryRepo = (audit.repos || []).find((repo) => repo.fullName.toLowerCase() === repoParts(project.repo).fullName.toLowerCase())
+      || audit.repos?.[0]
+      || null;
+
+    const lines = [];
+    if (codexWorkspace) {
+      const branch = safeString(codexWorkspace.gitBranch, 120) || 'an unknown branch';
+      lines.push(`${project.canonicalName} has a Codex workspace ${relativeSessionDescription(codexWorkspace.modifiedAt)} on ${branch}.`);
+      const changed = Number(codexWorkspace.gitStatusCount || codexWorkspace.gitStatus?.length || 0);
+      lines.push(changed
+        ? `That checkout has ${changed} changed or untracked file${changed === 1 ? '' : 's'}, so the current work is still local and in progress.`
+        : 'The checkout is clean, with no local changes reported by the desktop relay.');
+    } else {
+      lines.push(`${project.canonicalName} is registered, but the desktop relay does not currently report a matching Codex workspace.`);
+    }
+    if (primaryRepo?.headCommit) {
+      lines.push(`GitHub ${primaryRepo.defaultBranch || 'main'} is at ${primaryRepo.headCommit.sha.slice(0, 7)} (${preview(primaryRepo.headCommit.message, 120)}), with ${primaryRepo.openPullRequests?.length || 0} open pull request${primaryRepo.openPullRequests?.length === 1 ? '' : 's'}.`);
+    }
+    if (latestOperation) {
+      lines.push(`Marcus's latest durable operation for it is ${safeString(latestOperation.status, 80).replaceAll('_', ' ')}: ${preview(latestOperation.title || latestOperation.objective, 140)}.`);
+    } else {
+      lines.push('Marcus has no durable operation tied to this project yet; the visible work is happening directly in Codex.');
+    }
+
+    return {
+      ok: true,
+      status: 'project_status',
+      resolution,
+      project: summarizeProject(project),
+      codexWorkspace: codexWorkspace ? {
+        workspacePath: safeString(codexWorkspace.workspacePath, 2_000),
+        folderName: safeString(codexWorkspace.folderName, 300),
+        modifiedAt: safeString(codexWorkspace.modifiedAt, 64),
+        gitBranch: safeString(codexWorkspace.gitBranch, 120),
+        gitStatusCount: Number(codexWorkspace.gitStatusCount || codexWorkspace.gitStatus?.length || 0),
+        gitRecentCommits: Array.isArray(codexWorkspace.gitRecentCommits)
+          ? codexWorkspace.gitRecentCommits.slice(0, 3).map((item) => safeString(item, 240))
+          : [],
+      } : null,
+      activity: activity ? {
+        activityStatus: safeString(activity.activityStatus || activity.status, 100),
+        lastActivityAt: safeString(activity.lastActivityAt || activity.updatedAt, 64),
+        nextAction: safeString(activity.nextAction, 500),
+        reason: safeString(activity.reason, 500),
+      } : null,
+      audit: {
+        coverage: safeObject(audit.coverage),
+        findings: Array.isArray(audit.findings) ? audit.findings.slice(0, 12).map((item) => safeString(item, 500)) : [],
+        repositories: (Array.isArray(audit.repos) ? audit.repos : []).slice(0, 6).map((repo) => ({
+          fullName: safeString(repo.fullName, 300),
+          defaultBranch: safeString(repo.defaultBranch, 120),
+          pushedAt: safeString(repo.pushedAt, 64),
+          headCommit: repo.headCommit ? {
+            sha: safeString(repo.headCommit.sha, 100),
+            message: safeString(repo.headCommit.message, 300),
+            authoredAt: safeString(repo.headCommit.authoredAt, 64),
+          } : null,
+          openPullRequestCount: Array.isArray(repo.openPullRequests) ? repo.openPullRequests.length : 0,
+        })),
+      },
+      latestOperation: latestOperation ? {
+        id: safeString(latestOperation.id, 160),
+        title: safeString(latestOperation.title, 300),
+        status: safeString(latestOperation.status, 100),
+        currentStepId: safeString(latestOperation.currentStepId, 160),
+        updatedAt: safeString(latestOperation.updatedAt, 64),
+      } : null,
+      reply: lines.join(' '),
+    };
   }
 
   async discoverRelatedRepos(request, project, githubApi = this.githubApi) {
@@ -669,15 +887,17 @@ export class ProjectOperatorService {
     return { text, legacyRows, evidence, activity, desktopContext, repoFiles, audit, missionMemory };
   }
 
-  async prepareCodexOperation(businessKey, { message, projectId = '', projectRegistryId = '', resolutionRequest = '', source = 'project_operator', autoStart = true } = {}) {
+  async prepareCodexOperation(businessKey, { message, projectId = '', projectRegistryId = '', currentProjectId = '', resolutionRequest = '', source = 'project_operator', autoStart = true } = {}) {
     const key = safeBusinessKey(businessKey);
     const request = safeString(message, 12_000);
     if (!request) throw new Error('message is required.');
     const resolverText = safeString(resolutionRequest, 12_000) || request;
-    const explicit = await this.ensureExplicitGithubProject(key, resolverText);
+    const explicit = await this.ensureExplicitGithubProject(key, resolverText)
+      || await this.ensureExplicitDesktopProject(key, resolverText);
     const resolution = await this.operationsEngine.resolveProject(key, resolverText, {
       projectId,
       registryId: explicit?.id || projectRegistryId,
+      currentProjectId,
     });
     if (resolution.confidence === 'low' || !resolution.registryRecord) {
       const alternatives = (resolution.alternatives || []).map((item) => ({

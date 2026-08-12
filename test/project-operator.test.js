@@ -8,7 +8,7 @@ import { ProjectEvidenceService } from '../marcus/evidence/project_evidence_serv
 import { createOperationsEngine } from '../marcus/operations/operation_engine.js';
 import { ProjectOperatorService } from '../marcus/operators/project_operator_service.js';
 
-async function withProjectOperator(callback, { directCodexAdapter = null, getMissionMemory = async () => [] } = {}) {
+async function withProjectOperator(callback, { directCodexAdapter = null, getMissionMemory = async () => [], getDesktopContext = null } = {}) {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'marcus-project-operator-'));
   const legacyByBusiness = {
     personal: {
@@ -74,12 +74,21 @@ async function withProjectOperator(callback, { directCodexAdapter = null, getMis
       },
       pulls: [],
     },
+    scoopfairies: {
+      description: 'Scoop Fairies customer website',
+      files: {
+        'README.md': '# Scoop Fairies\nCustomer website and quote flow.',
+        'package.json': JSON.stringify({ scripts: { test: 'node --test', build: 'next build' } }),
+        'src/app/page.tsx': 'export default function Home() { return <main>Scoop Fairies</main>; }',
+      },
+      pulls: [],
+    },
   };
   const service = new ProjectOperatorService({
     operationsEngine: engine,
     projectEvidenceService: evidence,
     getLegacyStore: async (businessKey) => legacyByBusiness[businessKey] || {},
-    getDesktopContext: async () => ({
+    getDesktopContext: getDesktopContext ? () => getDesktopContext(dataDir) : async () => ({
       workspace: {
         folderName: 'royal-doody',
         workspacePath: path.join(dataDir, 'royal-doody'),
@@ -94,6 +103,7 @@ async function withProjectOperator(callback, { directCodexAdapter = null, getMis
         { full_name: 'markgromer/reggie', name: 'reggie', description: 'New Reggie agent runtime', default_branch: 'main' },
         { full_name: 'markgromer/reggie-hub', name: 'reggie-hub', description: 'Reggie hub control plane', default_branch: 'main' },
         { full_name: 'markgromer/freedom-scoopers', name: 'freedom-scoopers', description: 'Freedom Scoopers website', default_branch: 'main' },
+        { full_name: 'markgromer/scoopfairies', name: 'scoopfairies', description: 'Scoop Fairies website', default_branch: 'main' },
       ];
       const repoMatch = pathPart.match(/^\/repos\/markgromer\/([^/?]+)/i);
       const repoName = String(repoMatch?.[1] || '').toLowerCase();
@@ -299,6 +309,48 @@ test('project operator auto-registers an explicit GitHub repo and reuses it as c
     assert.equal(result.project.name, 'Reggie');
     assert.match(result.codexPrompt, /settings popup/i);
     assert.match(result.codexPrompt, /API token and slug/i);
+  });
+});
+
+test('project operator discovers an explicitly named recent Codex workspace and reports real status', async () => {
+  await withProjectOperator(async ({ engine, service, dataDir }) => {
+    const context = await service.resolveProjectContext('personal', {
+      message: 'What is the status of the Scoop Fairies project?',
+    });
+    assert.equal(context.registered, true);
+    assert.equal(context.project.name, 'Scoop Fairies');
+    assert.equal(context.project.repo, 'markgromer/scoopfairies');
+
+    const registered = await engine.listProjectRegistry('personal');
+    const project = registered.find((item) => item.canonicalName === 'Scoop Fairies');
+    assert.equal(project.localWorkspace.path, path.join(dataDir, 'scoopFairies'));
+    assert.equal(project.localWorkspace.trustStatus, 'pending');
+
+    const status = await service.readProjectStatus('personal', {
+      message: 'What is the status of the Scoop Fairies project?',
+    });
+    assert.equal(status.status, 'project_status');
+    assert.equal(status.project.name, 'Scoop Fairies');
+    assert.match(status.reply, /Codex workspace active/i);
+    assert.match(status.reply, /3 changed or untracked files/i);
+    assert.match(status.reply, /GitHub main is at head-sc/i);
+    assert.match(status.reply, /no durable operation tied/i);
+  }, {
+    getDesktopContext: async (dataDir) => ({
+      codexWorkspaces: [{
+        sessionId: 'session-scoop-fairies',
+        workspacePath: path.join(dataDir, 'scoopFairies'),
+        folderName: 'scoopFairies',
+        projectName: 'Scoop Fairies',
+        modifiedAt: new Date().toISOString(),
+        source: 'vscode',
+        originator: 'codex_vscode',
+        gitBranch: 'main',
+        gitRemote: 'https://github.com/markgromer/scoopfairies.git',
+        gitStatusCount: 3,
+        gitStatus: [{ status: 'M', file: 'src/app/page.tsx' }],
+      }],
+    }),
   });
 });
 
