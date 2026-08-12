@@ -193,3 +193,19 @@ Context: Reggie already starts Codex work through a central GitHub Actions runne
 Decision: Add `GitHubActionsCodexAdapter` and `.github/workflows/marcus-codex-runner.yml` so Marcus can use the same launch pattern when `MARCUS_CODEX_GITHUB_ACTIONS_ENABLED=true`. Default the runner repo to `markgromer/Reggie` so Marcus can use Reggie's existing runner secrets.
 
 Consequence: Marcus no longer requires a custom HTTP Codex service to enter direct mode. The runner still depends on Reggie's GitHub/OpenAI workflow secrets remaining configured.
+
+## 2026-08-12: Provider Verification Uses Canonical Sender Data Without Sending
+
+Context: The live Quo phone-number response included both a display-formatted number and a canonical E.164 number. Marcus preferred the display value, then rejected it as invalid even though the dedicated `os1` credential and Operations line were valid.
+
+Decision: Prefer Quo's canonical number, then the explicitly configured sender, and normalize display formatting only as a fallback. Model this response shape in the provider regression fixture. Keep provider verification separate from draft approval and send.
+
+Consequence: Production Quo verification now resolves the Operations line and required ids with `sent: false`. The full suite passes `114/114`; no real message is sent until the exact pending draft is explicitly approved and sent.
+
+## 2026-08-12: Reggie Acceptance Must Include Real Audit Time And Exact-Head Review
+
+Context: Earlier mobile replies were immediate, lost the explicit Reggie context, and described work without inspecting repositories or waiting for Codex. That behavior did not satisfy Marcus's operator mission.
+
+Decision: Exercise the exact `markgromer/Reggie` Sweep and Go request through production. Require repository indexing and file reads before prompt creation, a real Reggie GitHub Actions Codex run, authoritative PR evidence, independent criterion coverage, and isolated exact-head verification before completion.
+
+Consequence: Operation `op_f6XKmXTWILGvpQ` audited 180 paths and 10 files, dispatched a real Codex job, opened PR #16, and completed only after GitHub and authenticated evidence passed. The PR remains open and unmerged, preserving separate merge and deployment authority.

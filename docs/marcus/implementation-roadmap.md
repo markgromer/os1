@@ -224,7 +224,7 @@ Acceptance tests still required before this phase is complete:
 
 The production paired-admin `Verify` dashboard starts a fresh in-memory acceptance session, shows each voice/provider gate, and enables physical confirmation only after all eight Android voice gates pass in installed standalone mode. `GET /api/marcus/acceptance` combines that evidence with provider, approved-send, Codex, GitHub, Cloudflare, OpenAI, and desktop readiness. Service worker `marcus-mobile-v13` and the dashboard passed Render deployment and phone-size Chromium acceptance; the physical-phone run remains pending.
 
-Status: the official SDK, recovery, and acceptance telemetry are live at `https://task-tracker-5wsa.onrender.com/mobile.html`, pass the local `98/98` suite, and passed production synthetic-browser signaling, speech, assistant-audio, interruption, operator-bridge, network-recovery, and background-recovery validation. A real installed-Android speech, barge-in, and recovery conversation is not yet verified.
+Status: the official SDK, recovery, and acceptance telemetry are live at `https://task-tracker-5wsa.onrender.com/mobile.html`, pass the local `114/114` suite, and passed production synthetic-browser signaling, speech, assistant-audio, interruption, operator-bridge, network-recovery, and background-recovery validation. A real installed-Android speech, barge-in, and recovery conversation is not yet verified.
 
 Verified locally on 2026-08-12:
 
@@ -290,3 +290,25 @@ Independent result-review acceptance evidence:
 - Evidence digest: `99dc7a16679924e30285fff2b3fb1baaff9b24379e73d5f6d35332c4104c8d1b`
 - Result: four of four acceptance criteria grounded; five of five tests, Wrangler dry-run, syntax, artifact, diff-review, and unchanged-production evidence passed
 - Boundary proof: PR #4 is open and unmerged; live `/version` returns HTTP 404 because the acceptance change was not deployed
+
+Production Reggie project-operator acceptance evidence:
+
+- Durable operation: `op_f6XKmXTWILGvpQ`
+- Resolved project: `Reggie` / `markgromer/Reggie`, without falling back to the earlier Marcus demo context
+- Audit scope: one repository, 180 paths indexed, 10 files read, 2,548 ms
+- Codex prompt: 18,731 characters, including the Sweep and Go Setup button, modal, API-token/slug, verification gate, secure-storage, preservation, and focused-test requirements
+- Codex runner: `https://github.com/markgromer/Reggie/actions/runs/31588016385`
+- Review pull request: `https://github.com/markgromer/Reggie/pull/16`
+- Exact head: `36166678b23ec7f2a382d8c51a8d024c95715ffa`
+- GitHub source-quality `verify` check passed; an isolated exact-head `npm run check` validated 55 managed files and standard, Pages, Vinext, and Render fixtures
+- `git diff --check` passed. The repository has no lockfile, so `npm ci` was not applicable and is not recorded as passing
+- Independent criterion review, artifact presence, and authenticated manual review passed; the operation completed with no active blockers
+- Boundary proof: PR #16 remains open and unmerged. Marcus did not deploy it
+
+Provider acceptance status on 2026-08-12:
+
+- The existing dedicated Quo credential named `os1` is saved only in Marcus's redacted server settings.
+- Quo authenticated sender lookup verified the Operations line `+18886107667`, resolved its phone-number and user ids, and reported `sent: false`.
+- A self-addressed production text acceptance draft is pending explicit approval; no acceptance text has been sent yet.
+- SMTP remains unconfigured. The selected path is a dedicated Resend sending-only credential with `smtp.resend.com` and `Marcus <marcus@gromore.media>` after explicit approval.
+- The remaining combined acceptance gates are SMTP verification, approved text send, approved email send, and physical installed-Android voice acceptance.

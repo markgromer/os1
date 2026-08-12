@@ -217,6 +217,19 @@ The mobile app is a PWA first. Pairing sets the existing secure HttpOnly authent
 
 Pairing state is persisted on the Render data volume under an exclusive file lock. A code minted before a Render process replacement can be consumed once by the replacement process; a replay is rejected.
 
+## External Communication Providers
+
+Provider administration uses paired durable-admin routes:
+
+- `GET` and `PUT /api/marcus/providers/config` return or update redacted server-side settings.
+- `POST /api/marcus/providers/verify` authenticates and resolves the selected provider without sending.
+- `POST /api/marcus/external-actions/draft` creates an unsent draft.
+- Separate approve and send routes retain the draft -> approval -> provider-receipt boundary.
+
+Quo is configured in production with a dedicated existing `os1` credential and the Operations line. The no-send verifier resolved the canonical sender, phone-number id, and user id on 2026-08-12. Credentials are never returned by the configuration API.
+
+SMTP is not configured yet. The selected implementation path uses Resend's SMTP relay and the verified `gromore.media` domain after creation of a dedicated sending-only credential. The approved text and email acceptance sends remain pending, so Marcus does not yet report either send gate as passed.
+
 ## Desktop Agent
 
 `desktop-agent.cjs` relays local context and executes queued desktop actions.

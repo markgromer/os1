@@ -129,3 +129,15 @@ Completion requires evidence:
 - Test, lint, build, or manual verification.
 - Browser evidence when UI is involved.
 - Explicit note of any skipped verification.
+
+Production Reggie acceptance on 2026-08-12 exercised this complete loop:
+
+`explicit markgromer/Reggie request -> 180-path/10-file audit -> 18,731-character prompt -> Reggie GitHub Actions Codex runner -> PR #16 at exact head -> authoritative patches and passing GitHub check -> independent criterion review -> isolated npm run check and diff check -> authenticated evidence -> completed durable operation`
+
+The provider run lasted almost three minutes before opening the pull request. Marcus then remained blocked until the independent and authenticated verification evidence passed. PR #16 remains open and unmerged, so completion of the implementation operation did not imply merge or deployment authority.
+
+Production Quo onboarding followed the separate provider path:
+
+`paired admin -> save redacted os1 credential -> query Quo phone numbers -> normalize the canonical E.164 sender -> persist resolved sender ids -> mark provider verified with sent=false`
+
+The real text acceptance draft remains `pending_approval`. SMTP setup and both provider sends still require explicit operator authority.
