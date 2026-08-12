@@ -71,6 +71,12 @@ Production status verified on 2026-08-12:
 
 The Realtime session exposes one function, `marcus_operator`. That function calls Marcus's authenticated Live chat route; it does not expose GitHub, Cloudflare, Codex, email, text, deployment, or DNS credentials to the browser or voice model. Existing approval rules remain authoritative.
 
+## Mobile Pairing
+
+An authenticated operator can request one active six-digit code from `POST /api/auth/pairing-code`. The code expires after ten minutes, is stored only as a keyed hash, and is consumed by the first successful `POST /api/auth/pair` request. Failed attempts are limited per client. Successful pairing sets the secure HttpOnly admin cookie; the durable admin token is not returned to or stored by the phone.
+
+Local operator helper: `scripts/create-marcus-mobile-pairing-code.ps1`.
+
 External communication draft source:
 
 - `GET /api/marcus/external-actions`

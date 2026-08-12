@@ -86,8 +86,8 @@
   </header>
 
   <section id="loginPanel" class="panel login">
-    <label for="adminToken">Admin token</label>
-    <input id="adminToken" class="input" type="password" autocomplete="current-password" placeholder="Enter Marcus admin token">
+    <label for="adminToken">Pairing code or admin token</label>
+    <input id="adminToken" class="input" type="password" autocomplete="one-time-code" placeholder="Enter 6-digit code">
     <button id="loginBtn" class="btn primary" type="button">Sign in</button>
   </section>
 
@@ -281,13 +281,23 @@
   els.loginBtn.addEventListener('click', async () => {
     try {
       const enteredToken = String(els.adminToken.value || '').trim();
-      await api('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token: enteredToken, remember: true }),
-      });
-      adminToken = enteredToken;
-      localStorage.setItem('marcus_mobile_admin_token', adminToken);
+      if (/^\d{6}$/.test(enteredToken)) {
+        await api('/api/auth/pair', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code: enteredToken }),
+        });
+        adminToken = '';
+        localStorage.removeItem('marcus_mobile_admin_token');
+      } else {
+        await api('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: enteredToken, remember: true }),
+        });
+        adminToken = enteredToken;
+        localStorage.setItem('marcus_mobile_admin_token', adminToken);
+      }
       els.adminToken.value = '';
       await refreshHealth();
     } catch (err) {

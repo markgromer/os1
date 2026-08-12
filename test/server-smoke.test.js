@@ -116,6 +116,7 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     assert.match(mobileHtml, /manifest\.webmanifest/);
     assert.match(mobileHtml, /marcus-realtime\.js/);
     assert.match(mobileHtml, /Start voice/);
+    assert.match(mobileHtml, /Pairing code or admin token/);
     const realtimeClient = await fetch(`${base}/marcus-realtime.js`);
     assert.equal(realtimeClient.status, 200);
     assert.match(await realtimeClient.text(), /createMarcusRealtimeVoice/);
@@ -127,11 +128,34 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     assert.ok(manifest.icons.some((icon) => icon.src === '/icons/marcus.svg'));
     const serviceWorker = await fetch(`${base}/sw.js`);
     assert.equal(serviceWorker.status, 200);
-    assert.match(await serviceWorker.text(), /marcus-mobile-v4/);
+    assert.match(await serviceWorker.text(), /marcus-mobile-v5/);
     const mobileIcon = await fetch(`${base}/icons/marcus.svg`);
     assert.equal(mobileIcon.status, 200);
     assert.match(await mobileIcon.text(), /<svg/);
     assert.equal((await fetch(`${base}/api/operations/summary`)).status, 401);
+    assert.equal((await fetch(`${base}/api/auth/pairing-code`, { method: 'POST' })).status, 401);
+    const pairingResponse = await fetch(`${base}/api/auth/pairing-code`, { method: 'POST', headers: adminHeaders, body: '{}' });
+    const pairing = await pairingResponse.json();
+    assert.equal(pairingResponse.status, 201);
+    assert.match(pairing.code, /^\d{6}$/);
+    assert.equal(Object.hasOwn(pairing, 'token'), false);
+    const invalidPairingCode = pairing.code === '999999' ? '000000' : '999999';
+    const invalidPair = await fetch(`${base}/api/auth/pair`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: invalidPairingCode }),
+    });
+    assert.equal(invalidPair.status, 401);
+    const validPair = await fetch(`${base}/api/auth/pair`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: pairing.code }),
+    });
+    assert.equal(validPair.status, 200);
+    const pairingCookie = validPair.headers.get('set-cookie');
+    assert.match(pairingCookie || '', /ops_admin_token=/);
+    const pairedStatus = await fetch(`${base}/api/auth/status`, { headers: { cookie: pairingCookie } });
+    assert.equal((await pairedStatus.json()).authenticated, true);
+    const reusedPair = await fetch(`${base}/api/auth/pair`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: pairing.code }),
+    });
+    assert.equal(reusedPair.status, 401);
     assert.equal((await fetch(`${base}/api/tasks`, { headers: adminHeaders })).status, 200);
     assert.equal((await fetch(`${base}/api/projects`, { headers: adminHeaders })).status, 200);
     assert.equal((await fetch(`${base}/api/tasks`, { headers: { ...adminHeaders, 'x-business-key': 'not-configured' } })).status, 403);

@@ -1,5 +1,13 @@
 # Decision Log
 
+## 2026-08-12: Android Uses One-Time Pairing Instead Of A Copied Admin Secret
+
+Context: The original mobile login required the same durable admin token used by the server operator, which was awkward on Android and caused stale-token unauthorized failures.
+
+Decision: Add a single-use six-digit pairing code with a ten-minute lifetime, keyed server-side storage, failed-attempt throttling, and secure HttpOnly cookie issuance.
+
+Consequence: Mark can pair the Android PWA without exposing or retaining the durable admin token. Existing cookie authentication and Live session tokens continue to protect API and Realtime requests.
+
 ## 2026-08-12: Production Uses Dedicated Cloudflare And Reggie Operator Credentials
 
 Context: The local Wrangler OAuth token could manage developer resources but could not read DNS through Marcus's server API, and Render lacked GitHub, Cloudflare, and direct Codex variables.

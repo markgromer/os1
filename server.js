@@ -551,6 +551,11 @@ const MARCUS_REALTIME_VOICE = typeof process.env.MARCUS_REALTIME_VOICE === 'stri
   : DEFAULT_MARCUS_REALTIME_VOICE;
 const AUTH_COOKIE_NAME = 'ops_admin_token';
 const AUTH_COOKIE_MAX_AGE_SEC = 60 * 60 * 24 * 30;
+const MOBILE_PAIRING_CODE_TTL_MS = 10 * 60 * 1000;
+const MOBILE_PAIRING_ATTEMPT_WINDOW_MS = 10 * 60 * 1000;
+const MOBILE_PAIRING_MAX_FAILURES = 8;
+const mobilePairingCodes = new Map();
+const mobilePairingAttempts = new Map();
 
 function parseCookies(req) {
   const raw = typeof req.headers?.cookie === 'string' ? req.headers.cookie : '';
@@ -587,10 +592,49 @@ function buildAuthCookie({ req, token, clear = false, remember = true }) {
   return parts.join('; ');
 }
 
+function pairingCodeHash(code) {
+  return crypto.createHmac('sha256', ADMIN_TOKEN || 'marcus-local-pairing')
+    .update(String(code || ''))
+    .digest('hex');
+}
+
+function pruneMobilePairingState() {
+  const now = Date.now();
+  for (const [hash, record] of mobilePairingCodes.entries()) {
+    if (!Number.isFinite(record?.expiresAt) || record.expiresAt <= now) mobilePairingCodes.delete(hash);
+  }
+  for (const [key, record] of mobilePairingAttempts.entries()) {
+    if (!Number.isFinite(record?.startedAt) || record.startedAt + MOBILE_PAIRING_ATTEMPT_WINDOW_MS <= now) {
+      mobilePairingAttempts.delete(key);
+    }
+  }
+}
+
+function mobilePairingAttemptKey(req) {
+  return String(req.ip || req.socket?.remoteAddress || 'unknown');
+}
+
+function recordMobilePairingFailure(req) {
+  pruneMobilePairingState();
+  const key = mobilePairingAttemptKey(req);
+  const current = mobilePairingAttempts.get(key);
+  const next = current && current.startedAt + MOBILE_PAIRING_ATTEMPT_WINDOW_MS > Date.now()
+    ? { ...current, count: current.count + 1 }
+    : { startedAt: Date.now(), count: 1 };
+  mobilePairingAttempts.set(key, next);
+  return next.count;
+}
+
+function mobilePairingIsRateLimited(req) {
+  pruneMobilePairingState();
+  return (mobilePairingAttempts.get(mobilePairingAttemptKey(req))?.count || 0) >= MOBILE_PAIRING_MAX_FAILURES;
+}
+
 function isPublicApiRoute(req) {
   const method = String(req.method || '').toUpperCase();
   const p = String(req.path || '');
   if (method === 'POST' && p === '/api/auth/login') return true;
+  if (method === 'POST' && p === '/api/auth/pair') return true;
   if (method === 'POST' && p === '/api/auth/logout') return true;
   if (method === 'GET' && p === '/api/auth/status') return true;
   if (method === 'GET' && p === '/api/health') return true;
@@ -713,6 +757,36 @@ app.post('/api/auth/login', (req, res) => {
     return;
   }
   res.setHeader('Set-Cookie', buildAuthCookie({ req, token, remember }));
+  res.json({ ok: true, authRequired: true, authenticated: true });
+});
+
+app.post('/api/auth/pairing-code', (req, res) => {
+  if (!ADMIN_TOKEN) return res.status(400).json({ ok: false, error: 'Mobile pairing requires admin authentication.' });
+  pruneMobilePairingState();
+  mobilePairingCodes.clear();
+  const code = String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');
+  const expiresAt = Date.now() + MOBILE_PAIRING_CODE_TTL_MS;
+  mobilePairingCodes.set(pairingCodeHash(code), { expiresAt });
+  res.setHeader('Cache-Control', 'no-store');
+  res.status(201).json({ ok: true, code, expiresAt, ttlMs: MOBILE_PAIRING_CODE_TTL_MS });
+});
+
+app.post('/api/auth/pair', (req, res) => {
+  if (!ADMIN_TOKEN) return res.json({ ok: true, authRequired: false, authenticated: true });
+  if (mobilePairingIsRateLimited(req)) {
+    return res.status(429).json({ ok: false, error: 'Too many pairing attempts. Request a new code later.' });
+  }
+  const code = typeof req.body?.code === 'string' ? req.body.code.trim() : '';
+  const hash = /^\d{6}$/.test(code) ? pairingCodeHash(code) : '';
+  const record = hash ? mobilePairingCodes.get(hash) : null;
+  if (!record || record.expiresAt <= Date.now()) {
+    recordMobilePairingFailure(req);
+    return res.status(401).json({ ok: false, error: 'Invalid or expired pairing code.' });
+  }
+  mobilePairingCodes.delete(hash);
+  mobilePairingAttempts.delete(mobilePairingAttemptKey(req));
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Set-Cookie', buildAuthCookie({ req, token: ADMIN_TOKEN, remember: true }));
   res.json({ ok: true, authRequired: true, authenticated: true });
 });
 

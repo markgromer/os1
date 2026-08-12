@@ -142,6 +142,7 @@ It uses:
 - `public/manifest.webmanifest` for Android home-screen installation.
 - `public/sw.js` for a small app-shell cache.
 - `GET /api/auth/status` and `POST /api/auth/login` for the existing admin-cookie auth flow.
+- `POST /api/auth/pairing-code` and `POST /api/auth/pair` for short-lived, one-time Android pairing without copying the durable admin secret to the phone.
 - `GET /api/marcus/live/session` to create a short-lived Live token after auth.
 - `GET /api/marcus/operator-health` to show Codex, GitHub, Cloudflare, and desktop capability status.
 - `POST /api/marcus/live/chat` for conversation-first project operator chat.
@@ -150,7 +151,7 @@ It uses:
 
 Realtime voice uses `gpt-realtime-2.1` by default with voice `marin`. Its only operational function is `marcus_operator`, which sends substantive spoken requests back through `/api/marcus/live/chat`. The voice model does not own GitHub, Cloudflare, Codex, external communication, or approval authority.
 
-The mobile app is a PWA first. It does not add a separate Android credential store or native notification channel yet.
+The mobile app is a PWA first. Pairing sets the existing secure HttpOnly authentication cookie; the six-digit code is not retained. It does not add a separate Android credential store or native notification channel yet.
 
 ## Desktop Agent
 

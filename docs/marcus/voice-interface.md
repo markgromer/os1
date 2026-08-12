@@ -61,6 +61,8 @@ On 2026-08-12 the canonical Render PWA authenticated, obtained a short-lived Rea
 
 This proves production authentication, PWA assets, ephemeral-key minting, and WebRTC signaling. It does not prove actual Android microphone quality, spoken tool invocation, barge-in, phone-lock recovery, or network handoff; those remain in the completion gate.
 
+Android authentication uses the one-time pairing flow in [[access-model]], so voice setup does not require copying the durable server credential to the device.
+
 ## Completion Gate
 
 This capability is not complete until every acceptance test in [[implementation-roadmap]] passes on the installed Android PWA against the durable production host.
