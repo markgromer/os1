@@ -46,6 +46,8 @@ Local/saved settings are also supported for operator provider access:
 - `cloudflareAccountId`
 - `cloudflareDefaultZoneId`
 - `renderApiKey`
+- `quoApiKey`, `quoDefaultPhoneNumberId`, `quoFromNumber`, and `quoUserId`
+- `smtpHost`, `smtpPort`, `smtpSecure`, `smtpUsername`, `smtpPassword`, and `smtpFromAddress`
 
 Environment variables win when both env and saved settings are present. `/api/settings` reports configured/source/hint fields but redacts the actual saved secrets.
 
@@ -98,7 +100,9 @@ External communication draft source:
 
 Marcus can create email and text drafts with recipients, subject/body, project context, and the reason approval is needed. Approval changes the draft status to `approved`. A separate send call uses SMTP for email or Quo for text, records provider evidence, and changes the status to `sent`. Provider credentials remain server-side and are never exposed to the mobile browser or Realtime model.
 
-Production provider status on 2026-08-11: the outbound code and mock-provider acceptance tests pass, but real SMTP and Quo outbound credentials are not configured. Marcus must report that condition and must not claim a real message was sent.
+The paired mobile client can configure these providers through `GET/PUT /api/marcus/providers/config` and verify them through `POST /api/marcus/providers/verify`. These routes require the durable admin token or pairing cookie; a Live-session token is deliberately insufficient. Read responses contain only non-secret fields, masked hints, and bounded verification evidence. Blank secret inputs preserve an existing secret. A provider setting change clears that provider's previous verification. Verification performs a Quo sender lookup or SMTP authentication handshake and never creates, approves, or sends an external action.
+
+Production provider status on 2026-08-12: outbound code, admin-only mobile configuration, secret redaction, provider verification, and mock-provider send acceptance pass locally. Real SMTP and Quo credentials are not configured. Mark can enter them directly in Marcus Mobile under `Integrations`; Marcus must still report the unconfigured condition and must not claim a real message was sent until both live verification and approved-send acceptance pass.
 
 ## Desktop Relay Credential
 

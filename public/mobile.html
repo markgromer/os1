@@ -69,7 +69,38 @@
   .install { display: none; padding: 12px; align-items: center; justify-content: space-between; gap: 10px; }
   .install.visible { display: flex; }
   .install p { margin: 0; color: var(--muted); font-size: 13px; }
-  .footer-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .footer-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+  .provider-dialog { width: min(620px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); margin: auto; padding: 0; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow); overflow: hidden; }
+  .provider-dialog::backdrop { background: rgba(2, 7, 12, 0.78); }
+  .provider-form { display: flex; flex-direction: column; max-height: calc(100dvh - 24px); }
+  .provider-head, .provider-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px; }
+  .provider-head { border-bottom: 1px solid var(--line); }
+  .provider-head h2 { margin: 0; font-size: 17px; }
+  .icon-btn { width: 42px; min-width: 42px; height: 42px; border: 1px solid var(--line); border-radius: 8px; color: var(--text); background: rgba(255,255,255,0.05); font-size: 25px; line-height: 1; cursor: pointer; }
+  .provider-body { overflow: auto; }
+  .provider-section { padding: 14px 12px; }
+  .provider-section + .provider-section { border-top: 1px solid var(--line); }
+  .provider-title { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+  .provider-title h3 { margin: 0; font-size: 15px; }
+  .provider-state { color: var(--muted); font-size: 12px; text-align: right; overflow-wrap: anywhere; }
+  .provider-state.ok { color: var(--ok); }
+  .provider-state.error { color: var(--danger); }
+  .provider-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .provider-field { display: grid; gap: 5px; min-width: 0; }
+  .provider-field.wide { grid-column: 1 / -1; }
+  .provider-field label, .provider-check { color: var(--muted); font-size: 12px; }
+  .provider-field .input { border-radius: 8px; padding: 10px; min-width: 0; }
+  .provider-check { min-height: 42px; display: flex; align-items: center; gap: 8px; }
+  .provider-check input { width: 18px; height: 18px; accent-color: var(--accent); }
+  .provider-section .btn { border-radius: 8px; }
+  .provider-actions { border-top: 1px solid var(--line); justify-content: flex-end; }
+  .provider-result { min-height: 18px; margin: 0; padding: 0 12px 10px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+  .provider-result.error { color: var(--danger); }
+  @media (max-width: 520px) {
+    .provider-grid { grid-template-columns: 1fr; }
+    .provider-field.wide { grid-column: auto; }
+    .footer-actions .btn { padding-left: 6px; padding-right: 6px; font-size: 12px; }
+  }
   @media (min-width: 760px) {
     .app { max-width: 760px; width: 100%; margin: 0 auto; }
   }
@@ -125,9 +156,84 @@
 
   <nav class="footer-actions" aria-label="Mobile navigation">
     <button id="openLiveBtn" class="btn" type="button">Open Live HUD</button>
+    <button id="providersBtn" class="btn" type="button">Integrations</button>
     <button id="refreshBtn" class="btn" type="button">Refresh</button>
   </nav>
 </main>
+
+<dialog id="providerDialog" class="provider-dialog">
+  <form id="providerForm" class="provider-form" method="dialog">
+    <header class="provider-head">
+      <h2>Message providers</h2>
+      <button id="closeProvidersBtn" class="icon-btn" type="button" title="Close integrations" aria-label="Close integrations">&times;</button>
+    </header>
+    <div class="provider-body">
+      <section class="provider-section" aria-labelledby="textProviderTitle">
+        <div class="provider-title">
+          <h3 id="textProviderTitle">Text via Quo</h3>
+          <span id="textProviderState" class="provider-state">not checked</span>
+        </div>
+        <div class="provider-grid">
+          <div class="provider-field wide">
+            <label for="quoApiKey">API key</label>
+            <input id="quoApiKey" class="input" type="password" autocomplete="off" placeholder="Enter API key">
+          </div>
+          <div class="provider-field">
+            <label for="quoPhoneNumberId">Phone-number ID</label>
+            <input id="quoPhoneNumberId" class="input" type="text" autocomplete="off">
+          </div>
+          <div class="provider-field">
+            <label for="quoFromNumber">From number</label>
+            <input id="quoFromNumber" class="input" type="tel" autocomplete="tel" placeholder="+15555555555">
+          </div>
+          <div class="provider-field wide">
+            <label for="quoUserId">User ID</label>
+            <input id="quoUserId" class="input" type="text" autocomplete="off">
+          </div>
+        </div>
+        <button id="verifyTextBtn" class="btn" type="button">Save and verify text</button>
+      </section>
+
+      <section class="provider-section" aria-labelledby="emailProviderTitle">
+        <div class="provider-title">
+          <h3 id="emailProviderTitle">Email via SMTP</h3>
+          <span id="emailProviderState" class="provider-state">not checked</span>
+        </div>
+        <div class="provider-grid">
+          <div class="provider-field">
+            <label for="smtpHost">Host</label>
+            <input id="smtpHost" class="input" type="text" inputmode="url" autocomplete="off" placeholder="smtp.example.com">
+          </div>
+          <div class="provider-field">
+            <label for="smtpPort">Port</label>
+            <input id="smtpPort" class="input" type="number" inputmode="numeric" min="1" max="65535" value="465">
+          </div>
+          <div class="provider-field wide">
+            <label for="smtpUsername">Username</label>
+            <input id="smtpUsername" class="input" type="text" autocomplete="username">
+          </div>
+          <div class="provider-field wide">
+            <label for="smtpPassword">Password</label>
+            <input id="smtpPassword" class="input" type="password" autocomplete="off" placeholder="Enter password">
+          </div>
+          <div class="provider-field wide">
+            <label for="smtpFromAddress">From address</label>
+            <input id="smtpFromAddress" class="input" type="email" autocomplete="email">
+          </div>
+          <label class="provider-check" for="smtpSecure">
+            <input id="smtpSecure" type="checkbox" checked>
+            TLS
+          </label>
+        </div>
+        <button id="verifyEmailBtn" class="btn" type="button">Save and verify email</button>
+      </section>
+      <p id="providerResult" class="provider-result" aria-live="polite"></p>
+    </div>
+    <footer class="provider-actions">
+      <button id="saveProvidersBtn" class="btn primary" type="button">Save</button>
+    </footer>
+  </form>
+</dialog>
 
 <script src="/marcus-realtime.js"></script>
 <script>
@@ -148,6 +254,26 @@
     input: document.getElementById('messageInput'),
     send: document.getElementById('sendBtn'),
     openLive: document.getElementById('openLiveBtn'),
+    providers: document.getElementById('providersBtn'),
+    providerDialog: document.getElementById('providerDialog'),
+    providerForm: document.getElementById('providerForm'),
+    closeProviders: document.getElementById('closeProvidersBtn'),
+    saveProviders: document.getElementById('saveProvidersBtn'),
+    verifyText: document.getElementById('verifyTextBtn'),
+    verifyEmail: document.getElementById('verifyEmailBtn'),
+    providerResult: document.getElementById('providerResult'),
+    textProviderState: document.getElementById('textProviderState'),
+    emailProviderState: document.getElementById('emailProviderState'),
+    quoApiKey: document.getElementById('quoApiKey'),
+    quoPhoneNumberId: document.getElementById('quoPhoneNumberId'),
+    quoFromNumber: document.getElementById('quoFromNumber'),
+    quoUserId: document.getElementById('quoUserId'),
+    smtpHost: document.getElementById('smtpHost'),
+    smtpPort: document.getElementById('smtpPort'),
+    smtpSecure: document.getElementById('smtpSecure'),
+    smtpUsername: document.getElementById('smtpUsername'),
+    smtpPassword: document.getElementById('smtpPassword'),
+    smtpFromAddress: document.getElementById('smtpFromAddress'),
     refresh: document.getElementById('refreshBtn'),
     voice: document.getElementById('voiceBtn'),
     voiceLabel: document.getElementById('voiceLabel'),
@@ -262,6 +388,14 @@
     if (!resp.ok) throw new Error(data.error || data.message || `HTTP ${resp.status}`);
     return data;
   }
+  async function adminApi(path, options = {}) {
+    const headers = { ...(options.headers || {}) };
+    if (adminToken) headers.Authorization = `Bearer ${adminToken}`;
+    const resp = await fetch(path, { ...options, headers, credentials: 'include' });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.error || data.message || `HTTP ${resp.status}`);
+    return data;
+  }
   async function ensureSession() {
     const auth = await api('/api/auth/status');
     if (auth.authRequired && !auth.authenticated) {
@@ -286,6 +420,101 @@
     els.github.textContent = caps.github?.backendTokenConfigured ? `ready (${caps.github.source})` : 'not configured';
     els.cloudflare.textContent = caps.cloudflare?.backendTokenConfigured ? `ready (${caps.cloudflare.source})` : 'not configured';
     els.desktop.textContent = caps.desktopAgent?.relayOnline ? 'online' : 'offline';
+  }
+  function updateProviderState(element, configured, detail = '') {
+    element.className = `provider-state ${configured ? 'ok' : ''}`.trim();
+    element.textContent = detail || (configured ? 'configured' : 'not configured');
+  }
+  function applyProviderConfiguration(data) {
+    const text = data?.text || {};
+    const email = data?.email || {};
+    els.quoApiKey.value = '';
+    els.quoApiKey.placeholder = text.apiKeyConfigured ? `Saved ${text.apiKeyHint || ''}`.trim() : 'Enter API key';
+    els.quoPhoneNumberId.value = text.defaultPhoneNumberId || '';
+    els.quoFromNumber.value = text.fromNumber || '';
+    els.quoUserId.value = text.userId || '';
+    els.smtpHost.value = email.host || '';
+    els.smtpPort.value = String(email.port || 465);
+    els.smtpSecure.checked = email.secure !== false;
+    els.smtpUsername.value = email.username || '';
+    els.smtpPassword.value = '';
+    els.smtpPassword.placeholder = email.passwordConfigured ? `Saved ${email.passwordHint || ''}`.trim() : 'Enter password';
+    els.smtpFromAddress.value = email.fromAddress || '';
+    const textVerified = text.verification?.verified === true;
+    const emailVerified = email.verification?.verified === true;
+    updateProviderState(els.textProviderState, text.configured, textVerified ? 'verified' : text.configured ? `configured (${text.source})` : 'not configured');
+    updateProviderState(els.emailProviderState, email.configured, emailVerified ? 'verified' : email.configured ? `configured (${email.source})` : 'not configured');
+  }
+  function getProviderPatch(type = '') {
+    const patch = {};
+    if (!type || type === 'text') {
+      patch.text = {
+        apiKey: els.quoApiKey.value,
+        defaultPhoneNumberId: els.quoPhoneNumberId.value,
+        fromNumber: els.quoFromNumber.value,
+        userId: els.quoUserId.value,
+      };
+    }
+    if (!type || type === 'email') {
+      patch.email = {
+        host: els.smtpHost.value,
+        port: Number(els.smtpPort.value),
+        secure: els.smtpSecure.checked,
+        username: els.smtpUsername.value,
+        password: els.smtpPassword.value,
+        fromAddress: els.smtpFromAddress.value,
+      };
+    }
+    return patch;
+  }
+  async function saveProviderConfiguration(type = '') {
+    els.providerResult.classList.remove('error');
+    els.providerResult.textContent = 'Saving...';
+    const data = await adminApi('/api/marcus/providers/config', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(getProviderPatch(type)),
+    });
+    applyProviderConfiguration(data);
+    els.providerResult.textContent = 'Saved.';
+    return data;
+  }
+  async function verifyProvider(type) {
+    const stateElement = type === 'text' ? els.textProviderState : els.emailProviderState;
+    stateElement.className = 'provider-state';
+    stateElement.textContent = 'checking';
+    try {
+      await saveProviderConfiguration(type);
+      const data = await adminApi('/api/marcus/providers/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type }),
+      });
+      applyProviderConfiguration(await adminApi('/api/marcus/providers/config'));
+      stateElement.className = 'provider-state ok';
+      stateElement.textContent = 'verified';
+      els.providerResult.classList.remove('error');
+      els.providerResult.textContent = type === 'text'
+        ? `Quo verified for ${data.sender?.fromNumber || 'the selected sender'}. No text was sent.`
+        : `SMTP verified for ${data.fromAddress || 'the selected account'}. No email was sent.`;
+      await refreshHealth();
+    } catch (err) {
+      stateElement.className = 'provider-state error';
+      stateElement.textContent = 'verification failed';
+      els.providerResult.classList.add('error');
+      els.providerResult.textContent = err.message || String(err);
+    }
+  }
+  async function openProviders() {
+    try {
+      if (!(await ensureSession())) return;
+      applyProviderConfiguration(await adminApi('/api/marcus/providers/config'));
+      els.providerResult.textContent = '';
+      els.providerResult.classList.remove('error');
+      els.providerDialog.showModal();
+    } catch (err) {
+      addMessage('system', err.message || 'Provider settings could not be opened.');
+    }
   }
   async function sendMessage(text) {
     const message = String(text || '').trim();
@@ -402,6 +631,23 @@
     if (!(await ensureSession())) return;
     location.href = `/live.html?liveToken=${encodeURIComponent(liveToken)}`;
   });
+  els.providers.addEventListener('click', openProviders);
+  els.closeProviders.addEventListener('click', () => els.providerDialog.close());
+  els.providerDialog.addEventListener('click', (event) => {
+    if (event.target === els.providerDialog) els.providerDialog.close();
+  });
+  els.providerForm.addEventListener('submit', (event) => event.preventDefault());
+  els.saveProviders.addEventListener('click', async () => {
+    try {
+      await saveProviderConfiguration();
+      await refreshHealth();
+    } catch (err) {
+      els.providerResult.classList.add('error');
+      els.providerResult.textContent = err.message || String(err);
+    }
+  });
+  els.verifyText.addEventListener('click', () => verifyProvider('text'));
+  els.verifyEmail.addEventListener('click', () => verifyProvider('email'));
   els.refresh.addEventListener('click', refreshHealth);
   els.voice.addEventListener('click', async () => {
     if (!realtimeVoice) return;

@@ -94,13 +94,16 @@ Current routes:
 
 External communication routes:
 
+- `GET /api/marcus/providers/config`
+- `PUT /api/marcus/providers/config`
+- `POST /api/marcus/providers/verify`
 - `GET /api/marcus/external-actions`
 - `POST /api/marcus/external-actions/draft`
 - `POST /api/marcus/external-actions/:id/approve`
 - `POST /api/marcus/external-actions/:id/send`
 - `POST /api/marcus/external-actions/:id/reject`
 
-Email uses SMTP. Text uses Quo's message API. Drafting and approval are durable; provider acceptance moves the action through `sending` to `sent` and records the provider receipt. Production credentials are still required before either provider can send.
+Email uses SMTP. Text uses Quo's message API. Drafting and approval are durable; provider acceptance moves the action through `sending` to `sent` and records the provider receipt. Marcus Mobile's admin-only `Integrations` dialog writes Quo/SMTP settings without returning secrets, verifies each provider without sending, and records a bounded timestamped verification result. Quo verification retains an unambiguous resolved sender. A later settings change invalidates that provider's verification. Production credentials are still required before either provider can send.
 
 ## Providers
 
@@ -172,7 +175,7 @@ It uses:
 
 `client/marcus-realtime.js` builds the browser client with `@openai/agents-realtime`; `scripts/build-mobile.mjs` bundles it into `public/marcus-realtime.js`. Realtime voice uses `gpt-realtime-2.1` by default with voice `marin`, semantic VAD, interruption, near-field noise reduction, and live transcription. Its only operational function is `marcus_operator`, which sends substantive spoken requests back through `/api/marcus/live/chat`. The voice model does not own GitHub, Cloudflare, Codex, external communication, or approval authority.
 
-The browser lifecycle closes the media session while the PWA is hidden, resumes with a fresh ephemeral credential, reconnects after network or WebRTC loss with bounded backoff, and refreshes at 55 minutes before the Realtime session limit. A valid durable pairing cookie takes over immediately if a Render restart invalidates a process-bound Live token, even when the stale token is still present in the Authorization header. Service worker cache `marcus-mobile-v10` carries the acceptance telemetry client and keeps its initial event queue silent until authentication succeeds.
+The browser lifecycle closes the media session while the PWA is hidden, resumes with a fresh ephemeral credential, reconnects after network or WebRTC loss with bounded backoff, and refreshes at 55 minutes before the Realtime session limit. A valid durable pairing cookie takes over immediately if a Render restart invalidates a process-bound Live token, even when the stale token is still present in the Authorization header. Service worker cache `marcus-mobile-v11` carries the acceptance telemetry client, the admin-only provider setup, and keeps its initial event queue silent until authentication succeeds.
 
 The SDK's generic `audio_start` callback is not emitted when WebRTC owns audio playback. Marcus therefore derives speaking state from output-audio transcript deltas, derives playback completion from `response.output_audio.done`, treats the later final transcript as text-only, and records barge-in when input speech begins while assistant playback is active. Guarded state prevents duplicate events if another transport emits the generic callbacks.
 

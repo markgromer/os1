@@ -2443,6 +2443,7 @@ async function buildMarcusOperatorHealth() {
   const ai = await getAiConfig();
   const email = getEmailConfig(settings);
   const quoOutbound = getQuoOutboundConfig(settings);
+  const providerConfiguration = getMarcusProviderConfiguration(settings);
   const github = getGitHubCloudConfig(settings);
   const cloudflare = getCloudflareConfig(settings);
   const render = getRenderCloudConfig(settings);
@@ -2510,7 +2511,11 @@ async function buildMarcusOperatorHealth() {
       communication: {
         emailReadConfigured: email.imapConfigured,
         emailSendConfigured: email.smtpConfigured,
+        emailProviderVerified: providerConfiguration.email.verification?.verified === true,
+        emailProviderVerifiedAt: providerConfiguration.email.verification?.verifiedAt || '',
         textSendConfigured: quoOutbound.configured,
+        textProviderVerified: providerConfiguration.text.verification?.verified === true,
+        textProviderVerifiedAt: providerConfiguration.text.verification?.verifiedAt || '',
         textProvider: quoOutbound.configured ? 'quo' : 'none',
         textWebhookConfigured: quoWebhookConfigured,
         externalSendRequiresApproval: true,
@@ -3752,6 +3757,7 @@ function sanitizeSettingsForClient(settings) {
   delete clone.cloudflareApiToken;
   delete clone.renderApiKey;
   delete clone.externalActionDrafts;
+  delete clone.marcusProviderVerification;
   delete clone.airtableByBusinessKey;
   delete clone.airtablePat;
   delete clone.qdrantApiKey;
@@ -7881,6 +7887,222 @@ async function buildMarcusActiveBrief() {
     projectEvidenceActivity: projectActivity,
     evidenceFocus: projectActivity?.currentFocus || null,
   };
+}
+
+function getMarcusProviderConfiguration(saved = {}) {
+  const text = getQuoOutboundConfig(saved);
+  const email = getEmailConfig(saved);
+  const verification = saved.marcusProviderVerification && typeof saved.marcusProviderVerification === 'object'
+    ? saved.marcusProviderVerification
+    : {};
+  const textVerification = verification.text?.verified === true
+    && verification.text.fingerprint === marcusProviderConfigurationFingerprint('text', saved) ? {
+    verified: true,
+    provider: 'quo',
+    verifiedAt: String(verification.text.verifiedAt || '').slice(0, 40),
+    phoneNumberId: String(verification.text.phoneNumberId || '').slice(0, 200),
+    fromNumber: String(verification.text.fromNumber || '').slice(0, 30),
+    userId: String(verification.text.userId || '').slice(0, 200),
+  } : null;
+  const emailVerification = verification.email?.verified === true
+    && verification.email.fingerprint === marcusProviderConfigurationFingerprint('email', saved) ? {
+    verified: true,
+    provider: 'smtp',
+    verifiedAt: String(verification.email.verifiedAt || '').slice(0, 40),
+    fromAddress: String(verification.email.fromAddress || '').slice(0, 320),
+    profile: verification.email.profile && typeof verification.email.profile === 'object'
+      ? {
+          host: String(verification.email.profile.host || '').slice(0, 253),
+          port: normalizeNetworkPort(verification.email.profile.port, 465),
+          secure: verification.email.profile.secure === true,
+          label: String(verification.email.profile.label || '').slice(0, 80),
+        }
+      : null,
+  } : null;
+  const emailEnvConfigured = Boolean(
+    String(process.env.SMTP_HOST || '').trim()
+    || String(process.env.SMTP_USERNAME || '').trim()
+    || String(process.env.SMTP_PASSWORD || '').trim()
+    || String(process.env.SMTP_FROM_ADDRESS || '').trim()
+  );
+  const emailSavedConfigured = Boolean(
+    String(saved.smtpHost || '').trim()
+    || String(saved.smtpUsername || '').trim()
+    || String(saved.smtpPassword || '').trim()
+    || String(saved.smtpFromAddress || '').trim()
+  );
+
+  return {
+    ok: true,
+    text: {
+      provider: 'quo',
+      configured: text.configured,
+      apiKeyConfigured: Boolean(text.apiKey),
+      apiKeyHint: text.keyHint,
+      source: text.source,
+      defaultPhoneNumberId: text.defaultPhoneNumberId,
+      fromNumber: text.from,
+      userId: text.userId,
+      verification: textVerification,
+    },
+    email: {
+      provider: 'smtp',
+      configured: email.smtpConfigured,
+      passwordConfigured: Boolean(email.smtp.password),
+      passwordHint: maskSecretHint(email.smtp.password),
+      source: emailEnvConfigured && emailSavedConfigured ? 'mixed' : emailEnvConfigured ? 'env' : emailSavedConfigured ? 'settings' : 'none',
+      host: email.smtp.host,
+      port: email.smtp.port,
+      secure: email.smtp.secure,
+      username: email.smtp.username,
+      fromAddress: email.fromAddress,
+      verification: emailVerification,
+    },
+  };
+}
+
+function marcusProviderConfigurationFingerprint(type, saved = {}) {
+  if (type === 'text') {
+    const config = getQuoOutboundConfig(saved);
+    return crypto.createHash('sha256').update(JSON.stringify({
+      provider: 'quo',
+      apiKey: config.apiKey,
+      baseUrl: config.baseUrl,
+      defaultPhoneNumberId: config.defaultPhoneNumberId,
+      from: config.from,
+      userId: config.userId,
+    })).digest('hex');
+  }
+  const email = getEmailConfig(saved);
+  return crypto.createHash('sha256').update(JSON.stringify({
+    provider: 'smtp',
+    host: email.smtp.host,
+    port: email.smtp.port,
+    secure: email.smtp.secure,
+    username: email.smtp.username,
+    password: email.smtp.password,
+    fromAddress: email.fromAddress,
+  })).digest('hex');
+}
+
+function normalizeProviderTextField(value, label, maxLength = 320) {
+  const normalized = String(value ?? '').trim();
+  if (normalized.length > maxLength || /[\u0000-\u001f\u007f]/.test(normalized)) {
+    throw new Error(`${label} is invalid.`);
+  }
+  return normalized;
+}
+
+function normalizeSmtpHost(value) {
+  const host = normalizeProviderTextField(value, 'SMTP host', 253);
+  if (host && (!/^[a-z0-9.-]+$/i.test(host) || host.startsWith('.') || host.endsWith('.') || host.includes('..'))) {
+    throw new Error('SMTP host must be a hostname or IPv4 address without a URL scheme.');
+  }
+  return host;
+}
+
+async function updateMarcusProviderConfiguration(input = {}) {
+  const text = input?.text && typeof input.text === 'object' && !Array.isArray(input.text) ? input.text : null;
+  const email = input?.email && typeof input.email === 'object' && !Array.isArray(input.email) ? input.email : null;
+  if (!text && !email) throw new Error('Text or email provider settings are required.');
+
+  writeLock = writeLock.then(async () => {
+    const saved = await readSettings();
+    const next = { ...saved, updatedAt: nowIso() };
+
+    if (text) {
+      const apiKey = normalizeProviderTextField(text.apiKey, 'Quo API key', 1_000);
+      if (text.clearApiKey === true) next.quoApiKey = '';
+      else if (apiKey) next.quoApiKey = apiKey;
+      if (Object.hasOwn(text, 'defaultPhoneNumberId')) {
+        next.quoDefaultPhoneNumberId = normalizeProviderTextField(text.defaultPhoneNumberId, 'Quo phone-number ID', 200);
+      }
+      if (Object.hasOwn(text, 'fromNumber')) {
+        const fromNumber = normalizeProviderTextField(text.fromNumber, 'Quo sender number', 30);
+        if (fromNumber) normalizeExternalRecipient('text', fromNumber);
+        next.quoFromNumber = fromNumber;
+      }
+      if (Object.hasOwn(text, 'userId')) {
+        next.quoUserId = normalizeProviderTextField(text.userId, 'Quo user ID', 200);
+      }
+      next.marcusProviderVerification = { ...(next.marcusProviderVerification || {}), text: null };
+    }
+
+    if (email) {
+      const password = normalizeProviderTextField(email.password, 'SMTP password', 1_000);
+      if (email.clearPassword === true) next.smtpPassword = '';
+      else if (password) next.smtpPassword = password;
+      if (Object.hasOwn(email, 'host')) next.smtpHost = normalizeSmtpHost(email.host);
+      if (Object.hasOwn(email, 'port')) {
+        const port = Number(email.port);
+        if (!Number.isInteger(port) || port < 1 || port > 65_535) throw new Error('SMTP port must be between 1 and 65535.');
+        next.smtpPort = port;
+      }
+      if (Object.hasOwn(email, 'secure')) next.smtpSecure = email.secure === true;
+      if (Object.hasOwn(email, 'username')) {
+        next.smtpUsername = normalizeProviderTextField(email.username, 'SMTP username', 320);
+      }
+      if (Object.hasOwn(email, 'fromAddress')) {
+        const fromAddress = normalizeProviderTextField(email.fromAddress, 'SMTP from address', 320);
+        if (fromAddress) normalizeExternalRecipient('email', fromAddress);
+        next.smtpFromAddress = fromAddress;
+      }
+      next.marcusProviderVerification = { ...(next.marcusProviderVerification || {}), email: null };
+    }
+
+    await writeSettings(next);
+  });
+  await writeLock;
+  return getMarcusProviderConfiguration(await readSettings());
+}
+
+async function persistResolvedQuoSender(sender = {}) {
+  const envPhoneNumberId = firstNonEmptyString(process.env, ['QUO_DEFAULT_PHONE_NUMBER_ID', 'OPENPHONE_DEFAULT_PHONE_NUMBER_ID']);
+  const envFrom = firstNonEmptyString(process.env, ['QUO_FROM_NUMBER', 'OPENPHONE_FROM_NUMBER']);
+  const envUserId = firstNonEmptyString(process.env, ['QUO_USER_ID', 'OPENPHONE_USER_ID']);
+  writeLock = writeLock.then(async () => {
+    const saved = await readSettings();
+    const next = { ...saved };
+    let changed = false;
+    if (!envPhoneNumberId && !String(saved.quoDefaultPhoneNumberId || '').trim() && sender.phoneNumberId) {
+      next.quoDefaultPhoneNumberId = sender.phoneNumberId;
+      changed = true;
+    }
+    if (!envFrom && !String(saved.quoFromNumber || '').trim() && sender.from) {
+      next.quoFromNumber = sender.from;
+      changed = true;
+    }
+    if (!envUserId && !String(saved.quoUserId || '').trim() && sender.userId) {
+      next.quoUserId = sender.userId;
+      changed = true;
+    }
+    if (changed) await writeSettings({ ...next, updatedAt: nowIso() });
+  });
+  await writeLock;
+}
+
+async function persistMarcusProviderVerification(type, details = {}) {
+  writeLock = writeLock.then(async () => {
+    const saved = await readSettings();
+    const existing = saved.marcusProviderVerification && typeof saved.marcusProviderVerification === 'object'
+      ? saved.marcusProviderVerification
+      : {};
+    await writeSettings({
+      ...saved,
+      marcusProviderVerification: {
+        ...existing,
+        [type]: {
+          verified: true,
+          provider: type === 'text' ? 'quo' : 'smtp',
+          verifiedAt: nowIso(),
+          fingerprint: marcusProviderConfigurationFingerprint(type, saved),
+          ...details,
+        },
+      },
+      updatedAt: nowIso(),
+    });
+  });
+  await writeLock;
 }
 
 function messageNeedsProjectContext(message) {
@@ -15889,6 +16111,77 @@ app.get('/api/marcus/operator-health', async (req, res) => {
     res.json(await buildMarcusOperatorHealth());
   } catch (err) {
     res.status(500).json({ ok: false, error: String(err?.message || err) });
+  }
+});
+
+app.get('/api/marcus/providers/config', async (req, res) => {
+  try {
+    res.json(getMarcusProviderConfiguration(await readSettings()));
+  } catch (err) {
+    res.status(500).json({ ok: false, error: String(err?.message || err) });
+  }
+});
+
+app.put('/api/marcus/providers/config', async (req, res) => {
+  try {
+    res.json(await updateMarcusProviderConfiguration(req.body || {}));
+  } catch (err) {
+    res.status(400).json({ ok: false, error: String(err?.message || err) });
+  }
+});
+
+app.post('/api/marcus/providers/verify', async (req, res) => {
+  const type = String(req.body?.type || '').trim().toLowerCase();
+  if (!['text', 'email'].includes(type)) {
+    return res.status(400).json({ ok: false, error: 'Provider type must be text or email.' });
+  }
+  try {
+    const settings = await readSettings();
+    if (type === 'text') {
+      const config = getQuoOutboundConfig(settings);
+      const sender = await resolveQuoSender(config);
+      await persistResolvedQuoSender(sender);
+      await persistMarcusProviderVerification('text', {
+        phoneNumberId: sender.phoneNumberId,
+        fromNumber: sender.from,
+        userId: sender.userId,
+      });
+      return res.json({
+        ok: true,
+        type,
+        provider: 'quo',
+        verified: true,
+        sent: false,
+        sender: {
+          phoneNumberId: sender.phoneNumberId,
+          fromNumber: sender.from,
+          userId: sender.userId,
+        },
+        configuration: getMarcusProviderConfiguration(await readSettings()).text,
+      });
+    }
+
+    const email = getEmailConfig(settings);
+    const verified = await withSmtpTransport(email, async (_transport, profile) => ({ profile: describeSmtpProfile(profile) }), { timeoutMs: 8_000 });
+    await persistMarcusProviderVerification('email', {
+      fromAddress: email.fromAddress,
+      profile: verified.value.profile,
+    });
+    return res.json({
+      ok: true,
+      type,
+      provider: 'smtp',
+      verified: true,
+      sent: false,
+      profile: verified.value.profile,
+      fromAddress: email.fromAddress,
+      attempts: verified.attempts,
+      configuration: getMarcusProviderConfiguration(await readSettings()).email,
+    });
+  } catch (err) {
+    const message = String(err?.message || err);
+    const status = /not configured|missing|invalid|configure|required/i.test(message) ? 400 : 502;
+    return res.status(status).json({ ok: false, type, verified: false, sent: false, error: message });
   }
 });
 

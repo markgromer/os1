@@ -105,7 +105,15 @@ Implemented and tested locally on 2026-08-11:
 - Successful replay is idempotent and returns the stored receipt.
 - Operator health distinguishes inbound text webhooks from outbound text capability.
 
-Production blocker: no real Quo outbound API key/sender or SMTP account is configured. Live-provider acceptance remains required.
+Added and tested locally on 2026-08-12:
+
+- Marcus Mobile provides one Quo/SMTP provider dialog.
+- Configuration and no-send verification require durable admin-cookie/token authority; a Live-session token alone receives 401.
+- Secret values are never returned, and blank secret inputs preserve existing values.
+- Quo sender resolution and SMTP authentication persist bounded verification evidence and issue no message request or SMTP `DATA`.
+- The complete local suite passes `95/95` with provider setup, redaction, authorization, no-send verification, and the existing approved-send/idempotency checks.
+
+Production blocker: no real Quo outbound API key/sender or SMTP account is configured. Marcus Mobile now provides an admin-only `Integrations` dialog that stores write-only credentials and verifies Quo/SMTP without sending. Mark must enter both provider accounts there; live verification and one explicitly approved send through each provider remain required.
 
 Production project-continuity acceptance on 2026-08-11:
 

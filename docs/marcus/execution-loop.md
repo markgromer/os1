@@ -33,6 +33,12 @@ External communication now follows:
 
 Approval does not mark a message sent. The separate send action claims an approved draft as `sending`, invokes SMTP or Quo, then stores `sent` only after provider acceptance. Repeating a successful send request returns the existing receipt instead of sending twice.
 
+Provider onboarding is separate from external actions:
+
+`paired durable admin -> save redacted server settings -> authenticate without sending -> retain bounded verification evidence`
+
+A short-lived voice/Live token cannot configure or verify providers. Verification never creates, approves, or sends an external action.
+
 Realtime voice follows:
 
 `microphone -> OpenAI Realtime WebRTC -> marcus_operator -> /api/marcus/live/chat -> durable Marcus result -> spoken response`

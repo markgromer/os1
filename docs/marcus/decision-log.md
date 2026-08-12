@@ -1,5 +1,13 @@
 # Decision Log
 
+## 2026-08-12: Provider Setup Lives Behind Durable Mobile Admin Auth
+
+Context: Real text and email acceptance remained blocked because Quo and SMTP credentials were absent, and asking Mark to paste secrets into chat would expose them to conversation history.
+
+Decision: Add an `Integrations` dialog to the paired mobile client and admin-only provider configuration/verification routes. Keep secrets write-only, return masked hints, reject Live-session-only access, verify Quo sender identity or SMTP transport without sending, retain only bounded timestamped evidence, and invalidate that evidence after a settings change.
+
+Consequence: Mark can finish provider setup directly on Marcus Mobile without sharing credentials in chat. Sending remains a separate durable draft, explicit approval, and provider action; provider verification cannot send a message.
+
 ## 2026-08-12: Final Voice Transcripts Do Not Reopen Playback
 
 Context: A one-shot production Reggie continuity conversation streamed assistant audio and emitted `response.output_audio.done`, then emitted its final output transcript. Treating both transcript deltas and the final transcript as playback-start signals put the UI back into `Speaking` after playback had ended.

@@ -190,6 +190,9 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     assert.match(mobileHtml, /marcus-realtime\.js/);
     assert.match(mobileHtml, /Start voice/);
     assert.match(mobileHtml, /Pairing code or admin token/);
+    assert.match(mobileHtml, /Message providers/);
+    assert.match(mobileHtml, /Save and verify text/);
+    assert.match(mobileHtml, /Save and verify email/);
     assert.match(mobileHtml, /__marcusVoiceDiagnostics/);
     assert.match(mobileHtml, /voiceTelemetryReady/);
     const realtimeClient = await fetch(`${base}/marcus-realtime.js`);
@@ -203,7 +206,7 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     assert.ok(manifest.icons.some((icon) => icon.src === '/icons/marcus.svg'));
     const serviceWorker = await fetch(`${base}/sw.js`);
     assert.equal(serviceWorker.status, 200);
-    assert.match(await serviceWorker.text(), /marcus-mobile-v10/);
+    assert.match(await serviceWorker.text(), /marcus-mobile-v11/);
     const mobileIcon = await fetch(`${base}/icons/marcus.svg`);
     assert.equal(mobileIcon.status, 200);
     assert.match(await mobileIcon.text(), /<svg/);
@@ -227,6 +230,7 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     assert.match(pairingCookie || '', /ops_admin_token=/);
     const pairedStatus = await fetch(`${base}/api/auth/status`, { headers: { cookie: pairingCookie } });
     assert.equal((await pairedStatus.json()).authenticated, true);
+    assert.equal((await fetch(`${base}/api/marcus/providers/config`, { headers: { cookie: pairingCookie } })).status, 200);
     const reusedPair = await fetch(`${base}/api/auth/pair`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: pairing.code }),
     });
@@ -764,6 +768,92 @@ test('approved Marcus email actions send exactly once through SMTP', async () =>
       assert.equal((await replay.json()).reused, true);
       assert.equal(received.length, 1);
     } finally { await server.close(); }
+  });
+});
+
+test('paired admin can configure and verify Quo and SMTP without sending', async () => {
+  await withMockQuoApi(async ({ baseUrl: quoBaseUrl, received: texts }) => {
+    await withMockSmtp(async ({ port: smtpPort, received: emails }) => {
+      const server = await spawnServer({ extraEnv: {
+        QUO_API_KEY: '', OPENPHONE_API_KEY: '',
+        QUO_DEFAULT_PHONE_NUMBER_ID: '', OPENPHONE_DEFAULT_PHONE_NUMBER_ID: '',
+        QUO_FROM_NUMBER: '', OPENPHONE_FROM_NUMBER: '',
+        QUO_USER_ID: '', OPENPHONE_USER_ID: '',
+        QUO_API_BASE_URL: quoBaseUrl,
+        SMTP_HOST: '', SMTP_PORT: '', SMTP_SECURE: '', SMTP_USERNAME: '', SMTP_PASSWORD: '', SMTP_FROM_ADDRESS: '',
+      } });
+      const base = `http://127.0.0.1:${server.port}`;
+      const headers = { authorization: 'Bearer test-admin-token', 'content-type': 'application/json' };
+      try {
+        await server.waitForReady();
+        const session = await (await fetch(`${base}/api/marcus/live/session`, { headers })).json();
+        const liveHeaders = { authorization: `Bearer ${session.token}`, 'content-type': 'application/json' };
+        assert.equal((await fetch(`${base}/api/marcus/providers/config`, { headers: liveHeaders })).status, 401);
+        assert.equal((await fetch(`${base}/api/marcus/providers/config`, { method: 'PUT', headers: liveHeaders, body: '{}' })).status, 401);
+        assert.equal((await fetch(`${base}/api/marcus/providers/verify`, { method: 'POST', headers: liveHeaders, body: JSON.stringify({ type: 'text' }) })).status, 401);
+
+        const updateResponse = await fetch(`${base}/api/marcus/providers/config`, {
+          method: 'PUT', headers, body: JSON.stringify({
+            text: { apiKey: 'saved-quo-key', defaultPhoneNumberId: '', fromNumber: '', userId: '' },
+            email: {
+              host: '127.0.0.1', port: smtpPort, secure: false,
+              username: 'marcus@example.com', password: 'saved-smtp-password', fromAddress: 'marcus@example.com',
+            },
+          }),
+        });
+        const configured = await updateResponse.json();
+        assert.equal(updateResponse.status, 200, JSON.stringify(configured));
+        assert.equal(configured.text.apiKeyConfigured, true);
+        assert.equal(configured.text.apiKey, undefined);
+        assert.equal(configured.email.passwordConfigured, true);
+        assert.equal(configured.email.password, undefined);
+
+        const textVerifyResponse = await fetch(`${base}/api/marcus/providers/verify`, {
+          method: 'POST', headers, body: JSON.stringify({ type: 'text' }),
+        });
+        const textVerify = await textVerifyResponse.json();
+        assert.equal(textVerifyResponse.status, 200, JSON.stringify(textVerify));
+        assert.equal(textVerify.verified, true);
+        assert.equal(textVerify.sent, false);
+        assert.equal(textVerify.sender.phoneNumberId, 'PN_TEST');
+        assert.equal(textVerify.sender.fromNumber, '+15550001111');
+        assert.equal(textVerify.sender.userId, 'US_TEST');
+        assert.equal(texts.length, 0);
+
+        const emailVerifyResponse = await fetch(`${base}/api/marcus/providers/verify`, {
+          method: 'POST', headers, body: JSON.stringify({ type: 'email' }),
+        });
+        const emailVerify = await emailVerifyResponse.json();
+        assert.equal(emailVerifyResponse.status, 200, JSON.stringify(emailVerify));
+        assert.equal(emailVerify.verified, true);
+        assert.equal(emailVerify.sent, false);
+        assert.equal(emails.length, 0);
+
+        const verifiedConfiguration = await (await fetch(`${base}/api/marcus/providers/config`, { headers })).json();
+        assert.equal(verifiedConfiguration.text.verification.verified, true);
+        assert.equal(verifiedConfiguration.email.verification.verified, true);
+        assert.match(verifiedConfiguration.text.verification.verifiedAt, /^\d{4}-\d{2}-\d{2}T/);
+        assert.match(verifiedConfiguration.email.verification.verifiedAt, /^\d{4}-\d{2}-\d{2}T/);
+
+        const storedSettings = await (await fetch(`${base}/api/settings`, { headers })).json();
+        assert.equal(storedSettings.quoApiKey, undefined);
+        assert.equal(storedSettings.smtpPassword, undefined);
+        assert.equal(storedSettings.marcusProviderVerification, undefined);
+        const health = await (await fetch(`${base}/api/marcus/operator-health`, { headers })).json();
+        assert.equal(health.capabilities.communication.textSendConfigured, true);
+        assert.equal(health.capabilities.communication.emailSendConfigured, true);
+        assert.equal(health.capabilities.communication.textProviderVerified, true);
+        assert.equal(health.capabilities.communication.emailProviderVerified, true);
+
+        const changedSettingsResponse = await fetch(`${base}/api/settings`, {
+          method: 'PUT', headers, body: JSON.stringify({ quoApiKey: 'changed-after-verification' }),
+        });
+        assert.equal(changedSettingsResponse.status, 200);
+        const changedConfiguration = await (await fetch(`${base}/api/marcus/providers/config`, { headers })).json();
+        assert.equal(changedConfiguration.text.verification, null);
+        assert.equal(changedConfiguration.email.verification.verified, true);
+      } finally { await server.close(); }
+    });
   });
 });
 
