@@ -79,7 +79,7 @@ function normalizeWorkflowRun(run = {}, fallback = {}) {
 export class GitHubActionsCodexAdapter {
   constructor({
     token,
-    runnerRepo = 'markgromer/os1',
+    runnerRepo = 'markgromer/Reggie',
     eventType = 'marcus_codex_job',
     workflowFile = 'marcus-codex-runner.yml',
     timeoutMs = 30_000,
@@ -187,7 +187,7 @@ export function createGitHubActionsCodexAdapterFromEnv(env = process.env) {
   if (!token) return null;
   return new GitHubActionsCodexAdapter({
     token,
-    runnerRepo: env.MARCUS_CODEX_RUNNER_REPO || env.CODEX_RUNNER_REPO || 'markgromer/os1',
+    runnerRepo: env.MARCUS_CODEX_RUNNER_REPO || env.CODEX_RUNNER_REPO || 'markgromer/Reggie',
     eventType: env.MARCUS_CODEX_RUNNER_EVENT_TYPE || env.CODEX_RUNNER_EVENT_TYPE || 'marcus_codex_job',
     workflowFile: env.MARCUS_CODEX_RUNNER_WORKFLOW || env.CODEX_RUNNER_WORKFLOW || 'marcus-codex-runner.yml',
     timeoutMs: env.MARCUS_CODEX_GITHUB_TIMEOUT_MS || env.CODEX_GITHUB_TIMEOUT_MS,

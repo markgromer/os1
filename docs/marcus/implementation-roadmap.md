@@ -65,11 +65,11 @@ Reggie-style GitHub Actions adapter environment:
 
 - `MARCUS_CODEX_GITHUB_ACTIONS_ENABLED=true`
 - `MARCUS_CODEX_GITHUB_TOKEN` or `CODEX_GITHUB_TOKEN` or `GITHUB_TOKEN`
-- Optional runner repo: `MARCUS_CODEX_RUNNER_REPO` or `CODEX_RUNNER_REPO`
+- Optional runner repo: `MARCUS_CODEX_RUNNER_REPO` or `CODEX_RUNNER_REPO`; default is `markgromer/Reggie`
 - Optional runner event: `MARCUS_CODEX_RUNNER_EVENT_TYPE` or `CODEX_RUNNER_EVENT_TYPE`
 - Optional workflow file: `MARCUS_CODEX_RUNNER_WORKFLOW` or `CODEX_RUNNER_WORKFLOW`
 
-When this adapter is configured, `/api/marcus/operator-health` reports provider `github_actions_codex`. The runner workflow still requires the GitHub repository secrets needed by `.github/workflows/marcus-codex-runner.yml`, including an OpenAI key.
+When this adapter is configured, `/api/marcus/operator-health` reports provider `github_actions_codex`. The default Reggie runner uses `REGGIE_OPENAI_API_KEY` and `REGGIE_GITHUB_TOKEN`, which already exist in the Reggie repository secrets as of the last checked run.
 
 ## Phase 4: Result Review
 

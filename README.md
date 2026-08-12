@@ -405,7 +405,7 @@ Without a configured direct adapter, M.A.R.C.U.S. deliberately uses `external_ha
 5. The same operation resumes into verification.
 6. Required checks must pass or have a recorded approved waiver before completion.
 
-Marcus can also borrow Reggie's GitHub Actions launch pattern. Set `MARCUS_CODEX_GITHUB_ACTIONS_ENABLED=true` plus `MARCUS_CODEX_GITHUB_TOKEN` or `CODEX_GITHUB_TOKEN` to dispatch `repository_dispatch` event `marcus_codex_job` into `.github/workflows/marcus-codex-runner.yml`. Override the runner repository with `MARCUS_CODEX_RUNNER_REPO`; the default is `markgromer/os1`. The runner workflow uses `openai/codex-action@v1`, so the runner repository must have an OpenAI key secret such as `MARCUS_OPENAI_API_KEY` or `OPENAI_API_KEY`.
+Marcus can also borrow Reggie's GitHub Actions launch pattern. Set `MARCUS_CODEX_GITHUB_ACTIONS_ENABLED=true` plus `MARCUS_CODEX_GITHUB_TOKEN` or `CODEX_GITHUB_TOKEN` to dispatch `repository_dispatch` event `marcus_codex_job` into `.github/workflows/marcus-codex-runner.yml`. Override the runner repository with `MARCUS_CODEX_RUNNER_REPO`; the default is `markgromer/Reggie`, which uses Reggie's existing `REGGIE_OPENAI_API_KEY` and `REGGIE_GITHUB_TOKEN` workflow secrets.
 
 Codex output is implementation evidence, not verification. Any Codex-supplied `verificationResults` are quarantined as untrusted evidence. Automated checks run independently; authenticated manual evidence uses a separate route, requires a meaningful note or artifact, and records supplier/time provenance. Waivers remain explicit approval records.
 

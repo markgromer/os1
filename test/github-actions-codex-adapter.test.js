@@ -53,7 +53,7 @@ test('GitHub Actions Codex adapter only enables from env when explicitly request
   const adapter = createGitHubActionsCodexAdapterFromEnv({
     MARCUS_CODEX_GITHUB_ACTIONS_ENABLED: 'true',
     GITHUB_TOKEN: 'ghp_test',
-    MARCUS_CODEX_RUNNER_REPO: 'markgromer/os1',
   });
   assert.equal(adapter.providerName, 'github_actions_codex');
+  assert.equal(adapter.runnerRepo, 'markgromer/Reggie');
 });
