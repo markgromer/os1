@@ -33,6 +33,12 @@ Realtime voice follows:
 
 The voice model handles conversational audio but cannot bypass the normal project operator, durable operation, or approval paths. A spoken follow-up such as "do it" is sent to the same pending-operation approval handler as typed chat.
 
+Voice transport recovery follows:
+
+`background, network loss, connection loss, or 55-minute refresh -> close stale WebRTC session -> mint a new ephemeral credential -> reconnect -> resume listening`
+
+The active project and recent requirements remain server-side during transport recovery; reconnecting does not create a second project conversation or grant new authority.
+
 ## Execution Brief Contents
 
 Every Codex-bound job should include:

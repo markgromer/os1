@@ -72,6 +72,8 @@ Production status verified on 2026-08-12:
 
 The Realtime session exposes one function, `marcus_operator`. That function calls Marcus's authenticated Live chat route; it does not expose GitHub, Cloudflare, Codex, email, text, deployment, or DNS credentials to the browser or voice model. Existing approval rules remain authoritative.
 
+Every initial connection, reconnect, foreground resume, and scheduled session refresh requests a new ephemeral credential. The browser does not persist the credential, and stale connection attempts are prevented from replacing a newer session.
+
 ## Mobile Pairing
 
 An authenticated operator can request one active six-digit code from `POST /api/auth/pairing-code`. The code expires after ten minutes, is stored only as a keyed hash, and is consumed by the first successful `POST /api/auth/pair` request. Failed attempts are limited per client. Successful pairing sets the secure HttpOnly admin cookie; the durable admin token is not returned to or stored by the phone.

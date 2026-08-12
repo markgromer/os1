@@ -133,10 +133,14 @@ Implemented slice:
 
 - Server-minted short-lived Realtime client secrets.
 - `gpt-realtime-2.1` and `marin` defaults with environment overrides.
+- Official `@openai/agents-realtime` browser session rather than a hand-written Realtime transport.
+- Semantic VAD, barge-in, near-field noise reduction, and `gpt-live-transcribe` input transcription.
 - Android PWA start/stop voice control.
-- Native realtime turn-taking and interruption transport.
+- Background/phone-lock pause and foreground resume with a fresh ephemeral credential.
+- Network and WebRTC disconnect recovery with bounded backoff.
+- Scheduled renewal at 55 minutes before the Realtime session limit.
 - A single `marcus_operator` bridge back to the durable Live chat and approval flow.
-- Unit and smoke coverage for session policy, auth, and static assets.
+- Unit and smoke coverage for session policy, auth, static assets, interruption state, network/background recovery, expired credentials, and stale-connection races.
 
 Acceptance tests still required before this phase is complete:
 
@@ -148,7 +152,7 @@ Acceptance tests still required before this phase is complete:
 - Confirm external communication and production mutations still pause for explicit approval.
 - Verify recovery after phone lock, network interruption, and an expired Live token.
 
-Status: the integration is live at `https://task-tracker-5wsa.onrender.com/mobile.html`. A real installed-Android speech, barge-in, and recovery conversation is not yet verified.
+Status: the original Realtime integration is live at `https://task-tracker-5wsa.onrender.com/mobile.html`. The official SDK and recovery upgrade passes the local `89/89` suite but still requires Render deployment and production browser validation. A real installed-Android speech, barge-in, and recovery conversation is not yet verified.
 
 Verified locally on 2026-08-12:
 

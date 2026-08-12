@@ -9,6 +9,7 @@ import path from 'node:path';
 import tls from 'node:tls';
 
 import express from 'express';
+import compression from 'compression';
 import { google } from 'googleapis';
 import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
@@ -46,6 +47,7 @@ import {
 } from './marcus/operations/marcus_operation_tools.js';
 
 const app = express();
+app.use(compression());
 // When running behind SiteGround / reverse proxies, trust forwarded headers.
 const PORT = process.env.PORT ? Number(process.env.PORT) : 3030;
 const IS_HOSTED_RUNTIME = String(process.env.NODE_ENV || '').toLowerCase() === 'production'
@@ -61,6 +63,21 @@ let cachedActiveBusinessKey = DEFAULT_BUSINESS_KEY;
 let cachedBusinesses = [{ key: DEFAULT_BUSINESS_KEY, name: 'Personal', phoneNumbers: [] }];
 
 const lastRevisionCollapseByKey = new Map();
+
+const TRANSIENT_RENAME_CODES = new Set(['EACCES', 'EBUSY', 'EPERM']);
+
+async function replaceFileAtomically(tmpFile, destinationFile) {
+  const maxAttempts = process.platform === 'win32' ? 6 : 1;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      await fs.rename(tmpFile, destinationFile);
+      return;
+    } catch (error) {
+      if (attempt === maxAttempts || !TRANSIENT_RENAME_CODES.has(error?.code)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 20 * attempt));
+    }
+  }
+}
 
 // Cache cross-business rollups so chat doesn't re-scan every store on every message.
 let crossBizRollupCache = { at: 0, text: '' };
@@ -919,7 +936,7 @@ async function writeSettings(next) {
   await fs.mkdir(SETTINGS_DIR, { recursive: true });
   const tmpFile = `${SETTINGS_FILE}.tmp-${crypto.randomBytes(6).toString('hex')}`;
   await fs.writeFile(tmpFile, JSON.stringify(normalized, null, 2) + '\n', 'utf8');
-  await fs.rename(tmpFile, SETTINGS_FILE);
+  await replaceFileAtomically(tmpFile, SETTINGS_FILE);
   refreshBusinessCacheFromSettings().catch(() => {
     // best-effort
   });
@@ -980,7 +997,7 @@ async function writeMarcusOperationalControls(next) {
   await fs.mkdir(DATA_DIR, { recursive: true });
   const tmpFile = `${MARCUS_OPERATIONAL_CONTROLS_FILE}.tmp-${crypto.randomBytes(6).toString('hex')}`;
   await fs.writeFile(tmpFile, JSON.stringify(normalized, null, 2) + '\n', 'utf8');
-  await fs.rename(tmpFile, MARCUS_OPERATIONAL_CONTROLS_FILE);
+  await replaceFileAtomically(tmpFile, MARCUS_OPERATIONAL_CONTROLS_FILE);
   backupCriticalFiles().catch(() => {
     // backup is best-effort
   });
@@ -1020,7 +1037,7 @@ async function writeMarcusSessionState(next) {
   await fs.mkdir(DATA_DIR, { recursive: true });
   const tmpFile = `${MARCUS_SESSION_STATE_FILE}.tmp-${crypto.randomBytes(6).toString('hex')}`;
   await fs.writeFile(tmpFile, JSON.stringify(normalized, null, 2) + '\n', 'utf8');
-  await fs.rename(tmpFile, MARCUS_SESSION_STATE_FILE);
+  await replaceFileAtomically(tmpFile, MARCUS_SESSION_STATE_FILE);
   backupCriticalFiles().catch(() => {
     // backup is best-effort
   });
@@ -7045,7 +7062,7 @@ async function writeStoreFile(file, nextStore) {
   await ensureStoreFileExists(file);
   const tmpFile = `${file}.tmp-${crypto.randomBytes(6).toString('hex')}`;
   await fs.writeFile(tmpFile, JSON.stringify(nextStore, null, 2) + '\n', 'utf8');
-  await fs.rename(tmpFile, file);
+  await replaceFileAtomically(tmpFile, file);
   backupCriticalFiles().catch(() => {
     // backup is best-effort
   });

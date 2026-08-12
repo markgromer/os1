@@ -14,6 +14,12 @@ test('Marcus realtime voice delegates substantive work to the durable operator',
   assert.equal(session.type, 'realtime');
   assert.equal(session.model, DEFAULT_MARCUS_REALTIME_MODEL);
   assert.equal(session.audio.output.voice, DEFAULT_MARCUS_REALTIME_VOICE);
+  assert.equal(session.audio.input.turn_detection.type, 'semantic_vad');
+  assert.equal(session.audio.input.turn_detection.interrupt_response, true);
+  assert.equal(session.audio.input.turn_detection.create_response, true);
+  assert.equal(session.audio.input.transcription.model, 'gpt-live-transcribe');
+  assert.equal(session.reasoning.effort, 'low');
+  assert.equal(session.parallel_tool_calls, false);
   assert.match(session.instructions, /call marcus_operator exactly once/i);
   assert.match(session.instructions, /Never bypass Marcus approval requirements/i);
   assert.equal(session.tool_choice, 'auto');

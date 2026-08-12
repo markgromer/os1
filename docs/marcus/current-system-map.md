@@ -165,7 +165,9 @@ It uses:
 - `public/marcus-realtime.js` for a WebRTC speech-to-speech session.
 - `POST /api/marcus/realtime/client-secret` for a short-lived OpenAI Realtime client secret; the standard OpenAI key remains on the server.
 
-Realtime voice uses `gpt-realtime-2.1` by default with voice `marin`. Its only operational function is `marcus_operator`, which sends substantive spoken requests back through `/api/marcus/live/chat`. The voice model does not own GitHub, Cloudflare, Codex, external communication, or approval authority.
+`client/marcus-realtime.js` builds the browser client with `@openai/agents-realtime`; `scripts/build-mobile.mjs` bundles it into `public/marcus-realtime.js`. Realtime voice uses `gpt-realtime-2.1` by default with voice `marin`, semantic VAD, interruption, near-field noise reduction, and live transcription. Its only operational function is `marcus_operator`, which sends substantive spoken requests back through `/api/marcus/live/chat`. The voice model does not own GitHub, Cloudflare, Codex, external communication, or approval authority.
+
+The browser lifecycle closes the media session while the PWA is hidden, resumes with a fresh ephemeral credential, reconnects after network or WebRTC loss with bounded backoff, and refreshes at 55 minutes before the Realtime session limit. Service worker cache `marcus-mobile-v6` invalidates the previous hand-written client.
 
 `/api/marcus/live/chat` keeps recent conversation turns and an active project on the server. The project operator receives the accumulated user requirements rather than only the latest short follow-up.
 

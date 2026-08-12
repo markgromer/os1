@@ -7,19 +7,28 @@
     "node": ">=18"
   },
   "scripts": {
+    "build:mobile": "node scripts/build-mobile.mjs",
+    "prestart": "npm run build:mobile",
     "start": "node server.js",
     "dev": "node --watch server.js",
+    "pretest": "npm run build:mobile",
     "test": "node --test",
     "lint": "node scripts/lint.mjs"
   },
   "dependencies": {
+    "@openai/agents-realtime": "^0.15.0",
+    "compression": "^1.8.1",
     "express": "^4.22.2",
     "googleapis": "^140.0.0",
     "imapflow": "^1.5.0",
     "mailparser": "^3.9.14",
-    "nodemailer": "^9.0.3"
+    "nodemailer": "^9.0.3",
+    "zod": "^4.4.3"
   },
   "overrides": {
     "path-to-regexp": "0.1.13"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
   }
 }

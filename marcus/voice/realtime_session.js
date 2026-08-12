@@ -24,10 +24,28 @@ export function buildMarcusRealtimeClientSecretRequest({ model, voice } = {}) {
         'You may respond without a tool only to a brief greeting, a request to repeat yourself, or a voice-session control question.',
       ].join('\n'),
       audio: {
+        input: {
+          noise_reduction: { type: 'near_field' },
+          transcription: {
+            model: 'gpt-live-transcribe',
+            delay: 'low',
+            prompt: 'A project operations conversation with Marcus. Preserve project, repository, domain, company, and product names exactly.',
+            keywords: ['Marcus', 'Codex', 'GitHub', 'Cloudflare', 'Reggie', 'Sweep and Go'],
+            languages: ['en'],
+          },
+          turn_detection: {
+            type: 'semantic_vad',
+            eagerness: 'medium',
+            create_response: true,
+            interrupt_response: true,
+          },
+        },
         output: {
           voice: realtimeVoice,
         },
       },
+      reasoning: { effort: 'low' },
+      parallel_tool_calls: false,
       tools: [
         {
           type: 'function',

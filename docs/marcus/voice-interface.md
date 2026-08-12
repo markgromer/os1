@@ -1,6 +1,6 @@
 # Voice Interface
 
-Status: primary architecture selected and deployed. Local and production desktop-mobile WebRTC setup are verified; installed-Android speech and interruption verification remains open.
+Status: primary architecture selected. The official SDK recovery upgrade is implemented and locally verified; Render deployment and installed-Android speech, interruption, and recovery verification remain open.
 
 ## Objective
 
@@ -9,6 +9,7 @@ Voice should be the fastest way for Mark to use the same Marcus operator. It sho
 ## Selected Stack
 
 - Conversation model: OpenAI Realtime `gpt-realtime-2.1`.
+- Browser session library: `@openai/agents-realtime`.
 - Browser/mobile transport: WebRTC.
 - Default voice: `marin`.
 - Operational bridge: `marcus_operator` -> `POST /api/marcus/live/chat`.
@@ -55,9 +56,20 @@ The Realtime voice layer may not independently:
 
 The browser receives a short-lived client secret from `POST /api/marcus/realtime/client-secret`. The standard API key is never returned to the browser.
 
+## Session Lifecycle
+
+- Semantic VAD creates turns and interrupts Marcus when Mark starts speaking.
+- The PWA closes the media session while hidden or locked and reconnects when visible.
+- Offline, online, and unexpected WebRTC disconnect events enter a bounded reconnect loop.
+- Every reconnect mints a new ephemeral credential.
+- A connected session renews at 55 minutes before the Realtime session limit.
+- A connection version prevents a stale asynchronous setup from replacing a newer session.
+
+Local acceptance covers these lifecycle rules with an SDK-session test double. Production WebRTC and installed-Android behavior remain explicit completion checks.
+
 ## Production Evidence
 
-On 2026-08-12 the canonical Render PWA authenticated, obtained a short-lived Realtime client secret, created an OpenAI WebRTC call with HTTP 201, and reached `Voice on` / `Listening`. The browser reported no warning or error console messages. Service worker `marcus-mobile-v5` controlled the page.
+On 2026-08-12 the canonical Render PWA authenticated, obtained a short-lived Realtime client secret, created an OpenAI WebRTC call with HTTP 201, and reached `Voice on` / `Listening`. The browser reported no warning or error console messages. This evidence applies to the first Realtime client under service worker `marcus-mobile-v5`; it does not yet verify the official SDK recovery upgrade under `marcus-mobile-v6`.
 
 This proves production authentication, PWA assets, ephemeral-key minting, and WebRTC signaling. It does not prove actual Android microphone quality, spoken tool invocation, barge-in, phone-lock recovery, or network handoff; those remain in the completion gate.
 

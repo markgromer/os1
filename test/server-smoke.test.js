@@ -200,7 +200,7 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     assert.ok(manifest.icons.some((icon) => icon.src === '/icons/marcus.svg'));
     const serviceWorker = await fetch(`${base}/sw.js`);
     assert.equal(serviceWorker.status, 200);
-    assert.match(await serviceWorker.text(), /marcus-mobile-v5/);
+    assert.match(await serviceWorker.text(), /marcus-mobile-v6/);
     const mobileIcon = await fetch(`${base}/icons/marcus.svg`);
     assert.equal(mobileIcon.status, 200);
     assert.match(await mobileIcon.text(), /<svg/);
@@ -598,7 +598,8 @@ test('approved Marcus email actions send exactly once through SMTP', async () =>
       const draft = (await draftResponse.json()).action;
 
       const approval = await fetch(`${base}/api/marcus/external-actions/${draft.id}/approve`, { method: 'POST', headers, body: JSON.stringify({ message: 'Approve and send the email.' }) });
-      assert.equal(approval.status, 200);
+      const approvalBody = await approval.json();
+      assert.equal(approval.status, 200, JSON.stringify(approvalBody));
       const sent = await fetch(`${base}/api/marcus/external-actions/${draft.id}/send`, { method: 'POST', headers, body: '{}' });
       assert.equal(sent.status, 200);
       const sentBody = await sent.json();

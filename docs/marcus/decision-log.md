@@ -1,5 +1,13 @@
 # Decision Log
 
+## 2026-08-11: Marcus Voice Uses The Official Realtime SDK And Recoverable Sessions
+
+Context: The first mobile voice client hand-built a raw WebRTC connection and treated a disconnect as a permanent stop. Phone lock, backgrounding, network changes, ephemeral-token expiry, and the Realtime session limit could leave voice unavailable or race a stale setup against a newer connection.
+
+Decision: Use `@openai/agents-realtime` for the browser session, retain the single `marcus_operator` authority bridge, pause media while hidden, reconnect with bounded backoff and a new ephemeral credential, and renew at 55 minutes. Use semantic VAD with interruption enabled and live input transcription.
+
+Consequence: Marcus keeps one durable server-side conversation while the disposable audio transport can recover. Local tests cover interruption, background/network recovery, expired credentials, and stale-connection races; deployed and hands-on Android acceptance remain separate gates.
+
 ## 2026-08-11: Mobile Conversation State Owns The Active Project
 
 Context: Marcus answered each mobile message independently. A request could name `markgromer/Reggie`, then a follow-up such as "check the repo" would lose that context and fall back to the only previously registered demo project.

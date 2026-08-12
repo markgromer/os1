@@ -239,6 +239,8 @@
       listening: 'Voice on',
       thinking: 'Working',
       speaking: 'Speaking',
+      reconnecting: 'Reconnecting',
+      paused: 'Paused',
       error: 'Retry voice',
     };
     els.voiceLabel.textContent = labels[state] || 'Start voice';
@@ -343,7 +345,15 @@
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/sw.js').catch(() => {});
   }
-  window.addEventListener('pagehide', () => realtimeVoice?.stop());
+  document.addEventListener('visibilitychange', () => {
+    if (!realtimeVoice) return;
+    if (document.hidden) realtimeVoice.suspend('Voice paused while the phone is locked or the app is in the background');
+    else realtimeVoice.resume().catch(() => {});
+  });
+  window.addEventListener('offline', () => realtimeVoice?.networkChanged(false));
+  window.addEventListener('online', () => realtimeVoice?.networkChanged(true).catch(() => {}));
+  window.addEventListener('pagehide', () => realtimeVoice?.suspend('Voice paused while Marcus Mobile is in the background'));
+  window.addEventListener('pageshow', () => realtimeVoice?.resume().catch(() => {}));
   addMessage('system', 'Marcus Mobile is ready.');
   refreshHealth();
 })();
