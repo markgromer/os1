@@ -63,6 +63,8 @@
   .work-detail { margin: 0; min-height: 18px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
   .work-progress { height: 4px; overflow: hidden; background: rgba(255,255,255,0.08); }
   .work-progress span { display: block; width: 0; height: 100%; background: var(--accent); transition: width 180ms ease; }
+  .work-actions { display: flex; justify-content: flex-end; }
+  .work-actions .btn { min-height: 38px; border-radius: 8px; padding: 7px 12px; }
   .chat { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
   .messages { flex: 1; overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; scroll-behavior: smooth; }
   .msg { max-width: 92%; border: 1px solid var(--line); border-radius: 14px; padding: 11px 12px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; }
@@ -109,6 +111,11 @@
   .provider-actions { border-top: 1px solid var(--line); justify-content: flex-end; }
   .provider-result { min-height: 18px; margin: 0; padding: 0 12px 10px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
   .provider-result.error { color: var(--danger); }
+  .approval-summary { margin: 0; padding: 14px 12px; color: var(--muted); font-size: 13px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+  .approval-details { display: grid; grid-template-columns: minmax(84px, auto) minmax(0, 1fr); gap: 10px 12px; margin: 0; }
+  .approval-details dt { color: var(--muted); font-size: 12px; }
+  .approval-details dd { margin: 0; color: var(--text); font-size: 13px; overflow-wrap: anywhere; }
+  .approval-confirmation { margin-top: 14px; }
   .acceptance-summary { margin: 0; padding: 14px 12px; color: var(--muted); font-size: 13px; border-bottom: 1px solid var(--line); }
   .acceptance-summary strong { color: var(--text); }
   .acceptance-gates { margin: 0; padding: 0; list-style: none; }
@@ -165,6 +172,7 @@
     </div>
     <p id="activeWorkDetail" class="work-detail"></p>
     <div class="work-progress" aria-hidden="true"><span id="activeWorkProgress"></span></div>
+    <div class="work-actions"><button id="reviewApprovalBtn" class="btn" type="button" hidden>Review approval</button></div>
   </section>
 
   <section class="panel chat" aria-label="Marcus chat">
@@ -194,6 +202,41 @@
     <button id="refreshBtn" class="btn" type="button">Refresh</button>
   </nav>
 </main>
+
+<dialog id="approvalDialog" class="provider-dialog">
+  <section class="provider-form" aria-labelledby="approvalTitle">
+    <header class="provider-head">
+      <h2 id="approvalTitle">Review approval</h2>
+      <button id="closeApprovalBtn" class="icon-btn" type="button" title="Close approval" aria-label="Close approval">&times;</button>
+    </header>
+    <div class="provider-body">
+      <p id="approvalSummary" class="approval-summary">Review the exact durable action before authorizing it.</p>
+      <section class="provider-section">
+        <dl class="approval-details">
+          <dt>Project</dt><dd id="approvalProject">-</dd>
+          <dt>Target</dt><dd id="approvalTarget">-</dd>
+          <dt>Action</dt><dd id="approvalAction">-</dd>
+          <dt>Risk</dt><dd id="approvalRisk">-</dd>
+          <dt>Reason</dt><dd id="approvalReason">-</dd>
+          <dt>Operation</dt><dd id="approvalOperationId">-</dd>
+        </dl>
+        <label class="provider-check approval-confirmation">
+          <input id="approvalConfirmed" type="checkbox">
+          <span>I approve this exact action and authorize Marcus to run it now.</span>
+        </label>
+        <div id="criticalApprovalField" class="provider-field wide" hidden>
+          <label for="criticalApprovalText">Critical confirmation</label>
+          <input id="criticalApprovalText" class="input" autocomplete="off" placeholder="I understand the irreversible risk">
+        </div>
+      </section>
+      <p id="approvalResult" class="provider-result" aria-live="polite"></p>
+    </div>
+    <footer class="provider-actions">
+      <button id="rejectApprovalBtn" class="btn" type="button">Reject</button>
+      <button id="approveApprovalBtn" class="btn primary" type="button" disabled>Approve and run</button>
+    </footer>
+  </section>
+</dialog>
 
 <dialog id="providerDialog" class="provider-dialog">
   <form id="providerForm" class="provider-form" method="dialog">
@@ -338,6 +381,22 @@
     activeWorkStatus: document.getElementById('activeWorkStatus'),
     activeWorkDetail: document.getElementById('activeWorkDetail'),
     activeWorkProgress: document.getElementById('activeWorkProgress'),
+    reviewApproval: document.getElementById('reviewApprovalBtn'),
+    approvalDialog: document.getElementById('approvalDialog'),
+    closeApproval: document.getElementById('closeApprovalBtn'),
+    approvalSummary: document.getElementById('approvalSummary'),
+    approvalProject: document.getElementById('approvalProject'),
+    approvalTarget: document.getElementById('approvalTarget'),
+    approvalAction: document.getElementById('approvalAction'),
+    approvalRisk: document.getElementById('approvalRisk'),
+    approvalReason: document.getElementById('approvalReason'),
+    approvalOperationId: document.getElementById('approvalOperationId'),
+    approvalConfirmed: document.getElementById('approvalConfirmed'),
+    criticalApprovalField: document.getElementById('criticalApprovalField'),
+    criticalApprovalText: document.getElementById('criticalApprovalText'),
+    approvalResult: document.getElementById('approvalResult'),
+    approveApproval: document.getElementById('approveApprovalBtn'),
+    rejectApproval: document.getElementById('rejectApprovalBtn'),
     messages: document.getElementById('messages'),
     form: document.getElementById('chatForm'),
     input: document.getElementById('messageInput'),
@@ -400,6 +459,8 @@
   let voiceTelemetryReady = false;
   let acceptancePollTimer = null;
   let operationTracker = null;
+  let trackedOperation = null;
+  let approvalRequestInFlight = false;
 
   function restoredAcceptanceSessionId() {
     try {
@@ -501,8 +562,10 @@
     els.messages.scrollTop = els.messages.scrollHeight;
   }
   function renderTrackedOperation(operation) {
+    trackedOperation = operation || null;
     if (!operation) {
       els.activeWorkPanel.classList.remove('visible');
+      els.reviewApproval.hidden = true;
       return;
     }
     const verification = operation.verificationSummary || {};
@@ -522,6 +585,71 @@
     ].filter(Boolean);
     els.activeWorkDetail.textContent = `${details.join(' · ')} · ${operation.id}`;
     els.activeWorkProgress.style.width = `${Math.max(0, Math.min(100, Number(progress.percent) || 0))}%`;
+    els.reviewApproval.hidden = !(operation.needsApproval && operation.pendingApproval?.id);
+    if (els.approvalDialog.open && !operation.pendingApproval?.id) els.approvalDialog.close();
+  }
+  function approvalLabel(value) {
+    return String(value || '-').replaceAll('_', ' ');
+  }
+  function updateApprovalCommandState() {
+    const approval = trackedOperation?.pendingApproval;
+    const criticalReady = approval?.riskLevel !== 'critical' || /\bi understand\b/i.test(els.criticalApprovalText.value);
+    els.approveApproval.disabled = approvalRequestInFlight || !approval?.id || !els.approvalConfirmed.checked || !criticalReady;
+    els.rejectApproval.disabled = approvalRequestInFlight || !approval?.id;
+  }
+  async function openApprovalReview() {
+    if (!(await ensureSession())) return;
+    const approval = trackedOperation?.pendingApproval;
+    if (!trackedOperation?.id || !approval?.id) throw new Error('The tracked operation no longer has a pending approval.');
+    els.approvalSummary.textContent = 'This command authorizes the exact durable action below to run immediately.';
+    els.approvalProject.textContent = trackedOperation.projectName || '-';
+    els.approvalTarget.textContent = trackedOperation.title || '-';
+    els.approvalAction.textContent = approvalLabel(approval.action);
+    els.approvalRisk.textContent = approvalLabel(approval.riskLevel || trackedOperation.riskLevel);
+    els.approvalReason.textContent = approval.reason || 'Runtime policy requires explicit approval.';
+    els.approvalOperationId.textContent = trackedOperation.id;
+    els.approvalConfirmed.checked = false;
+    els.criticalApprovalText.value = '';
+    els.criticalApprovalField.hidden = approval.riskLevel !== 'critical';
+    els.approvalResult.classList.remove('error');
+    els.approvalResult.textContent = '';
+    updateApprovalCommandState();
+    els.approvalDialog.showModal();
+  }
+  async function decideTrackedApproval(decision) {
+    const operation = trackedOperation;
+    const approval = operation?.pendingApproval;
+    if (!operation?.id || !approval?.id) throw new Error('The approval is no longer pending.');
+    if (decision === 'approve' && !els.approvalConfirmed.checked) throw new Error('Confirm the exact action before approving it.');
+    if (approvalRequestInFlight) return;
+    approvalRequestInFlight = true;
+    updateApprovalCommandState();
+    els.approvalResult.classList.remove('error');
+    els.approvalResult.textContent = decision === 'approve' ? 'Authorizing exact action...' : 'Rejecting action...';
+    try {
+      const criticalMessage = String(els.criticalApprovalText.value || '').trim();
+      const message = approval.riskLevel === 'critical'
+        ? criticalMessage
+        : `I approve this exact ${approval.action} action for operation ${operation.id} and authorize Marcus to run it now.`;
+      const endpoint = decision === 'approve' ? 'approve' : 'reject';
+      const body = decision === 'approve'
+        ? { approvedBy: 'mark-mobile', message, runCycle: true }
+        : { rejectedBy: 'mark-mobile', message: `Reject ${approval.action} for operation ${operation.id}.` };
+      const data = await adminApi(`/api/operations/${encodeURIComponent(operation.id)}/approvals/${encodeURIComponent(approval.id)}/${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (data.operation) operationTracker?.track(data.operation);
+      els.approvalDialog.close();
+      addMessage('marcus', decision === 'approve'
+        ? `Approved ${approvalLabel(approval.action)} for ${operation.projectName || operation.id}. Marcus will report the verified result.`
+        : `Rejected ${approvalLabel(approval.action)} for ${operation.projectName || operation.id}.`);
+      await operationTracker?.refresh();
+    } finally {
+      approvalRequestInFlight = false;
+      updateApprovalCommandState();
+    }
   }
   function authTokenForPath(path) {
     const p = String(path || '');
@@ -945,6 +1073,25 @@
     if (!(await ensureSession())) return;
     location.href = `/live.html?liveToken=${encodeURIComponent(liveToken)}`;
   });
+  els.reviewApproval.addEventListener('click', () => openApprovalReview().catch((err) => addMessage('system', err.message || String(err))));
+  els.closeApproval.addEventListener('click', () => els.approvalDialog.close());
+  els.approvalDialog.addEventListener('click', (event) => {
+    if (event.target === els.approvalDialog && !approvalRequestInFlight) els.approvalDialog.close();
+  });
+  els.approvalConfirmed.addEventListener('change', updateApprovalCommandState);
+  els.criticalApprovalText.addEventListener('input', updateApprovalCommandState);
+  els.approveApproval.addEventListener('click', () => decideTrackedApproval('approve').catch((err) => {
+    approvalRequestInFlight = false;
+    updateApprovalCommandState();
+    els.approvalResult.classList.add('error');
+    els.approvalResult.textContent = err.message || String(err);
+  }));
+  els.rejectApproval.addEventListener('click', () => decideTrackedApproval('reject').catch((err) => {
+    approvalRequestInFlight = false;
+    updateApprovalCommandState();
+    els.approvalResult.classList.add('error');
+    els.approvalResult.textContent = err.message || String(err);
+  }));
   els.providers.addEventListener('click', openProviders);
   els.closeProviders.addEventListener('click', () => els.providerDialog.close());
   els.providerDialog.addEventListener('click', (event) => {

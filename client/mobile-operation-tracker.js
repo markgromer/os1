@@ -25,6 +25,11 @@ export function toMobileOperationSummary(operation = {}) {
   const manual = Number(operation.verificationSummary?.needsManualReview
     ?? required.filter((item) => item.status === 'needs_manual_review').length) || 0;
   const requiredCount = Number(operation.verificationSummary?.required ?? required.length) || 0;
+  const rawPendingApproval = operation.pendingApproval && typeof operation.pendingApproval === 'object'
+    ? operation.pendingApproval
+    : Array.isArray(operation.approvals)
+      ? operation.approvals.find((item) => item.status === 'pending')
+      : null;
   return {
     id: bounded(operation.id, 160),
     title: bounded(operation.title, 500),
@@ -33,6 +38,13 @@ export function toMobileOperationSummary(operation = {}) {
     updatedAt: bounded(operation.updatedAt, 50),
     riskLevel: bounded(operation.riskLevel, 40),
     needsApproval: operation.needsApproval === true || (Array.isArray(operation.approvals) && operation.approvals.some((item) => item.status === 'pending')),
+    pendingApproval: rawPendingApproval ? {
+      id: bounded(rawPendingApproval.id, 160),
+      action: bounded(rawPendingApproval.action, 200),
+      riskLevel: bounded(rawPendingApproval.riskLevel, 40),
+      reason: bounded(rawPendingApproval.reason, 1_000),
+      expiresAt: bounded(rawPendingApproval.expiresAt, 64),
+    } : null,
     needsRecovery: operation.needsRecovery === true || operation.status === 'recovery_required',
     activeBlockers: Number(operation.activeBlockers ?? (Array.isArray(operation.blockers) ? operation.blockers.filter((item) => item.status === 'active').length : 0)) || 0,
     progress: {
@@ -67,6 +79,8 @@ export function operationSignature(operation) {
     item.verificationSummary.failed,
     item.verificationSummary.needsManualReview,
     Number(item.needsApproval),
+    item.pendingApproval?.id || '',
+    item.pendingApproval?.action || '',
     item.activeBlockers,
   ].join('|');
 }

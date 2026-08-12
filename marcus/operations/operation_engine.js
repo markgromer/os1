@@ -416,12 +416,20 @@ export function createOperationsEngine({
         const currentStep = operation.steps.find((step) => step.id === operation.currentStepId)
           || operation.steps.find((step) => ['running', 'waiting_for_approval', 'blocked', 'ready', 'pending'].includes(step.status))
           || null;
+        const pendingApproval = operation.approvals.find((approval) => approval.status === 'pending') || null;
         const required = operation.verification.filter((item) => item.required !== false);
         const passed = required.filter((item) => item.status === 'passed' || (item.waived === true && item.waiverApprovalId)).length;
         return {
           id: operation.id, title: operation.title, projectName: operation.projectName, status: operation.status,
           riskLevel: operation.riskLevel, updatedAt: operation.updatedAt, progress: summarizeOperationProgress(operation),
           needsApproval: operation.approvals.some((approval) => approval.status === 'pending'),
+          pendingApproval: pendingApproval ? {
+            id: safeString(pendingApproval.id, 160),
+            action: safeString(pendingApproval.action, 200),
+            riskLevel: safeString(pendingApproval.riskLevel, 40),
+            reason: safeString(pendingApproval.reason, 1_000),
+            expiresAt: safeString(pendingApproval.expiresAt, 64),
+          } : null,
           needsRecovery: operation.status === 'recovery_required',
           activeBlockers: operation.blockers.filter((blocker) => blocker.status === 'active').length,
           currentStep: currentStep ? { title: currentStep.title, type: currentStep.type, status: currentStep.status } : null,

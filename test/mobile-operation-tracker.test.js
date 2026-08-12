@@ -21,6 +21,7 @@ test('mobile operation summary exposes progress without audit or prompt data', (
   const summary = toMobileOperationSummary({
     id: 'op1', projectName: 'Reggie', title: 'Add setup modal', status: 'running', currentStepId: 'step2',
     artifacts: [{ content: 'secret source excerpt' }], metadata: { codexPrompt: 'private prompt' },
+    approvals: [{ id: 'approval1', action: 'deploy_worker_version', riskLevel: 'high', reason: 'Exact version deployment requires approval.', status: 'pending', secret: 'do-not-return' }],
     steps: [
       { id: 'step1', title: 'Audit', type: 'internal', status: 'completed' },
       { id: 'step2', title: 'Implement with Codex', type: 'codex', status: 'running' },
@@ -33,6 +34,10 @@ test('mobile operation summary exposes progress without audit or prompt data', (
   assert.deepEqual(summary.verificationSummary, { required: 1, passed: 0, failed: 0, needsManualReview: 0, pending: 1 });
   assert.equal(Object.hasOwn(summary, 'artifacts'), false);
   assert.equal(Object.hasOwn(summary, 'metadata'), false);
+  assert.deepEqual(summary.pendingApproval, {
+    id: 'approval1', action: 'deploy_worker_version', riskLevel: 'high', reason: 'Exact version deployment requires approval.', expiresAt: '',
+  });
+  assert.equal(Object.hasOwn(summary.pendingApproval, 'secret'), false);
 });
 
 test('mobile tracker emits each persisted state transition once and follows newer active work', async () => {
