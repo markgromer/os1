@@ -1,0 +1,33 @@
+{
+  "name": "M.A.R.C.U.S.",
+  "short_name": "Marcus",
+  "description": "Mobile access to Marcus project operator chat and live status.",
+  "start_url": "/mobile.html",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#071018",
+  "theme_color": "#071018",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/icons/marcus.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Talk to Marcus",
+      "short_name": "Chat",
+      "url": "/mobile.html",
+      "icons": [{ "src": "/icons/marcus.svg", "sizes": "any", "type": "image/svg+xml" }]
+    },
+    {
+      "name": "Marcus Live HUD",
+      "short_name": "Live",
+      "url": "/live.html",
+      "icons": [{ "src": "/icons/marcus.svg", "sizes": "any", "type": "image/svg+xml" }]
+    }
+  ]
+}

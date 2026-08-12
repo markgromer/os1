@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#071018">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Marcus">
+<title>Marcus Mobile</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icons/marcus.svg" type="image/svg+xml">
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #071018;
+    --panel: #101c27;
+    --panel-2: #142535;
+    --text: #eef7fb;
+    --muted: #9fb0bd;
+    --line: rgba(151, 203, 224, 0.18);
+    --accent: #2dd4bf;
+    --accent-2: #38bdf8;
+    --danger: #fb7185;
+    --ok: #4ade80;
+    --shadow: 0 14px 44px rgba(0,0,0,0.36);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; letter-spacing: 0; }
+  body { min-height: 100dvh; display: flex; flex-direction: column; }
+  button, input, textarea { font: inherit; }
+  .app { min-height: 100dvh; display: flex; flex-direction: column; padding: max(14px, env(safe-area-inset-top)) 14px max(14px, env(safe-area-inset-bottom)); gap: 12px; }
+  .topbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .brand { min-width: 0; }
+  .brand h1 { margin: 0; font-size: 22px; line-height: 1.1; }
+  .brand p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+  .status-pill { border: 1px solid var(--line); border-radius: 999px; padding: 8px 10px; font-size: 12px; color: var(--muted); background: rgba(255,255,255,0.04); white-space: nowrap; }
+  .status-pill.ok { color: var(--ok); border-color: rgba(74,222,128,0.4); }
+  .status-pill.warn { color: #fbbf24; border-color: rgba(251,191,36,0.4); }
+  .panel { background: linear-gradient(180deg, rgba(20,37,53,0.96), rgba(16,28,39,0.96)); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); }
+  .login { padding: 16px; display: none; gap: 10px; }
+  .login.visible { display: grid; }
+  .login label { color: var(--muted); font-size: 13px; }
+  .input, .composer textarea { width: 100%; border: 1px solid var(--line); border-radius: 12px; color: var(--text); background: rgba(3,7,12,0.48); padding: 12px; outline: none; }
+  .input:focus, .composer textarea:focus { border-color: rgba(45,212,191,0.65); }
+  .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .btn { min-height: 44px; border: 1px solid var(--line); border-radius: 12px; color: var(--text); background: rgba(255,255,255,0.05); padding: 10px 12px; cursor: pointer; }
+  .btn.primary { color: #03211d; background: linear-gradient(135deg, var(--accent), var(--accent-2)); border: 0; font-weight: 800; }
+  .btn:disabled { opacity: 0.55; cursor: not-allowed; }
+  .health { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding: 10px; }
+  .metric { min-height: 64px; border: 1px solid var(--line); border-radius: 12px; background: rgba(0,0,0,0.15); padding: 10px; }
+  .metric span { display: block; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0; }
+  .metric strong { display: block; margin-top: 8px; font-size: 14px; overflow-wrap: anywhere; }
+  .chat { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+  .messages { flex: 1; overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; scroll-behavior: smooth; }
+  .msg { max-width: 92%; border: 1px solid var(--line); border-radius: 14px; padding: 11px 12px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; }
+  .msg.user { align-self: flex-end; color: #031b18; background: var(--accent); border-color: transparent; }
+  .msg.marcus { align-self: flex-start; background: rgba(255,255,255,0.055); }
+  .msg.system { align-self: center; max-width: 100%; color: var(--muted); background: transparent; border-style: dashed; font-size: 12px; }
+  .composer { border-top: 1px solid var(--line); padding: 10px; display: grid; gap: 8px; }
+  .composer textarea { min-height: 76px; max-height: 160px; resize: vertical; }
+  .quick { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  .quick .btn { min-height: 38px; padding: 8px; font-size: 12px; }
+  .install { display: none; padding: 12px; align-items: center; justify-content: space-between; gap: 10px; }
+  .install.visible { display: flex; }
+  .install p { margin: 0; color: var(--muted); font-size: 13px; }
+  .footer-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  @media (min-width: 760px) {
+    .app { max-width: 760px; width: 100%; margin: 0 auto; }
+  }
+</style>
+</head>
+<body>
+<main class="app">
+  <header class="topbar">
+    <div class="brand">
+      <h1>Marcus</h1>
+      <p>Project operator</p>
+    </div>
+    <div id="statusPill" class="status-pill">checking</div>
+  </header>
+
+  <section id="loginPanel" class="panel login">
+    <label for="adminToken">Admin token</label>
+    <input id="adminToken" class="input" type="password" autocomplete="current-password" placeholder="Enter Marcus admin token">
+    <button id="loginBtn" class="btn primary" type="button">Sign in</button>
+  </section>
+
+  <section id="installPanel" class="panel install">
+    <p>Install Marcus on this Android home screen.</p>
+    <button id="installBtn" class="btn primary" type="button">Install</button>
+  </section>
+
+  <section class="panel health" aria-label="Marcus capabilities">
+    <div class="metric"><span>Codex</span><strong id="codexMetric">checking</strong></div>
+    <div class="metric"><span>GitHub</span><strong id="githubMetric">checking</strong></div>
+    <div class="metric"><span>Cloudflare</span><strong id="cloudflareMetric">checking</strong></div>
+    <div class="metric"><span>Desktop</span><strong id="desktopMetric">checking</strong></div>
+  </section>
+
+  <section class="panel chat" aria-label="Marcus chat">
+    <div id="messages" class="messages"></div>
+    <form id="chatForm" class="composer">
+      <div class="quick">
+        <button class="btn" type="button" data-prompt="What should I focus on next?">Focus</button>
+        <button class="btn" type="button" data-prompt="Audit my active project and start Codex if there is enough context.">Codex</button>
+        <button class="btn" type="button" data-prompt="Draft the text or email I should send next, but do not send it.">Draft</button>
+      </div>
+      <textarea id="messageInput" placeholder="Talk to Marcus..."></textarea>
+      <button id="sendBtn" class="btn primary" type="submit">Send</button>
+    </form>
+  </section>
+
+  <nav class="footer-actions" aria-label="Mobile navigation">
+    <button id="openLiveBtn" class="btn" type="button">Open Live HUD</button>
+    <button id="refreshBtn" class="btn" type="button">Refresh</button>
+  </nav>
+</main>
+
+<script>
+(() => {
+  const els = {
+    status: document.getElementById('statusPill'),
+    loginPanel: document.getElementById('loginPanel'),
+    adminToken: document.getElementById('adminToken'),
+    loginBtn: document.getElementById('loginBtn'),
+    installPanel: document.getElementById('installPanel'),
+    installBtn: document.getElementById('installBtn'),
+    codex: document.getElementById('codexMetric'),
+    github: document.getElementById('githubMetric'),
+    cloudflare: document.getElementById('cloudflareMetric'),
+    desktop: document.getElementById('desktopMetric'),
+    messages: document.getElementById('messages'),
+    form: document.getElementById('chatForm'),
+    input: document.getElementById('messageInput'),
+    send: document.getElementById('sendBtn'),
+    openLive: document.getElementById('openLiveBtn'),
+    refresh: document.getElementById('refreshBtn'),
+  };
+  let liveToken = '';
+  let deferredInstall = null;
+
+  function setStatus(text, cls = '') {
+    els.status.className = `status-pill ${cls}`.trim();
+    els.status.textContent = text;
+  }
+  function addMessage(role, text) {
+    const div = document.createElement('div');
+    div.className = `msg ${role}`;
+    div.textContent = text;
+    els.messages.appendChild(div);
+    els.messages.scrollTop = els.messages.scrollHeight;
+  }
+  async function api(path, options = {}) {
+    const headers = { ...(options.headers || {}) };
+    if (liveToken) headers.Authorization = `Bearer ${liveToken}`;
+    const resp = await fetch(path, { ...options, headers, credentials: 'include' });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.error || data.message || `HTTP ${resp.status}`);
+    return data;
+  }
+  async function ensureSession() {
+    const auth = await api('/api/auth/status');
+    if (auth.authRequired && !auth.authenticated) {
+      els.loginPanel.classList.add('visible');
+      setStatus('sign in', 'warn');
+      return false;
+    }
+    els.loginPanel.classList.remove('visible');
+    const session = await api('/api/marcus/live/session');
+    liveToken = session.token || '';
+    setStatus('online', 'ok');
+    return true;
+  }
+  async function refreshHealth() {
+    if (!(await ensureSession())) return;
+    const health = await api('/api/marcus/operator-health');
+    const caps = health.capabilities || {};
+    els.codex.textContent = caps.projectOperator?.mode || 'unknown';
+    els.github.textContent = caps.github?.backendTokenConfigured ? `ready (${caps.github.source})` : 'not configured';
+    els.cloudflare.textContent = caps.cloudflare?.backendTokenConfigured ? `ready (${caps.cloudflare.source})` : 'not configured';
+    els.desktop.textContent = caps.desktopAgent?.relayOnline ? 'online' : 'offline';
+  }
+  async function sendMessage(text) {
+    const message = String(text || '').trim();
+    if (!message) return;
+    addMessage('user', message);
+    els.input.value = '';
+    els.send.disabled = true;
+    try {
+      if (!(await ensureSession())) return;
+      const data = await api('/api/marcus/live/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message }),
+      });
+      addMessage('marcus', data.reply || data.message || 'Marcus responded without text.');
+      await refreshHealth();
+    } catch (err) {
+      addMessage('system', err.message || String(err));
+    } finally {
+      els.send.disabled = false;
+      els.input.focus();
+    }
+  }
+
+  els.loginBtn.addEventListener('click', async () => {
+    try {
+      await api('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: els.adminToken.value, remember: true }),
+      });
+      els.adminToken.value = '';
+      await refreshHealth();
+    } catch (err) {
+      addMessage('system', err.message || 'Sign in failed.');
+    }
+  });
+  els.form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    sendMessage(els.input.value);
+  });
+  document.querySelectorAll('[data-prompt]').forEach((btn) => {
+    btn.addEventListener('click', () => sendMessage(btn.dataset.prompt));
+  });
+  els.openLive.addEventListener('click', async () => {
+    if (!(await ensureSession())) return;
+    location.href = `/live.html?liveToken=${encodeURIComponent(liveToken)}`;
+  });
+  els.refresh.addEventListener('click', refreshHealth);
+
+  window.addEventListener('beforeinstallprompt', (event) => {
+    event.preventDefault();
+    deferredInstall = event;
+    els.installPanel.classList.add('visible');
+  });
+  els.installBtn.addEventListener('click', async () => {
+    if (!deferredInstall) return;
+    deferredInstall.prompt();
+    await deferredInstall.userChoice.catch(() => null);
+    deferredInstall = null;
+    els.installPanel.classList.remove('visible');
+  });
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  }
+  addMessage('system', 'Marcus Mobile is ready.');
+  refreshHealth();
+})();
+</script>
+</body>
+</html>

@@ -120,6 +120,21 @@ It uses:
 - Live chat from `/api/marcus/live/chat`.
 - Voice status, transcription, and speech endpoints.
 
+## Mobile UI
+
+`public/mobile.html` is the Android-friendly Marcus mobile shell.
+
+It uses:
+
+- `public/manifest.webmanifest` for Android home-screen installation.
+- `public/sw.js` for a small app-shell cache.
+- `GET /api/auth/status` and `POST /api/auth/login` for the existing admin-cookie auth flow.
+- `GET /api/marcus/live/session` to create a short-lived Live token after auth.
+- `GET /api/marcus/operator-health` to show Codex, GitHub, Cloudflare, and desktop capability status.
+- `POST /api/marcus/live/chat` for conversation-first project operator chat.
+
+The mobile app is a PWA first. It does not add a separate Android credential store or native notification channel yet.
+
 ## Desktop Agent
 
 `desktop-agent.cjs` relays local context and executes queued desktop actions.
