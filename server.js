@@ -324,7 +324,7 @@ function operationApprovalTargetsMessage({ message, operation, approval }) {
     .some((value) => text.includes(value));
 }
 
-async function maybeApprovePendingOperationFromMessage(message) {
+async function maybeApprovePendingOperationFromMessage(message, { approvalAuthorized = false } = {}) {
   if (!isExplicitOperationApprovalMessage(message)) return null;
   const businessKey = getBusinessKeyFromContext();
   const operations = await operationsEngine.listOperations(businessKey, { limit: 100 });
@@ -346,6 +346,16 @@ async function maybeApprovePendingOperationFromMessage(message) {
       ok: false,
       approvalRequired: true,
       reply: `I need which pending approval you want me to approve.\n${choices}`,
+    };
+  }
+
+  if (!approvalAuthorized) {
+    return {
+      ok: false,
+      approvalRequired: true,
+      reauthenticationRequired: true,
+      operation: selected.operation,
+      reply: 'This approval requires the paired Marcus app or durable admin authentication. No action was authorized.',
     };
   }
 
@@ -767,6 +777,16 @@ function extractAuthCookieToken(req) {
   return String(parseCookies(req)[AUTH_COOKIE_NAME] || '').trim();
 }
 
+function hasDurableAdminAuthentication(req) {
+  if (!ADMIN_TOKEN) return true;
+  const token = extractBearerToken(req);
+  const cookieToken = extractAuthCookieToken(req);
+  return Boolean(
+    (token && safeTimingEqual(token, ADMIN_TOKEN))
+    || (cookieToken && safeTimingEqual(cookieToken, ADMIN_TOKEN)),
+  );
+}
+
 const MARCUS_LIVE_SESSION_TTL_MS = 10 * 60 * 1000;
 const marcusLiveSessionTokens = new Map();
 
@@ -807,8 +827,6 @@ function isMarcusLiveSessionRoute(req) {
     || p === '/api/marcus/live/dashboard'
     || p === '/api/marcus/operator-health'
     || p === '/api/marcus/project-operator'
-    || p === '/api/marcus/external-actions'
-    || p.startsWith('/api/marcus/external-actions/')
     || p === '/api/marcus/live/performance'
     || p === '/api/marcus/live/session-status'
     || p === '/api/marcus/live/voice/status'
@@ -2410,7 +2428,7 @@ function externalActionTargetsMessage(message, action) {
     .some((value) => text.includes(value));
 }
 
-async function maybeApproveAndSendExternalActionFromMessage(message) {
+async function maybeApproveAndSendExternalActionFromMessage(message, { approvalAuthorized = false } = {}) {
   if (!isExternalActionApprovalMessage(message)) return null;
   const settings = await readSettings();
   const candidates = normalizeExternalActionDrafts(settings.externalActionDrafts)
@@ -2421,6 +2439,15 @@ async function maybeApproveAndSendExternalActionFromMessage(message) {
   if (!selected) {
     const choices = candidates.slice(-8).reverse().map((action) => `- ${action.id}: ${action.type} to ${action.to}${action.subject ? ` - ${action.subject}` : ''}`).join('\n');
     return { ok: false, approvalRequired: true, reply: `I need which message you want me to approve and send.\n${choices}` };
+  }
+  if (!approvalAuthorized) {
+    return {
+      ok: false,
+      approvalRequired: true,
+      reauthenticationRequired: true,
+      externalAction: selected,
+      reply: 'Sending requires the paired Marcus app or durable admin authentication. The draft remains unsent.',
+    };
   }
   try {
     if (selected.status === 'pending_approval') await approveExternalAction(selected.id, message);
@@ -16840,15 +16867,16 @@ app.post('/api/marcus/live/chat', async (req, res) => {
 
   try {
     const conversation = await readMarcusLiveConversation();
+    const approvalAuthorized = hasDurableAdminAuthentication(req);
 
-    const sentExternalAction = await maybeApproveAndSendExternalActionFromMessage(message);
+    const sentExternalAction = await maybeApproveAndSendExternalActionFromMessage(message, { approvalAuthorized });
     if (sentExternalAction) {
       await recordMarcusLiveExchange(message, sentExternalAction.reply, { externalActionId: sentExternalAction.externalAction?.id || '' });
       pushLiveEvent({ type: 'chat', from: 'marcus', text: sentExternalAction.reply, ts: Date.now() });
       return res.json(sentExternalAction);
     }
 
-    const approvedOperation = await maybeApprovePendingOperationFromMessage(message);
+    const approvedOperation = await maybeApprovePendingOperationFromMessage(message, { approvalAuthorized });
     if (approvedOperation) {
       await recordMarcusLiveExchange(message, approvedOperation.reply, {
         operationId: approvedOperation.operation?.id || '',

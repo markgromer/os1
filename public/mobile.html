@@ -117,6 +117,8 @@
   .approval-details dd { margin: 0; color: var(--text); font-size: 13px; overflow-wrap: anywhere; }
   .approval-confirmation { margin-top: 14px; }
   .provider-field[hidden] { display: none; }
+  .message-review { display: flex; justify-content: flex-end; margin-top: 12px; }
+  .message-draft { max-height: 190px; margin: 14px 0 0; padding: 12px; overflow: auto; color: var(--text); background: rgba(3,7,12,0.38); border: 1px solid var(--line); border-radius: 8px; font-family: inherit; font-size: 13px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
   .acceptance-summary { margin: 0; padding: 14px 12px; color: var(--muted); font-size: 13px; border-bottom: 1px solid var(--line); }
   .acceptance-summary strong { color: var(--text); }
   .acceptance-gates { margin: 0; padding: 0; list-style: none; }
@@ -239,6 +241,38 @@
   </section>
 </dialog>
 
+<dialog id="messageApprovalDialog" class="provider-dialog">
+  <section class="provider-form" aria-labelledby="messageApprovalTitle">
+    <header class="provider-head">
+      <h2 id="messageApprovalTitle">Review message</h2>
+      <button id="closeMessageApprovalBtn" class="icon-btn" type="button" title="Close message review" aria-label="Close message review">&times;</button>
+    </header>
+    <div class="provider-body">
+      <p id="messageApprovalSummary" class="approval-summary">Review the exact draft before authorizing delivery.</p>
+      <section class="provider-section">
+        <dl class="approval-details">
+          <dt>Type</dt><dd id="messageApprovalType">-</dd>
+          <dt>Recipient</dt><dd id="messageApprovalRecipient">-</dd>
+          <dt>Subject</dt><dd id="messageApprovalSubject">-</dd>
+          <dt>Project</dt><dd id="messageApprovalProject">-</dd>
+          <dt>Reason</dt><dd id="messageApprovalReason">-</dd>
+          <dt>Draft</dt><dd id="messageApprovalId">-</dd>
+        </dl>
+        <div id="messageApprovalBody" class="message-draft" aria-label="Message body"></div>
+        <label class="provider-check approval-confirmation">
+          <input id="messageApprovalConfirmed" type="checkbox">
+          <span>I approve this exact draft and authorize Marcus to send it now.</span>
+        </label>
+      </section>
+      <p id="messageApprovalResult" class="provider-result" aria-live="polite"></p>
+    </div>
+    <footer class="provider-actions">
+      <button id="rejectMessageBtn" class="btn" type="button">Reject</button>
+      <button id="sendMessageApprovalBtn" class="btn primary" type="button" disabled>Approve and send</button>
+    </footer>
+  </section>
+</dialog>
+
 <dialog id="providerDialog" class="provider-dialog">
   <form id="providerForm" class="provider-form" method="dialog">
     <header class="provider-head">
@@ -350,6 +384,7 @@
           <li id="gateTextSend" class="acceptance-gate"><span>Approved Quo test send</span><strong>pending</strong></li>
           <li id="gateEmailSend" class="acceptance-gate"><span>Approved SMTP test send</span><strong>pending</strong></li>
         </ul>
+        <div class="message-review"><button id="reviewMessageBtn" class="btn" type="button" hidden>Review pending message</button></div>
       </section>
       <p id="acceptanceResult" class="provider-result" aria-live="polite"></p>
     </div>
@@ -398,6 +433,21 @@
     approvalResult: document.getElementById('approvalResult'),
     approveApproval: document.getElementById('approveApprovalBtn'),
     rejectApproval: document.getElementById('rejectApprovalBtn'),
+    reviewMessage: document.getElementById('reviewMessageBtn'),
+    messageApprovalDialog: document.getElementById('messageApprovalDialog'),
+    closeMessageApproval: document.getElementById('closeMessageApprovalBtn'),
+    messageApprovalSummary: document.getElementById('messageApprovalSummary'),
+    messageApprovalType: document.getElementById('messageApprovalType'),
+    messageApprovalRecipient: document.getElementById('messageApprovalRecipient'),
+    messageApprovalSubject: document.getElementById('messageApprovalSubject'),
+    messageApprovalProject: document.getElementById('messageApprovalProject'),
+    messageApprovalReason: document.getElementById('messageApprovalReason'),
+    messageApprovalId: document.getElementById('messageApprovalId'),
+    messageApprovalBody: document.getElementById('messageApprovalBody'),
+    messageApprovalConfirmed: document.getElementById('messageApprovalConfirmed'),
+    messageApprovalResult: document.getElementById('messageApprovalResult'),
+    sendMessageApproval: document.getElementById('sendMessageApprovalBtn'),
+    rejectMessage: document.getElementById('rejectMessageBtn'),
     messages: document.getElementById('messages'),
     form: document.getElementById('chatForm'),
     input: document.getElementById('messageInput'),
@@ -462,6 +512,9 @@
   let operationTracker = null;
   let trackedOperation = null;
   let approvalRequestInFlight = false;
+  let pendingMessageActions = [];
+  let selectedMessageAction = null;
+  let messageRequestInFlight = false;
 
   function restoredAcceptanceSessionId() {
     try {
@@ -650,6 +703,86 @@
     } finally {
       approvalRequestInFlight = false;
       updateApprovalCommandState();
+    }
+  }
+  async function loadPendingMessageActions() {
+    const data = await adminApi('/api/marcus/external-actions');
+    pendingMessageActions = (Array.isArray(data.actions) ? data.actions : [])
+      .filter((action) => ['pending_approval', 'approved'].includes(action.status));
+    els.reviewMessage.hidden = pendingMessageActions.length === 0;
+    els.reviewMessage.textContent = pendingMessageActions.length > 1
+      ? `Review ${pendingMessageActions.length} pending messages`
+      : 'Review pending message';
+    return pendingMessageActions;
+  }
+  function updateMessageCommandState() {
+    const action = selectedMessageAction;
+    els.sendMessageApproval.disabled = messageRequestInFlight || !action?.id || !els.messageApprovalConfirmed.checked;
+    els.rejectMessage.disabled = messageRequestInFlight || !action?.id || action.status !== 'pending_approval';
+  }
+  async function openMessageApproval() {
+    if (!(await ensureSession())) return;
+    const actions = await loadPendingMessageActions();
+    selectedMessageAction = actions[0] || null;
+    if (!selectedMessageAction) throw new Error('There are no pending messages to review.');
+    const action = selectedMessageAction;
+    els.messageApprovalSummary.textContent = action.status === 'approved'
+      ? 'This exact draft is approved but has not been sent.'
+      : 'This draft has not been approved or sent.';
+    els.messageApprovalType.textContent = approvalLabel(action.type);
+    els.messageApprovalRecipient.textContent = action.to || '-';
+    els.messageApprovalSubject.textContent = action.subject || 'Not applicable';
+    els.messageApprovalProject.textContent = action.projectName || '-';
+    els.messageApprovalReason.textContent = action.reason || 'External communication requires explicit approval.';
+    els.messageApprovalId.textContent = action.id;
+    els.messageApprovalBody.textContent = action.body || '';
+    els.messageApprovalConfirmed.checked = false;
+    els.messageApprovalResult.classList.remove('error');
+    els.messageApprovalResult.textContent = '';
+    els.sendMessageApproval.textContent = action.status === 'approved' ? 'Send approved message' : 'Approve and send';
+    updateMessageCommandState();
+    if (els.acceptanceDialog.open) els.acceptanceDialog.close();
+    els.messageApprovalDialog.showModal();
+  }
+  async function decideMessageAction(decision) {
+    const action = selectedMessageAction;
+    if (!action?.id) throw new Error('The message draft is no longer available.');
+    if (decision === 'send' && !els.messageApprovalConfirmed.checked) {
+      throw new Error('Confirm the exact draft before authorizing delivery.');
+    }
+    if (messageRequestInFlight) return;
+    messageRequestInFlight = true;
+    updateMessageCommandState();
+    els.messageApprovalResult.classList.remove('error');
+    els.messageApprovalResult.textContent = decision === 'send' ? 'Authorizing exact draft...' : 'Rejecting draft...';
+    try {
+      if (decision === 'reject') {
+        await adminApi(`/api/marcus/external-actions/${encodeURIComponent(action.id)}/reject`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: `Reject external action ${action.id}; do not send this draft.` }),
+        });
+        els.messageApprovalDialog.close();
+        addMessage('marcus', `Rejected ${action.type} draft ${action.id}. Nothing was sent.`);
+      } else {
+        if (action.status === 'pending_approval') {
+          await adminApi(`/api/marcus/external-actions/${encodeURIComponent(action.id)}/approve`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message: `Approve external action ${action.id}, ${action.type} to ${action.to}${action.subject ? ` with subject ${action.subject}` : ''}, and send it now.` }),
+          });
+        }
+        els.messageApprovalResult.textContent = 'Sending through the configured provider...';
+        const sent = await adminApi(`/api/marcus/external-actions/${encodeURIComponent(action.id)}/send`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+        });
+        els.messageApprovalDialog.close();
+        const receipt = sent.action?.sendResult?.messageId;
+        addMessage('marcus', `Sent ${action.type} to ${action.to}.${receipt ? ` Provider receipt: ${receipt}.` : ''}`);
+      }
+      await loadPendingMessageActions();
+      await openAcceptance().catch(() => {});
+    } finally {
+      messageRequestInFlight = false;
+      updateMessageCommandState();
     }
   }
   function authTokenForPath(path) {
@@ -880,7 +1013,7 @@
       els.acceptanceResult.classList.remove('error');
       els.acceptanceDialog.showModal();
       els.acceptanceDialog.querySelector('.provider-body')?.scrollTo({ top: 0 });
-      await refreshAcceptance();
+      await Promise.all([refreshAcceptance(), loadPendingMessageActions()]);
       scheduleAcceptancePoll();
     } catch (err) {
       addMessage('system', err.message || 'Acceptance status could not be opened.');
@@ -1092,6 +1225,29 @@
     updateApprovalCommandState();
     els.approvalResult.classList.add('error');
     els.approvalResult.textContent = err.message || String(err);
+  }));
+  els.reviewMessage.addEventListener('click', () => openMessageApproval().catch((err) => {
+    els.acceptanceResult.classList.add('error');
+    els.acceptanceResult.textContent = err.message || String(err);
+  }));
+  els.closeMessageApproval.addEventListener('click', () => {
+    if (!messageRequestInFlight) els.messageApprovalDialog.close();
+  });
+  els.messageApprovalDialog.addEventListener('click', (event) => {
+    if (event.target === els.messageApprovalDialog && !messageRequestInFlight) els.messageApprovalDialog.close();
+  });
+  els.messageApprovalConfirmed.addEventListener('change', updateMessageCommandState);
+  els.sendMessageApproval.addEventListener('click', () => decideMessageAction('send').catch((err) => {
+    messageRequestInFlight = false;
+    updateMessageCommandState();
+    els.messageApprovalResult.classList.add('error');
+    els.messageApprovalResult.textContent = err.message || String(err);
+  }));
+  els.rejectMessage.addEventListener('click', () => decideMessageAction('reject').catch((err) => {
+    messageRequestInFlight = false;
+    updateMessageCommandState();
+    els.messageApprovalResult.classList.add('error');
+    els.messageApprovalResult.textContent = err.message || String(err);
   }));
   els.providers.addEventListener('click', openProviders);
   els.closeProviders.addEventListener('click', () => els.providerDialog.close());

@@ -197,6 +197,8 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     assert.match(mobileHtml, /Install Marcus/);
     assert.match(mobileHtml, /Start voice test/);
     assert.match(mobileHtml, /Confirm on this phone/);
+    assert.match(mobileHtml, /Review pending message/);
+    assert.match(mobileHtml, /Approve and send/);
     assert.match(mobileHtml, /Save and verify text/);
     assert.match(mobileHtml, /Save and verify email/);
     assert.match(mobileHtml, /__marcusVoiceDiagnostics/);
@@ -219,7 +221,7 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     const serviceWorker = await fetch(`${base}/sw.js`);
     assert.equal(serviceWorker.status, 200);
     const serviceWorkerText = await serviceWorker.text();
-    assert.match(serviceWorkerText, /marcus-mobile-v17/);
+    assert.match(serviceWorkerText, /marcus-mobile-v18/);
     assert.match(serviceWorkerText, /marcus-maskable-512\.png/);
     const mobileIcon = await fetch(`${base}/icons/marcus.svg`);
     assert.equal(mobileIcon.status, 200);
@@ -424,9 +426,15 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     assert.equal(operatorHealthWithSavedProviders.capabilities.cloudflare.source, 'settings');
     assert.equal(operatorHealthWithSavedProviders.blockers.some((item) => /GITHUB_TOKEN is not configured/i.test(item)), false);
     assert.equal(operatorHealthWithSavedProviders.blockers.some((item) => /CLOUDFLARE_API_TOKEN is not configured/i.test(item)), false);
+    assert.equal((await fetch(`${base}/api/marcus/external-actions`, { headers: liveHeaders })).status, 401);
+    for (const suffix of ['draft', 'probe/approve', 'probe/send', 'probe/reject']) {
+      assert.equal((await fetch(`${base}/api/marcus/external-actions/${suffix}`, {
+        method: 'POST', headers: liveHeaders, body: '{}',
+      })).status, 401);
+    }
     const draftExternalActionResponse = await fetch(`${base}/api/marcus/external-actions/draft`, {
       method: 'POST',
-      headers: liveHeaders,
+      headers: adminHeaders,
       body: JSON.stringify({
         type: 'email',
         to: 'client@example.com',
@@ -441,19 +449,27 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     assert.equal(draftExternalAction.status, 'pending_approval');
     assert.equal(draftExternalAction.requiresApproval, true);
     assert.equal(draftExternalAction.createdBy, 'marcus');
-    const listedExternalActions = await (await fetch(`${base}/api/marcus/external-actions`, { headers: liveHeaders })).json();
+    const liveChatApproval = await fetch(`${base}/api/marcus/live/chat`, {
+      method: 'POST', headers: liveHeaders, body: JSON.stringify({ message: `approve ${draftExternalAction.id}` }),
+    });
+    assert.equal(liveChatApproval.status, 200);
+    const liveChatApprovalBody = await liveChatApproval.json();
+    assert.equal(liveChatApprovalBody.ok, false);
+    assert.equal(liveChatApprovalBody.reauthenticationRequired, true);
+    assert.match(liveChatApprovalBody.reply, /paired Marcus app or durable admin/i);
+    const listedExternalActions = await (await fetch(`${base}/api/marcus/external-actions`, { headers: adminHeaders })).json();
     assert.equal(listedExternalActions.ok, true);
-    assert.ok(listedExternalActions.actions.some((item) => item.id === draftExternalAction.id));
+    assert.equal(listedExternalActions.actions.find((item) => item.id === draftExternalAction.id)?.status, 'pending_approval');
     const vagueApproval = await fetch(`${base}/api/marcus/external-actions/${draftExternalAction.id}/approve`, {
       method: 'POST',
-      headers: liveHeaders,
+      headers: adminHeaders,
       body: JSON.stringify({ message: 'looks fine' }),
     });
     assert.equal(vagueApproval.status, 409);
     assert.equal((await vagueApproval.json()).approvalRequired, true);
     const explicitApproval = await fetch(`${base}/api/marcus/external-actions/${draftExternalAction.id}/approve`, {
       method: 'POST',
-      headers: liveHeaders,
+      headers: adminHeaders,
       body: JSON.stringify({ message: `approve ${draftExternalAction.id}` }),
     });
     assert.equal(explicitApproval.status, 200);
@@ -462,14 +478,14 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     assert.match(explicitApprovalBody.note, /separate explicit provider action/i);
     const draftTextResponse = await fetch(`${base}/api/marcus/external-actions/draft`, {
       method: 'POST',
-      headers: liveHeaders,
+      headers: adminHeaders,
       body: JSON.stringify({ type: 'text', to: '+15555550123', body: 'Can you confirm the Atlas review window?' }),
     });
     assert.equal(draftTextResponse.status, 201);
     const draftTextAction = (await draftTextResponse.json()).action;
     const rejectedText = await fetch(`${base}/api/marcus/external-actions/${draftTextAction.id}/reject`, {
       method: 'POST',
-      headers: liveHeaders,
+      headers: adminHeaders,
       body: JSON.stringify({ message: 'do not send this version' }),
     });
     assert.equal(rejectedText.status, 200);
@@ -702,6 +718,18 @@ test('Marcus Live approval follow-up advances a waiting project-operator operati
       assert.equal(created.status, 'codex_prepared');
       assert.equal(created.operation.status, 'waiting_for_approval');
       assert.equal(created.operation.approvals.filter((approval) => approval.status === 'pending').length, 1);
+
+      const liveSession = await (await fetch(`${base}/api/marcus/live/session`, { headers: adminHeaders })).json();
+      const liveOnlyHeaders = { authorization: `Bearer ${liveSession.token}`, 'content-type': 'application/json' };
+      const deniedLiveApproval = await fetch(`${base}/api/marcus/live/chat`, {
+        method: 'POST', headers: liveOnlyHeaders, body: JSON.stringify({ message: 'Get it done' }),
+      });
+      assert.equal(deniedLiveApproval.status, 200);
+      const deniedLiveApprovalBody = await deniedLiveApproval.json();
+      assert.equal(deniedLiveApprovalBody.ok, false);
+      assert.equal(deniedLiveApprovalBody.reauthenticationRequired, true);
+      const pendingAfterLiveAttempt = await (await fetch(`${base}/api/operations/${created.operation.id}`, { headers: adminHeaders })).json();
+      assert.equal(pendingAfterLiveAttempt.operation.status, 'waiting_for_approval');
 
       const approvalResponse = await fetch(`${base}/api/marcus/live/chat`, { method: 'POST', headers: adminHeaders, body: JSON.stringify({ message: 'Get it done' }) });
       assert.equal(approvalResponse.status, 200);
