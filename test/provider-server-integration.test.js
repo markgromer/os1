@@ -78,7 +78,7 @@ async function startProviderMock() {
     }
     const workerRoot = `/cf/accounts/${ACCOUNT}/workers/scripts/marcus-provider-demo`;
     if (pathname === `${workerRoot}/versions/${VERSION}` && req.method === 'GET') return send(res, 200, { success: true, result: { id: VERSION, number: 2 } });
-    if (pathname === `${workerRoot}/versions` && req.method === 'GET') return send(res, 200, { success: true, result: [{ id: VERSION, number: 2, metadata: { source: 'wrangler' } }] });
+    if (pathname === `${workerRoot}/versions` && req.method === 'GET') return send(res, 200, { success: true, result: { items: [{ id: VERSION, number: 2, metadata: { source: 'wrangler' } }] } });
     if (pathname === `${workerRoot}/deployments` && req.method === 'GET') {
       return send(res, 200, { success: true, result: { deployments: [{ id: state.deployment, versions: [{ version_id: state.deployment === OLD_DEPLOYMENT ? '00000000-0000-4000-8000-000000000000' : VERSION, percentage: 100 }] }] } });
     }

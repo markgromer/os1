@@ -2845,7 +2845,8 @@ async function cloudflareApi(pathPart, { method = 'GET', body, timeoutMs = 20_00
 function cloudflareResultRows(data, nestedKey = '') {
   const result = data?.result;
   if (Array.isArray(result)) return result;
-  return nestedKey && Array.isArray(result?.[nestedKey]) ? result[nestedKey] : [];
+  if (nestedKey && Array.isArray(result?.[nestedKey])) return result[nestedKey];
+  return Array.isArray(result?.items) ? result.items : [];
 }
 
 function cloudflareDnsRecordView(record) {
