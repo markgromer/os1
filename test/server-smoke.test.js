@@ -191,6 +191,7 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     assert.match(mobileHtml, /Start voice/);
     assert.match(mobileHtml, /Pairing code or admin token/);
     assert.match(mobileHtml, /__marcusVoiceDiagnostics/);
+    assert.match(mobileHtml, /voiceTelemetryReady/);
     const realtimeClient = await fetch(`${base}/marcus-realtime.js`);
     assert.equal(realtimeClient.status, 200);
     assert.match(await realtimeClient.text(), /createMarcusRealtimeVoice/);
@@ -202,7 +203,7 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     assert.ok(manifest.icons.some((icon) => icon.src === '/icons/marcus.svg'));
     const serviceWorker = await fetch(`${base}/sw.js`);
     assert.equal(serviceWorker.status, 200);
-    assert.match(await serviceWorker.text(), /marcus-mobile-v7/);
+    assert.match(await serviceWorker.text(), /marcus-mobile-v8/);
     const mobileIcon = await fetch(`${base}/icons/marcus.svg`);
     assert.equal(mobileIcon.status, 200);
     assert.match(await mobileIcon.text(), /<svg/);

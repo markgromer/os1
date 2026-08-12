@@ -164,6 +164,7 @@
   const voiceTelemetryQueue = [];
   let voiceTelemetryTimer = null;
   let voiceTelemetryInFlight = false;
+  let voiceTelemetryReady = false;
 
   function rememberVoiceDiagnostic(key, value) {
     if (!Array.isArray(voiceDiagnostics[key])) return;
@@ -205,7 +206,7 @@
   }
 
   function scheduleVoiceTelemetryFlush(delay = 250) {
-    if (voiceTelemetryTimer !== null || navigator.onLine === false) return;
+    if (!voiceTelemetryReady || voiceTelemetryTimer !== null || navigator.onLine === false) return;
     voiceTelemetryTimer = window.setTimeout(() => {
       voiceTelemetryTimer = null;
       flushVoiceTelemetry().catch(() => {});
@@ -213,7 +214,7 @@
   }
 
   async function flushVoiceTelemetry(keepalive = false) {
-    if (voiceTelemetryInFlight || !voiceTelemetryQueue.length || navigator.onLine === false) return;
+    if (!voiceTelemetryReady || voiceTelemetryInFlight || !voiceTelemetryQueue.length || navigator.onLine === false) return;
     voiceTelemetryInFlight = true;
     const events = voiceTelemetryQueue.slice(0, 50);
     try {
@@ -264,6 +265,7 @@
   async function ensureSession() {
     const auth = await api('/api/auth/status');
     if (auth.authRequired && !auth.authenticated) {
+      voiceTelemetryReady = false;
       els.loginPanel.classList.add('visible');
       setStatus('sign in', 'warn');
       return false;
@@ -271,6 +273,7 @@
     els.loginPanel.classList.remove('visible');
     const session = await api('/api/marcus/live/session');
     liveToken = session.token || '';
+    voiceTelemetryReady = true;
     setStatus('online', 'ok');
     flushVoiceTelemetry().catch(() => {});
     return true;

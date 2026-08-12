@@ -172,7 +172,7 @@ It uses:
 
 `client/marcus-realtime.js` builds the browser client with `@openai/agents-realtime`; `scripts/build-mobile.mjs` bundles it into `public/marcus-realtime.js`. Realtime voice uses `gpt-realtime-2.1` by default with voice `marin`, semantic VAD, interruption, near-field noise reduction, and live transcription. Its only operational function is `marcus_operator`, which sends substantive spoken requests back through `/api/marcus/live/chat`. The voice model does not own GitHub, Cloudflare, Codex, external communication, or approval authority.
 
-The browser lifecycle closes the media session while the PWA is hidden, resumes with a fresh ephemeral credential, reconnects after network or WebRTC loss with bounded backoff, and refreshes at 55 minutes before the Realtime session limit. Service worker cache `marcus-mobile-v7` carries the acceptance telemetry client.
+The browser lifecycle closes the media session while the PWA is hidden, resumes with a fresh ephemeral credential, reconnects after network or WebRTC loss with bounded backoff, and refreshes at 55 minutes before the Realtime session limit. Service worker cache `marcus-mobile-v8` carries the acceptance telemetry client and keeps its initial event queue silent until authentication succeeds.
 
 `marcus/voice/realtime_telemetry.js` accepts only allowlisted event types and bounded metadata. It stores no transcript, request, reply, credential, IP address, or raw user agent. Events are capped at 1,000 per business in `data/businesses/<business>/marcus-realtime-telemetry.json`. The acceptance view derives signaling, recognized-speech, assistant-audio-stream, interruption, operator-bridge, network-recovery, background-recovery, and installed-Android-context gates.
 
