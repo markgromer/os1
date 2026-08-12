@@ -30,9 +30,11 @@ Mobile continuity status: implemented and covered by regression tests. Marcus st
 
 ## Phase 1A: Durable Mission Memory
 
-Status: implemented and locally verified. `MissionMemoryStore` persists the overall operator mission, standing instructions, preferences, decisions, and facts independently from the rolling chat and per-project requirements. It is business-scoped, revisioned, atomic, backup-aware, secret-rejecting, and available to Live voice/mobile chat, main chat, project audits, Codex handoffs, operator health, and combined acceptance.
+Status: implemented and verified locally and in production. `MissionMemoryStore` persists the overall operator mission, standing instructions, preferences, decisions, and facts independently from the rolling chat and per-project requirements. It is business-scoped, revisioned, atomic, backup-aware, secret-rejecting, and available to Live voice/mobile chat, main chat, project audits, Codex handoffs, operator health, and combined acceptance.
 
-Regression evidence covers default mission seeding, explicit conversational memory and recall, admin-only routes, Live-token rejection, deduplication, archival, restart persistence, business isolation, secret rejection, corrupt-primary recovery, backup discovery, and mission text in the real generated Codex handoff. Production deployment and restart acceptance remain pending.
+Regression evidence covers default mission seeding, explicit conversational memory and recall, admin-only routes, Live-token rejection, deduplication, archival, restart persistence, business isolation, secret rejection, corrupt-primary recovery, backup discovery, and mission text in the real generated Codex handoff. The complete local suite passes `101/101`, and GitHub CI run `31582100170` passed for implementation commit `71dc510`.
+
+Production mission-memory acceptance on 2026-08-12 created standing instruction `mem_1aUnq0Ll2OzFeg` through Marcus Live: before starting Codex, deeply audit relevant repositories and carry inspected evidence into the prompt. Marcus recalled it in a separate conversation turn. Read-only Reggie operation `op_wrI7kf12uhE9ig` attached that exact memory ID plus three seeded records, indexed 180 paths, read ten files with zero failed checks, preserved the Sweep and Go/API-token/slug requirements, remained `planned` with zero Codex jobs, and was cancelled. A deployment restart persistence check follows this documentation commit.
 
 ## Phase 2: Context Gathering
 
