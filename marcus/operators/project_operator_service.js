@@ -142,6 +142,20 @@ function normalizeRepoFullName(value) {
   return match ? `${match[1]}/${match[2].replace(/\.git$/i, '')}` : '';
 }
 
+export function extractExplicitGitHubRepositories(request) {
+  const text = safeString(request, 2_000);
+  const repositories = new Set();
+  const add = (value) => {
+    const normalized = normalizeRepoFullName(value);
+    if (normalized) repositories.add(normalized);
+  };
+  for (const match of text.matchAll(/github\.com[:/]+([^/\s]+)\/([^/\s#?]+)/gi)) add(`${match[1]}/${match[2]}`);
+  for (const match of text.matchAll(/\b([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\.git)\b/g)) add(match[1]);
+  for (const match of text.matchAll(/\b(?:github(?:\s+(?:project|repo|repository))?|repo(?:sitory)?|at|from|use)\s+(?:the\s+)?([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\.git)?)\b/gi)) add(match[1]);
+  if (/^\s*[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\.git)?\s*$/.test(text)) add(text);
+  return [...repositories].slice(0, 8);
+}
+
 function repoNameTokens(value) {
   return safeString(value, 300)
     .toLowerCase()
@@ -152,9 +166,7 @@ function repoNameTokens(value) {
 
 function extractRepoSearchTerms(request) {
   const text = safeString(request, 2_000);
-  const terms = new Set();
-  for (const match of text.matchAll(/github\.com[:/]+([^/\s]+)\/([^/\s#?]+)/gi)) terms.add(`${match[1]}/${match[2].replace(/\.git$/i, '')}`);
-  for (const match of text.matchAll(/\b([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\.git)?)\b/g)) terms.add(match[1].replace(/\.git$/i, ''));
+  const terms = new Set(extractExplicitGitHubRepositories(text));
   for (const match of text.matchAll(/\b([a-z0-9.-]+\.[a-z]{2,})(?:\/[^\s]*)?/gi)) terms.add(match[1]);
 
   const phrases = [
@@ -390,9 +402,7 @@ export class ProjectOperatorService {
 
   async ensureExplicitGithubProject(businessKey, request) {
     const key = safeBusinessKey(businessKey);
-    const explicit = extractRepoSearchTerms(request)
-      .map((term) => normalizeRepoFullName(term))
-      .find(Boolean);
+    const explicit = extractExplicitGitHubRepositories(request)[0] || '';
     if (!explicit) return null;
 
     const records = await this.operationsEngine.listProjectRegistry(key);

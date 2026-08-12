@@ -34,7 +34,7 @@ import { createOperationsEngine } from './marcus/operations/operation_engine.js'
 import { discoverDurableBackupSources } from './marcus/operations/operation_backups.js';
 import { DesktopActionQueue } from './marcus/operations/desktop_action_queue.js';
 import { startOperationMonitor } from './marcus/operations/operation_monitor.js';
-import { ProjectOperatorService } from './marcus/operators/project_operator_service.js';
+import { extractExplicitGitHubRepositories, ProjectOperatorService } from './marcus/operators/project_operator_service.js';
 import { createGitHubActionsCodexAdapterFromEnv } from './marcus/providers/github_actions_codex_adapter.js';
 import { createHttpCodexAdapterFromEnv } from './marcus/providers/http_codex_adapter.js';
 import {
@@ -14814,7 +14814,7 @@ async function handleMissionMemoryCommand(businessKey, command, source = 'marcus
 
 function isProjectContextDeclaration(message) {
   const text = String(message || '').trim();
-  const explicitRepo = /(?:github\.com[/:]|\b[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\.git)?\b)/i.test(text);
+  const explicitRepo = extractExplicitGitHubRepositories(text).length > 0;
   return explicitRepo || (/\b(project|repo|repository)\b/i.test(text) && /\bgithub\b/i.test(text));
 }
 

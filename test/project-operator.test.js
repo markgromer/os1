@@ -302,6 +302,18 @@ test('project operator auto-registers an explicit GitHub repo and reuses it as c
   });
 });
 
+test('project operator does not register conversational slash phrases as GitHub repositories', async () => {
+  await withProjectOperator(async ({ engine, service }) => {
+    const context = await service.resolveProjectContext('personal', {
+      message: 'Send the approval request for the relevant workflow/operation and report the result.',
+    });
+    assert.equal(context.registered, false);
+    assert.equal(context.project, null);
+    const registered = await engine.listProjectRegistry('personal');
+    assert.equal(registered.some((project) => project.repo.fullName === 'workflow/operation'), false);
+  });
+});
+
 test('project operator inspects related GitHub repos before composing Codex prompt', async () => {
   await withProjectOperator(async ({ engine, service }) => {
     await engine.createProjectRegistryRecord('personal', {

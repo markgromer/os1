@@ -133,7 +133,8 @@ export class ProjectResolver {
 
   async resolve({ businessKey, request, legacyProjects = [], context = {} }) {
     const key = safeBusinessKey(businessKey);
-    const records = await this.registry.list(key);
+    const records = (await this.registry.list(key))
+      .filter((record) => safeString(record?.status, 100).toLowerCase() !== 'archived');
     const legacy = Array.isArray(legacyProjects) ? legacyProjects : [];
     const ctx = { ...safeObject(context), activeBusinessKey: key };
     const scored = records.map((record) => {
