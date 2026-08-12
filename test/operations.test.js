@@ -9,7 +9,7 @@ import { ApprovalPolicy } from '../marcus/approvals/approval_policy.js';
 import { registerOperationsRoutes } from '../marcus/api/operations_routes.js';
 import { withoutProjectExecutionDeferrals } from '../marcus/core/request_intent.js';
 import { createOperationsEngine } from '../marcus/operations/operation_engine.js';
-import { executeMarcusOperationTool, shouldCreateDurableOperationForRequest } from '../marcus/operations/marcus_operation_tools.js';
+import { executeMarcusOperationTool, formatOperationStatusForMarcus, shouldCreateDurableOperationForRequest } from '../marcus/operations/marcus_operation_tools.js';
 import { normalizeOperation, requiredVerificationPassed } from '../marcus/operations/operation_types.js';
 
 async function withEngine(callback, options = {}) {
@@ -19,6 +19,7 @@ async function withEngine(callback, options = {}) {
     dataDir,
     getLegacyProjects: async (businessKey) => legacyByBusiness[businessKey] || [],
     queueDesktopAction: options.queueDesktopAction || null,
+    directCodexAdapter: options.directCodexAdapter || null,
   });
   try {
     return await callback(create(), { dataDir, create });
@@ -144,6 +145,51 @@ test('durable request classification excludes questions and the engine interpret
     assert.ok(created.operation.acceptanceCriteria.some((criterion) => /390px/.test(criterion)));
     assert.equal(created.operation.originalRequest, 'The WARREN Creative Studio is still unusable on mobile. Own the problem and get Codex working on it.');
   });
+});
+
+test('install and replace requests authorize Codex implementation without a medium approval loop', async () => {
+  let starts = 0;
+  const adapter = {
+    async startJob() { starts++; return { jobId: 'install-job', status: 'queued' }; },
+    async getJobStatus(job) { return job; },
+    async getArtifacts() { return []; },
+    async getDiff() { return {}; },
+    async cancelJob(job) { return job; },
+    async sendFollowup(job) { return job; },
+  };
+  await withEngine(async (engine) => {
+    await engine.createProjectRegistryRecord('personal', { canonicalName: 'Freedom Scoopers' });
+    const created = await engine.createFromRequest('personal', {
+      originalRequest: 'The Freedom Scoopers website needs the new Reggie hub installed and replace the legacy Reggie system.',
+      autoPlan: true,
+      autoStart: true,
+    });
+    assert.equal(created.operation.metadata.authorizationProvenance.actionClasses.includes('codex_implementation'), true);
+    assert.equal(created.operation.status, 'awaiting_provider');
+    assert.equal(starts, 1);
+  }, { directCodexAdapter: adapter });
+});
+
+test('Marcus operation status is concise for voice', () => {
+  const reply = formatOperationStatusForMarcus({
+    id: 'op_123',
+    projectName: 'Freedom Scoopers',
+    title: 'Long internal operation title',
+    objective: 'Long internal objective',
+    status: 'awaiting_provider',
+    approvals: [],
+    blockers: [],
+    steps: [
+      { id: 'step_1', status: 'completed', title: 'Prepare context' },
+      { id: 'step_2', status: 'running', title: 'Implement with Codex', output: 'Provider job ghdispatch_123 is queued.' },
+      { id: 'step_3', status: 'pending', title: 'Verify' },
+    ],
+    currentStepId: 'step_2',
+  });
+  assert.match(reply, /Freedom Scoopers/);
+  assert.match(reply, /provider/i);
+  assert.doesNotMatch(reply, /Outcome:|Risk:|Progress:|op_123/);
+  assert.ok(reply.length < 180);
 });
 
 test('runtime policy overrides model risk and always gates high and critical actions', async () => {

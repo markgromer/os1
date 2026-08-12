@@ -355,17 +355,13 @@ function replyForResult(result) {
     const choices = result.alternatives.map((item) => `- ${item.name || item.id}`).join('\n');
     return `I need one project clarified before I start Codex.\n${choices || 'No confident project match was found.'}`;
   }
-  const handoff = result.codexPrompt ? 'I prepared the Codex prompt and saved it in the durable operation.' : 'I created the durable operation.';
-  const inspected = result.auditSummary ? `Inspected: ${result.auditSummary}.` : '';
-  const waiting = result.operation?.status === 'blocked'
-    ? 'It is waiting for a real Codex session/result; I am not pretending the handoff has executed.'
-    : `Operation status is ${result.operation?.status || 'unknown'}.`;
-  return [
-    `I resolved this to ${result.project?.name || result.operation?.projectName || 'the project'} and audited the available context.`,
-    inspected,
-    `${handoff} ${waiting}`,
-    `Operation: ${result.operation?.id || 'not created'}.`,
-  ].join('\n');
+  const project = result.project?.name || result.operation?.projectName || 'the project';
+  const status = result.operation?.status || 'unknown';
+  const inspected = result.auditSummary ? ` Inspected: ${result.auditSummary}.` : '';
+  if (status === 'waiting_for_approval') return `I resolved this to ${project} and audited the available context.${inspected} I need approval before I start the Codex implementation.`;
+  if (status === 'awaiting_provider') return `I resolved this to ${project} and audited the available context.${inspected} The Codex job is queued with the provider now.`;
+  if (status === 'blocked') return `I resolved this to ${project} and audited the available context.${inspected} The Codex handoff is ready, but no real session or result is attached yet.`;
+  return `I resolved this to ${project} and audited the available context.${inspected} Status is ${status}.`;
 }
 
 export class ProjectOperatorService {

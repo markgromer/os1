@@ -249,17 +249,24 @@ export function formatOperationStatusForMarcus(operation, resolution = null, { r
   const progress = summarizeOperationProgress(operation);
   const current = operation.steps.find((step) => step.id === operation.currentStepId);
   const pendingApproval = operation.approvals.find((approval) => approval.status === 'pending');
-  const handoff = operation.artifacts.find((artifact) => artifact.type === 'codex_handoff');
-  return [
-    reused
-      ? `I found the existing durable operation ${operation.id}: ${operation.title}. No duplicate was created.`
-      : `I created durable operation ${operation.id}: ${operation.title}.`,
-    `Outcome: ${operation.objective}`,
-    `Project: ${operation.projectName || 'unresolved'}${resolution?.confidence ? ` (${resolution.confidence} confidence)` : ''}.`,
-    `Risk: ${operation.riskLevel}. Status: ${operation.status}. Progress: ${progress.completed}/${progress.total} steps.`,
-    current ? `Current step: ${current.title} (${current.status}).` : '',
-    pendingApproval ? `Approval required: ${pendingApproval.action} (${pendingApproval.riskLevel}).` : '',
-    handoff && operation.status === 'blocked' ? 'A complete Codex handoff is saved, but no direct Codex API is configured. Nothing is being falsely reported as running; the operation is waiting for a real external Codex job or result.' : '',
-    operation.blockers.filter((blocker) => blocker.status === 'active').map((blocker) => `Blocker: ${blocker.message}`).join('\n'),
-  ].filter(Boolean).join('\n');
+  const activeBlocker = operation.blockers.find((blocker) => blocker.status === 'active');
+  const project = operation.projectName || 'the project';
+  const prefix = reused ? `I found the existing ${project} operation.` : `I created the ${project} operation.`;
+  if (pendingApproval) {
+    return `${prefix} I need approval for ${pendingApproval.action} before I move it forward.`;
+  }
+  if (operation.status === 'awaiting_provider') {
+    return `${prefix} It is with the provider now: ${current?.output || current?.title || 'work is queued'}.`;
+  }
+  if (operation.status === 'blocked' || operation.status === 'recovery_required') {
+    return `${prefix} It is blocked: ${activeBlocker?.message || current?.error || 'provider evidence is missing'}.`;
+  }
+  if (operation.status === 'completed') {
+    return `${prefix} It is complete and verification is recorded.`;
+  }
+  if (operation.status === 'failed') {
+    return `${prefix} It failed: ${current?.error || activeBlocker?.message || 'the provider returned a failure'}.`;
+  }
+  const confidence = resolution?.confidence ? ` ${resolution.confidence} confidence.` : '';
+  return `${prefix} Status is ${operation.status}; ${progress.completed}/${progress.total} steps are done.${confidence}`.trim();
 }

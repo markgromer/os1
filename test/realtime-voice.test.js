@@ -20,7 +20,8 @@ test('Marcus realtime voice delegates substantive work to the durable operator',
   assert.equal(session.audio.input.transcription.model, 'gpt-live-transcribe');
   assert.equal(session.reasoning.effort, 'low');
   assert.equal(session.parallel_tool_calls, false);
-  assert.match(session.instructions, /call marcus_operator exactly once/i);
+  assert.match(session.instructions, /You are Marcus/i);
+  assert.match(session.instructions, /one or two spoken sentences/i);
   assert.match(session.instructions, /Never bypass Marcus approval requirements/i);
   assert.equal(session.tool_choice, 'auto');
   assert.equal(session.tools.length, 1);

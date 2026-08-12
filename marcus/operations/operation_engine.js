@@ -84,12 +84,15 @@ function deriveTrustedAuthorization({ request, businessKey, projectRegistryId })
   const text = safeString(request, 12_000).toLowerCase();
   const actionClasses = [];
   const readOnlyOpening = /^\s*(?:what|who|when|where|why|how|show|tell|explain|summarize|list|status\b|is\b|are\b|can\s+you\s+(?:tell|show|explain|summarize|list|check\s+(?:the\s+)?status)\b)/.test(text);
-  const explicitMutationDirective = /(?:^|[.!?]\s+)(?:please\s+)?(?:use\s+codex\s+to\s+)?(?:implement|build|fix|change|update|redesign|repair|create|test|lint|typecheck|verify)\b/.test(text)
-    || /\b(?:please|i\s+(?:want|need)\s+you\s+to|go\s+ahead(?:\s+and|\s+to)?|proceed(?:\s+and|\s+to)?|own\s+(?:the\s+)?problem\s+and)\b[^.!?]{0,100}\b(?:use\s+codex|implement|build|fix|change|update|redesign|repair|create|test|lint|typecheck|verify|get\s+codex\s+working)\b/.test(text);
+  const implementationVerb = '(?:implement|build|fix|change|update|redesign|repair|create|install|replace|migrate|upgrade|swap|wire|integrate)';
+  const codexDirective = '(?:use\\s+codex(?:\\s+to)?|start\\s+codex|launch\\s+codex|run\\s+codex|get\\s+codex\\s+(?:fixing|working|implementing)|get\\s+(?:it|this)\\s+going\\s+in\\s+codex|codex\\s+(?:fix|implement|build|change|update|repair|install|replace))';
+  const implementationAction = `(?:${implementationVerb}|${codexDirective})`;
+  const explicitMutationDirective = new RegExp(`(?:^|[.!?]\\s+)(?:please\\s+)?${implementationAction}\\b`).test(text)
+    || new RegExp(`\\b(?:please|i\\s+(?:want|need)\\s+you\\s+to|go\\s+ahead(?:\\s+and|\\s+to)?|proceed(?:\\s+and|\\s+to)?|own\\s+(?:the\\s+)?problem\\s+and)\\b[^.!?]{0,100}\\b(?:${implementationAction}|test|lint|typecheck|verify)\\b`).test(text);
   const permitsMutation = !readOnlyOpening || explicitMutationDirective;
-  const codexDenied = /\b(?:do\s+not|don't|dont|never|no)\s+(?:\w+\s+){0,4}(?:use\s+codex|codex|implement|build|fix|change|update|redesign|repair|create)\b/.test(text);
+  const codexDenied = /\b(?:do\s+not|don't|dont|never|no)\s+(?:\w+\s+){0,4}(?:use\s+codex|codex|implement|build|fix|change|update|redesign|repair|create|install|replace|migrate|upgrade|swap|wire|integrate)\b/.test(text);
   const scriptDenied = /\b(?:do\s+not|don't|dont|never|no)\s+(?:\w+\s+){0,4}(?:test|build|lint|typecheck|verify|verification)\b/.test(text);
-  if (permitsMutation && !codexDenied && /\b(codex|implement|build|fix|change|update|redesign|repair|create)\b/.test(text)) actionClasses.push('codex_implementation');
+  if (permitsMutation && !codexDenied && new RegExp(`\\b${implementationAction}\\b`).test(text)) actionClasses.push('codex_implementation');
   if (permitsMutation && !scriptDenied && /\b(test|build|lint|typecheck|verify|verification)\b/.test(text)) actionClasses.push('run-project-script');
   if (/\b(read|inspect|compare|github|repository|pull request|workflow)\b/.test(text)) {
     actionClasses.push('repository_metadata', 'default_branch', 'branch_metadata', 'commit_metadata', 'repository_file', 'compare_refs', 'pull_request_metadata', 'workflow_status');

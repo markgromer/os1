@@ -675,7 +675,7 @@ test('Marcus Live approval follow-up advances a waiting project-operator operati
       }) });
       assert.equal(registryResponse.status, 201);
       const createResponse = await fetch(`${base}/api/marcus/live/chat`, { method: 'POST', headers: adminHeaders, body: JSON.stringify({
-        message: 'The Freedom Scoopers website needs the new Reggie and Reggie hub installed and replace the legacy Reggie system. You can find both projects in GitHub.',
+        message: 'Audit the Freedom Scoopers website and prepare an implementation plan.',
       }) });
       assert.equal(createResponse.status, 200);
       const created = await createResponse.json();
