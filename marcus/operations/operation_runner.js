@@ -550,8 +550,10 @@ export class OperationRunner {
       draft.status = 'blocked';
       const type = allFinished ? 'verification_required' : 'no_runnable_step';
       const message = allFinished ? 'Required verification has not passed or been explicitly waived.' : 'No runnable step is available.';
-      draft.blockers.push({ id: makeOperationId('blocker'), operationId: draft.id, type, status: 'active', message, createdAt: nowIso() });
-      appendEvent(draft, { type: `runner_${type}`, actor: 'runner', message });
+      if (!draft.blockers.some((item) => item.type === type && item.status === 'active')) {
+        draft.blockers.push({ id: makeOperationId('blocker'), operationId: draft.id, type, status: 'active', message, createdAt: nowIso() });
+        appendEvent(draft, { type: `runner_${type}`, actor: 'runner', message });
+      }
       return draft;
     });
   }
@@ -561,8 +563,10 @@ export class OperationRunner {
       const step = draft.steps.find((item) => item.id === stepId);
       if (step) { step.status = 'blocked'; step.error = message; }
       draft.status = 'recovery_required'; draft.currentStepId = stepId;
-      draft.blockers.push({ id: makeOperationId('blocker'), operationId, stepId, type: 'recovery_required', status: 'active', message, createdAt: nowIso() });
-      appendEvent(draft, { type: 'recovery_required', actor: 'runner', stepId, message });
+      if (!draft.blockers.some((item) => item.type === 'recovery_required' && item.stepId === stepId && item.status === 'active')) {
+        draft.blockers.push({ id: makeOperationId('blocker'), operationId, stepId, type: 'recovery_required', status: 'active', message, createdAt: nowIso() });
+        appendEvent(draft, { type: 'recovery_required', actor: 'runner', stepId, message });
+      }
       return draft;
     });
   }

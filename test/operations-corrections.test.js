@@ -838,6 +838,47 @@ test('recovery examines expired approvals and incomplete verification without as
   });
 });
 
+test('recovery leaves a stable blocked operation with an already completed Codex job unchanged', async () => {
+  await withEngine(async (engine) => {
+    const operation = await engine.store.create('personal', {
+      title: 'Stable manual review', objective: 'Keep completed implementation stable', status: 'blocked',
+      steps: [
+        { id: 'completed-codex', title: 'Implement', type: 'codex', status: 'completed' },
+        { id: 'manual-verification', title: 'Verify', type: 'verification', status: 'blocked' },
+      ],
+      verification: [{ id: 'manual-check', type: 'manual_review', status: 'needs_manual_review', required: true }],
+      blockers: [{ id: 'verification-blocker', type: 'verification_required', status: 'active', message: 'Review required.' }],
+      metadata: { codexJobs: { 'completed-codex': { jobId: 'completed-job', status: 'completed' } } },
+    });
+    const before = await engine.getOperation('personal', operation.id);
+
+    assert.deepEqual(await engine.recovery.recoverBusiness('personal'), []);
+    const after = await engine.getOperation('personal', operation.id);
+    assert.equal(after.revision, before.revision);
+    assert.equal(after.steps.find((step) => step.id === 'completed-codex').status, 'completed');
+    assert.equal(after.activityLog.filter((event) => event.type === 'operation_recovered').length, 0);
+    assert.equal(after.blockers.filter((item) => item.type === 'verification_required' && item.status === 'active').length, 1);
+  });
+});
+
+test('runner blocker creation is idempotent for repeated blocked and recovery decisions', async () => {
+  await withEngine(async (engine) => {
+    let operation = await engine.store.create('personal', {
+      title: 'No runnable step', objective: 'Remain blocked', status: 'running',
+      steps: [{ id: 'stuck-step', title: 'Stuck', type: 'internal', status: 'blocked' }],
+    });
+    operation = await engine.runner.finishOrBlock('personal', operation);
+    operation = await engine.runner.finishOrBlock('personal', operation);
+    assert.equal(operation.blockers.filter((item) => item.type === 'no_runnable_step' && item.status === 'active').length, 1);
+    assert.equal(operation.activityLog.filter((event) => event.type === 'runner_no_runnable_step').length, 1);
+
+    operation = await engine.runner.markRecoveryRequired('personal', operation.id, 'stuck-step', 'Provider state is unknown.');
+    operation = await engine.runner.markRecoveryRequired('personal', operation.id, 'stuck-step', 'Provider state is unknown.');
+    assert.equal(operation.blockers.filter((item) => item.type === 'recovery_required' && item.status === 'active').length, 1);
+    assert.equal(operation.activityLog.filter((event) => event.type === 'recovery_required').length, 1);
+  });
+});
+
 test('durable backup discovery includes operation, registry, and mission memory files for configured and discovered businesses', async () => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'durable-backups-'));
   try {

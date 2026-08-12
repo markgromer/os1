@@ -1,6 +1,12 @@
 import { makeOperationId, nowIso, requiredVerificationPassed, safeObject, safeString, TERMINAL_OPERATION_STATUSES } from './operation_types.js';
 
 const RECOVERABLE_DESKTOP_ACTIONS = new Set(['run-project-script', 'prepare-publish', 'open-vscode']);
+const ACTIVE_CODEX_JOB_STATUSES = new Set(['started', 'queued', 'running', 'waiting', 'paused']);
+
+function codexJobNeedsReconciliation(step, job) {
+  const status = safeString(job?.status, 100).toLowerCase();
+  return ACTIVE_CODEX_JOB_STATUSES.has(status) || (status === 'completed' && step?.status !== 'completed');
+}
 
 export class OperationRecovery {
   constructor({ store, registry = null, queueDesktopAction = null }) {
@@ -50,16 +56,19 @@ export class OperationRecovery {
     const recovered = [];
     for (const operation of operations) {
       if (TERMINAL_OPERATION_STATUSES.includes(operation.status)) continue;
+      const stepById = new Map(operation.steps.map((step) => [step.id, step]));
       const activeJobs = Object.entries(safeObject(operation.metadata?.codexJobs))
-        .filter(([, job]) => ['started', 'queued', 'running', 'waiting', 'paused', 'completed'].includes(job?.status));
+        .filter(([stepId, job]) => codexJobNeedsReconciliation(stepById.get(stepId), job));
       const queuedDesktop = operation.desktopCorrelations.filter((item) => ['queued', 'running'].includes(item.status));
       const unknownActions = operation.providerActions.filter((item) => item.status === 'unknown');
       const runningWithoutJob = operation.steps.filter((step) => step.status === 'running' && !activeJobs.some(([stepId]) => stepId === step.id));
       const expiredApprovals = operation.approvals.filter((approval) => approval.status === 'pending' && approval.expiresAt && Date.parse(approval.expiresAt) <= Date.now());
       const implementationFinished = operation.steps.some((step) => step.type === 'codex' && step.status === 'completed');
       const verificationIncomplete = implementationFinished && !requiredVerificationPassed(operation);
+      const verificationNeedsClassification = verificationIncomplete && (operation.status !== 'blocked'
+        || !operation.blockers.some((item) => item.type === 'verification_required' && item.status === 'active'));
       const inconsistentJobStatus = activeJobs.length && !['awaiting_provider', 'running', 'queued', 'paused'].includes(operation.status);
-      if (!activeJobs.length && !queuedDesktop.length && !unknownActions.length && !runningWithoutJob.length && !expiredApprovals.length && !verificationIncomplete && !inconsistentJobStatus) continue;
+      if (!activeJobs.length && !queuedDesktop.length && !unknownActions.length && !runningWithoutJob.length && !expiredApprovals.length && !verificationNeedsClassification && !inconsistentJobStatus) continue;
 
       const restoredDesktopIds = new Set();
       for (const correlation of queuedDesktop) {
@@ -99,7 +108,7 @@ export class OperationRecovery {
         }
         for (const step of draft.steps) {
           const job = safeObject(draft.metadata?.codexJobs)[step.id];
-          if (job && ['started', 'queued', 'running', 'waiting', 'paused', 'completed'].includes(job.status)) {
+          if (job && codexJobNeedsReconciliation(step, job)) {
             step.status = 'running';
             if (draft.status !== 'paused') state = state || 'awaiting_provider';
           } else if (step.status === 'running') {
@@ -112,7 +121,7 @@ export class OperationRecovery {
           }
         }
         if (draft.providerActions.some((item) => item.status === 'unknown')) state = 'recovery_required';
-        if (verificationIncomplete && !['recovery_required', 'awaiting_provider', 'waiting_for_approval'].includes(state)) state = 'blocked';
+        if (verificationNeedsClassification && !['recovery_required', 'awaiting_provider', 'waiting_for_approval'].includes(state)) state = 'blocked';
         draft.status = draft.status === 'paused' ? 'paused' : (state || draft.status);
         draft.currentStepId = draft.steps.find((step) => ['running', 'blocked', 'waiting_for_approval'].includes(step.status))?.id || draft.currentStepId;
         if (state === 'recovery_required' && !draft.blockers.some((item) => item.type === 'recovery_required' && item.status === 'active')) {
