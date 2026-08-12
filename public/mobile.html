@@ -151,12 +151,21 @@
     els.messages.appendChild(div);
     els.messages.scrollTop = els.messages.scrollHeight;
   }
-  async function api(path, options = {}) {
+  function authTokenForPath(path) {
+    const p = String(path || '');
+    if (p === '/api/auth/status' || p === '/api/auth/login' || p === '/api/marcus/live/session') return adminToken;
+    return liveToken || adminToken;
+  }
+  async function api(path, options = {}, retrying = false) {
     const headers = { ...(options.headers || {}) };
-    const authToken = liveToken || adminToken;
+    const authToken = authTokenForPath(path);
     if (authToken) headers.Authorization = `Bearer ${authToken}`;
     const resp = await fetch(path, { ...options, headers, credentials: 'include' });
     const data = await resp.json().catch(() => ({}));
+    if (resp.status === 401 && liveToken && !retrying) {
+      liveToken = '';
+      return api(path, options, true);
+    }
     if (!resp.ok) throw new Error(data.error || data.message || `HTTP ${resp.status}`);
     return data;
   }

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'marcus-mobile-v2';
+const CACHE_NAME = 'marcus-mobile-v3';
 const SHELL_ASSETS = [
   '/mobile.html',
   '/manifest.webmanifest',
