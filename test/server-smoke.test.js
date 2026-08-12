@@ -219,7 +219,7 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     const serviceWorker = await fetch(`${base}/sw.js`);
     assert.equal(serviceWorker.status, 200);
     const serviceWorkerText = await serviceWorker.text();
-    assert.match(serviceWorkerText, /marcus-mobile-v16/);
+    assert.match(serviceWorkerText, /marcus-mobile-v17/);
     assert.match(serviceWorkerText, /marcus-maskable-512\.png/);
     const mobileIcon = await fetch(`${base}/icons/marcus.svg`);
     assert.equal(mobileIcon.status, 200);
