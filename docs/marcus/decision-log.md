@@ -281,3 +281,11 @@ Context: Marcus Mobile could report that a durable operation needed approval, bu
 Decision: Add a redacted pending-approval descriptor to the Live-token-safe operation summary and an exact-target review dialog to Marcus Mobile. Show the immutable operation target, action, risk, reason, and operation id. Keep approval disabled until an explicit authorization checkbox is selected, require typed strong confirmation for critical actions, and submit approve/reject only through paired durable-admin routes.
 
 Consequence: Mark can review and authorize one exact GitHub or Cloudflare action from the installed PWA without exposing prompts, artifacts, provider input, or credentials to the read-only feed. Production service-worker `marcus-mobile-v17` rendered both pending targets at 390x844; neither was executed during validation, and an unauthenticated approval attempt returned 401.
+
+## 2026-08-12: External Message Approval Requires Durable Authentication
+
+Context: External-action routes were classified as Live-session routes. A short-lived Live token could therefore list full drafts or call draft, approve, send, and reject directly, even though provider administration and operation approval already required the paired durable-admin context. The phone also lacked an exact-draft review surface.
+
+Decision: Remove every external-action route from Live-token authorization and require durable admin authentication before conversational approval can execute. Add an exact-draft review dialog to the paired mobile `Verify` workflow showing recipient, subject, project, reason, body, and draft id. Keep approve-and-send disabled until Mark authorizes the displayed draft; preserve separate approve and provider-send requests behind that one explicit command.
+
+Consequence: A copied ephemeral token cannot inspect or authorize messages. Production service-worker `marcus-mobile-v18` returned 401 for direct Live-token draft access and `reauthenticationRequired` for a Live-token-only send phrase. The paired 390x844 dialog rendered draft `V8uMUUZjiRz1` with zero browser errors or warnings, while the draft remained `pending_approval` with no approval or send timestamp.
