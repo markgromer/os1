@@ -149,6 +149,12 @@ Production Reggie acceptance on 2026-08-12 exercised this complete loop:
 
 The provider run lasted almost three minutes before opening the pull request. Marcus then remained blocked until the independent and authenticated verification evidence passed. PR #16 remains open and unmerged, so completion of the implementation operation did not imply merge or deployment authority.
 
+Production one-instruction demo acceptance exercised the revised conversation path:
+
+`explicit install + start Codex request -> 2,493 ms six-file audit -> zero medium approvals -> one Reggie runner job -> PR #5 -> blocked on independent checks -> reviewer finds approval-boundary defect -> exact-head correction -> refreshed diff review -> 3/3 tests + Wrangler dry-run + syntax/diff checks -> completed operation`
+
+Operation `op_-qcwlO85nndNkw` completed at PR head `4b49e5cd580b238402b07ff776cb82899206f34c`. PR #5 remains open and unmerged, `/operator-controls` remains HTTP 404 in production, and Cloudflare deployment `d8eb7206-6d65-434b-aaab-04cd51f62823` remains on the prior Worker version. Starting Codex did not imply merge or deployment authority.
+
 Production Quo onboarding followed the separate provider path:
 
 `paired admin -> save redacted os1 credential -> query Quo phone numbers -> normalize the canonical E.164 sender -> persist resolved sender ids -> mark provider verified with sent=false`
@@ -159,4 +165,4 @@ Production provider-operation preparation on 2026-08-12 exercised the new bounda
 
 `live PR/Worker inspection -> exact Marcus Operator Demo registry binding -> GitHub merge operation op_wSMm8zWz7DGGiA -> Cloudflare deployment operation op_nA9c9c_bZYsMjg -> both waiting_for_approval -> authoritative re-inspection confirmed unchanged PR and deployment`
 
-The complete local suite passed `127/127`; GitHub CI passed for implementation commit `0409400` and Cloudflare version-shape correction `17769b0`. Live execution of either prepared provider action remains an explicit operator decision.
+The complete local suite passed `128/128`; GitHub CI passed for implementation commit `0409400` and Cloudflare version-shape correction `17769b0`. Live execution of either prepared provider action remains an explicit operator decision.

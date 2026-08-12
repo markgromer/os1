@@ -67,6 +67,8 @@ Authenticated provider inspection routes include:
 
 Every mutation is bound to one high-confidence project-registry record and an immutable execution target. GitHub merges require the exact registered repository, pull request, and expected 40-character head SHA. Cloudflare actions require the exact registered account plus zone/DNS record or Worker/version/current-deployment target. The runner re-reads provider state after approval, refuses drift, performs at most one mutation, and requires authoritative read-back before completion. DNS deletion also requires strong confirmation. An accepted mutation with unavailable read-back enters `recovery_required`; it is not blindly retried or reported as failed.
 
+An authenticated implementation request authorizes Codex to commit and push only to the operation's suggested nonproduction work branch and create or update that branch's review pull request. It does not authorize a push to the default, protected, or production branch, merge, deployment, DNS change, credential change, or external communication. `marcus/providers/codex_provider.js` writes this boundary into every Codex handoff.
+
 Capability truth source:
 
 - `GET /api/marcus/operator-health`
@@ -83,6 +85,7 @@ Production status verified on 2026-08-12:
 - Cloudflare Worker inspection resolved `marcus-operator-demo-worker`, two versions, and deployment `d8eb7206-6d65-434b-aaab-04cd51f62823` with version `a51aa87d-a3e8-4dc3-ab81-2b9577a5a17c` at 100 percent.
 - The Cloudflare credential is the dedicated account token `Marcus Production Operator`, not the local Wrangler OAuth token.
 - Operator health reports the approved GitHub and Cloudflare mutation paths available. Production preparation operations `op_wSMm8zWz7DGGiA` and `op_nA9c9c_bZYsMjg` stopped at `waiting_for_approval`; neither the PR nor Worker deployment changed.
+- Production conversation operation `op_-qcwlO85nndNkw` used the nonproduction Codex authority: it audited six files, started one real runner without a redundant medium approval, opened PR #5, and completed after exact-head independent verification. PR #5 remains open and unmerged; the Worker deployment remained unchanged.
 - Render admin authentication and the canonical `BASE_URL` point to `https://task-tracker-5wsa.onrender.com`.
 - `RENDER_API_KEY` remains unconfigured; Render management currently uses authenticated operator tooling rather than Marcus server API access.
 

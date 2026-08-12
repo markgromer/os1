@@ -6,7 +6,7 @@ Context: Marcus treated direct requests such as install the new system, replace 
 
 Decision: Derive Codex implementation authority only from the authenticated original request, recognize an explicit bounded set of implementation verbs and Codex execution phrases, and retain negation/read-only checks. Let that authority satisfy the medium-risk Codex step. Keep merge, deployment, DNS, publish, external communication, and all high/critical actions behind their separate runtime approvals.
 
-Consequence: Marcus can audit and start the requested Codex work from one clear instruction, while consequential follow-on actions still stop at their exact approval boundary. Immediate replies remain concise but include the measured audit summary. Regression coverage includes install/replace, get Codex fixing, get it going in Codex, read-only continuity, and the genuine unauthorised audit/plan approval path.
+Consequence: Marcus can audit and start the requested Codex work from one clear instruction, while consequential follow-on actions still stop at their exact approval boundary. Immediate replies remain concise but include the measured audit summary. The generated handoff authorizes only the nonproduction operation branch and its review PR. Regression coverage includes install/replace, get Codex fixing, get it going in Codex, read-only continuity, the genuine unauthorised audit/plan approval path, and the branch boundary. Production operation `op_-qcwlO85nndNkw` passed this flow through open/unmerged PR #5 without changing the Worker.
 
 ## 2026-08-12: Provider Credentials Are Broad, Mutation Actions Are Narrow
 

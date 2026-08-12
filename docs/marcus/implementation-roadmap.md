@@ -30,6 +30,8 @@ Mobile continuity status: implemented and covered by regression tests. Marcus st
 
 Execution-language status: explicit phrases such as install, replace, migrate, start Codex, get Codex fixing, and get it going in Codex authorize the medium-risk Codex implementation step from the authenticated request. They do not create a redundant approval loop before Codex starts. Read-only questions and explicit do-not-start instructions remain non-authorizing. High/critical merge, deployment, DNS, publish, and communication actions keep their independent approval boundary. Marcus's immediate reply now keeps a concise audit summary instead of dumping operation internals.
 
+Production acceptance on 2026-08-12 passed this path with operation `op_-qcwlO85nndNkw`: Marcus audited six files in 2,493 ms, started one Reggie job with zero pending approvals, opened demo PR #5, caught and corrected an approval-boundary defect during independent review, refreshed the exact-head evidence, and completed after three tests, Wrangler dry-run, syntax, and diff checks passed. The PR remained open and the Worker remained unchanged.
+
 ## Phase 1A: Durable Mission Memory
 
 Status: implemented and verified locally and in production. `MissionMemoryStore` persists the overall operator mission, standing instructions, preferences, decisions, and facts independently from the rolling chat and per-project requirements. It is business-scoped, revisioned, atomic, backup-aware, secret-rejecting, and available to Live voice/mobile chat, main chat, project audits, Codex handoffs, operator health, and combined acceptance.
@@ -150,7 +152,7 @@ The action allowlist is deliberately narrower than the credentials. Marcus does 
 Verification on 2026-08-12:
 
 - The real-server integration harness performed a GitHub merge, DNS create, and Worker deployment exactly once against stateful mock providers, then verified provider read-back and evidence persistence.
-- Focused provider tests passed `7/7`; the complete local suite passed `127/127`; JavaScript syntax passed for 73 files.
+- Focused provider tests passed `7/7`; the complete local suite passed `128/128`; JavaScript syntax passed for 73 files.
 - GitHub CI runs `31615296935` and `31615747675` passed for commits `0409400` and `17769b0`.
 - Render deployed both commits. Production operator health reports GitHub merge plus Cloudflare DNS/Worker mutation paths available.
 - Live read-only inspection resolved demo PR #4 at exact head `4ee4135eb98be5bc57385be0ff128ee78fa42729`, with settled checks and no failures.
@@ -260,7 +262,7 @@ Acceptance tests still required before this phase is complete:
 
 The production paired-admin `Verify` dashboard starts a fresh in-memory acceptance session, shows each voice/provider gate, and enables physical confirmation only after all eight Android voice gates pass in installed standalone mode. `GET /api/marcus/acceptance` combines that evidence with provider, approved-send, Codex, GitHub, Cloudflare, OpenAI, and desktop readiness. Service worker `marcus-mobile-v13` and the dashboard passed Render deployment and phone-size Chromium acceptance; the physical-phone run remains pending.
 
-Status: the official SDK, recovery, acceptance telemetry, and durable-work tracking remain covered in the current local `127/127` suite. At 390x844, an authenticated browser showed the active Reggie operation, persisted it across reload, displayed one blocked transition without repeated messages, loaded both tracker and announcer bundles, produced no horizontal overflow, and reported no browser warnings or errors. Production service-worker cache `marcus-mobile-v14`, the tracker bundle, and the active-work markup are live. The production safe summary reports Reggie operation `op_f6XKmXTWILGvpQ` completed with 3/3 steps and 3/3 required checks. Eight blocked/terminal operations retained identical status, revision, and update time across two monitor intervals. A real installed-Android speech, barge-in, and recovery conversation remains pending.
+Status: the official SDK, recovery, acceptance telemetry, and durable-work tracking remain covered in the current local `128/128` suite. At 390x844, an authenticated browser showed the active Reggie operation, persisted it across reload, displayed one blocked transition without repeated messages, loaded both tracker and announcer bundles, produced no horizontal overflow, and reported no browser warnings or errors. Production service-worker cache `marcus-mobile-v14`, the tracker bundle, and the active-work markup are live. The production safe summary reports Reggie operation `op_f6XKmXTWILGvpQ` completed with 3/3 steps and 3/3 required checks. Eight blocked/terminal operations retained identical status, revision, and update time across two monitor intervals. A real installed-Android speech, barge-in, and recovery conversation remains pending.
 
 Verified locally on 2026-08-12:
 
@@ -326,6 +328,16 @@ Independent result-review acceptance evidence:
 - Evidence digest: `99dc7a16679924e30285fff2b3fb1baaff9b24379e73d5f6d35332c4104c8d1b`
 - Result: four of four acceptance criteria grounded; five of five tests, Wrangler dry-run, syntax, artifact, diff-review, and unchanged-production evidence passed
 - Boundary proof: PR #4 is open and unmerged; live `/version` returns HTTP 404 because the acceptance change was not deployed
+
+One-instruction conversation-to-Codex acceptance evidence:
+
+- Durable operation: `op_-qcwlO85nndNkw`
+- Audit: one repository, six paths indexed, six files read, 2,493 ms
+- Codex runner: `https://github.com/markgromer/Reggie/actions/runs/31616694759`
+- Review pull request: `https://github.com/markgromer/marcus-operator-demo-worker/pull/5`
+- Exact verified head: `4b49e5cd580b238402b07ff776cb82899206f34c`
+- Result: no redundant medium approval; the operation blocked until independent diff review plus three tests, Wrangler dry-run, JavaScript syntax, and diff checks passed
+- Boundary proof: PR #5 is open and unmerged, live `/operator-controls` returns HTTP 404, and the Worker deployment/version did not change
 
 Production Reggie project-operator acceptance evidence:
 
