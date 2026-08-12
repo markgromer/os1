@@ -59,9 +59,15 @@ The current explicit project wins over an older active project. Context-only req
 
 Voice acceptance evidence follows:
 
-`allowlisted browser lifecycle event -> authenticated telemetry batch -> bounded business-scoped event file -> derived acceptance gates`
+`fresh installed-phone session -> allowlisted browser lifecycle events -> authenticated telemetry batch -> bounded business-scoped event file -> every derived gate passes -> Mark confirms on that phone -> physical acceptance evidence`
 
-Transcripts, prompts, replies, credentials, IP addresses, and raw user agents are not part of this path. The resulting gates show what the client observed, while installed-device physical acceptance remains an explicit operator check.
+Transcripts, prompts, replies, credentials, IP addresses, and raw user agents are not part of this path. Android standalone context alone is not accepted as physical proof. Confirmation is enabled only after every voice gate passes and is stored as a boolean event without a note or conversation content.
+
+Repository audit and Codex handoff follow:
+
+`resolve project -> discover named/related GitHub repositories -> index recursive trees -> rank files against the complete request -> read redacted source/config/test evidence -> record coverage and failures -> compose 30,000-character execution brief -> create durable operation -> direct Codex or external handoff`
+
+Codex treats the brief as preflight evidence and must reopen relevant files, callers, dependents, and tests. Related repositories remain explicit scope; the runner may not silently reduce a multi-repository request to the primary checkout.
 
 ## Execution Brief Contents
 
@@ -96,6 +102,8 @@ Before launching Codex, Marcus should inspect:
 - Project evidence.
 - Recent inbox or client context.
 - Desktop workspace context, if available.
+
+The implemented GitHub audit records recursive tree statistics, head/recent commit state, open pull requests, request-ranked file excerpts, failed checks, API-call count, and elapsed time. Obvious secret paths are excluded before retrieval and retained text is redacted before it enters an operation.
 
 ## Completion Standard
 

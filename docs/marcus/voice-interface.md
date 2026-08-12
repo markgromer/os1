@@ -1,6 +1,6 @@
 # Voice Interface
 
-Status: primary architecture selected and deployed. The official SDK signaling and recovery paths are verified in production Chromium; installed-Android speech, interruption, and physical phone-lock/network-handoff verification remain open.
+Status: primary architecture selected and deployed. The official SDK signaling and recovery paths are verified in production Chromium; the source now includes an explicit physical-phone acceptance dashboard, while installed-Android speech, interruption, and physical phone-lock/network-handoff verification remain open.
 
 ## Objective
 
@@ -13,7 +13,7 @@ Voice should be the fastest way for Mark to use the same Marcus operator. It sho
 - Browser/mobile transport: WebRTC.
 - Default voice: `marin`.
 - Operational bridge: `marcus_operator` -> `POST /api/marcus/live/chat`.
-- Acceptance evidence: redacted lifecycle events -> `POST /api/marcus/realtime/telemetry` -> `GET /api/marcus/realtime/acceptance`.
+- Acceptance evidence: redacted lifecycle events -> `POST /api/marcus/realtime/telemetry` -> `GET /api/marcus/realtime/acceptance` and combined `GET /api/marcus/acceptance`.
 - Existing fallback: OpenAI file transcription plus ElevenLabs or browser speech synthesis.
 
 OpenAI's current voice-agent guidance recommends Realtime speech-to-speech for low first-audio latency, barge-in, natural turn-taking, and realtime tool use. It recommends WebRTC for browser and mobile clients. Sources: [Voice agents](https://developers.openai.com/api/docs/guides/voice-agents), [Realtime WebRTC](https://developers.openai.com/api/docs/guides/realtime-webrtc), and [Realtime tools](https://developers.openai.com/api/docs/guides/realtime-mcp).
@@ -75,9 +75,9 @@ The PWA assigns a random in-memory acceptance session ID and batches allowlisted
 
 Stored evidence includes event type, timestamps, voice state, transcript length, coarse platform/browser/display mode, operator outcome, and optional durable operation ID. It excludes transcript text, request/reply text, credentials, IP addresses, and raw user-agent strings. Server retention is capped at 1,000 events per business.
 
-`GET /api/marcus/realtime/acceptance` derives these gates: signaling connected, user speech recognized, assistant audio streamed, interruption observed, operator bridge completed, network recovery, background recovery, and installed Android context. All gates passing marks the session ready for physical review; it does not independently prove the device was physical.
+`GET /api/marcus/realtime/acceptance` derives these gates: signaling connected, user speech recognized, assistant audio streamed, interruption observed, operator bridge completed, network recovery, background recovery, and installed Android context. All gates passing marks the session ready for physical review; it does not independently prove the device was physical. The mobile `Verify` view then permits a boolean confirmation from that installed Android session. `acceptedOnPhysicalDevice` is true only when the derived gates, installed context, and explicit confirmation all agree.
 
-Local normalization, persistence, redaction, deduplication, auth, business-scope, WebRTC playback inference, and gate-derivation tests passed on 2026-08-12 in the `94/94` suite.
+Local normalization, persistence, redaction, deduplication, auth, business-scope, WebRTC playback inference, gate derivation, explicit phone confirmation, and combined acceptance-report tests passed on 2026-08-12 in the `98/98` suite.
 
 ## Production Evidence
 

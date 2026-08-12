@@ -30,6 +30,7 @@ function completeSession(sessionId = 'voice-session-1') {
     { ...base, eventId: 'e15', type: 'background_suspended' },
     { ...base, eventId: 'e16', type: 'background_resumed' },
     { ...base, eventId: 'e17', type: 'voice_state', state: 'listening' },
+    { ...base, eventId: 'e18', type: 'physical_review_confirmed', confirmed: true, note: 'must not persist' },
   ];
 }
 
@@ -40,6 +41,8 @@ test('realtime telemetry strips content and summarizes every acceptance gate', (
   assert.doesNotMatch(JSON.stringify(events), /text must never|assistant text/i);
   const summary = summarizeRealtimeTelemetry(events, 'voice-session-1');
   assert.equal(summary.readyForPhysicalReview, true);
+  assert.equal(summary.physicalReviewConfirmed, true);
+  assert.equal(summary.acceptedOnPhysicalDevice, true);
   assert.deepEqual(summary.gates, {
     signalingConnected: true,
     userSpeechRecognized: true,
@@ -58,14 +61,15 @@ test('realtime telemetry persists bounded, idempotent, content-free events', asy
   try {
     const store = new RealtimeTelemetryStore({ dataDir, maxEvents: 100 });
     const first = await store.append('personal', completeSession());
-    assert.equal(first.accepted, 17);
+    assert.equal(first.accepted, 18);
     const duplicate = await store.append('personal', completeSession());
-    assert.equal(duplicate.duplicates, 17);
+    assert.equal(duplicate.duplicates, 18);
     const result = await store.acceptance('personal', { sessionId: 'voice-session-1' });
     assert.equal(result.latest.readyForPhysicalReview, true);
+    assert.equal(result.latest.acceptedOnPhysicalDevice, true);
     assert.equal(result.privacy.transcriptTextStored, false);
     const raw = await fs.readFile(path.join(dataDir, 'businesses', 'personal', 'marcus-realtime-telemetry.json'), 'utf8');
-    assert.doesNotMatch(raw, /text must never|assistant text/i);
+    assert.doesNotMatch(raw, /text must never|assistant text|must not persist/i);
   } finally {
     await fs.rm(dataDir, { recursive: true, force: true });
   }

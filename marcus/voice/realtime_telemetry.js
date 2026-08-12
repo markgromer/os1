@@ -27,6 +27,7 @@ export const REALTIME_TELEMETRY_EVENT_TYPES = new Set([
   'network_online',
   'background_suspended',
   'background_resumed',
+  'physical_review_confirmed',
   'voice_error',
 ]);
 
@@ -103,6 +104,10 @@ export function normalizeRealtimeTelemetryEvent(input, { nowMs = Date.now() } = 
     event.installed = input.installed === true;
     event.online = input.online !== false;
   }
+  if (type === 'physical_review_confirmed') {
+    if (input.confirmed !== true) return null;
+    event.confirmed = true;
+  }
   return event;
 }
 
@@ -137,6 +142,8 @@ export function summarizeRealtimeTelemetry(events, sessionId) {
     backgroundRecovery: backgroundResumeIndex >= 0 && listeningIndexAfter(sessionEvents, backgroundResumeIndex) >= 0,
     installedAndroidContext: androidStandalone,
   };
+  const readyForPhysicalReview = Object.values(gates).every(Boolean);
+  const physicalReviewConfirmed = sessionEvents.some((event) => event.type === 'physical_review_confirmed' && event.confirmed === true);
   return {
     sessionId,
     startedAt: sessionEvents[0].occurredAt,
@@ -149,7 +156,9 @@ export function summarizeRealtimeTelemetry(events, sessionId) {
       installed: context.installed === true,
     },
     gates,
-    readyForPhysicalReview: Object.values(gates).every(Boolean),
+    readyForPhysicalReview,
+    physicalReviewConfirmed,
+    acceptedOnPhysicalDevice: readyForPhysicalReview && androidStandalone && physicalReviewConfirmed,
     operationId: successfulOperator?.operationId || '',
   };
 }

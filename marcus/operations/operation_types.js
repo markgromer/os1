@@ -73,6 +73,7 @@ export const PROVIDER_RESULT_STATUSES = Object.freeze([
 ]);
 
 const SECRET_PATTERNS = [
+  /(["']?(?:api[_-]?key|token|secret|password|passwd|private[_-]?key|client[_-]?secret)["']?\s*[:=]\s*["'])[^"'\r\n]*(?=["'])/gi,
   /(authorization\s*[:=]\s*(?:bearer\s+)?)[^\s,;]+/gi,
   /((?:api[_-]?key|token|secret|password|passwd|private[_-]?key|client[_-]?secret)\s*[:=]\s*)[^\s,;]+/gi,
   /\b(?:sk|pat|ghp|gho|github_pat|xox[baprs]|eyJ)[A-Za-z0-9._-]{12,}\b/g,
@@ -371,7 +372,7 @@ function normalizeOperationMetadata(value) {
   return {
     projectResolution: sanitizeStructured(raw.projectResolution ?? {}, 5_000),
     relevantMemory: normalizeStringArray(raw.relevantMemory, 20, 1_000),
-    currentArchitecture: redactSecrets(raw.currentArchitecture ?? '', 12_000).trim(),
+    currentArchitecture: redactSecrets(raw.currentArchitecture ?? '', 30_000).trim(),
     codexJobs: sanitizeStructured(raw.codexJobs ?? {}, 15_000),
     authorizationProvenance: sanitizeStructured(raw.authorizationProvenance ?? {}, 12_000),
     executionTarget: sanitizeStructured(raw.executionTarget ?? {}, 25_000),

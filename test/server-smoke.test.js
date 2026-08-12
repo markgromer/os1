@@ -191,6 +191,8 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     assert.match(mobileHtml, /Start voice/);
     assert.match(mobileHtml, /Pairing code or admin token/);
     assert.match(mobileHtml, /Message providers/);
+    assert.match(mobileHtml, /System acceptance/);
+    assert.match(mobileHtml, /Confirm on this phone/);
     assert.match(mobileHtml, /Save and verify text/);
     assert.match(mobileHtml, /Save and verify email/);
     assert.match(mobileHtml, /__marcusVoiceDiagnostics/);
@@ -206,7 +208,7 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     assert.ok(manifest.icons.some((icon) => icon.src === '/icons/marcus.svg'));
     const serviceWorker = await fetch(`${base}/sw.js`);
     assert.equal(serviceWorker.status, 200);
-    assert.match(await serviceWorker.text(), /marcus-mobile-v12/);
+    assert.match(await serviceWorker.text(), /marcus-mobile-v13/);
     const mobileIcon = await fetch(`${base}/icons/marcus.svg`);
     assert.equal(mobileIcon.status, 200);
     assert.match(await mobileIcon.text(), /<svg/);
@@ -258,6 +260,7 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     assert.equal((await fetch(`${base}/api/marcus/realtime/client-secret`, { method: 'POST' })).status, 401);
     assert.equal((await fetch(`${base}/api/marcus/realtime/telemetry`, { method: 'POST' })).status, 401);
     assert.equal((await fetch(`${base}/api/marcus/realtime/acceptance`)).status, 401);
+    assert.equal((await fetch(`${base}/api/marcus/acceptance`)).status, 401);
     const staleLiveHeaders = { authorization: 'Bearer stale-after-restart', cookie: pairingCookie, 'x-business-key': 'agency', 'content-type': 'application/json' };
     const staleTokenStatus = await (await fetch(`${base}/api/auth/status`, { headers: staleLiveHeaders })).json();
     assert.equal(staleTokenStatus.authenticated, true);
@@ -315,13 +318,24 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
         { eventId: 'suspended', sessionId: telemetrySessionId, type: 'background_suspended' },
         { eventId: 'resumed', sessionId: telemetrySessionId, type: 'background_resumed' },
         { eventId: 'background-listening', sessionId: telemetrySessionId, type: 'voice_state', state: 'listening' },
+        { eventId: 'physical-review', sessionId: telemetrySessionId, type: 'physical_review_confirmed', confirmed: true, text: 'never retain this confirmation text' },
       ] }),
     });
     assert.equal(telemetryResponse.status, 202);
     const telemetryAcceptance = await (await fetch(`${base}/api/marcus/realtime/acceptance?sessionId=${telemetrySessionId}`, { headers: liveHeaders })).json();
     assert.equal(telemetryAcceptance.latest.readyForPhysicalReview, true);
+    assert.equal(telemetryAcceptance.latest.acceptedOnPhysicalDevice, true);
     assert.equal(telemetryAcceptance.privacy.transcriptTextStored, false);
     assert.doesNotMatch(JSON.stringify(telemetryAcceptance), /never persist this text/i);
+    const systemAcceptance = await (await fetch(`${base}/api/marcus/acceptance?sessionId=${telemetrySessionId}`, { headers: liveHeaders })).json();
+    assert.equal(systemAcceptance.voice.session.acceptedOnPhysicalDevice, true);
+    assert.equal(systemAcceptance.gates.physicalAndroidVoiceAccepted, true);
+    assert.equal(systemAcceptance.gates.projectOperatorReady, false);
+    assert.equal(systemAcceptance.gates.approvedTextSendAccepted, false);
+    assert.equal(systemAcceptance.gates.approvedEmailSendAccepted, false);
+    assert.equal(systemAcceptance.ready, false);
+    assert.equal(systemAcceptance.missing.some((item) => item.key === 'textProviderVerified'), true);
+    assert.doesNotMatch(JSON.stringify(systemAcceptance), /never retain this confirmation text/i);
     const voiceStatus = await fetch(`${base}/api/marcus/live/voice/status`, { headers: liveHeaders });
     assert.equal(voiceStatus.status, 200);
     const voiceStatusBody = await voiceStatus.json();
@@ -771,7 +785,7 @@ test('approved Marcus email actions send exactly once through SMTP', async () =>
   });
 });
 
-test('paired admin can configure and verify Quo and SMTP without sending', async () => {
+test('paired admin can configure, verify, and acceptance-test Quo and SMTP safely', async () => {
   await withMockQuoApi(async ({ baseUrl: quoBaseUrl, received: texts }) => {
     await withMockSmtp(async ({ port: smtpPort, received: emails }) => {
       const server = await spawnServer({ extraEnv: {
@@ -845,6 +859,34 @@ test('paired admin can configure and verify Quo and SMTP without sending', async
         assert.equal(health.capabilities.communication.textProviderVerified, true);
         assert.equal(health.capabilities.communication.emailProviderVerified, true);
 
+        const createApprovedSend = async (draft) => {
+          const draftResponse = await fetch(`${base}/api/marcus/external-actions/draft`, {
+            method: 'POST', headers, body: JSON.stringify(draft),
+          });
+          assert.equal(draftResponse.status, 201);
+          const action = (await draftResponse.json()).action;
+          const approvalResponse = await fetch(`${base}/api/marcus/external-actions/${action.id}/approve`, {
+            method: 'POST', headers, body: JSON.stringify({ message: `Approve and send this ${draft.type}.` }),
+          });
+          assert.equal(approvalResponse.status, 200);
+          const sendResponse = await fetch(`${base}/api/marcus/external-actions/${action.id}/send`, { method: 'POST', headers, body: '{}' });
+          assert.equal(sendResponse.status, 200);
+          return (await sendResponse.json()).action;
+        };
+        const sentText = await createApprovedSend({ type: 'text', to: '+15550002222', body: 'Provider acceptance text.' });
+        const sentEmail = await createApprovedSend({ type: 'email', to: 'client@example.com', subject: 'Provider acceptance', body: 'Provider acceptance email.' });
+        assert.equal(sentText.status, 'sent');
+        assert.equal(sentEmail.status, 'sent');
+        assert.equal(texts.length, 1);
+        assert.equal(emails.length, 1);
+        const providerAcceptance = await (await fetch(`${base}/api/marcus/acceptance`, { headers })).json();
+        assert.equal(providerAcceptance.gates.textProviderVerified, true);
+        assert.equal(providerAcceptance.gates.emailProviderVerified, true);
+        assert.equal(providerAcceptance.gates.approvedTextSendAccepted, true);
+        assert.equal(providerAcceptance.gates.approvedEmailSendAccepted, true);
+        assert.equal(providerAcceptance.providers.text.acceptedSend.actionId, sentText.id);
+        assert.equal(providerAcceptance.providers.email.acceptedSend.actionId, sentEmail.id);
+
         const changedSettingsResponse = await fetch(`${base}/api/settings`, {
           method: 'PUT', headers, body: JSON.stringify({ quoApiKey: 'changed-after-verification' }),
         });
@@ -852,6 +894,10 @@ test('paired admin can configure and verify Quo and SMTP without sending', async
         const changedConfiguration = await (await fetch(`${base}/api/marcus/providers/config`, { headers })).json();
         assert.equal(changedConfiguration.text.verification, null);
         assert.equal(changedConfiguration.email.verification.verified, true);
+        const invalidatedAcceptance = await (await fetch(`${base}/api/marcus/acceptance`, { headers })).json();
+        assert.equal(invalidatedAcceptance.gates.textProviderVerified, false);
+        assert.equal(invalidatedAcceptance.gates.approvedTextSendAccepted, false);
+        assert.equal(invalidatedAcceptance.gates.approvedEmailSendAccepted, true);
       } finally { await server.close(); }
     });
   });

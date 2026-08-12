@@ -72,7 +72,7 @@ It owns:
 
 - Detecting project/audit/Codex work requests.
 - Resolving the project through the durable operations engine.
-- Gathering legacy store, project evidence, desktop, and repository sample context.
+- Gathering legacy store, project evidence, desktop, and deep GitHub repository context.
 - Writing a Marcus Project Execution Brief.
 - Composing a Codex-ready prompt.
 - Creating a durable operation and either starting a direct Codex job through the configured adapter or creating an external Codex handoff.
@@ -81,11 +81,14 @@ It owns:
 - Requiring a positive work action before auditing or creating an operation; repository, site, and Codex mentions alone remain conversation context.
 - Respecting "do not audit" as context-only and "audit/prepare, but do not start Codex" as a planned operation with no provider start.
 
+Repository auditing uses each discovered repository's recursive Git tree, default branch, head commit, recent commits, open pull requests, and request-ranked source/configuration/test files. It excludes generated trees, oversized or binary files, and obvious secret-file paths before reads; evidence is redacted again before persistence. Marcus records coverage, API-call count, failures, selected paths, and elapsed time. The execution brief and real direct-Codex handoff may retain up to 30,000 characters so source evidence is not reduced to filename previews.
+
 The production project registry includes `Reggie` at `markgromer/Reggie`, with `connect.scooper.site` and `Sweep and Go` aliases.
 
 Current routes:
 
 - `GET /api/marcus/operator-health`
+- `GET /api/marcus/acceptance`
 - `POST /api/marcus/project-operator`
 - `POST /api/marcus/live/chat` for project operator requests
 - `POST /api/chat` for project operator requests
@@ -172,14 +175,15 @@ It uses:
 - `POST /api/marcus/realtime/client-secret` for a short-lived OpenAI Realtime client secret; the standard OpenAI key remains on the server.
 - `POST /api/marcus/realtime/telemetry` for authenticated, redacted voice acceptance events.
 - `GET /api/marcus/realtime/acceptance` for derived acceptance gates by page session.
+- `GET /api/marcus/acceptance` for the combined voice, provider, Codex, GitHub, Cloudflare, OpenAI, and desktop acceptance report.
 
 `client/marcus-realtime.js` builds the browser client with `@openai/agents-realtime`; `scripts/build-mobile.mjs` bundles it into `public/marcus-realtime.js`. Realtime voice uses `gpt-realtime-2.1` by default with voice `marin`, semantic VAD, interruption, near-field noise reduction, and live transcription. Its only operational function is `marcus_operator`, which sends substantive spoken requests back through `/api/marcus/live/chat`. The voice model does not own GitHub, Cloudflare, Codex, external communication, or approval authority.
 
-The browser lifecycle closes the media session while the PWA is hidden, resumes with a fresh ephemeral credential, reconnects after network or WebRTC loss with bounded backoff, and refreshes at 55 minutes before the Realtime session limit. A valid durable pairing cookie takes over immediately if a Render restart invalidates a process-bound Live token, even when the stale token is still present in the Authorization header. Service worker cache `marcus-mobile-v12` carries the acceptance telemetry client, the admin-only provider setup, and keeps its initial event queue silent until authentication succeeds.
+The browser lifecycle closes the media session while the PWA is hidden, resumes with a fresh ephemeral credential, reconnects after network or WebRTC loss with bounded backoff, and refreshes at 55 minutes before the Realtime session limit. A valid durable pairing cookie takes over immediately if a Render restart invalidates a process-bound Live token, even when the stale token is still present in the Authorization header. Current source cache `marcus-mobile-v13` adds a mobile `Verify` dashboard for a fresh voice run, provider verification, and approved-send evidence. Production remained on `marcus-mobile-v12` at the last provider-onboarding check; v13 deployment acceptance is still pending.
 
 The SDK's generic `audio_start` callback is not emitted when WebRTC owns audio playback. Marcus therefore derives speaking state from output-audio transcript deltas, derives playback completion from `response.output_audio.done`, treats the later final transcript as text-only, and records barge-in when input speech begins while assistant playback is active. Guarded state prevents duplicate events if another transport emits the generic callbacks.
 
-`marcus/voice/realtime_telemetry.js` accepts only allowlisted event types and bounded metadata. It stores no transcript, request, reply, credential, IP address, or raw user agent. Events are capped at 1,000 per business in `data/businesses/<business>/marcus-realtime-telemetry.json`. The acceptance view derives signaling, recognized-speech, assistant-audio-stream, interruption, operator-bridge, network-recovery, background-recovery, and installed-Android-context gates.
+`marcus/voice/realtime_telemetry.js` accepts only allowlisted event types and bounded metadata. It stores no transcript, request, reply, credential, IP address, or raw user agent. Events are capped at 1,000 per business in `data/businesses/<business>/marcus-realtime-telemetry.json`. The acceptance view derives signaling, recognized-speech, assistant-audio-stream, interruption, operator-bridge, network-recovery, background-recovery, and installed-Android-context gates. A session becomes physical-device evidence only when every derived gate passes in installed Android standalone context and Mark explicitly confirms the run from that same session.
 
 `/api/marcus/live/chat` keeps recent conversation turns, an active project, and bounded durable requirement memory for up to 40 projects on the server. Each project retains at most 12 deduplicated requirement sentences. Both sides of each exchange carry project metadata. When a message explicitly names a project, Marcus resolves that project before building the request and includes only matching user requirements; the explicit target overrides the previously active project. Older conversations remain compatible because a user turn can inherit the project metadata from its paired assistant reply. Context-only replies summarize at most three substantive requirements instead of replaying raw history.
 

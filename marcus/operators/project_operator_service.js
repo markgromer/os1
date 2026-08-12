@@ -1,7 +1,127 @@
-import { safeBusinessKey, safeObject, safeString } from '../operations/operation_types.js';
+import { redactSecrets, safeBusinessKey, safeObject, safeString } from '../operations/operation_types.js';
 import { explicitlyDefersProjectAudit, withoutExplicitlyNegatedClauses } from '../core/request_intent.js';
 
 const PROJECT_OPERATOR_ACTION_RE = /\b(audit|inspect|review|check|fix|build|implement|install(?:ed|ing)?|replace|migrate|upgrade|deploy|publish|modify|change|create|add|prepare|write|set\s*up|get [^.!?\n]{0,80} (?:working|going)|start [^.!?\n]{0,80} session)\b/i;
+const MAX_AUDIT_REPOSITORIES = 6;
+const MAX_AUDIT_FILES_PER_REPOSITORY = 10;
+const MAX_AUDIT_FILES_TOTAL = 36;
+const MAX_AUDIT_FILE_CHARS = 6_000;
+const MAX_EXECUTION_BRIEF_CHARS = 30_000;
+const AUDIT_GITHUB_TIMEOUT_MS = 6_000;
+const AUDIT_TEXT_EXTENSIONS = new Set([
+  '', '.c', '.cc', '.conf', '.cpp', '.cs', '.css', '.go', '.graphql', '.h', '.html', '.java', '.js', '.json', '.jsx',
+  '.kt', '.md', '.mjs', '.php', '.prisma', '.properties', '.py', '.rb', '.rs', '.scss', '.sh', '.sql', '.svelte',
+  '.toml', '.ts', '.tsx', '.txt', '.vue', '.xml', '.yaml', '.yml',
+]);
+const AUDIT_MANIFEST_NAMES = new Set([
+  'package.json', 'pyproject.toml', 'requirements.txt', 'go.mod', 'cargo.toml', 'composer.json', 'gemfile',
+  'wrangler.jsonc', 'wrangler.toml', 'render.yaml', 'render.yml', 'tsconfig.json', 'vite.config.js', 'vite.config.ts',
+  'next.config.js', 'next.config.mjs', 'next.config.ts', 'astro.config.mjs', 'dockerfile', 'docker-compose.yml',
+]);
+
+function mapWithConcurrency(values, limit, mapper) {
+  const input = Array.isArray(values) ? values : [];
+  const results = new Array(input.length);
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(Math.max(1, limit), input.length) }, async () => {
+    while (cursor < input.length) {
+      const index = cursor;
+      cursor += 1;
+      results[index] = await mapper(input[index], index);
+    }
+  });
+  return Promise.all(workers).then(() => results);
+}
+
+function encodeRepoPath(value) {
+  return safeString(value, 2_000).split('/').map((part) => encodeURIComponent(part)).join('/');
+}
+
+function isSafeAuditFilePath(value, size = 0) {
+  const filePath = safeString(value, 2_000).replace(/\\/g, '/');
+  if (!filePath || filePath.startsWith('/') || filePath.includes('../')) return false;
+  if (Number(size) > 400_000) return false;
+  if (/(^|\/)(node_modules|vendor|dist|build|coverage|\.next|\.git|\.wrangler)(\/|$)/i.test(filePath)) return false;
+  if (/(^|\/)(\.env(?:\..*)?|id_rsa|id_ed25519|credentials\.json|service-account[^/]*\.json|secrets?\.(?:json|ya?ml|toml))$/i.test(filePath)) return false;
+  const base = filePath.split('/').pop().toLowerCase();
+  const extensionIndex = base.lastIndexOf('.');
+  const extension = extensionIndex > 0 ? base.slice(extensionIndex) : '';
+  return AUDIT_TEXT_EXTENSIONS.has(extension) || AUDIT_MANIFEST_NAMES.has(base) || /^readme(?:\.|$)/i.test(base);
+}
+
+function auditRequestTokens(request) {
+  return [...new Set([
+    ...repoNameTokens(request),
+    ...extractRepoSearchTerms(request).flatMap((term) => repoNameTokens(term)),
+  ])].filter((token) => !['audit', 'check', 'review', 'start', 'codex', 'project', 'repository'].includes(token)).slice(0, 24);
+}
+
+function auditPathScore(filePath, requestTokens = []) {
+  const normalized = safeString(filePath, 2_000).replace(/\\/g, '/');
+  const lower = normalized.toLowerCase();
+  const parts = lower.split('/');
+  const base = parts.at(-1) || '';
+  const depth = Math.max(0, parts.length - 1);
+  let score = Math.max(0, 40 - (depth * 5));
+  const reasons = [];
+
+  if (/^readme(?:\.|$)/i.test(base)) { score += 1_000; reasons.push('repository overview'); }
+  if (AUDIT_MANIFEST_NAMES.has(base)) { score += 900; reasons.push('manifest or runtime configuration'); }
+  if (/^\.github\/workflows\/.+\.ya?ml$/i.test(lower)) { score += 720; reasons.push('automation workflow'); }
+  if (/(^|\/)(src|app|server|worker|api|lib|components|pages|routes)(\/|$)/i.test(lower)) score += 90;
+  if (/^(index|main|app|server|worker|route|page)\.(?:[cm]?[jt]sx?|py|go|rs|php)$/i.test(base)) {
+    score += 260;
+    reasons.push('runtime entry point');
+  }
+  if (/(^|\/)(test|tests|__tests__|spec)(\/|\.)/i.test(lower)) score += 80;
+  if (/(^|\/)(architecture|docs?|adr)(\/|\.|$)/i.test(lower)) score += 110;
+
+  const matches = requestTokens.filter((token) => lower.includes(token));
+  if (matches.length) {
+    score += 1_200 + (matches.length * 100);
+    reasons.push(`request terms: ${matches.slice(0, 5).join(', ')}`);
+  }
+  return { score, reason: reasons.join('; ') || 'representative source file' };
+}
+
+function selectAuditTreeFiles(treeEntries, request, limit = MAX_AUDIT_FILES_PER_REPOSITORY) {
+  const tokens = auditRequestTokens(request);
+  return (Array.isArray(treeEntries) ? treeEntries : [])
+    .filter((entry) => entry?.type === 'blob' && isSafeAuditFilePath(entry.path, entry.size))
+    .map((entry) => ({ ...entry, ...auditPathScore(entry.path, tokens) }))
+    .sort((a, b) => b.score - a.score || Number(a.size || 0) - Number(b.size || 0) || a.path.localeCompare(b.path))
+    .slice(0, limit);
+}
+
+function summarizeRepositoryTree(treeEntries = []) {
+  const blobs = treeEntries.filter((entry) => entry?.type === 'blob');
+  const directoryCounts = new Map();
+  const extensionCounts = new Map();
+  for (const entry of blobs) {
+    const filePath = safeString(entry.path, 2_000).replace(/\\/g, '/');
+    const parts = filePath.split('/');
+    if (parts.length > 1) directoryCounts.set(parts[0], (directoryCounts.get(parts[0]) || 0) + 1);
+    const base = parts.at(-1) || '';
+    const dot = base.lastIndexOf('.');
+    const extension = dot > 0 ? base.slice(dot).toLowerCase() : '[none]';
+    extensionCounts.set(extension, (extensionCounts.get(extension) || 0) + 1);
+  }
+  const top = (map, limit) => [...map.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, limit)
+    .map(([name, count]) => ({ name, count }));
+  return {
+    fileCount: blobs.length,
+    directoryCount: treeEntries.filter((entry) => entry?.type === 'tree').length,
+    topDirectories: top(directoryCounts, 8),
+    topExtensions: top(extensionCounts, 8),
+  };
+}
+
+function auditCodeFence(filePath) {
+  const extension = (safeString(filePath, 2_000).split('.').pop() || '').toLowerCase();
+  return ({ js: 'javascript', mjs: 'javascript', jsx: 'jsx', ts: 'typescript', tsx: 'tsx', py: 'python', rb: 'ruby', rs: 'rust', yml: 'yaml', md: 'markdown' })[extension] || extension;
+}
 
 function preview(value, max = 240) {
   return safeString(value, max).replace(/\s+/g, ' ').trim();
@@ -118,12 +238,35 @@ function formatContextBrief({ request, project, resolution, legacyRows, evidence
     `- ${preview(item.contactName || item.fromName || item.sender || item.source || 'Message', 120)}: ${preview(item.subject || item.text || item.body || item.summary, 220)}`);
   const evidenceLines = (Array.isArray(evidence) ? evidence : []).slice(0, 10).map((item) =>
     `- [${preview(item.source, 40)}/${preview(item.type, 40)}] ${preview(item.summary || item.event, 220)}`);
-  const repoFileLines = (Array.isArray(repoFiles) ? repoFiles : []).map((file) =>
-    `- ${file.repo ? `${file.repo}:` : ''}${file.path}: ${preview(file.summary || file.content, 260)}`);
+  const repoFileBlocks = (Array.isArray(repoFiles) ? repoFiles : []).slice(0, 18).map((file) => {
+    const excerpt = redactSecrets(safeString(file.content || file.summary, 1_200), 1_200).replaceAll('```', '`` `').trim();
+    return [
+      `### ${file.repo ? `${file.repo}:` : ''}${file.path}`,
+      `- Selection reason: ${preview(file.reason, 300) || 'representative repository evidence'}`,
+      `- Blob size: ${Number(file.size || 0)} bytes; excerpt: ${excerpt.length} characters.`,
+      excerpt ? `\`\`\`${auditCodeFence(file.path)}\n${excerpt}\n\`\`\`` : '- Content was unavailable.',
+    ].join('\n');
+  });
   const auditRepos = Array.isArray(audit.repos) ? audit.repos : [];
-  const auditRepoLines = auditRepos.map((repo) =>
-    `- ${repo.fullName}${repo.description ? `: ${preview(repo.description, 180)}` : ''}${repo.defaultBranch ? ` (default ${repo.defaultBranch})` : ''}`);
+  const auditRepoLines = auditRepos.map((repo) => {
+    const head = repo.headCommit?.sha
+      ? `; head ${safeString(repo.headCommit.sha, 40).slice(0, 12)} ${preview(repo.headCommit.message, 120)}`
+      : '';
+    const pulls = Array.isArray(repo.openPullRequests) ? repo.openPullRequests : [];
+    const directories = (repo.topDirectories || []).map((item) => `${item.name} (${item.count})`).join(', ');
+    const extensions = (repo.topExtensions || []).map((item) => `${item.name} (${item.count})`).join(', ');
+    return [
+      `- ${repo.fullName}${repo.description ? `: ${preview(repo.description, 180)}` : ''}`,
+      `  - Default branch: ${repo.defaultBranch || 'unknown'}${head}`,
+      `  - Tree: ${Number(repo.fileCount || 0)} files, ${Number(repo.directoryCount || 0)} directories${repo.treeTruncated ? ', GitHub reported a truncated tree' : ''}.`,
+      `  - Top directories: ${directories || 'root-only or unavailable'}.`,
+      `  - Dominant extensions: ${extensions || 'unavailable'}.`,
+      `  - Open pull requests: ${pulls.length}${pulls.length ? ` (${pulls.slice(0, 5).map((pull) => `#${pull.number} ${preview(pull.title, 80)}`).join('; ')})` : ''}.`,
+      `  - Selected files: ${(repo.selectedPaths || []).join(', ') || 'none'}.`,
+    ].join('\n');
+  });
   const auditFindingLines = (Array.isArray(audit.findings) ? audit.findings : []).map((finding) => `- ${finding}`);
+  const coverage = safeObject(audit.coverage);
   const desktop = safeObject(desktopContext);
   const ws = safeObject(desktop.workspace);
   const desktopLines = [
@@ -150,6 +293,10 @@ function formatContextBrief({ request, project, resolution, legacyRows, evidence
     '## GitHub Audit',
     auditRepoLines.length ? auditRepoLines.join('\n') : '- No related GitHub repositories were inspected.',
     auditFindingLines.length ? auditFindingLines.join('\n') : '',
+    `- Audit coverage: ${Number(coverage.repositoriesInspected || 0)} repositories, ${Number(coverage.treesIndexed || 0)} recursive trees, ${Number(coverage.pathsIndexed || 0)} paths indexed, ${Number(coverage.filesRead || 0)} files read, ${Number(coverage.apiCalls || 0)} GitHub API calls, ${Number(coverage.durationMs || 0)} ms.`,
+    '',
+    '## Repository Evidence Excerpts',
+    repoFileBlocks.length ? repoFileBlocks.join('\n\n') : '- Repository file inspection was unavailable or not configured.',
     '',
     '## Activity Snapshot',
     activity?.currentFocusProject ? `- Current focus: ${activity.currentFocusProject}.` : '- No calculated project activity snapshot was available.',
@@ -158,9 +305,6 @@ function formatContextBrief({ request, project, resolution, legacyRows, evidence
     '',
     '## Desktop Context',
     desktopLines.length ? desktopLines.map((line) => `- ${line}`).join('\n') : '- No live desktop workspace context was available.',
-    '',
-    '## Repository Files Inspected',
-    repoFileLines.length ? repoFileLines.join('\n') : '- Repository file inspection was unavailable or not configured.',
   ].filter((line) => line !== '').join('\n');
 }
 
@@ -170,7 +314,7 @@ function composeCodexPrompt({ request, project, executionBrief }) {
     '# Goal for Codex',
     '',
     '## Objective',
-    preview(request, 1600) || 'Audit the resolved project and implement the requested improvement.',
+    redactSecrets(safeString(request, 8_000), 8_000).trim() || 'Audit the resolved project and implement the requested improvement.',
     '',
     '## Project',
     `- Name: ${summary.name || 'Unknown'}`,
@@ -181,10 +325,12 @@ function composeCodexPrompt({ request, project, executionBrief }) {
     `- Cloudflare project: ${summary.cloudflareProject || 'not registered'}`,
     '',
     '## Marcus Audit Brief',
-    executionBrief.slice(0, 12_000),
+    executionBrief.slice(0, MAX_EXECUTION_BRIEF_CHARS),
     '',
     '## Instructions',
     '- Inspect the repository before changing code.',
+    '- Treat Marcus audit evidence as a starting point, not permission to skip opening the relevant files and their dependents.',
+    '- If the objective references related repositories, determine each repository role and do not silently reduce the requested scope to the primary repository.',
     '- Make the smallest coherent change that satisfies the objective.',
     '- Preserve existing behavior and data outside the requested scope.',
     '- Do not deploy, publish, merge, change DNS, bill, text, email, or contact customers.',
@@ -194,6 +340,7 @@ function composeCodexPrompt({ request, project, executionBrief }) {
     '## Verification',
     '- Run the most relevant project checks from package scripts or documented commands.',
     '- For UI work, verify at desktop and mobile widths and report what was checked.',
+    '- Reconcile the final implementation against every requirement in the original request and the Marcus audit brief.',
     '- Return changed files, verification output, remaining risks, and any manual approval needed.',
   ].join('\n');
 }
@@ -294,27 +441,30 @@ export class ProjectOperatorService {
     return { resolution, project: resolution.registryRecord ? summarizeProject(resolution.registryRecord) : null, registered: Boolean(explicit) };
   }
 
-  async discoverRelatedRepos(request, project) {
+  async discoverRelatedRepos(request, project, githubApi = this.githubApi) {
     const primary = repoParts(project?.repo).fullName;
     const terms = extractRepoSearchTerms(request);
     const byName = new Map();
     const addRepo = (repo = {}, score = 0, source = 'unknown') => {
       const fullName = normalizeRepoFullName(repo.full_name || repo.fullName || repo.html_url || primary);
       if (!fullName) return;
-      const existing = byName.get(fullName) || {};
-      byName.set(fullName, {
-        fullName,
+      const key = fullName.toLowerCase();
+      const existing = byName.get(key) || {};
+      const sources = new Set(safeString(existing.source, 500).split(',').filter(Boolean));
+      sources.add(source);
+      byName.set(key, {
+        fullName: safeString(repo.full_name || repo.fullName, 300) || existing.fullName || fullName,
         name: safeString(repo.name || fullName.split('/')[1], 200),
         description: safeString(repo.description || existing.description, 500),
         defaultBranch: safeString(repo.default_branch || repo.defaultBranch || existing.defaultBranch, 120),
         htmlUrl: safeString(repo.html_url || existing.htmlUrl, 1_000),
         private: repo.private === true || existing.private === true,
         score: Math.max(Number(existing.score) || 0, score),
-        source: existing.source ? `${existing.source},${source}` : source,
+        source: [...sources].join(','),
       });
     };
     if (primary) addRepo({ fullName: primary }, 150, 'project_registry');
-    if (!this.githubApi) return [...byName.values()];
+    if (!githubApi) return [...byName.values()];
 
     for (const term of terms) {
       const full = normalizeRepoFullName(term);
@@ -322,7 +472,7 @@ export class ProjectOperatorService {
     }
 
     try {
-      const repos = await this.githubApi('/user/repos?per_page=100&sort=updated&affiliation=owner,collaborator,organization_member');
+      const repos = await githubApi('/user/repos?per_page=100&sort=updated&affiliation=owner,collaborator,organization_member');
       for (const repo of Array.isArray(repos) ? repos : []) {
         const score = scoreRepoForTerms(repo, terms);
         if (score >= 24) addRepo(repo, score, 'github_user_repos');
@@ -333,46 +483,125 @@ export class ProjectOperatorService {
 
     return [...byName.values()]
       .sort((a, b) => b.score - a.score || a.fullName.localeCompare(b.fullName))
-      .slice(0, 8);
+      .slice(0, MAX_AUDIT_REPOSITORIES);
+  }
+
+  async inspectRepository(repoInfo, request, githubApi) {
+    const [owner, repo] = safeString(repoInfo.fullName, 300).split('/');
+    const base = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+    const errors = [];
+    let metadata = {};
+    try {
+      metadata = await githubApi(base);
+    } catch (error) {
+      errors.push(`metadata: ${preview(error?.message || error, 200)}`);
+    }
+    const fullName = safeString(metadata?.full_name || repoInfo.fullName, 300);
+    const defaultBranch = safeString(metadata?.default_branch || repoInfo.defaultBranch, 120) || 'main';
+    const [treeResult, commitsResult, pullsResult] = await Promise.allSettled([
+      githubApi(`${base}/git/trees/${encodeURIComponent(defaultBranch)}?recursive=1`),
+      githubApi(`${base}/commits?sha=${encodeURIComponent(defaultBranch)}&per_page=5`),
+      githubApi(`${base}/pulls?state=open&sort=updated&direction=desc&per_page=10`),
+    ]);
+    if (treeResult.status === 'rejected') errors.push(`tree: ${preview(treeResult.reason?.message || treeResult.reason, 200)}`);
+    if (commitsResult.status === 'rejected') errors.push(`commits: ${preview(commitsResult.reason?.message || commitsResult.reason, 200)}`);
+    if (pullsResult.status === 'rejected') errors.push(`pull requests: ${preview(pullsResult.reason?.message || pullsResult.reason, 200)}`);
+
+    const treeEntries = treeResult.status === 'fulfilled' && Array.isArray(treeResult.value?.tree) ? treeResult.value.tree : [];
+    const fallbackPaths = [
+      'README.md', 'package.json', 'pyproject.toml', 'requirements.txt', 'go.mod', 'Cargo.toml',
+      'wrangler.jsonc', 'wrangler.toml', 'render.yaml', 'vite.config.ts', 'next.config.js',
+      '.github/workflows/deploy.yml', '.github/workflows/pages.yml', 'src/index.ts', 'src/index.js', 'server.js',
+    ].map((filePath) => ({ type: 'blob', path: filePath, size: 0 }));
+    const selected = selectAuditTreeFiles(
+      treeEntries.length ? treeEntries : fallbackPaths,
+      request,
+      treeEntries.length ? MAX_AUDIT_FILES_PER_REPOSITORY : 4,
+    );
+    const fileResults = await mapWithConcurrency(selected, 4, async (entry) => {
+      try {
+        const data = await githubApi(`${base}/contents/${encodeRepoPath(entry.path)}?ref=${encodeURIComponent(defaultBranch)}`);
+        const encoded = safeString(data?.content, 600_000).replace(/\s+/g, '');
+        const decoded = encoded ? Buffer.from(encoded, 'base64').toString('utf8') : '';
+        const content = redactSecrets(decoded, MAX_AUDIT_FILE_CHARS).trim();
+        return content ? {
+          repo: fullName,
+          path: entry.path,
+          size: Number(data?.size || entry.size || Buffer.byteLength(decoded, 'utf8')),
+          sha: safeString(data?.sha || entry.sha, 100),
+          score: Number(entry.score || 0),
+          reason: entry.reason,
+          content,
+        } : null;
+      } catch (error) {
+        errors.push(`${entry.path}: ${preview(error?.message || error, 160)}`);
+        return null;
+      }
+    });
+    const commits = commitsResult.status === 'fulfilled' && Array.isArray(commitsResult.value) ? commitsResult.value : [];
+    const pulls = pullsResult.status === 'fulfilled' && Array.isArray(pullsResult.value) ? pullsResult.value : [];
+    const treeSummary = summarizeRepositoryTree(treeEntries);
+    return {
+      repo: {
+        ...repoInfo,
+        fullName,
+        name: safeString(metadata?.name || repoInfo.name, 200),
+        description: safeString(metadata?.description || repoInfo.description, 500),
+        defaultBranch,
+        htmlUrl: safeString(metadata?.html_url || repoInfo.htmlUrl, 1_000),
+        private: metadata?.private === true || repoInfo.private === true,
+        archived: metadata?.archived === true,
+        pushedAt: safeString(metadata?.pushed_at, 64),
+        treeIndexed: treeEntries.length > 0,
+        treeTruncated: treeResult.status === 'fulfilled' && treeResult.value?.truncated === true,
+        ...treeSummary,
+        selectedPaths: fileResults.filter(Boolean).map((file) => file.path),
+        headCommit: commits[0] ? {
+          sha: safeString(commits[0]?.sha, 100),
+          message: safeString(commits[0]?.commit?.message, 500),
+          authoredAt: safeString(commits[0]?.commit?.author?.date, 64),
+        } : null,
+        recentCommits: commits.slice(0, 5).map((commit) => ({
+          sha: safeString(commit?.sha, 100),
+          message: safeString(commit?.commit?.message, 500),
+          authoredAt: safeString(commit?.commit?.author?.date, 64),
+        })),
+        openPullRequests: pulls.slice(0, 10).map((pull) => ({
+          number: Number(pull?.number || 0),
+          title: safeString(pull?.title, 300),
+          draft: pull?.draft === true,
+          head: safeString(pull?.head?.ref, 200),
+          base: safeString(pull?.base?.ref, 200),
+          updatedAt: safeString(pull?.updated_at, 64),
+        })),
+        errors: errors.slice(0, 20),
+      },
+      files: fileResults.filter(Boolean),
+    };
   }
 
   async sampleRepoFiles(project, request = '') {
-    if (!this.githubApi) return [];
-    const repos = await this.discoverRelatedRepos(request, project);
-    if (!repos.length) return [];
-    const candidates = [
-      'README.md',
-      'package.json',
-      'wrangler.jsonc',
-      'wrangler.toml',
-      'render.yaml',
-      '.github/workflows/marcus-codex-runner.yml',
-      '.github/workflows/deploy.yml',
-      '.github/workflows/pages.yml',
-      'src/index.ts',
-      'src/index.js',
-    ];
-    const out = [];
-    for (const repoInfo of repos) {
-      const [owner, repo] = repoInfo.fullName.split('/');
-      for (const filePath of candidates) {
-        try {
-          const data = await this.githubApi(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${filePath}`);
-          const encoded = safeString(data?.content, 100_000).replace(/\s+/g, '');
-          const content = encoded ? Buffer.from(encoded, 'base64').toString('utf8') : '';
-          if (content) out.push({ repo: repoInfo.fullName, path: filePath, content: content.slice(0, 4_000) });
-        } catch {
-          // Missing sample files are normal across projects.
-        }
-      }
-    }
-    return out.slice(0, 32);
+    return (await this.buildGithubAudit(request, project)).files;
   }
 
   async buildGithubAudit(request, project) {
     if (!this.githubApi) return { repos: [], files: [], findings: ['GitHub API was not configured for repository inspection.'] };
-    const repos = await this.discoverRelatedRepos(request, project);
-    const files = await this.sampleRepoFiles(project, request);
+    const startedAt = Date.now();
+    let apiCalls = 0;
+    const githubApi = async (pathPart) => {
+      apiCalls += 1;
+      return this.githubApi(pathPart, { timeoutMs: AUDIT_GITHUB_TIMEOUT_MS });
+    };
+    const discovered = await this.discoverRelatedRepos(request, project, githubApi);
+    const inspections = await mapWithConcurrency(discovered, 2, (repoInfo) => this.inspectRepository(repoInfo, request, githubApi));
+    const repos = inspections.map((inspection) => inspection.repo);
+    const files = [];
+    for (let index = 0; index < MAX_AUDIT_FILES_PER_REPOSITORY && files.length < MAX_AUDIT_FILES_TOTAL; index += 1) {
+      for (const inspection of inspections) {
+        if (inspection.files[index]) files.push(inspection.files[index]);
+        if (files.length >= MAX_AUDIT_FILES_TOTAL) break;
+      }
+    }
     const findings = [];
     if (!repos.length) {
       findings.push('No related repositories were discovered from the request or project registry.');
@@ -383,9 +612,27 @@ export class ProjectOperatorService {
       findings.push('No key repository files were readable from the discovered repositories.');
     } else {
       const byRepo = files.reduce((acc, file) => ({ ...acc, [file.repo]: (acc[file.repo] || 0) + 1 }), {});
-      findings.push(`Read ${files.length} key file sample${files.length === 1 ? '' : 's'} across ${Object.keys(byRepo).length} repositor${Object.keys(byRepo).length === 1 ? 'y' : 'ies'}.`);
+      findings.push(`Read ${files.length} request-ranked file${files.length === 1 ? '' : 's'} across ${Object.keys(byRepo).length} repositor${Object.keys(byRepo).length === 1 ? 'y' : 'ies'}.`);
     }
-    return { repos, files, findings };
+    const partialRepos = repos.filter((repo) => !repo.treeIndexed || repo.treeTruncated || repo.errors?.length);
+    if (partialRepos.length) findings.push(`Partial GitHub evidence for: ${partialRepos.map((repo) => repo.fullName).join(', ')}.`);
+    const minimumExpectedFiles = repos.reduce((sum, repo) => sum + Math.min(4, Math.max(1, Number(repo.fileCount || 0))), 0);
+    const failedChecks = repos.reduce((sum, repo) => sum + (Array.isArray(repo.errors) ? repo.errors.length : 0), 0);
+    const coverage = {
+      mode: repos.length
+        && repos.every((repo) => repo.treeIndexed && !repo.treeTruncated && !repo.errors?.length)
+        && files.length >= minimumExpectedFiles ? 'deep' : 'partial',
+      repositoriesInspected: repos.length,
+      treesIndexed: repos.filter((repo) => repo.treeIndexed).length,
+      pathsIndexed: repos.reduce((sum, repo) => sum + Number(repo.fileCount || 0), 0),
+      filesRead: files.length,
+      requestRelevantFiles: files.filter((file) => safeString(file.reason, 500).includes('request terms:')).length,
+      failedChecks,
+      apiCalls,
+      durationMs: Date.now() - startedAt,
+    };
+    findings.push(`Audit mode ${coverage.mode}: indexed ${coverage.pathsIndexed} paths and read ${coverage.filesRead} files in ${coverage.durationMs} ms.`);
+    return { repos, files, findings, coverage };
   }
 
   async buildExecutionBrief(businessKey, message, resolution) {
@@ -434,9 +681,16 @@ export class ProjectOperatorService {
     }
     const brief = await this.buildExecutionBrief(key, request, resolution);
     const codexPrompt = composeCodexPrompt({ request, project: resolution.registryRecord, executionBrief: brief.text });
+    const coverage = safeObject(brief.audit?.coverage);
+    const auditSummary = [
+      `${Number(coverage.repositoriesInspected || 0)} repos`,
+      `${Number(coverage.pathsIndexed || 0)} paths indexed`,
+      `${Number(coverage.filesRead || 0)} files read`,
+      `${Number(coverage.durationMs || 0)} ms`,
+    ].join(', ');
     const acceptanceCriteria = [
       request,
-      'Marcus gathered project context before creating the Codex handoff.',
+      `Marcus gathered project context before creating the Codex handoff (${auditSummary}).`,
       'Codex receives the audit brief, constraints, approval boundaries, and verification requirements.',
       'Completion is not accepted without registered implementation and verification evidence.',
     ];
@@ -450,19 +704,37 @@ export class ProjectOperatorService {
       autoPlan: true,
       autoStart: autoStart !== false,
       acceptanceCriteria,
-      currentArchitecture: brief.text,
+      currentArchitecture: brief.text.slice(0, MAX_EXECUTION_BRIEF_CHARS),
       relevantMemory: [
         `Marcus execution brief prepared at ${new Date().toISOString()}.`,
         ...brief.text.split('\n').filter((line) => line.startsWith('- ')).slice(0, 24),
       ],
       metadata: {
         projectOperator: {
-          promptVersion: 2,
-          executionBrief: brief.text,
-          codexPrompt,
+          promptVersion: 3,
+          promptLength: codexPrompt.length,
+          executionBriefLength: brief.text.length,
           githubAudit: {
-            repos: (brief.audit?.repos || []).map((repo) => ({ fullName: repo.fullName, source: repo.source, score: repo.score })),
-            files: (brief.repoFiles || []).map((file) => ({ repo: file.repo, path: file.path })),
+            coverage,
+            repos: (brief.audit?.repos || []).map((repo) => ({
+              fullName: repo.fullName,
+              source: repo.source,
+              score: repo.score,
+              defaultBranch: repo.defaultBranch,
+              fileCount: repo.fileCount,
+              treeIndexed: repo.treeIndexed,
+              treeTruncated: repo.treeTruncated,
+              headSha: repo.headCommit?.sha || '',
+              openPullRequestCount: repo.openPullRequests?.length || 0,
+            })),
+            files: (brief.repoFiles || []).map((file) => ({
+              repo: file.repo,
+              path: file.path,
+              sha: file.sha,
+              size: file.size,
+              score: file.score,
+              reason: file.reason,
+            })),
             findings: brief.audit?.findings || [],
           },
         },
@@ -475,7 +747,7 @@ export class ProjectOperatorService {
       resolution,
       project: summarizeProject(resolution.registryRecord),
       auditBrief: brief.text,
-      auditSummary: `${brief.audit?.repos?.length || 0} repos, ${brief.repoFiles?.length || 0} files`,
+      auditSummary,
       codexPrompt,
       handoff: handoff ? { id: handoff.id, name: handoff.name, content: handoff.content } : null,
       operation: created.operation,

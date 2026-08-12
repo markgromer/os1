@@ -22,6 +22,8 @@ Primary integration point:
 
 Status: initial implementation exists in `marcus/operators/project_operator_service.js`. It deterministically resolves a project, gathers current context, writes an execution brief, composes a Codex prompt, and creates a durable Codex handoff operation.
 
+Deep-audit status: implemented and locally verified. Marcus indexes recursive GitHub trees for up to six request-related repositories, captures branch/commit/pull-request state, reads request-ranked source/configuration/test evidence, excludes obvious secret paths, redacts retained excerpts, and records coverage/failures/timing. The real Codex handoff now carries up to 30,000 characters of audit evidence and requires Codex to reopen callers, dependents, and tests. Production read-only acceptance against real Reggie repositories remains pending.
+
 Mobile continuity status: implemented and covered by regression tests. Marcus stores a bounded recent transcript and active project, recognizes explicit GitHub `owner/repository` references, and carries earlier requirements into a later audit/Codex request. `Reggie` is registered in production as `markgromer/Reggie` with `connect.scooper.site` and `Sweep and Go` aliases.
 
 ## Phase 2: Context Gathering
@@ -39,6 +41,8 @@ Add a reusable context gatherer that can pull:
 - Desktop context.
 
 The output should be structured and stored as an operation artifact.
+
+Status: GitHub deep gathering is implemented in the project operator and persisted as bounded operation metadata plus the execution brief. Cloudflare/Render evidence still comes from the existing project-evidence layer rather than the same recursive repository audit transaction.
 
 ## Phase 3: Codex Session Launch
 
@@ -111,7 +115,7 @@ Added and tested locally on 2026-08-12:
 - Configuration and no-send verification require durable admin-cookie/token authority; a Live-session token alone receives 401.
 - Secret values are never returned, and blank secret inputs preserve existing values.
 - Quo sender resolution and SMTP authentication persist bounded verification evidence and issue no message request or SMTP `DATA`.
-- The complete local suite passes `95/95` with provider setup, redaction, authorization, no-send verification, and the existing approved-send/idempotency checks.
+- The complete local suite passes `98/98` with provider setup, redaction, authorization, no-send verification, approved-send/idempotency checks, deep GitHub audits, and mobile acceptance aggregation.
 
 Production blocker: no real Quo outbound API key/sender or SMTP account is configured. Marcus Mobile now provides an admin-only `Integrations` dialog that stores write-only credentials and verifies Quo/SMTP without sending. Mark must enter both provider accounts there; live verification and one explicitly approved send through each provider remain required.
 
@@ -179,7 +183,9 @@ Acceptance tests still required before this phase is complete:
 - Verify recovery after phone lock, network interruption, and an expired Live token.
 - Inspect the resulting acceptance session and confirm every physical-device gate is true without relying on transcript storage.
 
-Status: the official SDK, recovery, and acceptance telemetry are live at `https://task-tracker-5wsa.onrender.com/mobile.html`, pass the local `95/95` suite, and passed production synthetic-browser signaling, speech, assistant-audio, interruption, operator-bridge, network-recovery, and background-recovery validation. A real installed-Android speech, barge-in, and recovery conversation is not yet verified.
+Current source includes a paired-admin `Verify` dashboard that starts a fresh in-memory acceptance session, shows each voice/provider gate, and enables physical confirmation only after all eight Android voice gates pass in installed standalone mode. `GET /api/marcus/acceptance` combines that evidence with provider, approved-send, Codex, GitHub, Cloudflare, OpenAI, and desktop readiness. Deployment and physical-phone acceptance of this dashboard remain pending.
+
+Status: the official SDK, recovery, and acceptance telemetry are live at `https://task-tracker-5wsa.onrender.com/mobile.html`, pass the local `98/98` suite, and passed production synthetic-browser signaling, speech, assistant-audio, interruption, operator-bridge, network-recovery, and background-recovery validation. A real installed-Android speech, barge-in, and recovery conversation is not yet verified.
 
 Verified locally on 2026-08-12:
 

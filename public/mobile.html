@@ -69,7 +69,7 @@
   .install { display: none; padding: 12px; align-items: center; justify-content: space-between; gap: 10px; }
   .install.visible { display: flex; }
   .install p { margin: 0; color: var(--muted); font-size: 13px; }
-  .footer-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+  .footer-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
   .provider-dialog { width: min(620px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); margin: auto; padding: 0; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow); overflow: hidden; }
   .provider-dialog::backdrop { background: rgba(2, 7, 12, 0.78); }
   .provider-form { display: flex; flex-direction: column; max-height: calc(100dvh - 24px); }
@@ -96,6 +96,17 @@
   .provider-actions { border-top: 1px solid var(--line); justify-content: flex-end; }
   .provider-result { min-height: 18px; margin: 0; padding: 0 12px 10px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
   .provider-result.error { color: var(--danger); }
+  .acceptance-summary { margin: 0; padding: 14px 12px; color: var(--muted); font-size: 13px; border-bottom: 1px solid var(--line); }
+  .acceptance-summary strong { color: var(--text); }
+  .acceptance-gates { margin: 0; padding: 0; list-style: none; }
+  .acceptance-gate { min-height: 42px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 12px; border-bottom: 1px solid var(--line); }
+  .acceptance-gate span { min-width: 0; font-size: 13px; overflow-wrap: anywhere; }
+  .acceptance-gate strong { color: var(--muted); font-size: 12px; font-weight: 600; }
+  .acceptance-gate.ok strong { color: var(--ok); }
+  .acceptance-next { min-height: 44px; margin: 0; padding: 12px; color: var(--text); font-size: 13px; }
+  .acceptance-privacy { margin: 0; padding: 0 12px 12px; color: var(--muted); font-size: 11px; }
+  .acceptance-actions { flex-wrap: wrap; }
+  .acceptance-actions .btn { flex: 1 1 150px; border-radius: 8px; }
   @media (max-width: 520px) {
     .provider-grid { grid-template-columns: 1fr; }
     .provider-field.wide { grid-column: auto; }
@@ -157,6 +168,7 @@
   <nav class="footer-actions" aria-label="Mobile navigation">
     <button id="openLiveBtn" class="btn" type="button">Open Live HUD</button>
     <button id="providersBtn" class="btn" type="button">Integrations</button>
+    <button id="acceptanceBtn" class="btn" type="button">Verify</button>
     <button id="refreshBtn" class="btn" type="button">Refresh</button>
   </nav>
 </main>
@@ -235,6 +247,53 @@
   </form>
 </dialog>
 
+<dialog id="acceptanceDialog" class="provider-dialog">
+  <section class="provider-form" aria-labelledby="acceptanceTitle">
+    <header class="provider-head">
+      <h2 id="acceptanceTitle">System acceptance</h2>
+      <button id="closeAcceptanceBtn" class="icon-btn" type="button" title="Close acceptance" aria-label="Close acceptance">&times;</button>
+    </header>
+    <div class="provider-body">
+      <p class="acceptance-summary"><strong id="acceptanceState">Not tested</strong><br><span id="acceptanceSummary">Checking production gates.</span></p>
+      <section class="provider-section" aria-labelledby="voiceAcceptanceTitle">
+        <div class="provider-title">
+          <h3 id="voiceAcceptanceTitle">Android voice</h3>
+          <span id="voiceAcceptanceCount" class="provider-state">0/8</span>
+        </div>
+        <ul class="acceptance-gates">
+          <li id="gateInstalledAndroidContext" class="acceptance-gate"><span>Installed Android app</span><strong>pending</strong></li>
+          <li id="gateSignalingConnected" class="acceptance-gate"><span>Realtime connected</span><strong>pending</strong></li>
+          <li id="gateUserSpeechRecognized" class="acceptance-gate"><span>Speech recognized</span><strong>pending</strong></li>
+          <li id="gateOperatorBridgeCompleted" class="acceptance-gate"><span>Marcus completed request</span><strong>pending</strong></li>
+          <li id="gateAssistantAudioStreamed" class="acceptance-gate"><span>Spoken reply received</span><strong>pending</strong></li>
+          <li id="gateInterruptionObserved" class="acceptance-gate"><span>Interruption handled</span><strong>pending</strong></li>
+          <li id="gateNetworkRecovery" class="acceptance-gate"><span>Network recovered</span><strong>pending</strong></li>
+          <li id="gateBackgroundRecovery" class="acceptance-gate"><span>Lock/background recovered</span><strong>pending</strong></li>
+        </ul>
+        <p id="acceptanceNext" class="acceptance-next">Start a fresh phone test.</p>
+        <p class="acceptance-privacy">Telemetry stores gate events and lengths only. It does not store transcript, request, reply, or credentials.</p>
+      </section>
+      <section class="provider-section" aria-labelledby="messageAcceptanceTitle">
+        <div class="provider-title">
+          <h3 id="messageAcceptanceTitle">Messaging</h3>
+          <span id="providerAcceptanceCount" class="provider-state">0/4</span>
+        </div>
+        <ul class="acceptance-gates">
+          <li id="gateTextProvider" class="acceptance-gate"><span>Quo text provider</span><strong>pending</strong></li>
+          <li id="gateEmailProvider" class="acceptance-gate"><span>SMTP email provider</span><strong>pending</strong></li>
+          <li id="gateTextSend" class="acceptance-gate"><span>Approved Quo test send</span><strong>pending</strong></li>
+          <li id="gateEmailSend" class="acceptance-gate"><span>Approved SMTP test send</span><strong>pending</strong></li>
+        </ul>
+      </section>
+      <p id="acceptanceResult" class="provider-result" aria-live="polite"></p>
+    </div>
+    <footer class="provider-actions acceptance-actions">
+      <button id="beginAcceptanceBtn" class="btn primary" type="button">Start fresh test</button>
+      <button id="confirmPhoneBtn" class="btn" type="button" disabled>Confirm on this phone</button>
+    </footer>
+  </section>
+</dialog>
+
 <script src="/marcus-realtime.js"></script>
 <script>
 (() => {
@@ -255,6 +314,21 @@
     send: document.getElementById('sendBtn'),
     openLive: document.getElementById('openLiveBtn'),
     providers: document.getElementById('providersBtn'),
+    acceptance: document.getElementById('acceptanceBtn'),
+    acceptanceDialog: document.getElementById('acceptanceDialog'),
+    closeAcceptance: document.getElementById('closeAcceptanceBtn'),
+    acceptanceState: document.getElementById('acceptanceState'),
+    acceptanceSummary: document.getElementById('acceptanceSummary'),
+    voiceAcceptanceCount: document.getElementById('voiceAcceptanceCount'),
+    providerAcceptanceCount: document.getElementById('providerAcceptanceCount'),
+    acceptanceNext: document.getElementById('acceptanceNext'),
+    acceptanceResult: document.getElementById('acceptanceResult'),
+    beginAcceptance: document.getElementById('beginAcceptanceBtn'),
+    confirmPhone: document.getElementById('confirmPhoneBtn'),
+    gateTextProvider: document.getElementById('gateTextProvider'),
+    gateEmailProvider: document.getElementById('gateEmailProvider'),
+    gateTextSend: document.getElementById('gateTextSend'),
+    gateEmailSend: document.getElementById('gateEmailSend'),
     providerDialog: document.getElementById('providerDialog'),
     providerForm: document.getElementById('providerForm'),
     closeProviders: document.getElementById('closeProvidersBtn'),
@@ -285,12 +359,13 @@
   let realtimeVoice = null;
   const voiceDiagnostics = { statuses: [], inputTranscripts: [], outputTranscripts: [] };
   window.__marcusVoiceDiagnostics = voiceDiagnostics;
-  const telemetrySessionId = createTelemetryId();
+  let telemetrySessionId = createTelemetryId();
   voiceDiagnostics.sessionId = telemetrySessionId;
   const voiceTelemetryQueue = [];
   let voiceTelemetryTimer = null;
   let voiceTelemetryInFlight = false;
   let voiceTelemetryReady = false;
+  let acceptancePollTimer = null;
 
   function rememberVoiceDiagnostic(key, value) {
     if (!Array.isArray(voiceDiagnostics[key])) return;
@@ -357,6 +432,15 @@
     } finally {
       voiceTelemetryInFlight = false;
     }
+  }
+
+  async function drainVoiceTelemetry() {
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      await flushVoiceTelemetry();
+      if (!voiceTelemetryInFlight && voiceTelemetryQueue.length === 0) return true;
+      await new Promise((resolve) => window.setTimeout(resolve, 100));
+    }
+    return voiceTelemetryQueue.length === 0;
   }
 
   function setStatus(text, cls = '') {
@@ -516,6 +600,119 @@
       addMessage('system', err.message || 'Provider settings could not be opened.');
     }
   }
+  const voiceAcceptanceGates = [
+    ['installedAndroidContext', 'gateInstalledAndroidContext'],
+    ['signalingConnected', 'gateSignalingConnected'],
+    ['userSpeechRecognized', 'gateUserSpeechRecognized'],
+    ['operatorBridgeCompleted', 'gateOperatorBridgeCompleted'],
+    ['assistantAudioStreamed', 'gateAssistantAudioStreamed'],
+    ['interruptionObserved', 'gateInterruptionObserved'],
+    ['networkRecovery', 'gateNetworkRecovery'],
+    ['backgroundRecovery', 'gateBackgroundRecovery'],
+  ];
+  function applyAcceptanceGate(element, passed, passedText = 'passed', pendingText = 'pending') {
+    if (!element) return;
+    element.classList.toggle('ok', passed);
+    const status = element.querySelector('strong');
+    if (status) status.textContent = passed ? passedText : pendingText;
+  }
+  function nextVoiceAcceptanceStep(session) {
+    const gates = session?.gates || {};
+    if (!gates.installedAndroidContext) return 'Install Marcus, open it from the Android home screen, then start a fresh test.';
+    if (!gates.signalingConnected) return 'Tap Start voice and wait for Voice on.';
+    if (!gates.userSpeechRecognized || !gates.operatorBridgeCompleted || !gates.assistantAudioStreamed) return 'Ask Marcus a project question and wait for the spoken answer.';
+    if (!gates.interruptionObserved) return 'While Marcus is speaking, begin your next sentence to interrupt him.';
+    if (!gates.networkRecovery) return 'Turn Wi-Fi and mobile data off, restore either connection, and wait for Voice on.';
+    if (!gates.backgroundRecovery) return 'Lock the phone for several seconds, unlock it, and wait for Voice on.';
+    if (!session.physicalReviewConfirmed) return 'Review the passed gates, then confirm that this test ran on your physical phone.';
+    return 'Physical Android voice acceptance passed.';
+  }
+  function applyAcceptanceReport(report) {
+    const session = report?.voice?.session || null;
+    const gates = session?.gates || {};
+    let voicePassed = 0;
+    for (const [key, elementId] of voiceAcceptanceGates) {
+      const passed = gates[key] === true;
+      if (passed) voicePassed += 1;
+      applyAcceptanceGate(document.getElementById(elementId), passed);
+    }
+    els.voiceAcceptanceCount.textContent = `${voicePassed}/${voiceAcceptanceGates.length}`;
+    els.voiceAcceptanceCount.className = `provider-state ${voicePassed === voiceAcceptanceGates.length ? 'ok' : ''}`.trim();
+    const textVerified = report?.providers?.text?.verified === true;
+    const emailVerified = report?.providers?.email?.verified === true;
+    const textSendAccepted = Boolean(report?.providers?.text?.acceptedSend);
+    const emailSendAccepted = Boolean(report?.providers?.email?.acceptedSend);
+    applyAcceptanceGate(els.gateTextProvider, textVerified, 'verified');
+    applyAcceptanceGate(els.gateEmailProvider, emailVerified, 'verified');
+    applyAcceptanceGate(els.gateTextSend, textSendAccepted, 'accepted');
+    applyAcceptanceGate(els.gateEmailSend, emailSendAccepted, 'accepted');
+    const providerPassed = Number(textVerified) + Number(emailVerified) + Number(textSendAccepted) + Number(emailSendAccepted);
+    els.providerAcceptanceCount.textContent = `${providerPassed}/4`;
+    els.providerAcceptanceCount.className = `provider-state ${providerPassed === 4 ? 'ok' : ''}`.trim();
+    els.confirmPhone.disabled = session?.readyForPhysicalReview !== true || session?.physicalReviewConfirmed === true;
+    els.acceptanceNext.textContent = nextVoiceAcceptanceStep(session);
+    els.acceptanceState.textContent = report?.ready ? 'All production gates passed' : `${report?.missing?.length || 0} production gates remain`;
+    els.acceptanceSummary.textContent = session?.acceptedOnPhysicalDevice
+      ? 'This phone has durable physical voice evidence.'
+      : 'Complete the highlighted Android steps and verify both message providers.';
+  }
+  async function refreshAcceptance() {
+    if (!liveToken && !(await ensureSession())) return null;
+    await drainVoiceTelemetry();
+    const report = await api(`/api/marcus/acceptance?sessionId=${encodeURIComponent(telemetrySessionId)}`);
+    applyAcceptanceReport(report);
+    return report;
+  }
+  function scheduleAcceptancePoll() {
+    if (acceptancePollTimer !== null || !els.acceptanceDialog.open) return;
+    acceptancePollTimer = window.setTimeout(async () => {
+      acceptancePollTimer = null;
+      await refreshAcceptance().catch(() => {});
+      scheduleAcceptancePoll();
+    }, 2_000);
+  }
+  async function openAcceptance() {
+    try {
+      if (!(await ensureSession())) return;
+      els.acceptanceResult.textContent = '';
+      els.acceptanceResult.classList.remove('error');
+      els.acceptanceDialog.showModal();
+      await refreshAcceptance();
+      scheduleAcceptancePoll();
+    } catch (err) {
+      addMessage('system', err.message || 'Acceptance status could not be opened.');
+    }
+  }
+  async function beginAcceptance() {
+    if (realtimeVoice?.isActive()) realtimeVoice.stop();
+    await drainVoiceTelemetry();
+    telemetrySessionId = createTelemetryId();
+    voiceDiagnostics.sessionId = telemetrySessionId;
+    queueVoiceTelemetry({ type: 'client_context', ...voiceClientContext(), occurredAt: new Date().toISOString() });
+    els.acceptanceResult.classList.remove('error');
+    els.acceptanceResult.textContent = 'Fresh physical test started.';
+    await refreshAcceptance();
+  }
+  async function confirmPhysicalPhone() {
+    try {
+      const context = voiceClientContext();
+      if (!(context.platform === 'android' && context.displayMode === 'standalone' && context.installed)) {
+        throw new Error('Open the installed Marcus app from the Android home screen before confirming.');
+      }
+      const current = await refreshAcceptance();
+      if (current?.voice?.session?.readyForPhysicalReview !== true) throw new Error('Complete every Android voice gate before confirming.');
+      queueVoiceTelemetry({ type: 'physical_review_confirmed', confirmed: true, occurredAt: new Date().toISOString() });
+      await drainVoiceTelemetry();
+      const report = await refreshAcceptance();
+      els.acceptanceResult.classList.remove('error');
+      els.acceptanceResult.textContent = report?.voice?.session?.acceptedOnPhysicalDevice
+        ? 'Physical phone acceptance recorded.'
+        : 'Phone confirmation is still pending.';
+    } catch (err) {
+      els.acceptanceResult.classList.add('error');
+      els.acceptanceResult.textContent = err.message || String(err);
+    }
+  }
   async function sendMessage(text) {
     const message = String(text || '').trim();
     if (!message) return;
@@ -648,6 +845,20 @@
   });
   els.verifyText.addEventListener('click', () => verifyProvider('text'));
   els.verifyEmail.addEventListener('click', () => verifyProvider('email'));
+  els.acceptance.addEventListener('click', openAcceptance);
+  els.closeAcceptance.addEventListener('click', () => els.acceptanceDialog.close());
+  els.acceptanceDialog.addEventListener('click', (event) => {
+    if (event.target === els.acceptanceDialog) els.acceptanceDialog.close();
+  });
+  els.acceptanceDialog.addEventListener('close', () => {
+    if (acceptancePollTimer !== null) window.clearTimeout(acceptancePollTimer);
+    acceptancePollTimer = null;
+  });
+  els.beginAcceptance.addEventListener('click', () => beginAcceptance().catch((err) => {
+    els.acceptanceResult.classList.add('error');
+    els.acceptanceResult.textContent = err.message || String(err);
+  }));
+  els.confirmPhone.addEventListener('click', confirmPhysicalPhone);
   els.refresh.addEventListener('click', refreshHealth);
   els.voice.addEventListener('click', async () => {
     if (!realtimeVoice) return;

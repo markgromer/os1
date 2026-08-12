@@ -44,6 +44,28 @@ test('operation normalization rejects arbitrary enum values, bounds data, and re
   assert.match(operation.steps[0].output, /REDACTED/);
 });
 
+test('operation normalization preserves a bounded deep-audit brief for the Codex handoff', () => {
+  const operation = normalizeOperation({
+    businessKey: 'personal',
+    objective: 'Use a deep repository audit',
+    metadata: { currentArchitecture: 'A'.repeat(35_000) },
+  });
+  assert.equal(operation.metadata.currentArchitecture.length, 30_000);
+  assert.ok(operation.metadata.currentArchitecture.length > 12_000);
+});
+
+test('operation redaction removes quoted JSON-style credentials from audit evidence', () => {
+  const operation = normalizeOperation({
+    businessKey: 'personal',
+    objective: 'Use repository evidence',
+    metadata: {
+      currentArchitecture: '{"api_key":"sk-secret-value-123456", "password": "quoted password"}',
+    },
+  });
+  assert.doesNotMatch(operation.metadata.currentArchitecture, /sk-secret-value|quoted password/);
+  assert.match(operation.metadata.currentArchitecture, /\[REDACTED\]/);
+});
+
 test('state transitions reject restarting a completed operation', async () => {
   await withEngine(async (engine) => {
     const operation = await engine.createOperation('personal', { title: 'Done', objective: 'Done', status: 'completed' });

@@ -279,7 +279,7 @@ const projectOperatorService = new ProjectOperatorService({
   projectEvidenceService,
   getLegacyStore: (businessKey) => readStoreForBusiness(businessKey),
   getDesktopContext: async () => desktopRelayCache?.data || desktopContextCache?.data || {},
-  githubApi: (pathPart) => githubApi(pathPart),
+  githubApi: (pathPart, options) => githubApi(pathPart, options),
 });
 
 async function createOrReuseDurableOperationForMessage(message, { projectId = '', projectName = '', source = 'marcus_chat' } = {}) {
@@ -803,6 +803,7 @@ function isMarcusLiveSessionRoute(req) {
     || p === '/api/marcus/realtime/client-secret'
     || p === '/api/marcus/realtime/telemetry'
     || p === '/api/marcus/realtime/acceptance'
+    || p === '/api/marcus/acceptance'
     || p === '/api/marcus/transcribe'
     || p === '/api/desktop-context/health';
 }
@@ -2530,6 +2531,81 @@ async function buildMarcusOperatorHealth() {
       !email.smtpConfigured ? 'SMTP is not configured; Marcus can draft and approve email but cannot send it yet.' : '',
       !quoOutbound.configured ? 'Quo outbound API credentials are not configured; Marcus can draft and approve text messages but cannot send them yet.' : '',
     ].filter(Boolean),
+  };
+}
+
+async function buildMarcusAcceptanceReport({ sessionId = '' } = {}) {
+  const health = await buildMarcusOperatorHealth();
+  const settings = await readSettings();
+  const voice = await realtimeTelemetryStore.acceptance(getBusinessKeyFromContext(), {
+    sessionId,
+    limit: sessionId ? 1 : 50,
+  });
+  const voiceSession = sessionId
+    ? voice.latest
+    : (voice.sessions.find((session) => session.acceptedOnPhysicalDevice) || voice.latest);
+  const communication = health.capabilities?.communication || {};
+  const acceptedSend = (type, verifiedAt) => {
+    const verifiedMs = Date.parse(String(verifiedAt || ''));
+    if (!Number.isFinite(verifiedMs)) return null;
+    return normalizeExternalActionDrafts(settings.externalActionDrafts)
+      .filter((action) => action.type === type && action.status === 'sent' && Date.parse(action.sentAt) >= verifiedMs)
+      .filter((action) => type === 'text'
+        ? action.sendResult?.provider === 'quo' && action.sendResult?.accepted === true
+        : action.sendResult?.provider === 'smtp'
+          && (Boolean(action.sendResult?.messageId) || (Array.isArray(action.sendResult?.accepted) && action.sendResult.accepted.length > 0)))
+      .sort((a, b) => Date.parse(b.sentAt) - Date.parse(a.sentAt))[0] || null;
+  };
+  const textSend = acceptedSend('text', communication.textProviderVerifiedAt);
+  const emailSend = acceptedSend('email', communication.emailProviderVerifiedAt);
+  const gates = {
+    projectOperatorReady: health.capabilities?.projectOperator?.canStartCodexDirectly === true,
+    githubReady: health.capabilities?.github?.backendTokenConfigured === true,
+    cloudflareReady: health.capabilities?.cloudflare?.backendTokenConfigured === true,
+    openaiReady: health.capabilities?.openai?.configured === true,
+    desktopRelayReady: health.capabilities?.desktopAgent?.relayOnline === true,
+    textProviderVerified: communication.textSendConfigured === true && communication.textProviderVerified === true,
+    emailProviderVerified: communication.emailSendConfigured === true && communication.emailProviderVerified === true,
+    approvedTextSendAccepted: Boolean(textSend),
+    approvedEmailSendAccepted: Boolean(emailSend),
+    physicalAndroidVoiceAccepted: voiceSession?.acceptedOnPhysicalDevice === true,
+  };
+  const labels = {
+    projectOperatorReady: 'Direct Codex operator',
+    githubReady: 'GitHub',
+    cloudflareReady: 'Cloudflare',
+    openaiReady: 'OpenAI',
+    desktopRelayReady: 'Desktop relay',
+    textProviderVerified: 'Quo text provider',
+    emailProviderVerified: 'SMTP email provider',
+    approvedTextSendAccepted: 'Approved Quo test send',
+    approvedEmailSendAccepted: 'Approved SMTP test send',
+    physicalAndroidVoiceAccepted: 'Physical Android voice acceptance',
+  };
+  return {
+    ok: true,
+    ready: Object.values(gates).every(Boolean),
+    generatedAt: nowIso(),
+    gates,
+    missing: Object.entries(gates).filter(([, value]) => !value).map(([key]) => ({ key, label: labels[key] })),
+    voice: {
+      privacy: voice.privacy,
+      session: voiceSession || null,
+    },
+    providers: {
+      text: {
+        configured: communication.textSendConfigured === true,
+        verified: communication.textProviderVerified === true,
+        verifiedAt: communication.textProviderVerifiedAt || '',
+        acceptedSend: textSend ? { actionId: textSend.id, sentAt: textSend.sentAt, provider: 'quo' } : null,
+      },
+      email: {
+        configured: communication.emailSendConfigured === true,
+        verified: communication.emailProviderVerified === true,
+        verifiedAt: communication.emailProviderVerifiedAt || '',
+        acceptedSend: emailSend ? { actionId: emailSend.id, sentAt: emailSend.sentAt, provider: 'smtp' } : null,
+      },
+    },
   };
 }
 
@@ -16109,6 +16185,16 @@ app.delete('/api/marcus/operational-controls/:section/:id', async (req, res) => 
 app.get('/api/marcus/operator-health', async (req, res) => {
   try {
     res.json(await buildMarcusOperatorHealth());
+  } catch (err) {
+    res.status(500).json({ ok: false, error: String(err?.message || err) });
+  }
+});
+
+app.get('/api/marcus/acceptance', async (req, res) => {
+  try {
+    res.json(await buildMarcusAcceptanceReport({
+      sessionId: typeof req.query?.sessionId === 'string' ? req.query.sessionId : '',
+    }));
   } catch (err) {
     res.status(500).json({ ok: false, error: String(err?.message || err) });
   }

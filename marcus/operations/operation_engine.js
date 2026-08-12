@@ -247,7 +247,7 @@ export function createOperationsEngine({
           },
           authorizationProvenance,
           relevantMemory: Array.isArray(raw.relevantMemory) ? raw.relevantMemory.slice(0, 30) : [],
-          currentArchitecture: safeString(raw.currentArchitecture, 12_000),
+          currentArchitecture: safeString(raw.currentArchitecture, 30_000),
           projectSnapshot: record ? {
             id: record.id,
             canonicalName: record.canonicalName,

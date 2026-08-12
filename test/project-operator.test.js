@@ -30,6 +30,51 @@ async function withProjectOperator(callback, { directCodexAdapter = null } = {})
     getSettings: async () => ({}),
   });
   engine.setCodexLifecycleRecorder((event) => evidence.recordCodexLifecycle(event));
+  const githubRequests = [];
+  const repoFixtures = {
+    'royal-doody-demo': {
+      description: 'Royal Doody booking app',
+      files: {
+        'README.md': '# Royal Doody\nMobile booking application.',
+        'package.json': JSON.stringify({ scripts: { test: 'node --test', build: 'vite build' } }),
+        'src/booking.tsx': 'export function BookingForm() { return <form aria-label="Book service" />; }',
+        'test/booking.test.js': 'test("booking form", () => assert.ok(true));',
+      },
+      pulls: [{ number: 7, title: 'Improve booking validation', draft: false, head: { ref: 'booking-validation' }, base: { ref: 'main' }, updated_at: '2026-08-10T00:00:00Z' }],
+    },
+    reggie: {
+      description: 'New Reggie agent runtime',
+      files: {
+        'README.md': '# Reggie\nNew agent runtime with Sweep and Go.',
+        'package.json': JSON.stringify({ scripts: { test: 'node --test', build: 'npm run build' } }),
+        'src/runtime.ts': 'export function startReggie() { return "ready"; }',
+        'src/sweep-and-go/settings.ts': 'export function saveSweepCredentials(apiToken: string, slug: string) { return { apiToken, slug }; }',
+        'test/sweep-and-go-settings.test.ts': 'test("requires verified settings", () => expect(true).toBe(true));',
+        '.env': 'OPENAI_API_KEY=must-not-be-read',
+        'config/credentials.json': '{"password":"must-not-be-read"}',
+      },
+      pulls: [],
+    },
+    'reggie-hub': {
+      description: 'Reggie hub control plane',
+      files: {
+        'README.md': '# Reggie Hub\nControl plane for Reggie.',
+        'package.json': JSON.stringify({ scripts: { test: 'node --test' } }),
+        'src/index.ts': 'export const hubStatus = "ready";',
+        'src/integrations/reggie.ts': 'export function connectReggie(slug: string) { return slug; }',
+      },
+      pulls: [],
+    },
+    'freedom-scoopers': {
+      description: 'Freedom Scoopers website',
+      files: {
+        'README.md': '# Freedom Scoopers\nCustomer website.',
+        'package.json': JSON.stringify({ scripts: { test: 'node --test', build: 'vite build' } }),
+        'src/quote-tool.ts': 'export function quoteTool() { return "legacy Reggie"; }',
+      },
+      pulls: [],
+    },
+  };
   const service = new ProjectOperatorService({
     operationsEngine: engine,
     projectEvidenceService: evidence,
@@ -43,22 +88,53 @@ async function withProjectOperator(callback, { directCodexAdapter = null } = {})
       },
     }),
     githubApi: async (pathPart) => {
+      githubRequests.push(pathPart);
       if (pathPart.startsWith('/user/repos')) return [
         { full_name: 'markgromer/reggie', name: 'reggie', description: 'New Reggie agent runtime', default_branch: 'main' },
         { full_name: 'markgromer/reggie-hub', name: 'reggie-hub', description: 'Reggie hub control plane', default_branch: 'main' },
+        { full_name: 'markgromer/freedom-scoopers', name: 'freedom-scoopers', description: 'Freedom Scoopers website', default_branch: 'main' },
       ];
-      if (pathPart.toLowerCase() === '/repos/markgromer/reggie') return {
-        full_name: 'markgromer/Reggie', name: 'Reggie', description: 'New Reggie agent runtime', default_branch: 'main', html_url: 'https://github.com/markgromer/Reggie',
+      const repoMatch = pathPart.match(/^\/repos\/markgromer\/([^/?]+)/i);
+      const repoName = String(repoMatch?.[1] || '').toLowerCase();
+      const fixture = repoFixtures[repoName];
+      if (fixture && pathPart.toLowerCase() === `/repos/markgromer/${repoName}`) return {
+        full_name: repoName === 'reggie' ? 'markgromer/Reggie' : `markgromer/${repoName}`,
+        name: repoName === 'reggie' ? 'Reggie' : repoName,
+        description: fixture.description,
+        default_branch: 'main',
+        html_url: `https://github.com/markgromer/${repoName}`,
+        pushed_at: '2026-08-11T00:00:00Z',
       };
-      if (pathPart.includes('/reggie/contents/README.md')) return { content: Buffer.from('# Reggie\nNew agent runtime.').toString('base64') };
-      if (pathPart.includes('/reggie-hub/contents/README.md')) return { content: Buffer.from('# Reggie Hub\nControl plane for Reggie.').toString('base64') };
-      if (pathPart.endsWith('/README.md')) return { content: Buffer.from('# Royal Doody\nBooking app.').toString('base64') };
-      if (pathPart.endsWith('/package.json')) return { content: Buffer.from(JSON.stringify({ scripts: { test: 'node --test', build: 'vite build' } })).toString('base64') };
+      if (fixture && pathPart.includes('/git/trees/main?recursive=1')) return {
+        truncated: false,
+        tree: [
+          ...[...new Set(Object.keys(fixture.files).flatMap((filePath) => {
+            const parts = filePath.split('/');
+            return parts.slice(0, -1).map((_part, index) => parts.slice(0, index + 1).join('/'));
+          }))].map((directoryPath) => ({ type: 'tree', path: directoryPath })),
+          ...Object.entries(fixture.files).map(([filePath, content], index) => ({
+            type: 'blob', path: filePath, size: Buffer.byteLength(content), sha: `blob-${repoName}-${index}`,
+          })),
+        ],
+      };
+      if (fixture && pathPart.includes('/commits?')) return [{
+        sha: `head-${repoName}-1234567890`,
+        commit: { message: `Latest ${repoName} change`, author: { date: '2026-08-11T00:00:00Z' } },
+      }];
+      if (fixture && pathPart.includes('/pulls?')) return fixture.pulls;
+      const contentMatch = pathPart.match(/\/contents\/([^?]+)(?:\?.*)?$/i);
+      if (fixture && contentMatch) {
+        const filePath = contentMatch[1].split('/').map((part) => decodeURIComponent(part)).join('/');
+        if (Object.hasOwn(fixture.files, filePath)) {
+          const content = fixture.files[filePath];
+          return { content: Buffer.from(content).toString('base64'), size: Buffer.byteLength(content), sha: `content-${repoName}-${filePath}` };
+        }
+      }
       throw new Error('not found');
     },
   });
   try {
-    return await callback({ engine, evidence, service, dataDir });
+    return await callback({ engine, evidence, service, dataDir, githubRequests });
   } finally {
     await fs.rm(dataDir, { recursive: true, force: true });
   }
@@ -250,5 +326,42 @@ test('project operator inspects related GitHub repos before composing Codex prom
       true,
     );
     assert.ok(result.operation.metadata.extra.projectOperator.githubAudit.files.length >= 2);
+  });
+});
+
+test('project operator indexes recursive trees and puts request-ranked source evidence in the real Codex handoff', async () => {
+  await withProjectOperator(async ({ engine, service, githubRequests }) => {
+    const project = await engine.createProjectRegistryRecord('personal', {
+      canonicalName: 'Reggie',
+      projectId: 'reggie',
+      aliases: ['Sweep and Go'],
+      repo: { fullName: 'markgromer/Reggie', defaultBranch: 'main' },
+    });
+
+    const result = await service.prepareCodexOperation('personal', {
+      message: 'Audit Reggie and Reggie Hub, then start Codex to add the Sweep and Go settings popup for API token and slug with a verification gate.',
+      projectRegistryId: project.id,
+    });
+
+    const audit = result.operation.metadata.extra.projectOperator.githubAudit;
+    assert.equal(result.operation.metadata.extra.projectOperator.promptVersion, 3);
+    assert.equal(audit.coverage.mode, 'deep');
+    assert.equal(audit.coverage.repositoriesInspected, 2);
+    assert.equal(audit.coverage.treesIndexed, 2);
+    assert.ok(audit.coverage.pathsIndexed >= 9);
+    assert.ok(audit.coverage.filesRead >= 6);
+    assert.ok(audit.coverage.requestRelevantFiles >= 2);
+    assert.ok(audit.coverage.apiCalls >= 10);
+    assert.ok(audit.files.some((file) => file.path === 'src/sweep-and-go/settings.ts' && /request terms/i.test(file.reason)));
+    assert.match(result.auditBrief, /## Repository Evidence Excerpts/);
+    assert.match(result.auditBrief, /saveSweepCredentials/);
+    assert.match(result.auditBrief, /head-reggie-/);
+    assert.match(result.codexPrompt, /do not silently reduce the requested scope/i);
+    assert.match(result.codexPrompt, /saveSweepCredentials/);
+    assert.match(result.handoff.content, /saveSweepCredentials/);
+    assert.match(result.operation.metadata.currentArchitecture, /saveSweepCredentials/);
+    assert.doesNotMatch(result.auditBrief, /must-not-be-read/);
+    assert.equal(githubRequests.some((request) => /contents\/(?:\.env|config\/credentials\.json)/i.test(request)), false);
+    assert.match(result.reply, /paths indexed/);
   });
 });

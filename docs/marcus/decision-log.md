@@ -1,5 +1,21 @@
 # Decision Log
 
+## 2026-08-12: Codex Launch Requires Request-Ranked Repository Evidence
+
+Context: The original project operator probed ten hard-coded filenames and collapsed each readable file to a 260-character single-line preview. It could answer immediately without seeing nested request-relevant source, repository topology, current commits, or open pull requests, and the real direct-Codex handoff truncated the brief at 12,000 characters.
+
+Decision: Discover request-related repositories, index each recursive Git tree, rank safe text files against the complete request, read bounded redacted excerpts, and record coverage, failures, API calls, and elapsed time. Increase the retained architecture evidence to 30,000 characters and require Codex to reopen the relevant files, callers, dependents, and tests. Preserve named related repositories as explicit scope.
+
+Consequence: Marcus can demonstrate what it inspected before asking for approval or starting Codex. Missing or truncated GitHub evidence is reported as partial instead of being hidden, obvious secret paths are never fetched, and a slow or broken repository is bounded by per-call deadlines and a small fallback probe.
+
+## 2026-08-12: Physical Voice Acceptance Requires Derived Gates And Same-Session Confirmation
+
+Context: Browser telemetry can prove protocol events and an Android standalone user agent can be emulated. Neither independently proves that Mark completed the workflow on his installed physical phone.
+
+Decision: Add a fresh-session mobile `Verify` flow. Enable confirmation only after all eight voice gates pass in installed Android standalone context, accept only a boolean `physical_review_confirmed` event, and define `acceptedOnPhysicalDevice` as the conjunction of those facts. Combine voice, provider, approved-send, and operator gates in one authenticated acceptance report.
+
+Consequence: Marcus has a concrete phone checklist and durable completion evidence without persisting transcript or note content. Synthetic browser runs remain useful but cannot close the physical-device gate.
+
 ## 2026-08-12: Provider Setup Lives Behind Durable Mobile Admin Auth
 
 Context: Real text and email acceptance remained blocked because Quo and SMTP credentials were absent, and asking Mark to paste secrets into chat would expose them to conversation history.
