@@ -742,12 +742,16 @@ function extractBearerToken(req) {
   if (auth.toLowerCase().startsWith('bearer ')) return auth.slice(7).trim();
   const headerToken = typeof req.headers['x-admin-token'] === 'string' ? req.headers['x-admin-token'].trim() : '';
   if (headerToken) return headerToken;
-  const cookieToken = String(parseCookies(req)[AUTH_COOKIE_NAME] || '').trim();
+  const cookieToken = extractAuthCookieToken(req);
   if (cookieToken) return cookieToken;
   const liveToken = typeof req.query?.liveToken === 'string' ? req.query.liveToken.trim() : '';
   if (liveToken) return liveToken;
   const queryToken = typeof req.query?.token === 'string' ? req.query.token.trim() : '';
   return queryToken;
+}
+
+function extractAuthCookieToken(req) {
+  return String(parseCookies(req)[AUTH_COOKIE_NAME] || '').trim();
 }
 
 const MARCUS_LIVE_SESSION_TTL_MS = 10 * 60 * 1000;
@@ -816,6 +820,8 @@ app.use((req, res, next) => {
     if (token && safeTimingEqual(token, ADMIN_TOKEN)) return next();
     const liveSession = isMarcusLiveSessionRoute(req) ? getMarcusLiveSession(token) : null;
     if (liveSession && liveSession.businessKey === getBusinessKeyFromContext()) return next();
+    const cookieToken = extractAuthCookieToken(req);
+    if (cookieToken && safeTimingEqual(cookieToken, ADMIN_TOKEN)) return next();
     res.status(401).json({ error: 'Unauthorized' });
   } catch {
     res.status(401).json({ error: 'Unauthorized' });
@@ -832,7 +838,11 @@ app.get('/api/auth/status', (req, res) => {
     return;
   }
   const token = extractBearerToken(req);
-  const authenticated = Boolean(token && (safeTimingEqual(token, ADMIN_TOKEN) || isValidMarcusLiveSessionToken(token)));
+  const cookieToken = extractAuthCookieToken(req);
+  const authenticated = Boolean(
+    (token && (safeTimingEqual(token, ADMIN_TOKEN) || isValidMarcusLiveSessionToken(token)))
+    || (cookieToken && safeTimingEqual(cookieToken, ADMIN_TOKEN)),
+  );
   res.json({ ok: true, authRequired: true, authenticated });
 });
 

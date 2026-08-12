@@ -203,7 +203,7 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     assert.ok(manifest.icons.some((icon) => icon.src === '/icons/marcus.svg'));
     const serviceWorker = await fetch(`${base}/sw.js`);
     assert.equal(serviceWorker.status, 200);
-    assert.match(await serviceWorker.text(), /marcus-mobile-v9/);
+    assert.match(await serviceWorker.text(), /marcus-mobile-v10/);
     const mobileIcon = await fetch(`${base}/icons/marcus.svg`);
     assert.equal(mobileIcon.status, 200);
     assert.match(await mobileIcon.text(), /<svg/);
@@ -254,6 +254,15 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     assert.equal((await fetch(`${base}/api/marcus/realtime/client-secret`, { method: 'POST' })).status, 401);
     assert.equal((await fetch(`${base}/api/marcus/realtime/telemetry`, { method: 'POST' })).status, 401);
     assert.equal((await fetch(`${base}/api/marcus/realtime/acceptance`)).status, 401);
+    const staleLiveHeaders = { authorization: 'Bearer stale-after-restart', cookie: pairingCookie, 'x-business-key': 'agency', 'content-type': 'application/json' };
+    const staleTokenStatus = await (await fetch(`${base}/api/auth/status`, { headers: staleLiveHeaders })).json();
+    assert.equal(staleTokenStatus.authenticated, true);
+    const cookieFallbackTelemetry = await fetch(`${base}/api/marcus/realtime/telemetry`, {
+      method: 'POST', headers: staleLiveHeaders, body: JSON.stringify({ event: {
+        eventId: 'cookie-fallback-event', sessionId: 'cookie-fallback-session', type: 'voice_state', state: 'listening',
+      } }),
+    });
+    assert.equal(cookieFallbackTelemetry.status, 202);
     const voiceTelemetryResponse = await fetch(`${base}/api/marcus/realtime/telemetry`, {
       method: 'POST',
       headers: liveHeaders,

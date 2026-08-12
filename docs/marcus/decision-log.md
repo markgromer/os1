@@ -1,5 +1,13 @@
 # Decision Log
 
+## 2026-08-12: Final Voice Transcripts Do Not Reopen Playback
+
+Context: A one-shot production Reggie continuity conversation streamed assistant audio and emitted `response.output_audio.done`, then emitted its final output transcript. Treating both transcript deltas and the final transcript as playback-start signals put the UI back into `Speaking` after playback had ended.
+
+Decision: Use output-audio transcript deltas to infer WebRTC playback start, use `response.output_audio.done` to end it, and treat the final transcript event as text-only. Reproduce that exact ordering in the browser client regression.
+
+Consequence: Marcus returns to `Listening` after WebRTC playback instead of remaining stuck on `Speaking`, while assistant transcript callbacks and redacted transcript-length telemetry remain intact.
+
 ## 2026-08-12: Live Memory Is Project-Scoped Before Execution
 
 Context: A deterministic production speech test correctly reached OpenAI Realtime and the Marcus operator, but the answer replayed stale requirements from another project because Live chat assembled recent history before resolving the explicitly named Reggie repository.

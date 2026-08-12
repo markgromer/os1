@@ -65,7 +65,7 @@ The browser receives a short-lived client secret from `POST /api/marcus/realtime
 - Every reconnect mints a new ephemeral credential.
 - A connected session renews at 55 minutes before the Realtime session limit.
 - A connection version prevents a stale asynchronous setup from replacing a newer session.
-- WebRTC speaking state is derived from output-audio transcript events because the SDK's generic audio callback is not emitted when WebRTC owns playback; speech detected during that state records barge-in.
+- WebRTC speaking state is derived from output-audio transcript deltas because the SDK's generic audio callback is not emitted when WebRTC owns playback; `response.output_audio.done` ends playback, the later final transcript does not reopen it, and speech detected during active playback records barge-in.
 
 Local acceptance covers these lifecycle rules with an SDK-session test double. Production Chromium covers live signaling plus synthetic network and page lifecycle recovery. Installed-Android behavior remains an explicit completion check.
 
@@ -90,6 +90,8 @@ This proves production authentication, PWA assets, ephemeral-key minting, SDK We
 Android authentication uses the one-time pairing flow in [[access-model]], so voice setup does not require copying the durable server credential to the device. The production pairing-to-voice path passed with no durable token in browser storage.
 
 Production telemetry acceptance on 2026-08-12 used service worker `marcus-mobile-v9` and acceptance session `1ad47863-7d44-4a2b-9363-0aa50f67e16c`. A clean paired mobile Chromium run had zero browser errors or warnings, established Realtime, recognized a synthetic spoken read-only status request, called the real `marcus_operator` bridge, produced assistant audio, recorded a timed barge-in, and recovered after network and page-background cycles. The resulting gates were all true except `installedAndroidContext`, which remained false because this was deliberately a browser-emulated test rather than a physical installed PWA.
+
+A separate one-shot project-continuity run used acceptance session `b1af050e-d971-470d-8632-749329fe0c8d`. It transcribed the Reggie request, called the real operator once, returned the exact saved setup-button, API-token, slug, verification, and blocking requirements, streamed assistant audio, created no operation, and stored no transcript/request text or credentials. That run exposed final-transcript event ordering that could leave the UI on `Speaking`; service worker `marcus-mobile-v10` applies and tests the corrected ordering.
 
 The status request explicitly prohibited audits, Codex, and operation creation. Production still had four operations afterward, with the latest created at `2026-08-12T07:13:48.308Z`, before this acceptance run. The acceptance response reported that transcript text, request text, and credentials are not stored.
 

@@ -166,6 +166,7 @@ test('Marcus browser voice infers WebRTC playback and barge-in from raw Realtime
 
   sessions[0].emit('transport_event', { type: 'response.output_audio_transcript.delta', delta: 'Again' });
   sessions[0].emit('transport_event', { type: 'response.output_audio.done' });
+  sessions[0].emit('transport_event', { type: 'response.output_audio_transcript.done', transcript: 'Again' });
   assert.equal(voice.getState(), 'listening');
   assert.equal(telemetry.filter((event) => event.type === 'audio_stopped').length, 1);
   voice.stop();

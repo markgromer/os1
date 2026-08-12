@@ -235,7 +235,6 @@ export function createMarcusRealtimeVoice(options = {}) {
       if (event?.type === 'response.output_audio_transcript.done') {
         const transcript = String(event.transcript || '').trim();
         if (transcript) {
-          markAssistantAudioStarted();
           emitEvent('assistant_transcript', { length: transcript.length });
           onAssistantText(transcript);
         }
