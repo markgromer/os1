@@ -70,7 +70,7 @@
   .install.visible { display: flex; }
   .install p { margin: 0; color: var(--muted); font-size: 13px; }
   .footer-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-  .provider-dialog { width: min(620px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); margin: auto; padding: 0; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow); overflow: hidden; }
+  .provider-dialog { position: fixed; inset: 0; width: min(620px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); margin: auto; padding: 0; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow); overflow: hidden; }
   .provider-dialog::backdrop { background: rgba(2, 7, 12, 0.78); }
   .provider-form { display: flex; flex-direction: column; max-height: calc(100dvh - 24px); }
   .provider-head, .provider-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px; }
@@ -677,6 +677,7 @@
       els.acceptanceResult.textContent = '';
       els.acceptanceResult.classList.remove('error');
       els.acceptanceDialog.showModal();
+      els.acceptanceDialog.querySelector('.provider-body')?.scrollTo({ top: 0 });
       await refreshAcceptance();
       scheduleAcceptancePoll();
     } catch (err) {
