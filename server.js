@@ -261,10 +261,11 @@ const operationsEngine = createOperationsEngine({
   queueDesktopAction: async (action) => queueDesktopAction(action),
   githubReadAdapter: async (input) => githubOperationsReadAdapter(input),
   directCodexAdapter,
-  reviewCodexResult: async ({ messages, timeoutMs }) => aiChatCompletion({
+  reviewCodexResult: async ({ messages, timeoutMs, responseFormat }) => aiChatCompletion({
     routeKey: 'marcusChat',
     messages,
     timeoutMs,
+    response_format: responseFormat,
   }),
   allowedWorkspaceRoots: String(process.env.MARCUS_ALLOWED_WORKSPACE_ROOTS || '')
     .split(path.delimiter).map((value) => value.trim()).filter(Boolean),
@@ -3772,7 +3773,7 @@ function resolveAiRoute(saved, routeKey) {
   return { provider, model, apiKey: providerSecrets.apiKey };
 }
 
-async function aiChatCompletion({ routeKey, messages, tools, tool_choice, timeoutMs = 30_000 }) {
+async function aiChatCompletion({ routeKey, messages, tools, tool_choice, response_format, timeoutMs = 30_000 }) {
   const saved = await readSettings();
   const route = resolveAiRoute(saved, routeKey);
   if (!route.apiKey) {
@@ -3806,6 +3807,7 @@ async function aiChatCompletion({ routeKey, messages, tools, tool_choice, timeou
   };
   if (Array.isArray(tools) && tools.length) body.tools = tools;
   if (tool_choice) body.tool_choice = tool_choice;
+  if (response_format) body.response_format = response_format;
 
   let resp;
   let data;

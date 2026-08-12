@@ -42,9 +42,11 @@ function diff(overrides = {}) {
 
 test('independent Codex result reviewer passes only complete criterion-by-criterion evidence', async () => {
   let systemPrompt = '';
+  let responseFormat;
   const reviewer = new CodexResultReviewer({
-    complete: async ({ messages }) => {
+    complete: async ({ messages, responseFormat: format }) => {
       systemPrompt = messages[0].content;
+      responseFormat = format;
       return {
         ok: true,
         provider: 'openai',
@@ -71,6 +73,110 @@ test('independent Codex result reviewer passes only complete criterion-by-criter
   const content = JSON.parse(artifact.content);
   assert.equal(content.review.acceptanceCoverage.length, 2);
   assert.equal(content.review.residualRisks.length, 1);
+  assert.equal(responseFormat.type, 'json_schema');
+  assert.equal(responseFormat.json_schema.strict, true);
+  assert.equal(responseFormat.json_schema.schema.properties.acceptanceCoverage.minItems, 2);
+  assert.equal(responseFormat.json_schema.schema.properties.acceptanceCoverage.maxItems, 2);
+});
+
+test('project-operator control criteria are bound deterministically to durable evidence', async () => {
+  let suppliedCriteria;
+  const reviewer = new CodexResultReviewer({
+    complete: async ({ messages, responseFormat }) => {
+      suppliedCriteria = JSON.parse(messages[1].content).acceptanceCriteria;
+      assert.equal(responseFormat.json_schema.schema.properties.acceptanceCoverage.minItems, 1);
+      return {
+        ok: true,
+        provider: 'openai',
+        model: 'gpt-review',
+        message: { content: JSON.stringify({
+          verdict: 'pass',
+          confidence: 0.98,
+          summary: 'The requested endpoint and tests are visible, and registered test evidence passed.',
+          acceptanceCoverage: [{
+            criterionIndex: 0,
+            status: 'met',
+            evidence: 'src/setup.js contains the requested implementation and authenticated tests passed.',
+            evidenceRefs: ['diff:src/setup.js', 'verification:test'],
+          }],
+          findings: [],
+          residualRisks: [],
+        }) },
+      };
+    },
+  });
+  const projectOperation = {
+    ...operation(),
+    acceptanceCriteria: [
+      'Add a verified setup dialog and run its tests.',
+      'Marcus gathered project context before creating the Codex handoff (1 repos, 6 paths indexed, 6 files read, 2124 ms).',
+      'Codex receives the audit brief, constraints, approval boundaries, and verification requirements.',
+      'Completion is not accepted without registered implementation and verification evidence.',
+    ],
+    verification: [
+      { type: 'build', status: 'passed', waived: false, output: 'Dry-run build passed.' },
+      { type: 'test', status: 'passed', waived: false, output: 'All focused tests passed.' },
+      { type: 'diff_review', status: 'passed', waived: false, output: 'Old review result.' },
+    ],
+    metadata: {
+      codexJobs: { codex: { provider: 'github_actions_codex', jobId: 'job-123' } },
+      extra: { projectOperator: {
+        promptVersion: 3,
+        promptLength: 11281,
+        executionBriefLength: 9396,
+        githubAudit: { coverage: { repositoriesInspected: 1, pathsIndexed: 6, filesRead: 6 } },
+      } },
+    },
+  };
+  const artifact = await reviewer.review({
+    operation: projectOperation,
+    diff: diff(),
+    artifacts: [{ type: 'github_result_evidence' }],
+  });
+  assert.deepEqual(suppliedCriteria, [{ criterionIndex: 0, criterion: projectOperation.acceptanceCriteria[0] }]);
+  assert.equal(artifact.metadata.reviewStatus, 'passed');
+  const coverage = JSON.parse(artifact.content).review.acceptanceCoverage;
+  assert.equal(coverage.length, 4);
+  assert.deepEqual(coverage[1].evidenceRefs, ['operation:github_audit']);
+  assert.deepEqual(coverage[2].evidenceRefs, ['operation:codex_handoff']);
+  assert.ok(coverage[3].evidenceRefs.includes('operation:implementation_evidence'));
+  assert.ok(coverage[3].evidenceRefs.includes('verification:test'));
+  assert.ok(!coverage[3].evidenceRefs.includes('verification:diff_review'));
+});
+
+test('project-operator completion control fails closed without verification evidence', async () => {
+  const reviewer = new CodexResultReviewer({
+    complete: async () => ({
+      ok: true,
+      provider: 'openai',
+      model: 'gpt-review',
+      message: { content: JSON.stringify({
+        verdict: 'pass', confidence: 0.99, summary: 'The implementation is visible.',
+        acceptanceCoverage: [{ criterionIndex: 0, status: 'met', evidence: 'The requested code is present.', evidenceRefs: ['diff:src/setup.js'] }],
+        findings: [], residualRisks: [],
+      }) },
+    }),
+  });
+  const projectOperation = {
+    ...operation(),
+    acceptanceCriteria: [
+      'Add a verified setup dialog.',
+      'Marcus gathered project context before creating the Codex handoff (1 repos, 1 paths indexed, 1 files read, 1 ms).',
+      'Codex receives the audit brief, constraints, approval boundaries, and verification requirements.',
+      'Completion is not accepted without registered implementation and verification evidence.',
+    ],
+    metadata: {
+      codexJobs: { codex: { provider: 'github_actions_codex', jobId: 'job-123' } },
+      extra: { projectOperator: {
+        promptVersion: 3, promptLength: 100, executionBriefLength: 80,
+        githubAudit: { coverage: { repositoriesInspected: 1, pathsIndexed: 1, filesRead: 1 } },
+      } },
+    },
+  };
+  const artifact = await reviewer.review({ operation: projectOperation, diff: diff(), artifacts: [{ type: 'commit' }] });
+  assert.equal(artifact.metadata.reviewStatus, 'needs_manual_review');
+  const coverage = JSON.parse(artifact.content).review.acceptanceCoverage;
+  assert.equal(coverage[3].status, 'unknown');
 });
 
 test('independent Codex result reviewer cannot pass incomplete criterion coverage', async () => {
