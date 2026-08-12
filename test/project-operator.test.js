@@ -43,6 +43,12 @@ async function withProjectOperator(callback, { directCodexAdapter = null } = {})
       },
     }),
     githubApi: async (pathPart) => {
+      if (pathPart.startsWith('/user/repos')) return [
+        { full_name: 'markgromer/reggie', name: 'reggie', description: 'New Reggie agent runtime', default_branch: 'main' },
+        { full_name: 'markgromer/reggie-hub', name: 'reggie-hub', description: 'Reggie hub control plane', default_branch: 'main' },
+      ];
+      if (pathPart.includes('/reggie/contents/README.md')) return { content: Buffer.from('# Reggie\nNew agent runtime.').toString('base64') };
+      if (pathPart.includes('/reggie-hub/contents/README.md')) return { content: Buffer.from('# Reggie Hub\nControl plane for Reggie.').toString('base64') };
       if (pathPart.endsWith('/README.md')) return { content: Buffer.from('# Royal Doody\nBooking app.').toString('base64') };
       if (pathPart.endsWith('/package.json')) return { content: Buffer.from(JSON.stringify({ scripts: { test: 'node --test', build: 'vite build' } })).toString('base64') };
       throw new Error('not found');
@@ -153,5 +159,33 @@ test('project operator detects website install and replace requests', async () =
       service.shouldHandle('The Freedom Scoopers website needs the new Reggie and Reggie hub installed and replace the legacy Reggie.'),
       true,
     );
+  });
+});
+
+test('project operator inspects related GitHub repos before composing Codex prompt', async () => {
+  await withProjectOperator(async ({ engine, service }) => {
+    await engine.createProjectRegistryRecord('personal', {
+      canonicalName: 'Freedom Scoopers',
+      projectId: 'freedom-scoopers',
+      aliases: ['Freedom Scoopers website'],
+      repo: { fullName: 'markgromer/freedom-scoopers', defaultBranch: 'main' },
+    });
+
+    const result = await service.prepareCodexOperation('personal', {
+      message: 'The Freedom Scoopers website needs the new Reggie and Reggie hub installed and replace the legacy Reggie system. You can find both projects in GitHub.',
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.status, 'codex_prepared');
+    assert.match(result.reply, /Inspected: /);
+    assert.match(result.auditBrief, /## GitHub Audit/);
+    assert.match(result.auditBrief, /markgromer\/reggie/);
+    assert.match(result.auditBrief, /markgromer\/reggie-hub/);
+    assert.match(result.codexPrompt, /Reggie Hub/);
+    assert.deepEqual(
+      result.operation.metadata.extra.projectOperator.githubAudit.repos.some((repo) => repo.fullName === 'markgromer/reggie-hub'),
+      true,
+    );
+    assert.ok(result.operation.metadata.extra.projectOperator.githubAudit.files.length >= 2);
   });
 });
