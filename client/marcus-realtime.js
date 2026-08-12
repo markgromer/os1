@@ -404,6 +404,13 @@ export function createMarcusRealtimeVoice(options = {}) {
     try { session?.interrupt(); } catch {}
   }
 
+  function announce(message) {
+    const update = String(message || '').trim().slice(0, 1_500);
+    if (!update || !desiredActive || suspended || !session || typeof session.sendMessage !== 'function') return false;
+    session.sendMessage(`Durable Marcus status update: ${update}\nSpeak this update concisely and faithfully. Do not call a tool or imply any additional action.`);
+    return true;
+  }
+
   return {
     start,
     stop,
@@ -411,6 +418,7 @@ export function createMarcusRealtimeVoice(options = {}) {
     resume,
     networkChanged,
     interrupt,
+    announce,
     getState: () => state,
     isActive: () => desiredActive,
   };

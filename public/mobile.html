@@ -50,6 +50,18 @@
   .metric { min-height: 64px; border: 1px solid var(--line); border-radius: 12px; background: rgba(0,0,0,0.15); padding: 10px; }
   .metric span { display: block; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0; }
   .metric strong { display: block; margin-top: 8px; font-size: 14px; overflow-wrap: anywhere; }
+  .work-strip { display: none; min-height: 92px; padding: 12px; gap: 10px; }
+  .work-strip.visible { display: grid; }
+  .work-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+  .work-copy { min-width: 0; }
+  .work-copy span { display: block; color: var(--muted); font-size: 11px; text-transform: uppercase; }
+  .work-copy strong { display: block; margin-top: 4px; font-size: 14px; overflow-wrap: anywhere; }
+  .work-status { flex: 0 0 auto; color: var(--muted); font-size: 12px; text-transform: capitalize; }
+  .work-status.ok { color: var(--ok); }
+  .work-status.warn { color: #fbbf24; }
+  .work-detail { margin: 0; min-height: 18px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+  .work-progress { height: 4px; overflow: hidden; background: rgba(255,255,255,0.08); }
+  .work-progress span { display: block; width: 0; height: 100%; background: var(--accent); transition: width 180ms ease; }
   .chat { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
   .messages { flex: 1; overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; scroll-behavior: smooth; }
   .msg { max-width: 92%; border: 1px solid var(--line); border-radius: 14px; padding: 11px 12px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; }
@@ -143,6 +155,15 @@
     <div class="metric"><span>GitHub</span><strong id="githubMetric">checking</strong></div>
     <div class="metric"><span>Cloudflare</span><strong id="cloudflareMetric">checking</strong></div>
     <div class="metric"><span>Desktop</span><strong id="desktopMetric">checking</strong></div>
+  </section>
+
+  <section id="activeWorkPanel" class="panel work-strip" aria-label="Active durable work" aria-live="polite">
+    <div class="work-head">
+      <div class="work-copy"><span>Active work</span><strong id="activeWorkTitle">No active operation</strong></div>
+      <span id="activeWorkStatus" class="work-status">idle</span>
+    </div>
+    <p id="activeWorkDetail" class="work-detail"></p>
+    <div class="work-progress" aria-hidden="true"><span id="activeWorkProgress"></span></div>
   </section>
 
   <section class="panel chat" aria-label="Marcus chat">
@@ -295,6 +316,7 @@
 </dialog>
 
 <script src="/marcus-realtime.js"></script>
+<script src="/marcus-operation-tracker.js"></script>
 <script>
 (() => {
   const els = {
@@ -308,6 +330,11 @@
     github: document.getElementById('githubMetric'),
     cloudflare: document.getElementById('cloudflareMetric'),
     desktop: document.getElementById('desktopMetric'),
+    activeWorkPanel: document.getElementById('activeWorkPanel'),
+    activeWorkTitle: document.getElementById('activeWorkTitle'),
+    activeWorkStatus: document.getElementById('activeWorkStatus'),
+    activeWorkDetail: document.getElementById('activeWorkDetail'),
+    activeWorkProgress: document.getElementById('activeWorkProgress'),
     messages: document.getElementById('messages'),
     form: document.getElementById('chatForm'),
     input: document.getElementById('messageInput'),
@@ -366,6 +393,7 @@
   let voiceTelemetryInFlight = false;
   let voiceTelemetryReady = false;
   let acceptancePollTimer = null;
+  let operationTracker = null;
 
   function rememberVoiceDiagnostic(key, value) {
     if (!Array.isArray(voiceDiagnostics[key])) return;
@@ -454,6 +482,29 @@
     els.messages.appendChild(div);
     els.messages.scrollTop = els.messages.scrollHeight;
   }
+  function renderTrackedOperation(operation) {
+    if (!operation) {
+      els.activeWorkPanel.classList.remove('visible');
+      return;
+    }
+    const verification = operation.verificationSummary || {};
+    const progress = operation.progress || {};
+    const terminal = ['completed', 'failed', 'cancelled'].includes(operation.status);
+    const warning = operation.needsApproval || operation.needsRecovery || ['blocked', 'failed'].includes(operation.status);
+    els.activeWorkPanel.classList.add('visible');
+    els.activeWorkTitle.textContent = operation.projectName || operation.title || operation.id;
+    els.activeWorkStatus.className = `work-status ${operation.status === 'completed' ? 'ok' : warning ? 'warn' : ''}`.trim();
+    els.activeWorkStatus.textContent = String(operation.status || 'unknown').replaceAll('_', ' ');
+    const details = [
+      operation.currentStep?.title ? `${operation.currentStep.title} (${operation.currentStep.status})` : '',
+      progress.total ? `${progress.completed}/${progress.total} steps` : '',
+      verification.required ? `${verification.passed}/${verification.required} checks` : terminal ? 'No required checks reported' : 'Verification pending',
+      operation.needsApproval ? 'Approval required' : '',
+      operation.activeBlockers ? `${operation.activeBlockers} blocker${operation.activeBlockers === 1 ? '' : 's'}` : '',
+    ].filter(Boolean);
+    els.activeWorkDetail.textContent = `${details.join(' · ')} · ${operation.id}`;
+    els.activeWorkProgress.style.width = `${Math.max(0, Math.min(100, Number(progress.percent) || 0))}%`;
+  }
   function authTokenForPath(path) {
     const p = String(path || '');
     if (p === '/api/auth/status' || p === '/api/auth/login' || p === '/api/marcus/live/session') return adminToken;
@@ -497,13 +548,14 @@
     return true;
   }
   async function refreshHealth() {
-    if (!(await ensureSession())) return;
+    if (!(await ensureSession())) return false;
     const health = await api('/api/marcus/operator-health');
     const caps = health.capabilities || {};
     els.codex.textContent = caps.projectOperator?.mode || 'unknown';
     els.github.textContent = caps.github?.backendTokenConfigured ? `ready (${caps.github.source})` : 'not configured';
     els.cloudflare.textContent = caps.cloudflare?.backendTokenConfigured ? `ready (${caps.cloudflare.source})` : 'not configured';
     els.desktop.textContent = caps.desktopAgent?.relayOnline ? 'online' : 'offline';
+    return true;
   }
   function updateProviderState(element, configured, detail = '') {
     element.className = `provider-state ${configured ? 'ok' : ''}`.trim();
@@ -728,6 +780,7 @@
         body: JSON.stringify({ message }),
       });
       addMessage('marcus', data.reply || data.message || 'Marcus responded without text.');
+      if (data.operation?.id) operationTracker?.track(data.operation);
       await refreshHealth();
     } catch (err) {
       addMessage('system', err.message || String(err));
@@ -769,6 +822,7 @@
         });
         const reply = data.reply || data.message || data.error || 'Marcus responded without text.';
         addMessage('marcus', reply);
+        if (data.operation?.id) operationTracker?.track(data.operation);
         refreshHealth().catch(() => {});
         return {
           ok: data.ok !== false,
@@ -812,7 +866,7 @@
         localStorage.setItem('marcus_mobile_admin_token', adminToken);
       }
       els.adminToken.value = '';
-      await refreshHealth();
+      if (await refreshHealth()) await operationTracker?.start();
       flushVoiceTelemetry().catch(() => {});
     } catch (err) {
       addMessage('system', err.message || 'Sign in failed.');
@@ -860,7 +914,9 @@
     els.acceptanceResult.textContent = err.message || String(err);
   }));
   els.confirmPhone.addEventListener('click', confirmPhysicalPhone);
-  els.refresh.addEventListener('click', refreshHealth);
+  els.refresh.addEventListener('click', async () => {
+    if (await refreshHealth()) await operationTracker?.refresh();
+  });
   els.voice.addEventListener('click', async () => {
     if (!realtimeVoice) return;
     if (realtimeVoice.isActive()) {
@@ -904,8 +960,20 @@
   });
   window.addEventListener('pageshow', () => realtimeVoice?.resume().catch(() => {}));
   queueVoiceTelemetry({ type: 'client_context', ...voiceClientContext(), occurredAt: new Date().toISOString() });
+  if (typeof window.createMarcusMobileOperationTracker === 'function') {
+    operationTracker = window.createMarcusMobileOperationTracker({
+      loadSummaries: () => api('/api/operations/summary?limit=50'),
+      onRender: renderTrackedOperation,
+      onTransition: (operation) => {
+        if (typeof window.formatOperationTransition !== 'function') return;
+        const update = window.formatOperationTransition(operation);
+        addMessage('marcus', update);
+        if (window.shouldAnnounceOperationTransition?.(operation) && realtimeVoice?.isActive()) realtimeVoice.announce(update);
+      },
+    });
+  }
   addMessage('system', 'Marcus Mobile is ready.');
-  refreshHealth();
+  refreshHealth().then((ready) => ready ? operationTracker?.start() : null).catch(() => {});
 })();
 </script>
 </body>

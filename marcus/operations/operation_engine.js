@@ -288,12 +288,28 @@ export function createOperationsEngine({
 
     async listOperationSummaries(businessKey, filters = {}) {
       const operations = await store.list(businessKey, filters);
-      return operations.map((operation) => ({
-        id: operation.id, title: operation.title, projectName: operation.projectName, status: operation.status,
-        riskLevel: operation.riskLevel, updatedAt: operation.updatedAt, progress: summarizeOperationProgress(operation),
-        needsApproval: operation.approvals.some((approval) => approval.status === 'pending'),
-        needsRecovery: operation.status === 'recovery_required',
-      }));
+      return operations.map((operation) => {
+        const currentStep = operation.steps.find((step) => step.id === operation.currentStepId)
+          || operation.steps.find((step) => ['running', 'waiting_for_approval', 'blocked', 'ready', 'pending'].includes(step.status))
+          || null;
+        const required = operation.verification.filter((item) => item.required !== false);
+        const passed = required.filter((item) => item.status === 'passed' || (item.waived === true && item.waiverApprovalId)).length;
+        return {
+          id: operation.id, title: operation.title, projectName: operation.projectName, status: operation.status,
+          riskLevel: operation.riskLevel, updatedAt: operation.updatedAt, progress: summarizeOperationProgress(operation),
+          needsApproval: operation.approvals.some((approval) => approval.status === 'pending'),
+          needsRecovery: operation.status === 'recovery_required',
+          activeBlockers: operation.blockers.filter((blocker) => blocker.status === 'active').length,
+          currentStep: currentStep ? { title: currentStep.title, type: currentStep.type, status: currentStep.status } : null,
+          verificationSummary: {
+            required: required.length,
+            passed,
+            failed: required.filter((item) => item.status === 'failed').length,
+            needsManualReview: required.filter((item) => item.status === 'needs_manual_review').length,
+            pending: required.filter((item) => ['pending', 'running', 'skipped'].includes(item.status)).length,
+          },
+        };
+      });
     },
 
     async readiness(businessKey) {

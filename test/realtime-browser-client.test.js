@@ -22,6 +22,7 @@ class FakeSession extends Emitter {
     this.connectCalls = [];
     this.closeCalls = 0;
     this.interruptCalls = 0;
+    this.sentMessages = [];
   }
   async connect(options) {
     this.connectCalls.push(options);
@@ -32,6 +33,7 @@ class FakeSession extends Emitter {
     this.transport.emit('connection_change', 'disconnected');
   }
   interrupt() { this.interruptCalls += 1; }
+  sendMessage(message) { this.sentMessages.push(message); }
 }
 
 function secretResponse() {
@@ -94,7 +96,10 @@ test('Marcus browser voice uses the SDK tool bridge and reports interruption lif
 
   voice.interrupt();
   assert.equal(sessions[0].interruptCalls, 1);
+  assert.equal(voice.announce('Reggie completed with verification.'), true);
+  assert.match(sessions[0].sentMessages[0], /Reggie completed with verification/);
   voice.stop();
+  assert.equal(voice.announce('This must not be spoken.'), false);
   assert.equal(voice.getState(), 'offline');
   assert.equal(voice.isActive(), false);
 });

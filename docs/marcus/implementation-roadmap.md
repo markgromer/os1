@@ -205,11 +205,15 @@ Implemented slice:
 - Network and WebRTC disconnect recovery with bounded backoff.
 - Scheduled renewal at 55 minutes before the Realtime session limit.
 - A single `marcus_operator` bridge back to the durable Live chat and approval flow.
+- A persistent active-work strip that follows the same durable operation across refresh and shows current step, step progress, verification counts, blockers, and approval/recovery state through the redacted operation-summary API.
+- A server-side monitor that keeps execution-safe durable jobs moving when the phone is closed, without ticking approval-gated, blocked, paused, recovery-required, or terminal operations.
+- Selective Realtime announcements for persisted completion, failure, cancellation, approval, blocker, and recovery transitions.
 - Project-scoped conversation memory that resolves the current explicit repository before selecting retained requirements, with bounded per-project requirement storage and durable-operation recovery.
 - Bounded context replies and direct project-switch regression coverage to prevent stale requirements from entering Codex prompts.
 - Authenticated, business-scoped acceptance telemetry with strict field allowlisting and 1,000-event retention.
 - Derived gates for speech recognition, assistant audio, interruption, operator completion, network/background recovery, and installed Android context.
 - Unit and smoke coverage for session policy, auth, static assets, interruption state, network/background recovery, expired credentials, and stale-connection races.
+- Unit coverage for monitor state allowlisting/serialization, summary redaction, tracker persistence/deduplication, terminal handoff, and voice announcements.
 
 Acceptance tests still required before this phase is complete:
 
@@ -224,7 +228,7 @@ Acceptance tests still required before this phase is complete:
 
 The production paired-admin `Verify` dashboard starts a fresh in-memory acceptance session, shows each voice/provider gate, and enables physical confirmation only after all eight Android voice gates pass in installed standalone mode. `GET /api/marcus/acceptance` combines that evidence with provider, approved-send, Codex, GitHub, Cloudflare, OpenAI, and desktop readiness. Service worker `marcus-mobile-v13` and the dashboard passed Render deployment and phone-size Chromium acceptance; the physical-phone run remains pending.
 
-Status: the official SDK, recovery, and acceptance telemetry are live at `https://task-tracker-5wsa.onrender.com/mobile.html`, pass the local `114/114` suite, and passed production synthetic-browser signaling, speech, assistant-audio, interruption, operator-bridge, network-recovery, and background-recovery validation. A real installed-Android speech, barge-in, and recovery conversation is not yet verified.
+Status: the official SDK, recovery, acceptance telemetry, and durable-work tracking pass the local `118/118` suite. At 390x844, an authenticated browser showed the active Reggie operation, persisted it across reload, displayed one blocked transition without repeated messages, loaded both tracker and announcer bundles, produced no horizontal overflow, and reported no browser warnings or errors. Production deployment verification for this tracker revision and a real installed-Android speech, barge-in, and recovery conversation remain pending.
 
 Verified locally on 2026-08-12:
 

@@ -209,3 +209,11 @@ Context: Earlier mobile replies were immediate, lost the explicit Reggie context
 Decision: Exercise the exact `markgromer/Reggie` Sweep and Go request through production. Require repository indexing and file reads before prompt creation, a real Reggie GitHub Actions Codex run, authoritative PR evidence, independent criterion coverage, and isolated exact-head verification before completion.
 
 Consequence: Operation `op_f6XKmXTWILGvpQ` audited 180 paths and 10 files, dispatched a real Codex job, opened PR #16, and completed only after GitHub and authenticated evidence passed. The PR remains open and unmerged, preserving separate merge and deployment authority.
+
+## 2026-08-12: Durable Jobs Continue Independently Of The Mobile Conversation
+
+Context: Marcus Mobile displayed only the first `/api/marcus/live/chat` reply. It discarded the returned operation id, did not show later Codex or verification state, and provider jobs advanced only when another request explicitly ticked the operation runner. This recreated the appearance of instant shallow answers even when durable work existed.
+
+Decision: Add an allowlisted server operation monitor for execution-safe states and a read-only mobile tracker over the redacted operation-summary API. Persist only the active operation id and status signature on the phone. Emit one conversation update per material persisted transition, and speak only terminal, approval, blocker, or recovery transitions when Realtime voice is active.
+
+Consequence: Codex polling and verification no longer depend on the phone remaining open. Marcus Mobile can show honest progress and verified completion without gaining prompt, artifact, provider, credential, or execution access. Approval and recovery boundaries remain fail-closed.

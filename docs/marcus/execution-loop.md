@@ -51,6 +51,12 @@ Realtime voice follows:
 
 The voice model handles conversational audio but cannot bypass the normal project operator, durable operation, or approval paths. A spoken follow-up such as "do it" is sent to the same pending-operation approval handler as typed chat.
 
+Durable mobile follow-through now follows:
+
+`chat or voice creates operation -> server monitor advances execution-safe states -> safe operation summary -> active-work strip -> one message per persisted material transition -> selective spoken terminal/approval/blocker announcement`
+
+The phone does not tick operations or read full operation records. Closing or locking the phone does not stop the server monitor. Waiting approvals, blocked operations, recovery-required work, and terminal states are never advanced automatically by that monitor.
+
 Voice transport recovery follows:
 
 `background, network loss, connection loss, or 55-minute refresh -> close stale WebRTC session -> mint a new ephemeral credential -> reconnect -> resume listening`

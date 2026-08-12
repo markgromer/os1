@@ -33,6 +33,7 @@ import { formatMissionMemoryForPrompt, MissionMemoryStore } from './marcus/memor
 import { createOperationsEngine } from './marcus/operations/operation_engine.js';
 import { discoverDurableBackupSources } from './marcus/operations/operation_backups.js';
 import { DesktopActionQueue } from './marcus/operations/desktop_action_queue.js';
+import { startOperationMonitor } from './marcus/operations/operation_monitor.js';
 import { ProjectOperatorService } from './marcus/operators/project_operator_service.js';
 import { createGitHubActionsCodexAdapterFromEnv } from './marcus/providers/github_actions_codex_adapter.js';
 import { createHttpCodexAdapterFromEnv } from './marcus/providers/http_codex_adapter.js';
@@ -20024,6 +20025,23 @@ function startProjectEvidenceScheduler() {
   if (typeof interval.unref === 'function') interval.unref();
 }
 
+function startDurableOperationMonitor() {
+  return startOperationMonitor({
+    engine: operationsEngine,
+    listBusinessKeys: async () => {
+      await refreshBusinessCacheFromSettings();
+      return (Array.isArray(cachedBusinesses) ? cachedBusinesses : [])
+        .map((business) => normalizeBusinessKey(business?.key || '') || DEFAULT_BUSINESS_KEY);
+    },
+    initialDelayMs: Math.max(1_000, Number(process.env.MARCUS_OPERATION_MONITOR_INITIAL_DELAY_MS) || 3_000),
+    intervalMs: Math.max(5_000, Number(process.env.MARCUS_OPERATION_MONITOR_INTERVAL_MS) || 15_000),
+    maxOperationsPerBusiness: 20,
+    onError: (error, context = {}) => {
+      console.error(`Durable operation monitor ${context.phase || 'pass'} failed${context.operationId ? ` for ${context.operationId}` : ''}:`, error?.message || error);
+    },
+  });
+}
+
 const httpServer = app.listen(PORT, SERVER_HOST, async () => {
   await refreshBusinessCacheFromSettings();
   const businesses = Array.isArray(cachedBusinesses) ? cachedBusinesses : [{ key: DEFAULT_BUSINESS_KEY }];
@@ -20071,6 +20089,7 @@ const httpServer = app.listen(PORT, SERVER_HOST, async () => {
   startBackupScheduler();
   startGa4Scheduler();
   startAirtableRequestsAutoSyncScheduler();
+  startDurableOperationMonitor();
   startProjectEvidenceScheduler();
   startMarcusBriefScheduler();
   // eslint-disable-next-line no-console

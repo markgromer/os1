@@ -188,6 +188,8 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     assert.match(mobileHtml, /Marcus Mobile/);
     assert.match(mobileHtml, /manifest\.webmanifest/);
     assert.match(mobileHtml, /marcus-realtime\.js/);
+    assert.match(mobileHtml, /marcus-operation-tracker\.js/);
+    assert.match(mobileHtml, /Active durable work/);
     assert.match(mobileHtml, /Start voice/);
     assert.match(mobileHtml, /Pairing code or admin token/);
     assert.match(mobileHtml, /Message providers/);
@@ -208,7 +210,7 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     assert.ok(manifest.icons.some((icon) => icon.src === '/icons/marcus.svg'));
     const serviceWorker = await fetch(`${base}/sw.js`);
     assert.equal(serviceWorker.status, 200);
-    assert.match(await serviceWorker.text(), /marcus-mobile-v13/);
+    assert.match(await serviceWorker.text(), /marcus-mobile-v14/);
     const mobileIcon = await fetch(`${base}/icons/marcus.svg`);
     assert.equal(mobileIcon.status, 200);
     assert.match(await mobileIcon.text(), /<svg/);
@@ -459,6 +461,9 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     assert.equal(summary.status, 200);
     const summaryBody = await summary.json();
     assert.ok(summaryBody.operations.every((operation) => !Object.hasOwn(operation, 'artifacts')));
+    assert.ok(summaryBody.operations.every((operation) => !Object.hasOwn(operation, 'metadata')));
+    assert.ok(summaryBody.operations.every((operation) => Object.hasOwn(operation, 'verificationSummary')));
+    assert.ok(summaryBody.operations.every((operation) => Object.hasOwn(operation, 'activeBlockers')));
     assert.equal((await fetch(`${base}/api/operations`, { headers: liveHeaders })).status, 401);
     assert.equal((await fetch(`${base}/api/operations`, { method: 'POST', headers: liveHeaders, body: JSON.stringify({ originalRequest: 'mutate' }) })).status, 401);
 
