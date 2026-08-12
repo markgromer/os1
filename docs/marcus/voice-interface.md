@@ -77,7 +77,7 @@ Stored evidence includes event type, timestamps, voice state, transcript length,
 
 `GET /api/marcus/realtime/acceptance` derives these gates: signaling connected, user speech recognized, assistant audio streamed, interruption observed, operator bridge completed, network recovery, background recovery, and installed Android context. All gates passing marks the session ready for physical review; it does not independently prove the device was physical.
 
-Local normalization, persistence, redaction, deduplication, auth, business-scope, and gate-derivation tests passed on 2026-08-12. Production telemetry deployment remains unverified until the current source revision is deployed.
+Local normalization, persistence, redaction, deduplication, auth, business-scope, WebRTC playback inference, and gate-derivation tests passed on 2026-08-12 in the `94/94` suite.
 
 ## Production Evidence
 
@@ -88,6 +88,10 @@ The same production browser went offline and entered `Reconnecting` / `Waiting f
 This proves production authentication, PWA assets, ephemeral-key minting, SDK WebRTC signaling, and browser lifecycle recovery. It does not prove actual Android microphone quality, spoken tool invocation, barge-in, physical phone-lock recovery, or cellular/Wi-Fi handoff; those remain in the completion gate.
 
 Android authentication uses the one-time pairing flow in [[access-model]], so voice setup does not require copying the durable server credential to the device. The production pairing-to-voice path passed with no durable token in browser storage.
+
+Production telemetry acceptance on 2026-08-12 used service worker `marcus-mobile-v9` and acceptance session `1ad47863-7d44-4a2b-9363-0aa50f67e16c`. A clean paired mobile Chromium run had zero browser errors or warnings, established Realtime, recognized a synthetic spoken read-only status request, called the real `marcus_operator` bridge, produced assistant audio, recorded a timed barge-in, and recovered after network and page-background cycles. The resulting gates were all true except `installedAndroidContext`, which remained false because this was deliberately a browser-emulated test rather than a physical installed PWA.
+
+The status request explicitly prohibited audits, Codex, and operation creation. Production still had four operations afterward, with the latest created at `2026-08-12T07:13:48.308Z`, before this acceptance run. The acceptance response reported that transcript text, request text, and credentials are not stored.
 
 ## Completion Gate
 

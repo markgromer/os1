@@ -163,7 +163,7 @@ Acceptance tests still required before this phase is complete:
 - Verify recovery after phone lock, network interruption, and an expired Live token.
 - Inspect the resulting acceptance session and confirm every physical-device gate is true without relying on transcript storage.
 
-Status: the official SDK and recovery upgrade is live at `https://task-tracker-5wsa.onrender.com/mobile.html`, passes the local `93/93` suite, and passed production browser signaling and recovery validation. Acceptance telemetry passes locally but is not yet verified on the deployed revision. A real installed-Android speech, barge-in, and recovery conversation is not yet verified.
+Status: the official SDK, recovery, and acceptance telemetry are live at `https://task-tracker-5wsa.onrender.com/mobile.html`, pass the local `94/94` suite, and passed production synthetic-browser signaling, speech, assistant-audio, interruption, operator-bridge, network-recovery, and background-recovery validation. A real installed-Android speech, barge-in, and recovery conversation is not yet verified.
 
 Verified locally on 2026-08-12:
 
@@ -183,6 +183,9 @@ Verified against production on 2026-08-12:
 - Production operator health reported `direct_codex`, GitHub ready, and Cloudflare ready.
 - One-time six-digit mobile pairing was exercised against production. Cookie authentication succeeded, code reuse returned 401, no durable token was stored in browser storage, and the paired session established the Realtime call.
 - A separate code minted before deployment `858a0ba` survived Render process replacement, authenticated with HTTP 200 on the replacement process, and returned 401 on replay from a fresh session.
+- Service worker `marcus-mobile-v9` acceptance session `1ad47863-7d44-4a2b-9363-0aa50f67e16c` recorded every browser/synthetic gate as true: signaling, recognized speech, assistant audio, interruption, operator completion, network recovery, and background recovery.
+- The same session correctly left `installedAndroidContext` false. It used browser-emulated Android plus deterministic synthetic speech and does not replace the physical-phone completion checks.
+- The spoken request was read-only and explicitly prohibited audit, Codex, and operation creation. Production retained four operations, with no operation created during the acceptance run.
 
 ## Demo Deployment
 
