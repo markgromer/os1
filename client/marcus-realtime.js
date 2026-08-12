@@ -85,6 +85,7 @@ export function createMarcusRealtimeVoice(options = {}) {
   const onTranscript = typeof options.onTranscript === 'function' ? options.onTranscript : () => {};
   const onAssistantText = typeof options.onAssistantText === 'function' ? options.onAssistantText : () => {};
   const onError = typeof options.onError === 'function' ? options.onError : () => {};
+  const onEvent = typeof options.onEvent === 'function' ? options.onEvent : () => {};
   const invokeMarcus = typeof options.invokeMarcus === 'function'
     ? options.invokeMarcus
     : async () => ({ ok: false, error: 'Marcus operator bridge is unavailable.' });
@@ -112,9 +113,16 @@ export function createMarcusRealtimeVoice(options = {}) {
   let connectPromise = null;
   let connectionVersion = 0;
 
+  function emitEvent(type, metadata = {}) {
+    try {
+      onEvent({ type, occurredAt: new Date().toISOString(), ...metadata });
+    } catch {}
+  }
+
   function setState(next, detail = '') {
     state = next;
     onStatus({ state, detail, active: desiredActive, reconnectAttempt });
+    emitEvent('voice_state', { state, reconnectAttempt });
   }
 
   function clearReconnectTimer() {
@@ -141,6 +149,7 @@ export function createMarcusRealtimeVoice(options = {}) {
     desiredActive = false;
     const error = new Error(message || 'Marcus voice could not reconnect. Tap Retry voice.');
     setState('error', error.message);
+    emitEvent('voice_error');
     onError(error);
   }
 
@@ -180,28 +189,53 @@ export function createMarcusRealtimeVoice(options = {}) {
     });
     current.on('agent_start', () => { if (isCurrent()) setState('thinking', 'Thinking'); });
     current.on('agent_tool_start', () => { if (isCurrent()) setState('thinking', 'Marcus is working on it'); });
-    current.on('audio_start', () => { if (isCurrent()) setState('speaking', 'Marcus is speaking'); });
-    current.on('audio_stopped', () => { if (isCurrent()) setState('listening', 'Listening'); });
-    current.on('audio_interrupted', () => { if (isCurrent()) setState('listening', 'Interrupted; listening'); });
+    current.on('audio_start', () => {
+      if (!isCurrent()) return;
+      emitEvent('audio_started');
+      setState('speaking', 'Marcus is speaking');
+    });
+    current.on('audio_stopped', () => {
+      if (!isCurrent()) return;
+      emitEvent('audio_stopped');
+      setState('listening', 'Listening');
+    });
+    current.on('audio_interrupted', () => {
+      if (!isCurrent()) return;
+      emitEvent('audio_interrupted');
+      setState('listening', 'Interrupted; listening');
+    });
     current.on('agent_end', () => {
       if (isCurrent() && state !== 'speaking') setState('listening', 'Listening');
     });
     current.on('transport_event', (event) => {
       if (!isCurrent()) return;
-      if (event?.type === 'input_audio_buffer.speech_started') setState('listening', 'Listening');
-      if (event?.type === 'input_audio_buffer.speech_stopped') setState('thinking', 'Thinking');
+      if (event?.type === 'input_audio_buffer.speech_started') {
+        emitEvent('speech_started');
+        setState('listening', 'Listening');
+      }
+      if (event?.type === 'input_audio_buffer.speech_stopped') {
+        emitEvent('speech_stopped');
+        setState('thinking', 'Thinking');
+      }
       if (event?.type === 'conversation.item.input_audio_transcription.completed') {
         const transcript = String(event.transcript || '').trim();
-        if (transcript) onTranscript(transcript);
+        if (transcript) {
+          emitEvent('user_transcript', { length: transcript.length });
+          onTranscript(transcript);
+        }
       }
       if (event?.type === 'response.output_audio_transcript.done') {
         const transcript = String(event.transcript || '').trim();
-        if (transcript) onAssistantText(transcript);
+        if (transcript) {
+          emitEvent('assistant_transcript', { length: transcript.length });
+          onAssistantText(transcript);
+        }
       }
     });
     current.on('error', (event) => {
       if (!isCurrent()) return;
       const error = event?.error instanceof Error ? event.error : new Error(errorMessage(event));
+      emitEvent('voice_error');
       onError(error);
     });
   }
@@ -210,9 +244,16 @@ export function createMarcusRealtimeVoice(options = {}) {
     const normalized = String(message || '').trim().slice(0, 12_000);
     setState('thinking', normalized ? 'Marcus is working on it' : 'Marcus is checking the request');
     if (!normalized) return { ok: false, error: 'The voice request did not contain a usable message.' };
+    emitEvent('operator_started');
     try {
-      return await invokeMarcus(normalized);
+      const result = await invokeMarcus(normalized);
+      emitEvent('operator_completed', {
+        outcome: result?.ok === false ? 'failure' : 'success',
+        operationId: String(result?.operationId || '').trim().slice(0, 120),
+      });
+      return result;
     } catch (error) {
+      emitEvent('operator_completed', { outcome: 'failure' });
       return { ok: false, error: errorMessage(error, 'Marcus could not process the voice request.') };
     }
   }
@@ -283,6 +324,7 @@ export function createMarcusRealtimeVoice(options = {}) {
       } else {
         desiredActive = false;
         setState('error', errorMessage(error, 'Voice connection failed.'));
+        emitEvent('voice_error');
         onError(error instanceof Error ? error : new Error(errorMessage(error)));
       }
       throw error;
@@ -297,10 +339,12 @@ export function createMarcusRealtimeVoice(options = {}) {
     desiredActive = true;
     suspended = false;
     reconnectAttempt = 0;
+    emitEvent('session_started');
     return connectNow({ automatic: false });
   }
 
   function stop() {
+    if (desiredActive) emitEvent('session_stopped');
     desiredActive = false;
     suspended = false;
     reconnectAttempt = 0;
@@ -312,6 +356,7 @@ export function createMarcusRealtimeVoice(options = {}) {
 
   function suspend(detail = 'Voice paused while the app is in the background') {
     if (!desiredActive) return;
+    if (!suspended) emitEvent('background_suspended');
     suspended = true;
     clearReconnectTimer();
     closeCurrentSession();
@@ -321,6 +366,7 @@ export function createMarcusRealtimeVoice(options = {}) {
 
   async function resume() {
     if (!desiredActive) return false;
+    if (suspended) emitEvent('background_resumed');
     suspended = false;
     reconnectAttempt = 0;
     if (!isOnline()) {
@@ -332,6 +378,7 @@ export function createMarcusRealtimeVoice(options = {}) {
 
   async function networkChanged(online) {
     if (!desiredActive) return false;
+    emitEvent(online ? 'network_online' : 'network_offline');
     if (!online) {
       clearReconnectTimer();
       closeCurrentSession();

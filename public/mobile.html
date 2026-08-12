@@ -157,6 +157,80 @@
   let adminToken = localStorage.getItem('marcus_mobile_admin_token') || '';
   let deferredInstall = null;
   let realtimeVoice = null;
+  const voiceDiagnostics = { statuses: [], inputTranscripts: [], outputTranscripts: [] };
+  window.__marcusVoiceDiagnostics = voiceDiagnostics;
+  const telemetrySessionId = createTelemetryId();
+  voiceDiagnostics.sessionId = telemetrySessionId;
+  const voiceTelemetryQueue = [];
+  let voiceTelemetryTimer = null;
+  let voiceTelemetryInFlight = false;
+
+  function rememberVoiceDiagnostic(key, value) {
+    if (!Array.isArray(voiceDiagnostics[key])) return;
+    voiceDiagnostics[key].push(value);
+    voiceDiagnostics[key] = voiceDiagnostics[key].slice(-20);
+  }
+
+  function createTelemetryId() {
+    if (typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    return Array.from(bytes, (value) => value.toString(16).padStart(2, '0')).join('');
+  }
+
+  function voiceClientContext() {
+    const userAgent = String(navigator.userAgent || '').toLowerCase();
+    const standalone = window.matchMedia?.('(display-mode: standalone)').matches || navigator.standalone === true;
+    const displayMode = standalone
+      ? 'standalone'
+      : window.matchMedia?.('(display-mode: minimal-ui)').matches
+        ? 'minimal-ui'
+        : window.matchMedia?.('(display-mode: fullscreen)').matches
+          ? 'fullscreen'
+          : 'browser';
+    return {
+      displayMode,
+      installed: standalone,
+      platform: /android/.test(userAgent) ? 'android' : /iphone|ipad|ipod/.test(userAgent) ? 'ios' : 'desktop',
+      browser: /firefox/.test(userAgent) ? 'firefox' : /chrome|chromium|crios|edg\//.test(userAgent) ? 'chromium' : /safari/.test(userAgent) ? 'safari' : 'other',
+      online: navigator.onLine !== false,
+    };
+  }
+
+  function queueVoiceTelemetry(event) {
+    if (!event || typeof event !== 'object' || !event.type) return;
+    voiceTelemetryQueue.push({ ...event, eventId: createTelemetryId(), sessionId: telemetrySessionId });
+    if (voiceTelemetryQueue.length > 100) voiceTelemetryQueue.splice(0, voiceTelemetryQueue.length - 100);
+    scheduleVoiceTelemetryFlush();
+  }
+
+  function scheduleVoiceTelemetryFlush(delay = 250) {
+    if (voiceTelemetryTimer !== null || navigator.onLine === false) return;
+    voiceTelemetryTimer = window.setTimeout(() => {
+      voiceTelemetryTimer = null;
+      flushVoiceTelemetry().catch(() => {});
+    }, delay);
+  }
+
+  async function flushVoiceTelemetry(keepalive = false) {
+    if (voiceTelemetryInFlight || !voiceTelemetryQueue.length || navigator.onLine === false) return;
+    voiceTelemetryInFlight = true;
+    const events = voiceTelemetryQueue.slice(0, 50);
+    try {
+      await api('/api/marcus/realtime/telemetry', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ events }),
+        keepalive,
+      });
+      voiceTelemetryQueue.splice(0, events.length);
+      if (voiceTelemetryQueue.length) scheduleVoiceTelemetryFlush(50);
+    } catch {
+      scheduleVoiceTelemetryFlush(2_000);
+    } finally {
+      voiceTelemetryInFlight = false;
+    }
+  }
 
   function setStatus(text, cls = '') {
     els.status.className = `status-pill ${cls}`.trim();
@@ -198,6 +272,7 @@
     const session = await api('/api/marcus/live/session');
     liveToken = session.token || '';
     setStatus('online', 'ok');
+    flushVoiceTelemetry().catch(() => {});
     return true;
   }
   async function refreshHealth() {
@@ -272,7 +347,13 @@
           operationStatus: data.operation?.status || data.status || '',
         };
       },
-      onStatus: updateVoiceUi,
+      onStatus: (status) => {
+        rememberVoiceDiagnostic('statuses', { ...status, at: new Date().toISOString() });
+        updateVoiceUi(status);
+      },
+      onTranscript: (text) => rememberVoiceDiagnostic('inputTranscripts', { length: String(text || '').length, at: new Date().toISOString() }),
+      onAssistantText: (text) => rememberVoiceDiagnostic('outputTranscripts', { length: String(text || '').length, at: new Date().toISOString() }),
+      onEvent: queueVoiceTelemetry,
       onError: (error) => addMessage('system', error?.message || 'Marcus voice failed.'),
     });
   } else {
@@ -302,6 +383,7 @@
       }
       els.adminToken.value = '';
       await refreshHealth();
+      flushVoiceTelemetry().catch(() => {});
     } catch (err) {
       addMessage('system', err.message || 'Sign in failed.');
     }
@@ -351,9 +433,16 @@
     else realtimeVoice.resume().catch(() => {});
   });
   window.addEventListener('offline', () => realtimeVoice?.networkChanged(false));
-  window.addEventListener('online', () => realtimeVoice?.networkChanged(true).catch(() => {}));
-  window.addEventListener('pagehide', () => realtimeVoice?.suspend('Voice paused while Marcus Mobile is in the background'));
+  window.addEventListener('online', () => {
+    realtimeVoice?.networkChanged(true).catch(() => {});
+    flushVoiceTelemetry().catch(() => {});
+  });
+  window.addEventListener('pagehide', () => {
+    realtimeVoice?.suspend('Voice paused while Marcus Mobile is in the background');
+    flushVoiceTelemetry(true).catch(() => {});
+  });
   window.addEventListener('pageshow', () => realtimeVoice?.resume().catch(() => {}));
+  queueVoiceTelemetry({ type: 'client_context', ...voiceClientContext(), occurredAt: new Date().toISOString() });
   addMessage('system', 'Marcus Mobile is ready.');
   refreshHealth();
 })();

@@ -48,6 +48,7 @@ test('Marcus browser voice uses the SDK tool bridge and reports interruption lif
   const statuses = [];
   const transcripts = [];
   const assistantText = [];
+  const telemetry = [];
   const requests = [];
   const voice = createMarcusRealtimeVoice({
     fetchFn: async () => secretResponse(),
@@ -62,6 +63,7 @@ test('Marcus browser voice uses the SDK tool bridge and reports interruption lif
     onStatus: (status) => statuses.push(status),
     onTranscript: (text) => transcripts.push(text),
     onAssistantText: (text) => assistantText.push(text),
+    onEvent: (event) => telemetry.push(event),
     sessionRefreshMs: 60_000,
   });
 
@@ -83,6 +85,12 @@ test('Marcus browser voice uses the SDK tool bridge and reports interruption lif
   assert.deepEqual(transcripts, ['Audit Reggie']);
   assert.deepEqual(assistantText, ['I audited Reggie.']);
   assert.ok(statuses.some((status) => status.detail === 'Interrupted; listening'));
+  assert.ok(telemetry.some((event) => event.type === 'user_transcript' && event.length === 12));
+  assert.ok(telemetry.some((event) => event.type === 'assistant_transcript' && event.length === 17));
+  assert.ok(telemetry.some((event) => event.type === 'audio_started'));
+  assert.ok(telemetry.some((event) => event.type === 'audio_interrupted'));
+  assert.ok(telemetry.some((event) => event.type === 'operator_completed' && event.outcome === 'success'));
+  assert.doesNotMatch(JSON.stringify(telemetry), /Audit Reggie|I audited Reggie|Durable result/);
 
   voice.interrupt();
   assert.equal(sessions[0].interruptCalls, 1);

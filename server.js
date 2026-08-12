@@ -39,6 +39,7 @@ import {
   DEFAULT_MARCUS_REALTIME_MODEL,
   DEFAULT_MARCUS_REALTIME_VOICE,
 } from './marcus/voice/realtime_session.js';
+import { RealtimeTelemetryStore } from './marcus/voice/realtime_telemetry.js';
 import {
   executeMarcusOperationTool,
   formatOperationStatusForMarcus,
@@ -238,6 +239,7 @@ const DATA_DIR = resolveDirFromEnv(process.env.TASK_TRACKER_DATA_DIR || process.
 const DATA_FILE = path.join(DATA_DIR, 'tasks.json');
 const MARCUS_OPERATIONAL_CONTROLS_FILE = path.join(DATA_DIR, 'marcus-operational-controls.json');
 const MARCUS_SESSION_STATE_FILE = path.join(DATA_DIR, 'marcus-session-state.json');
+const realtimeTelemetryStore = new RealtimeTelemetryStore({ dataDir: DATA_DIR });
 
 const BUSINESS_DATA_DIR = path.join(DATA_DIR, 'businesses');
 const desktopActionQueue = new DesktopActionQueue({
@@ -795,6 +797,8 @@ function isMarcusLiveSessionRoute(req) {
     || p === '/api/marcus/live/voice/status'
     || p === '/api/marcus/live/voice/speak'
     || p === '/api/marcus/realtime/client-secret'
+    || p === '/api/marcus/realtime/telemetry'
+    || p === '/api/marcus/realtime/acceptance'
     || p === '/api/marcus/transcribe'
     || p === '/api/desktop-context/health';
 }
@@ -13868,9 +13872,10 @@ async function recordMarcusLiveExchange(message, reply, metadata = {}) {
     const settings = await readSettings();
     const conversation = normalizeMarcusLiveConversation(settings.marcusLiveConversation);
     const timestamp = nowIso();
+    const exchangeMetadata = metadata && typeof metadata === 'object' ? metadata : {};
     conversation.messages.push(
-      { role: 'user', content: String(message || '').trim().slice(0, 4_000), timestamp, metadata: {} },
-      { role: 'assistant', content: String(reply || '').trim().slice(0, 4_000), timestamp, metadata: metadata && typeof metadata === 'object' ? metadata : {} },
+      { role: 'user', content: String(message || '').trim().slice(0, 4_000), timestamp, metadata: exchangeMetadata },
+      { role: 'assistant', content: String(reply || '').trim().slice(0, 4_000), timestamp, metadata: exchangeMetadata },
     );
     conversation.messages = conversation.messages.filter((item) => item.content).slice(-MARCUS_LIVE_CONVERSATION_MAX_MESSAGES);
     const project = metadata?.project && typeof metadata.project === 'object' ? metadata.project : null;
@@ -13895,14 +13900,74 @@ function recentMarcusLiveMessages(conversation, nowMs = Date.now()) {
   }).slice(-16);
 }
 
-function buildMarcusLiveProjectRequest(conversation, message) {
+function normalizeConversationProject(project = {}) {
+  return {
+    projectRegistryId: String(project.projectRegistryId || project.registryId || project.id || '').trim().toLowerCase(),
+    projectId: String(project.projectId || '').trim().toLowerCase(),
+    name: String(project.name || project.canonicalName || '').trim().toLowerCase(),
+    repo: String(project.repo || project.fullName || '').trim().replace(/\.git$/i, '').toLowerCase(),
+  };
+}
+
+function conversationProjectsMatch(left, right) {
+  const a = normalizeConversationProject(left);
+  const b = normalizeConversationProject(right);
+  return ['projectRegistryId', 'projectId', 'repo', 'name'].some((key) => a[key] && b[key] && a[key] === b[key]);
+}
+
+function scopedMarcusLiveUserMessages(conversation, targetProject = conversation?.activeProject || {}) {
+  const messages = recentMarcusLiveMessages(conversation);
+  const hasTargetProject = Object.values(normalizeConversationProject(targetProject)).some(Boolean);
+  const scoped = [];
+  for (let index = 0; index < messages.length; index += 1) {
+    const item = messages[index];
+    if (item.role !== 'user') continue;
+    const ownProject = item.metadata?.project;
+    const pairedProject = messages[index + 1]?.role === 'assistant'
+      && messages[index + 1]?.timestamp === item.timestamp
+      ? messages[index + 1]?.metadata?.project
+      : null;
+    const project = ownProject || pairedProject;
+    if (!hasTargetProject || (project && conversationProjectsMatch(project, targetProject))) scoped.push(item.content);
+  }
+  return scoped;
+}
+
+function summarizeMarcusLiveRequirements(conversation, currentMessage, targetProject) {
+  const messages = [...scopedMarcusLiveUserMessages(conversation, targetProject), String(currentMessage || '').trim()].filter(Boolean);
+  const candidates = [];
+  let sequence = 0;
+  for (const message of messages) {
+    const cleaned = withoutProjectExecutionDeferrals(message);
+    const sentences = cleaned.split(/(?<=[.!?])\s+|[\r\n]+/).map((item) => item.trim()).filter(Boolean);
+    for (const sentence of sentences) {
+      sequence += 1;
+      if (/\b(read[- ]only|acceptance test)\b/i.test(sentence)) continue;
+      if (/^(?:tell|identify|repeat|show|list|what|which|audit|inspect|review|check|prepare|start|launch|run|open|get it|do it)\b/i.test(sentence)) continue;
+      const signals = sentence.match(/\b(?:need|needs|must|should|require|requires|required|requirement|feature|popup|modal|setting|button|collect|block|verify|verified|token|slug|trigger)\w*\b/gi) || [];
+      if (signals.length < 2) continue;
+      const text = sentence.replace(/\s+/g, ' ').trim().slice(0, 500);
+      const key = text.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+      candidates.push({ text, key, score: signals.length, sequence });
+    }
+  }
+  const selected = [];
+  for (const candidate of candidates.sort((a, b) => b.score - a.score || b.sequence - a.sequence)) {
+    const duplicate = selected.some((item) => item.key === candidate.key
+      || (item.key.length >= 30 && candidate.key.length >= 30 && (item.key.includes(candidate.key) || candidate.key.includes(item.key))));
+    if (!duplicate) selected.push(candidate);
+    if (selected.length >= 3) break;
+  }
+  return selected.sort((a, b) => a.sequence - b.sequence).map((item) => item.text);
+}
+
+function buildMarcusLiveProjectRequest(conversation, message, targetProject = conversation?.activeProject || {}) {
   const current = String(message || '').trim();
-  const prior = recentMarcusLiveMessages(conversation)
-    .filter((item) => item.role === 'user')
+  const prior = scopedMarcusLiveUserMessages(conversation, targetProject)
     .slice(-7)
-    .map((item) => withoutProjectExecutionDeferrals(item.content))
+    .map((item) => withoutProjectExecutionDeferrals(item))
     .filter(Boolean);
-  const active = conversation?.activeProject || {};
+  const active = targetProject || {};
   const projectLine = [active.name, active.repo].filter(Boolean).length
     ? `Active project from this conversation: ${[active.name, active.repo].filter(Boolean).join(' / ')}.`
     : '';
@@ -14459,6 +14524,29 @@ app.post('/api/marcus/realtime/client-secret', async (req, res) => {
       ok: false,
       error: timedOut ? 'OpenAI realtime session setup timed out.' : (err?.message || 'OpenAI realtime session setup failed.'),
     });
+  }
+});
+
+app.post('/api/marcus/realtime/telemetry', async (req, res) => {
+  try {
+    const events = Array.isArray(req.body?.events) ? req.body.events : [req.body?.event || req.body];
+    const result = await realtimeTelemetryStore.append(getBusinessKeyFromContext(), events);
+    res.status(202).json({ ok: true, ...result });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error?.message || 'Marcus realtime telemetry could not be recorded.' });
+  }
+});
+
+app.get('/api/marcus/realtime/acceptance', async (req, res) => {
+  try {
+    const result = await realtimeTelemetryStore.acceptance(getBusinessKeyFromContext(), {
+      sessionId: typeof req.query?.sessionId === 'string' ? req.query.sessionId : '',
+      limit: req.query?.limit,
+    });
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error?.message || 'Marcus realtime acceptance could not be read.' });
   }
 });
 
@@ -15800,7 +15888,6 @@ app.post('/api/marcus/live/chat', async (req, res) => {
 
   try {
     const conversation = await readMarcusLiveConversation();
-    const projectRequest = buildMarcusLiveProjectRequest(conversation, message);
 
     const sentExternalAction = await maybeApproveAndSendExternalActionFromMessage(message);
     if (sentExternalAction) {
@@ -15823,29 +15910,40 @@ app.post('/api/marcus/live/chat', async (req, res) => {
       return res.json(approvedOperation);
     }
 
-    if (isProjectContextDeclaration(message) && !projectOperatorService.shouldHandle(message)) {
-      const contextResult = await projectOperatorService.resolveProjectContext(getBusinessKeyFromContext(), {
-        message: projectRequest,
+    const declaresProjectContext = isProjectContextDeclaration(message);
+    const handlesProjectRequest = projectOperatorService.shouldHandle(message);
+    const declaredContext = declaresProjectContext
+      ? await projectOperatorService.resolveProjectContext(getBusinessKeyFromContext(), {
+        message,
         projectId: conversation.activeProject.projectId,
         projectRegistryId: conversation.activeProject.projectRegistryId,
-      });
-      const project = contextResult.project;
+      })
+      : null;
+    const requestProject = declaredContext?.project || conversation.activeProject;
+    const projectRequest = buildMarcusLiveProjectRequest(conversation, message, requestProject);
+
+    if (declaresProjectContext && !handlesProjectRequest) {
+      const project = declaredContext?.project || null;
       const executionDeferred = explicitlyDefersProjectAudit(message) || explicitlyDefersCodexStart(message);
-      const retainedRequirements = projectRequest.slice(-3_000);
+      const retainedRequirements = summarizeMarcusLiveRequirements(conversation, message, project);
       const reply = project
-        ? `I resolved this conversation to ${project.name}${project.repo ? ` at ${project.repo}` : ''} and set it as the active project. Current request retained: ${retainedRequirements}${executionDeferred ? ' I did not audit the repository or start Codex.' : ' I will carry these requirements into a later repository audit and Codex prompt.'}`
+        ? [
+            `Active project: ${project.name}${project.repo ? ` (${project.repo})` : ''}.`,
+            retainedRequirements.length ? `Retained requirements:\n${retainedRequirements.map((item) => `- ${item}`).join('\n')}` : 'I retained the current project context.',
+            executionDeferred ? 'I did not audit the repository or start Codex.' : 'I will carry these requirements into a later repository audit and Codex prompt.',
+          ].join('\n')
         : 'I could not verify that GitHub project yet. Give me the exact owner/repository name so I can inspect the right code instead of guessing.';
       await recordMarcusLiveExchange(message, reply, { project });
       pushLiveEvent({ type: 'chat', from: 'marcus', text: reply, ts: Date.now() });
       return res.json({ ok: Boolean(project), status: project ? 'project_context_set' : 'needs_project', project, reply });
     }
 
-    if (projectOperatorService.shouldHandle(message)) {
+    if (handlesProjectRequest) {
       const result = await projectOperatorService.prepareCodexOperation(getBusinessKeyFromContext(), {
         message: projectRequest,
-        resolutionRequest: projectRequest,
-        projectId: conversation.activeProject.projectId,
-        projectRegistryId: conversation.activeProject.projectRegistryId,
+        resolutionRequest: declaresProjectContext ? message : projectRequest,
+        projectId: requestProject.projectId,
+        projectRegistryId: requestProject.projectRegistryId,
         source: 'marcus_live_project_operator',
         autoStart: !explicitlyDefersCodexStart(message),
       });
@@ -15865,8 +15963,8 @@ app.post('/api/marcus/live/chat', async (req, res) => {
     // same operation engine instead of being answered as if an AI chat executed them.
     if (!isExternalCommunicationRequest(message) && shouldCreateDurableOperationForRequest(message)) {
       const result = await createOrReuseDurableOperationForMessage(projectRequest, {
-        projectId: conversation.activeProject.projectId,
-        projectName: conversation.activeProject.name,
+        projectId: requestProject.projectId,
+        projectName: requestProject.name,
         source: 'marcus_live',
       });
       const reply = formatOperationStatusForMarcus(result.operation, result.resolution, { reused: result.reused });

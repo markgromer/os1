@@ -1,5 +1,13 @@
 # Decision Log
 
+## 2026-08-12: Voice Acceptance Uses Redacted Durable Telemetry
+
+Context: Production browser signaling tests and screenshots could show UI state, but they could not durably prove recognized speech, assistant audio, interruption, operator completion, or recovery on an installed Android PWA. Retaining transcripts or credentials for acceptance would create unnecessary privacy and security exposure.
+
+Decision: Record only allowlisted voice lifecycle events and bounded metadata through an authenticated endpoint. Convert user and assistant transcripts to character counts, keep the client queue in memory, cap server retention at 1,000 events per business, and derive explicit acceptance gates. Treat Android standalone context as eligibility for physical review rather than proof of a physical device.
+
+Consequence: One installed-phone run can produce durable, inspectable evidence without storing conversation content or credentials. Screenshots are supporting evidence instead of the acceptance record, while physical-device confirmation remains honest and separate.
+
 ## 2026-08-12: Project Conversation Does Not Imply Execution
 
 Context: A production read-only Reggie continuity check mentioned a repository, auditing, and Codex while explicitly saying not to audit or start Codex. The broad keyword classifier resolved Reggie and inspected two repositories and six files before creating approval-gated operation `op_-3JoirxhsOnaLg`. No provider job started, and the operation was cancelled, but creating it violated the user's instruction.

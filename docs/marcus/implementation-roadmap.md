@@ -146,6 +146,8 @@ Implemented slice:
 - Network and WebRTC disconnect recovery with bounded backoff.
 - Scheduled renewal at 55 minutes before the Realtime session limit.
 - A single `marcus_operator` bridge back to the durable Live chat and approval flow.
+- Authenticated, business-scoped acceptance telemetry with strict field allowlisting and 1,000-event retention.
+- Derived gates for speech recognition, assistant audio, interruption, operator completion, network/background recovery, and installed Android context.
 - Unit and smoke coverage for session policy, auth, static assets, interruption state, network/background recovery, expired credentials, and stale-connection races.
 
 Acceptance tests still required before this phase is complete:
@@ -157,8 +159,9 @@ Acceptance tests still required before this phase is complete:
 - Approve a waiting operation by voice and confirm the same durable operation advances.
 - Confirm external communication and production mutations still pause for explicit approval.
 - Verify recovery after phone lock, network interruption, and an expired Live token.
+- Inspect the resulting acceptance session and confirm every physical-device gate is true without relying on transcript storage.
 
-Status: the official SDK and recovery upgrade is live at `https://task-tracker-5wsa.onrender.com/mobile.html`, passes the local `91/91` suite, and passed production browser signaling and recovery validation. A real installed-Android speech, barge-in, and recovery conversation is not yet verified.
+Status: the official SDK and recovery upgrade is live at `https://task-tracker-5wsa.onrender.com/mobile.html`, passes the local `93/93` suite, and passed production browser signaling and recovery validation. Acceptance telemetry passes locally but is not yet verified on the deployed revision. A real installed-Android speech, barge-in, and recovery conversation is not yet verified.
 
 Verified locally on 2026-08-12:
 

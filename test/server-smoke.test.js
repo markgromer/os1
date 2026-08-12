@@ -190,6 +190,7 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     assert.match(mobileHtml, /marcus-realtime\.js/);
     assert.match(mobileHtml, /Start voice/);
     assert.match(mobileHtml, /Pairing code or admin token/);
+    assert.match(mobileHtml, /__marcusVoiceDiagnostics/);
     const realtimeClient = await fetch(`${base}/marcus-realtime.js`);
     assert.equal(realtimeClient.status, 200);
     assert.match(await realtimeClient.text(), /createMarcusRealtimeVoice/);
@@ -201,7 +202,7 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     assert.ok(manifest.icons.some((icon) => icon.src === '/icons/marcus.svg'));
     const serviceWorker = await fetch(`${base}/sw.js`);
     assert.equal(serviceWorker.status, 200);
-    assert.match(await serviceWorker.text(), /marcus-mobile-v6/);
+    assert.match(await serviceWorker.text(), /marcus-mobile-v7/);
     const mobileIcon = await fetch(`${base}/icons/marcus.svg`);
     assert.equal(mobileIcon.status, 200);
     assert.match(await mobileIcon.text(), /<svg/);
@@ -250,9 +251,63 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     assert.ok(session.token);
     const liveHeaders = { authorization: `Bearer ${session.token}`, 'x-business-key': 'agency', 'content-type': 'application/json' };
     assert.equal((await fetch(`${base}/api/marcus/realtime/client-secret`, { method: 'POST' })).status, 401);
+    assert.equal((await fetch(`${base}/api/marcus/realtime/telemetry`, { method: 'POST' })).status, 401);
+    assert.equal((await fetch(`${base}/api/marcus/realtime/acceptance`)).status, 401);
+    const voiceTelemetryResponse = await fetch(`${base}/api/marcus/realtime/telemetry`, {
+      method: 'POST',
+      headers: liveHeaders,
+      body: JSON.stringify({ events: [
+        {
+          eventId: 'smoke-event-1',
+          sessionId: 'smoke-session-1',
+          type: 'client_context',
+          displayMode: 'browser',
+          platform: 'desktop',
+          browser: 'chromium',
+          installed: false,
+          transcript: 'must never be retained',
+          token: 'must-never-be-retained',
+        },
+        { eventId: 'smoke-event-2', sessionId: 'smoke-session-1', type: 'voice_state', state: 'listening' },
+      ] }),
+    });
+    assert.equal(voiceTelemetryResponse.status, 202);
+    assert.equal((await voiceTelemetryResponse.json()).accepted, 2);
+    const acceptanceResponse = await fetch(`${base}/api/marcus/realtime/acceptance?sessionId=smoke-session-1`, { headers: liveHeaders });
+    const acceptance = await acceptanceResponse.json();
+    assert.equal(acceptanceResponse.status, 200);
+    assert.equal(acceptance.latest.sessionId, 'smoke-session-1');
+    assert.equal(acceptance.latest.gates.signalingConnected, true);
+    assert.equal(acceptance.latest.gates.installedAndroidContext, false);
+    assert.equal(acceptance.privacy.transcriptTextStored, false);
+    const telemetryFile = await fs.readFile(path.join(server.root, 'data', 'businesses', 'agency', 'marcus-realtime-telemetry.json'), 'utf8');
+    assert.doesNotMatch(telemetryFile, /must never be retained|must-never-be-retained/);
     const realtimeSecretWithoutOpenAi = await fetch(`${base}/api/marcus/realtime/client-secret`, { method: 'POST', headers: liveHeaders });
     assert.equal(realtimeSecretWithoutOpenAi.status, 400);
     assert.match((await realtimeSecretWithoutOpenAi.json()).error, /OpenAI is not configured/i);
+    assert.equal((await fetch(`${base}/api/marcus/realtime/acceptance`)).status, 401);
+    const telemetrySessionId = 'server-smoke-voice-session';
+    const telemetryResponse = await fetch(`${base}/api/marcus/realtime/telemetry`, {
+      method: 'POST', headers: liveHeaders, body: JSON.stringify({ events: [
+        { eventId: 'context', sessionId: telemetrySessionId, type: 'client_context', platform: 'android', browser: 'chromium', displayMode: 'standalone', installed: true },
+        { eventId: 'listening', sessionId: telemetrySessionId, type: 'voice_state', state: 'listening' },
+        { eventId: 'transcript', sessionId: telemetrySessionId, type: 'user_transcript', length: 24, text: 'never persist this text' },
+        { eventId: 'audio', sessionId: telemetrySessionId, type: 'audio_started' },
+        { eventId: 'interrupt', sessionId: telemetrySessionId, type: 'audio_interrupted' },
+        { eventId: 'operator', sessionId: telemetrySessionId, type: 'operator_completed', outcome: 'success' },
+        { eventId: 'offline', sessionId: telemetrySessionId, type: 'network_offline' },
+        { eventId: 'online', sessionId: telemetrySessionId, type: 'network_online' },
+        { eventId: 'network-listening', sessionId: telemetrySessionId, type: 'voice_state', state: 'listening' },
+        { eventId: 'suspended', sessionId: telemetrySessionId, type: 'background_suspended' },
+        { eventId: 'resumed', sessionId: telemetrySessionId, type: 'background_resumed' },
+        { eventId: 'background-listening', sessionId: telemetrySessionId, type: 'voice_state', state: 'listening' },
+      ] }),
+    });
+    assert.equal(telemetryResponse.status, 202);
+    const telemetryAcceptance = await (await fetch(`${base}/api/marcus/realtime/acceptance?sessionId=${telemetrySessionId}`, { headers: liveHeaders })).json();
+    assert.equal(telemetryAcceptance.latest.readyForPhysicalReview, true);
+    assert.equal(telemetryAcceptance.privacy.transcriptTextStored, false);
+    assert.doesNotMatch(JSON.stringify(telemetryAcceptance), /never persist this text/i);
     const voiceStatus = await fetch(`${base}/api/marcus/live/voice/status`, { headers: liveHeaders });
     assert.equal(voiceStatus.status, 200);
     const voiceStatusBody = await voiceStatus.json();
@@ -549,6 +604,14 @@ test('Marcus Mobile remembers an explicit Reggie repo and carries requirements i
       assert.equal(context.status, 'project_context_set');
       assert.equal(context.project.name, 'Reggie');
 
+      const atlasResponse = await fetch(`${base}/api/marcus/live/chat`, { method: 'POST', headers, body: JSON.stringify({
+        message: 'Atlas is my GitHub project at markgromer/Atlas. Atlas needs a blue launch banner.',
+      }) });
+      assert.equal(atlasResponse.status, 200);
+      const atlas = await atlasResponse.json();
+      assert.equal(atlas.status, 'project_context_set');
+      assert.equal(atlas.project.name, 'Atlas');
+
       const readOnlyResponse = await fetch(`${base}/api/marcus/live/chat`, { method: 'POST', headers, body: JSON.stringify({
         message: 'For a read-only continuity check, use Reggie at markgromer/Reggie. Tell me the repository and retained requirements. Do not audit or start Codex.',
       }) });
@@ -558,11 +621,20 @@ test('Marcus Mobile remembers an explicit Reggie repo and carries requirements i
       assert.match(readOnly.reply, /markgromer\/Reggie/i);
       assert.match(readOnly.reply, /API token and slug/i);
       assert.match(readOnly.reply, /did not audit.*or start Codex/i);
+      assert.doesNotMatch(readOnly.reply, /blue launch banner/i);
+      assert.doesNotMatch(readOnly.reply, /Current request retained/i);
+      assert.ok(readOnly.reply.length < 1_200);
       const beforeExecution = await (await fetch(`${base}/api/operations`, { headers })).json();
       assert.equal(beforeExecution.operations.length, 0);
 
+      const secondAtlasResponse = await fetch(`${base}/api/marcus/live/chat`, { method: 'POST', headers, body: JSON.stringify({
+        message: 'Switch back to Atlas at markgromer/Atlas. Keep its blue launch banner requirement.',
+      }) });
+      assert.equal(secondAtlasResponse.status, 200);
+      assert.equal((await secondAtlasResponse.json()).project.name, 'Atlas');
+
       const operationResponse = await fetch(`${base}/api/marcus/live/chat`, { method: 'POST', headers, body: JSON.stringify({
-        message: 'Check the git repo and set up the plan, then get it going in Codex.',
+        message: 'For Reggie at markgromer/Reggie, check the git repo and set up the plan, then get it going in Codex.',
       }) });
       assert.equal(operationResponse.status, 200);
       const result = await operationResponse.json();
@@ -570,6 +642,7 @@ test('Marcus Mobile remembers an explicit Reggie repo and carries requirements i
       assert.equal(result.operation.projectName, 'Reggie');
       assert.match(result.operation.originalRequest, /settings popup/i);
       assert.match(result.operation.originalRequest, /API token and slug/i);
+      assert.doesNotMatch(result.operation.originalRequest, /blue launch banner/i);
       assert.equal(Object.values(result.operation.metadata.codexJobs || {}).some((job) => job.provider === 'mock_http_codex'), true);
     } finally { await server.close(); }
   });

@@ -13,6 +13,7 @@ Voice should be the fastest way for Mark to use the same Marcus operator. It sho
 - Browser/mobile transport: WebRTC.
 - Default voice: `marin`.
 - Operational bridge: `marcus_operator` -> `POST /api/marcus/live/chat`.
+- Acceptance evidence: redacted lifecycle events -> `POST /api/marcus/realtime/telemetry` -> `GET /api/marcus/realtime/acceptance`.
 - Existing fallback: OpenAI file transcription plus ElevenLabs or browser speech synthesis.
 
 OpenAI's current voice-agent guidance recommends Realtime speech-to-speech for low first-audio latency, barge-in, natural turn-taking, and realtime tool use. It recommends WebRTC for browser and mobile clients. Sources: [Voice agents](https://developers.openai.com/api/docs/guides/voice-agents), [Realtime WebRTC](https://developers.openai.com/api/docs/guides/realtime-webrtc), and [Realtime tools](https://developers.openai.com/api/docs/guides/realtime-mcp).
@@ -66,6 +67,16 @@ The browser receives a short-lived client secret from `POST /api/marcus/realtime
 - A connection version prevents a stale asynchronous setup from replacing a newer session.
 
 Local acceptance covers these lifecycle rules with an SDK-session test double. Production Chromium covers live signaling plus synthetic network and page lifecycle recovery. Installed-Android behavior remains an explicit completion check.
+
+## Acceptance Telemetry
+
+The PWA assigns a random in-memory acceptance session ID and batches allowlisted events after authentication. Offline events remain in a bounded in-memory queue and flush after network recovery; no telemetry queue is persisted in browser storage.
+
+Stored evidence includes event type, timestamps, voice state, transcript length, coarse platform/browser/display mode, operator outcome, and optional durable operation ID. It excludes transcript text, request/reply text, credentials, IP addresses, and raw user-agent strings. Server retention is capped at 1,000 events per business.
+
+`GET /api/marcus/realtime/acceptance` derives these gates: signaling connected, user speech recognized, assistant audio streamed, interruption observed, operator bridge completed, network recovery, background recovery, and installed Android context. All gates passing marks the session ready for physical review; it does not independently prove the device was physical.
+
+Local normalization, persistence, redaction, deduplication, auth, business-scope, and gate-derivation tests passed on 2026-08-12. Production telemetry deployment remains unverified until the current source revision is deployed.
 
 ## Production Evidence
 

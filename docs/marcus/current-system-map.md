@@ -167,10 +167,14 @@ It uses:
 - `POST /api/marcus/live/chat` for conversation-first project operator chat.
 - `public/marcus-realtime.js` for a WebRTC speech-to-speech session.
 - `POST /api/marcus/realtime/client-secret` for a short-lived OpenAI Realtime client secret; the standard OpenAI key remains on the server.
+- `POST /api/marcus/realtime/telemetry` for authenticated, redacted voice acceptance events.
+- `GET /api/marcus/realtime/acceptance` for derived acceptance gates by page session.
 
 `client/marcus-realtime.js` builds the browser client with `@openai/agents-realtime`; `scripts/build-mobile.mjs` bundles it into `public/marcus-realtime.js`. Realtime voice uses `gpt-realtime-2.1` by default with voice `marin`, semantic VAD, interruption, near-field noise reduction, and live transcription. Its only operational function is `marcus_operator`, which sends substantive spoken requests back through `/api/marcus/live/chat`. The voice model does not own GitHub, Cloudflare, Codex, external communication, or approval authority.
 
-The browser lifecycle closes the media session while the PWA is hidden, resumes with a fresh ephemeral credential, reconnects after network or WebRTC loss with bounded backoff, and refreshes at 55 minutes before the Realtime session limit. Service worker cache `marcus-mobile-v6` invalidates the previous hand-written client.
+The browser lifecycle closes the media session while the PWA is hidden, resumes with a fresh ephemeral credential, reconnects after network or WebRTC loss with bounded backoff, and refreshes at 55 minutes before the Realtime session limit. Service worker cache `marcus-mobile-v7` carries the acceptance telemetry client.
+
+`marcus/voice/realtime_telemetry.js` accepts only allowlisted event types and bounded metadata. It stores no transcript, request, reply, credential, IP address, or raw user agent. Events are capped at 1,000 per business in `data/businesses/<business>/marcus-realtime-telemetry.json`. The acceptance view derives signaling, recognized-speech, assistant-audio-stream, interruption, operator-bridge, network-recovery, background-recovery, and installed-Android-context gates.
 
 `/api/marcus/live/chat` keeps recent conversation turns and an active project on the server. The project operator receives the accumulated user requirements rather than only the latest short follow-up.
 

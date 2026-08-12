@@ -74,6 +74,10 @@ The Realtime session exposes one function, `marcus_operator`. That function call
 
 Every initial connection, reconnect, foreground resume, and scheduled session refresh requests a new ephemeral credential. The browser does not persist the credential, and stale connection attempts are prevented from replacing a newer session.
 
+Voice acceptance telemetry uses the same admin-cookie or short-lived Live-session authentication. `POST /api/marcus/realtime/telemetry` drops every field outside its strict allowlist before persistence. User and assistant transcripts are represented only by bounded character counts. The server stores no request text, reply text, credential, IP address, or raw user agent, and retains at most 1,000 events per business. `GET /api/marcus/realtime/acceptance` exposes only derived gates and coarse client context.
+
+An Android/standalone context is not treated as proof of physical possession. It makes a telemetry session eligible for physical review; Mark's installed-device run remains a separate acceptance requirement in [[implementation-roadmap]].
+
 ## Mobile Pairing
 
 An authenticated operator can request one active six-digit code from `POST /api/auth/pairing-code`. The code expires after ten minutes and is stored only as an HMAC hash in `data/mobile-pairing.json`. An exclusive file lock makes replacement and consumption single-use across Node process replacement. Failed attempts are limited per client. Successful pairing sets the secure HttpOnly admin cookie; the durable admin token is not returned to or stored by the phone.

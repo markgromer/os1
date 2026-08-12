@@ -45,6 +45,12 @@ Voice transport recovery follows:
 
 The active project and recent requirements remain server-side during transport recovery; reconnecting does not create a second project conversation or grant new authority.
 
+Voice acceptance evidence follows:
+
+`allowlisted browser lifecycle event -> authenticated telemetry batch -> bounded business-scoped event file -> derived acceptance gates`
+
+Transcripts, prompts, replies, credentials, IP addresses, and raw user agents are not part of this path. The resulting gates show what the client observed, while installed-device physical acceptance remains an explicit operator check.
+
 ## Execution Brief Contents
 
 Every Codex-bound job should include:
