@@ -6,7 +6,7 @@ Context: A production read-only Reggie continuity check mentioned a repository, 
 
 Decision: Require a positive project-work action instead of treating `repo`, `site`, or `Codex` as execution intent. Remove explicitly negated audit clauses before durable-work classification. Preserve requirements across turns, but let the newest execution instruction supersede old "do not audit/start" controls without removing durable restrictions such as "do not deploy." Support audit/prompt preparation with `autoStart: false` when the current turn explicitly defers starting Codex.
 
-Consequence: Marcus can discuss and retain project requirements without immediately auditing or launching work. Regression coverage proves a read-only Reggie turn creates zero operations, a later positive turn uses the retained API-token/slug requirements, and prepare-without-start creates no provider job.
+Consequence: Marcus can discuss and retain project requirements without immediately auditing or launching work. Regression coverage proves a read-only Reggie turn creates zero operations, a later positive turn uses the retained API-token/slug requirements, and prepare-without-start creates no provider job. Production then repeated both stages: zero operations for the read-only turn, followed by a one-repository/three-file audit and 5,230-character prompt with zero provider jobs.
 
 ## 2026-08-12: Mobile Pairing Survives Render Process Replacement
 

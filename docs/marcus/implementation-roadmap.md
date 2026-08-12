@@ -114,6 +114,12 @@ Production project-continuity acceptance on 2026-08-11:
 - A separate audit request inspected one repository and three files before producing a 4,563-character Codex prompt containing the popup, API-token, and slug requirements.
 - Acceptance operation `op_AxhGdUBf5tlB6g` stopped at `waiting_for_approval` and was cancelled without launching Codex or modifying the repository.
 
+Production conversation/intent acceptance on 2026-08-12:
+
+- A read-only Reggie turn retained `markgromer/Reggie` plus the Sweep and Go API-token, slug, verification gate, and setup-button requirements; the production operation count did not change.
+- A separate "audit and prepare, do not start Codex" turn inspected one repository and three files and produced a 5,230-character prompt containing the retained API-token and slug requirements.
+- Staged acceptance operation `op_4py4qYDAyb7J1A` remained `planned`, contained zero provider jobs, and was cancelled after verification without starting Codex or modifying the repository.
+
 ## Phase 6: Documentation Automation
 
 Keep this Obsidian-compatible folder current.
