@@ -94,7 +94,7 @@ export async function executeMarcusOperationTool({ name, args, engine, businessK
   if (name === 'cancel_operation') return { ok: true, operation: await engine.cancelOperation(businessKey, input.operationId, { actor: 'marcus-chat', reason: input.reason }) };
   if (name === 'approve_operation_step') {
     const actualRequest = safeString(requestMessage, 4_000);
-    if (!/\b(approve|approved|approval granted|go ahead|proceed|do it)\b/i.test(actualRequest)) {
+    if (!/\b(approve|approved|approval granted|go ahead|proceed|do it|get it done|run it|start it)\b/i.test(actualRequest)) {
       return { ok: false, approvalRequired: true, error: 'The current user message does not explicitly approve this operation action.' };
     }
     const operation = await engine.getOperation(businessKey, input.operationId);

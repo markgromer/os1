@@ -272,6 +272,57 @@ async function createOrReuseDurableOperationForMessage(message, { projectId = ''
   return { ...created, reused: false };
 }
 
+function isExplicitOperationApprovalMessage(message) {
+  const text = String(message || '').trim().toLowerCase();
+  if (!text) return false;
+  return /\b(approve|approved|approval granted|go ahead|proceed|do it|get it done|yes do it|yeah do it|yep do it|run it|start it)\b/i.test(text);
+}
+
+function operationApprovalTargetsMessage({ message, operation, approval }) {
+  const text = String(message || '').trim().toLowerCase();
+  return [operation?.id, operation?.title, operation?.projectName, approval?.action]
+    .map((value) => String(value || '').trim().toLowerCase())
+    .filter((value) => value.length >= 3)
+    .some((value) => text.includes(value));
+}
+
+async function maybeApprovePendingOperationFromMessage(message) {
+  if (!isExplicitOperationApprovalMessage(message)) return null;
+  const businessKey = getBusinessKeyFromContext();
+  const operations = await operationsEngine.listOperations(businessKey, { limit: 100 });
+  const candidates = [];
+  for (const operation of operations) {
+    if (!['waiting_for_approval', 'queued', 'running', 'blocked', 'paused', 'awaiting_provider', 'recovery_required'].includes(operation.status)) continue;
+    for (const approval of operation.approvals || []) {
+      if (approval.status === 'pending') candidates.push({ operation, approval });
+    }
+  }
+  if (!candidates.length) return null;
+
+  const targeted = candidates.filter((candidate) => operationApprovalTargetsMessage({ message, ...candidate }));
+  const selected = targeted.length === 1 ? targeted[0] : (candidates.length === 1 ? candidates[0] : null);
+  if (!selected) {
+    const choices = candidates.slice(0, 8).map(({ operation, approval }) =>
+      `- ${operation.id}: ${operation.projectName || operation.title || 'Operation'} - ${approval.action} (${approval.riskLevel})`).join('\n');
+    return {
+      ok: false,
+      approvalRequired: true,
+      reply: `I need which pending approval you want me to approve.\n${choices}`,
+    };
+  }
+
+  const operation = await operationsEngine.approveOperationStep(businessKey, selected.operation.id, selected.approval.id, {
+    approvedBy: 'mark',
+    message,
+    runCycle: true,
+  });
+  return {
+    ok: true,
+    operation,
+    reply: `Approved ${selected.approval.action} for ${operation.projectName || operation.title}.\n${formatOperationStatusForMarcus(operation)}`,
+  };
+}
+
 function getStoreFileForBusiness(businessKey) {
   const key = normalizeBusinessKey(businessKey) || DEFAULT_BUSINESS_KEY;
   // Keep backwards-compat: Personal uses the legacy data/tasks.json file.
@@ -15155,6 +15206,12 @@ app.post('/api/marcus/live/chat', async (req, res) => {
   if (!message) return res.status(400).json({ error: 'Empty message' });
 
   try {
+    const approvedOperation = await maybeApprovePendingOperationFromMessage(message);
+    if (approvedOperation) {
+      pushLiveEvent({ type: 'chat', from: 'marcus', text: approvedOperation.reply, ts: Date.now() });
+      return res.json(approvedOperation);
+    }
+
     if (projectOperatorService.shouldHandle(message)) {
       const result = await projectOperatorService.prepareCodexOperation(getBusinessKeyFromContext(), {
         message,

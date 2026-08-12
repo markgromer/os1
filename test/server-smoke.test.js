@@ -359,6 +359,40 @@ test('server enables direct Codex mode when HTTP adapter URL is configured', asy
   });
 });
 
+test('Marcus Live approval follow-up advances a waiting project-operator operation', async () => {
+  await withMockCodexAdapter(async (adapterUrl) => {
+    const server = await spawnServer({ extraEnv: { MARCUS_CODEX_ADAPTER_URL: adapterUrl, MARCUS_CODEX_ADAPTER_TOKEN: 'test-token' } });
+    const base = `http://127.0.0.1:${server.port}`;
+    const adminHeaders = { authorization: 'Bearer test-admin-token', 'content-type': 'application/json' };
+    try {
+      await server.waitForReady();
+      const registryResponse = await fetch(`${base}/api/project-registry`, { method: 'POST', headers: adminHeaders, body: JSON.stringify({
+        canonicalName: 'Freedom Scoopers',
+        aliases: ['Freedom Scoopers website', 'freedom scoopers website'],
+        repo: { fullName: 'markgromer/freedom-scoopers' },
+      }) });
+      assert.equal(registryResponse.status, 201);
+      const createResponse = await fetch(`${base}/api/marcus/live/chat`, { method: 'POST', headers: adminHeaders, body: JSON.stringify({
+        message: 'The Freedom Scoopers website needs the new Reggie and Reggie hub installed and replace the legacy Reggie system. You can find both projects in GitHub.',
+      }) });
+      assert.equal(createResponse.status, 200);
+      const created = await createResponse.json();
+      assert.equal(created.status, 'codex_prepared');
+      assert.equal(created.operation.status, 'waiting_for_approval');
+      assert.equal(created.operation.approvals.filter((approval) => approval.status === 'pending').length, 1);
+
+      const approvalResponse = await fetch(`${base}/api/marcus/live/chat`, { method: 'POST', headers: adminHeaders, body: JSON.stringify({ message: 'Get it done' }) });
+      assert.equal(approvalResponse.status, 200);
+      const approved = await approvalResponse.json();
+      assert.equal(approved.ok, true);
+      assert.equal(approved.operation.id, created.operation.id);
+      assert.notEqual(approved.operation.status, 'waiting_for_approval');
+      assert.match(approved.reply, /Approved/);
+      assert.equal(Object.values(approved.operation.metadata.codexJobs || {}).some((job) => job.provider === 'mock_http_codex'), true);
+    } finally { await server.close(); }
+  });
+});
+
 test('server enables Reggie-style GitHub Actions Codex mode when configured', async () => {
   const server = await spawnServer({ extraEnv: {
     MARCUS_CODEX_GITHUB_ACTIONS_ENABLED: 'true',
