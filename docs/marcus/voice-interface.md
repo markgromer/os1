@@ -1,6 +1,6 @@
 # Voice Interface
 
-Status: primary architecture selected and deployed. The official SDK signaling and recovery paths and the v13 physical-phone acceptance dashboard are verified in production Chromium; installed-Android speech, interruption, and physical phone-lock/network-handoff verification remain open.
+Status: primary architecture selected and deployed. The official SDK signaling and recovery paths and the v15 physical-phone acceptance dashboard are verified in production Chromium; installed-Android speech, interruption, and physical phone-lock/network-handoff verification remain open.
 
 ## Objective
 
@@ -71,7 +71,7 @@ Local acceptance covers these lifecycle rules with an SDK-session test double. P
 
 ## Acceptance Telemetry
 
-The PWA assigns a random in-memory acceptance session ID and batches allowlisted events after authentication. Offline events remain in a bounded in-memory queue and flush after network recovery; no telemetry queue is persisted in browser storage.
+The PWA assigns a random acceptance session ID and persists only that ID, its start time, and coarse platform/display context for up to two hours. This lets one installed-app test survive reload or Android process replacement. A session is discarded when the platform or display context changes, so browser-tab evidence cannot carry into a standalone-app run. Offline telemetry events remain in a bounded in-memory queue and flush after network recovery; no transcript, request, reply, credential, or telemetry queue is persisted in browser storage.
 
 Stored evidence includes event type, timestamps, voice state, transcript length, coarse platform/browser/display mode, operator outcome, and optional durable operation ID. It excludes transcript text, request/reply text, credentials, IP addresses, and raw user-agent strings. Server retention is capped at 1,000 events per business.
 
@@ -92,6 +92,8 @@ Android authentication uses the one-time pairing flow in [[access-model]], so vo
 Production telemetry acceptance on 2026-08-12 used service worker `marcus-mobile-v9` and acceptance session `1ad47863-7d44-4a2b-9363-0aa50f67e16c`. A clean paired mobile Chromium run had zero browser errors or warnings, established Realtime, recognized a synthetic spoken read-only status request, called the real `marcus_operator` bridge, produced assistant audio, recorded a timed barge-in, and recovered after network and page-background cycles. The resulting gates were all true except `installedAndroidContext`, which remained false because this was deliberately a browser-emulated test rather than a physical installed PWA.
 
 A separate one-shot project-continuity run used acceptance session `b1af050e-d971-470d-8632-749329fe0c8d`. It transcribed the Reggie request, called the real operator once, returned the exact saved setup-button, API-token, slug, verification, and blocking requirements, streamed assistant audio, created no operation, and stored no transcript/request text or credentials. That run exposed final-transcript event ordering that could leave the UI on `Speaking`; service worker `marcus-mobile-v10` applies and tests the corrected ordering.
+
+Service worker `marcus-mobile-v15` is live on Render. The manifest has stable app ID `/mobile.html`, explicit 192x192 and 512x512 PNG icons for `any` and `maskable` purposes, and the mobile acceptance dialog exposes install, new-test, and voice controls without requiring the dialog to be closed. Local Playwright at 390x844 verified the dialog layout, installed-context gate, same-session reload recovery, and display-context isolation. Production fetches verified all four PNG dimensions and MIME types. This does not replace the physical installed-Android run.
 
 The status request explicitly prohibited audits, Codex, and operation creation. Production still had four operations afterward, with the latest created at `2026-08-12T07:13:48.308Z`, before this acceptance run. The acceptance response reported that transcript text, request text, and credentials are not stored.
 

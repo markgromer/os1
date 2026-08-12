@@ -1,5 +1,13 @@
 # Decision Log
 
+## 2026-08-12: Voice Acceptance Survives Reload But Cannot Cross Install Contexts
+
+Context: The acceptance session existed only in JavaScript memory, so an Android process replacement or reload could split one physical test across session IDs. The verification dialog also told Mark to start voice while its own modal blocked the main voice control, and the manifest supplied only one SVG icon without explicit Chromium raster install sizes.
+
+Decision: Persist only the random acceptance ID, start time, and coarse platform/display context for two hours. Reuse it only in the same context and discard it when moving between browser and standalone display modes or between platforms. Add voice and install controls inside the dialog, stable manifest app identity, and explicit 192x192/512x512 `any` and `maskable` PNG icons. Keep telemetry events, transcripts, requests, replies, and credentials out of persisted browser storage.
+
+Consequence: One installed-phone acceptance run can survive ordinary Android reload/process replacement without letting browser-tab evidence satisfy the installed-app gate. Service worker v15, local 390x844 Playwright checks, the 128-test suite, and production asset inspection verify the implementation; actual microphone, barge-in, network, lock/background, and physical confirmation evidence still requires Mark's installed phone.
+
 ## 2026-08-12: Explicit Implementation Language Starts Codex Without A Redundant Approval
 
 Context: Marcus treated direct requests such as install the new system, replace the legacy system, get Codex fixing it, and get it going in Codex as an untrusted medium-risk step. The mobile conversation therefore stopped for a vague approval after Mark had already issued the implementation instruction, reproducing the shallow approval loop shown in the original screenshots.
