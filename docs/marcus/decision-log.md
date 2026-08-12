@@ -216,7 +216,7 @@ Context: The live Quo phone-number response included both a display-formatted nu
 
 Decision: Prefer Quo's canonical number, then the explicitly configured sender, and normalize display formatting only as a fallback. Model this response shape in the provider regression fixture. Keep provider verification separate from draft approval and send.
 
-Consequence: Production Quo verification now resolves the Operations line and required ids with `sent: false`. The full suite passes `114/114`; no real message is sent until the exact pending draft is explicitly approved and sent.
+Consequence: Production Quo verification resolves the Operations line and required ids without sending. A later explicit approval advanced acceptance action `rv1v4_RKB38v` through provider-accepted `sent` evidence; verification alone still cannot send a message.
 
 ## 2026-08-12: Reggie Acceptance Must Include Real Audit Time And Exact-Head Review
 

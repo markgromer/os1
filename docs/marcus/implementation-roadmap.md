@@ -190,7 +190,7 @@ Added and tested locally on 2026-08-12:
 - Quo sender resolution and SMTP authentication persist bounded verification evidence and issue no message request or SMTP `DATA`.
 - The complete local suite passes `98/98` with provider setup, redaction, authorization, no-send verification, approved-send/idempotency checks, deep GitHub audits, and mobile acceptance aggregation.
 
-Production blocker: Quo is configured and no-send verified against the Operations line, but its exact acceptance text remains pending approval. SMTP is not configured. The selected SMTP path is a dedicated Resend sending-only credential for `Marcus <marcus@gromore.media>`. One explicitly approved provider send through each channel remains required.
+Production status: Quo is configured and verified against the Operations line. Approved acceptance action `rv1v4_RKB38v` reached `sent` with provider acceptance on 2026-08-12, so both Quo gates pass. SMTP is not configured. The selected SMTP path is a dedicated Resend sending-only credential for `Marcus <marcus@gromore.media>`, followed by one explicitly approved email acceptance send.
 
 Production provider-onboarding acceptance on 2026-08-12:
 
@@ -357,6 +357,6 @@ Provider acceptance status on 2026-08-12:
 
 - The existing dedicated Quo credential named `os1` is saved only in Marcus's redacted server settings.
 - Quo authenticated sender lookup verified the Operations line `+18886107667`, resolved its phone-number and user ids, and reported `sent: false`.
-- A self-addressed production text acceptance draft is pending explicit approval; no acceptance text has been sent yet.
+- Production text acceptance action `rv1v4_RKB38v` was explicitly approved and provider-accepted at `2026-08-12T15:56:49.822Z`.
 - SMTP remains unconfigured. The selected path is a dedicated Resend sending-only credential with `smtp.resend.com` and `Marcus <marcus@gromore.media>` after explicit approval.
-- The remaining combined acceptance gates are SMTP verification, approved text send, approved email send, and physical installed-Android voice acceptance.
+- The remaining combined acceptance gates are SMTP verification, approved email send, and physical installed-Android voice acceptance.
