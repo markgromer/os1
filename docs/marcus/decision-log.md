@@ -265,3 +265,11 @@ Context: A related production service already held a working Resend credential, 
 Decision: Reuse the existing server-side Resend credential for SMTP authentication and send as `Marcus <marcus@gromore.media>`. Keep verification no-send and retain the existing draft -> explicit approval -> provider send -> receipt sequence.
 
 Consequence: SMTP configuration and authentication now pass without exposing the credential. Draft `V8uMUUZjiRz1` remains unsent and `pending_approval`; the production email acceptance gate stays false until Mark explicitly approves it and provider receipt evidence is recorded.
+
+## 2026-08-12: Completed Provider Jobs Are Stable Across Restart
+
+Context: Startup recovery included provider jobs with status `completed` even when the bound Codex step was already complete. Every Render replacement reset that step to running, polled the same finished job, and added another no-runnable-step blocker when verification still required review. Marcus Mobile then surfaced the stale blocked operation as active work.
+
+Decision: Reconcile a completed provider job only when its bound step is not complete. Treat an already blocked operation with completed implementation and an active verification blocker as stable. Deduplicate active runner and recovery blockers by type and bound step, and emit the corresponding event only when the blocker is first created.
+
+Consequence: Process replacement no longer rewrites settled implementation state or grows blocker noise. After deployment, two superseded Reggie acceptance operations were cancelled with no external provider action, and the mobile tracker returned to the legitimate pending demo approval.

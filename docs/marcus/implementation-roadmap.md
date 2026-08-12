@@ -152,7 +152,7 @@ The action allowlist is deliberately narrower than the credentials. Marcus does 
 Verification on 2026-08-12:
 
 - The real-server integration harness performed a GitHub merge, DNS create, and Worker deployment exactly once against stateful mock providers, then verified provider read-back and evidence persistence.
-- Focused provider tests passed `7/7`; the current complete local suite passes `130/130`; JavaScript syntax passes for 66 files.
+- Focused provider tests passed `7/7`; the current complete local suite passes `132/132`; JavaScript syntax passes for 66 files.
 - GitHub CI runs `31615296935` and `31615747675` passed for commits `0409400` and `17769b0`.
 - Render deployed both commits. Production operator health reports GitHub merge plus Cloudflare DNS/Worker mutation paths available.
 - Live read-only inspection resolved demo PR #4 at exact head `4ee4135eb98be5bc57385be0ff128ee78fa42729`, with settled checks and no failures.
@@ -262,7 +262,7 @@ Acceptance tests still required before this phase is complete:
 
 The production paired-admin `Verify` dashboard starts a fresh acceptance session, persists only its ID/start time/coarse platform-display context for up to two hours, shows each voice/provider gate, and enables physical confirmation only after all eight Android voice gates pass in installed standalone mode. Context matching prevents browser-tab evidence from being reused after a standalone launch. `GET /api/marcus/acceptance` combines that evidence with provider, approved-send, Codex, GitHub, Cloudflare, OpenAI, and desktop readiness. Service worker `marcus-mobile-v15` and the dashboard passed Render deployment and phone-size Chromium acceptance; the physical-phone run remains pending.
 
-Status: the official SDK, recovery, acceptance telemetry, durable-work tracking, PWA install assets, and mobile deployment contract remain covered in the current local `130/130` suite and 66-file syntax lint. At 390x844, Playwright confirmed the acceptance dialog is scrollable, its install/new-test/voice controls remain visible without overlap, standalone Android context is recorded, the same session survives reload, and a browser/standalone context mismatch invalidates the saved ID. Production service-worker cache `marcus-mobile-v15` and all four required 192x192/512x512 `any`/`maskable` PNG icons are live. The live combined report passes 10/12 gates; only the approved SMTP acceptance send and physical installed-Android voice acceptance remain. A real installed-Android speech, barge-in, and recovery conversation remains pending.
+Status: the official SDK, recovery, acceptance telemetry, durable-work tracking, PWA install assets, and mobile deployment contract remain covered in the current local `132/132` suite and 66-file syntax lint. At 390x844, Playwright confirmed the acceptance dialog is scrollable, its install/new-test/voice controls remain visible without overlap, standalone Android context is recorded, the same session survives reload, and a browser/standalone context mismatch invalidates the saved ID. Production service-worker cache `marcus-mobile-v15` and all four required 192x192/512x512 `any`/`maskable` PNG icons are live. The live combined report passes 10/12 gates; only the approved SMTP acceptance send and physical installed-Android voice acceptance remain. A real installed-Android speech, barge-in, and recovery conversation remains pending.
 
 Verified locally on 2026-08-12:
 
@@ -368,3 +368,11 @@ Production false-project correction on 2026-08-12:
 - Archived records are also excluded from evidence collection, current focus, and bottleneck scoring while remaining historically queryable.
 - Bug-created operation `op_MC80S_R81ha7ng` was cancelled before any provider launch. Registry record `registry_Vs8FTyGEW2MgmA` was archived, its active conversation binding and one project-memory entry were removed, and all 80 conversation messages plus Reggie memory were preserved.
 - Production read-back showed only `op_wSMm8zWz7DGGiA` and `op_nA9c9c_bZYsMjg` still waiting for approval. The live acceptance report remained 10/12.
+
+Production durable-recovery correction on 2026-08-12:
+
+- Startup recovery had treated an already completed Codex job as active, reset its completed step to running, and added another `no_runnable_step` blocker on every Render restart.
+- Recovery now reconciles a completed provider job only when its bound step is not complete. Stable blocked verification work is not rewritten, and blocker/event creation is idempotent.
+- The correction passed the complete `132/132` suite, JavaScript syntax lint for 66 files, GitHub CI run `31622049442`, and a Render process replacement.
+- Superseded Reggie operations `op_PNlbjXYY-r565w` and `op_BoKja2fbT0v6xQ` were cancelled after confirming both provider jobs were already complete. No GitHub branch or pull request was changed. Reggie PR #19 remains open for separate review; verified PR #16 remains the accepted implementation result.
+- A fresh paired 390 x 844 production session then tracked the legitimate Cloudflare approval `op_nA9c9c_bZYsMjg`, showed 10/12 acceptance with messaging at 3/4, retained no browser token, and produced zero console warnings or errors.
