@@ -90,7 +90,7 @@ Repository auditing uses each discovered repository's recursive Git tree, defaul
 
 The initial durable records encode Mark's trusted-operator mission, evidence-first assistance standard, and preference for a maintained prebuilt voice interface. Explicit `remember`, mission, preference, and `from now on` messages write through deterministic server handling rather than model inference. Credential-like content is rejected. Relevant active records enter normal chat context, project execution briefs, and the real Codex handoff.
 
-Production acceptance on 2026-08-12 confirmed four active records, conversational create and recall, exact memory-record provenance in a real deep Reggie execution brief, and zero provider jobs during the staged read-only audit. The staged operation was cancelled after inspection.
+Production acceptance on 2026-08-12 confirmed four active records, conversational create and recall, exact memory-record provenance in a real deep Reggie execution brief, and zero provider jobs during the staged read-only audit. The staged operation was cancelled after inspection. A Render process replacement then reset uptime and a fresh Live session recalled the same record; the memory and cancelled operation state survived on the persistent volume.
 
 Mission memory routes require durable admin authentication; a short-lived Live token cannot call them directly:
 
