@@ -383,7 +383,20 @@ For chat-created operations, the authenticated user message is the only request 
 
 ### Codex integration
 
-The provider interface supports `startJob`, `getJobStatus`, `sendFollowup`, `getArtifacts`, `getDiff`, `cancelJob`, and optional `pauseJob`/`resumeJob`. Pausing never converts an existing job into a new launch attempt: unsupported providers may continue externally, and explicit resume polls the same durable job. This deployment has no supported direct Codex launch API, so it deliberately uses `external_handoff` mode:
+The provider interface supports `startJob`, `getJobStatus`, `sendFollowup`, `getArtifacts`, `getDiff`, `cancelJob`, and optional `pauseJob`/`resumeJob`. Pausing never converts an existing job into a new launch attempt: unsupported providers may continue externally, and explicit resume polls the same durable job. By default the app uses `external_handoff` mode. If `MARCUS_CODEX_ADAPTER_URL` or `CODEX_ADAPTER_URL` is configured, the server enables the HTTP Codex adapter in direct mode and `/api/marcus/operator-health` reports `mode: direct_codex`.
+
+Direct HTTP adapter defaults:
+
+- `POST /codex/start`
+- `POST /codex/status`
+- `POST /codex/followup`
+- `POST /codex/artifacts`
+- `POST /codex/diff`
+- `POST /codex/cancel`
+
+Use `MARCUS_CODEX_ADAPTER_TOKEN` or `CODEX_ADAPTER_TOKEN` for bearer auth. Path and timeout overrides are available with the `MARCUS_CODEX_ADAPTER_*_PATH` and `MARCUS_CODEX_ADAPTER_TIMEOUT_MS` environment variables.
+
+Without a configured direct adapter, M.A.R.C.U.S. deliberately uses `external_handoff` mode:
 
 1. M.A.R.C.U.S. resolves the project and persists the operation.
 2. The runner generates and stores a complete Codex handoff artifact.
@@ -391,6 +404,8 @@ The provider interface supports `startJob`, `getJobStatus`, `sendFollowup`, `get
 4. Mark can register a real Codex run ID, branch, commit, diff, artifacts, or completion result.
 5. The same operation resumes into verification.
 6. Required checks must pass or have a recorded approved waiver before completion.
+
+Marcus can also borrow Reggie's GitHub Actions launch pattern. Set `MARCUS_CODEX_GITHUB_ACTIONS_ENABLED=true` plus `MARCUS_CODEX_GITHUB_TOKEN` or `CODEX_GITHUB_TOKEN` to dispatch `repository_dispatch` event `marcus_codex_job` into `.github/workflows/marcus-codex-runner.yml`. Override the runner repository with `MARCUS_CODEX_RUNNER_REPO`; the default is `markgromer/os1`. The runner workflow uses `openai/codex-action@v1`, so the runner repository must have an OpenAI key secret such as `MARCUS_OPENAI_API_KEY` or `OPENAI_API_KEY`.
 
 Codex output is implementation evidence, not verification. Any Codex-supplied `verificationResults` are quarantined as untrusted evidence. Automated checks run independently; authenticated manual evidence uses a separate route, requires a meaningful note or artifact, and records supplier/time provenance. Waivers remain explicit approval records.
 

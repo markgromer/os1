@@ -306,6 +306,7 @@ export function createOperationsEngine({
         codex: {
           mode: codex.mode,
           directAdapterConfigured: codex.mode === 'direct',
+          provider: codex.providerName || codex.mode,
         },
         recoveryRequiredCount: operations.filter((operation) => operation.status === 'recovery_required').length,
         pendingApprovalCount: operations.reduce((count, operation) => count + operation.approvals.filter((approval) => approval.status === 'pending').length, 0),

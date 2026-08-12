@@ -29,6 +29,9 @@ import { buildActiveBrief as buildOperationalActiveBrief } from './marcus/intell
 import { createOperationsEngine } from './marcus/operations/operation_engine.js';
 import { discoverDurableBackupSources } from './marcus/operations/operation_backups.js';
 import { DesktopActionQueue } from './marcus/operations/desktop_action_queue.js';
+import { ProjectOperatorService } from './marcus/operators/project_operator_service.js';
+import { createGitHubActionsCodexAdapterFromEnv } from './marcus/providers/github_actions_codex_adapter.js';
+import { createHttpCodexAdapterFromEnv } from './marcus/providers/http_codex_adapter.js';
 import {
   executeMarcusOperationTool,
   formatOperationStatusForMarcus,
@@ -218,6 +221,7 @@ const desktopActionQueue = new DesktopActionQueue({
   dataDir: DATA_DIR,
   leaseMs: process.env.MARCUS_DESKTOP_ACTION_LEASE_MS,
 });
+const directCodexAdapter = createHttpCodexAdapterFromEnv(process.env) || createGitHubActionsCodexAdapterFromEnv(process.env);
 
 const operationsEngine = createOperationsEngine({
   dataDir: DATA_DIR,
@@ -228,6 +232,7 @@ const operationsEngine = createOperationsEngine({
   getDesktopContext: async () => desktopRelayCache?.data || desktopContextCache?.data || {},
   queueDesktopAction: async (action) => queueDesktopAction(action),
   githubReadAdapter: async (input) => githubOperationsReadAdapter(input),
+  directCodexAdapter,
   allowedWorkspaceRoots: String(process.env.MARCUS_ALLOWED_WORKSPACE_ROOTS || '')
     .split(path.delimiter).map((value) => value.trim()).filter(Boolean),
 });
@@ -243,6 +248,14 @@ const projectEvidenceService = new ProjectEvidenceService({
   cloudflareApi: (pathPart) => cloudflareApi(pathPart),
 });
 operationsEngine.setCodexLifecycleRecorder((event) => projectEvidenceService.recordCodexLifecycle(event));
+
+const projectOperatorService = new ProjectOperatorService({
+  operationsEngine,
+  projectEvidenceService,
+  getLegacyStore: (businessKey) => readStoreForBusiness(businessKey),
+  getDesktopContext: async () => desktopRelayCache?.data || desktopContextCache?.data || {},
+  githubApi: (pathPart) => githubApi(pathPart),
+});
 
 async function createOrReuseDurableOperationForMessage(message, { projectId = '', projectName = '', source = 'marcus_chat' } = {}) {
   const businessKey = getBusinessKeyFromContext();
@@ -580,6 +593,10 @@ function isMarcusLiveSessionRoute(req) {
     || p === '/api/marcus/active-brief'
     || p === '/api/marcus/live/chat'
     || p === '/api/marcus/live/dashboard'
+    || p === '/api/marcus/operator-health'
+    || p === '/api/marcus/project-operator'
+    || p === '/api/marcus/external-actions'
+    || p.startsWith('/api/marcus/external-actions/')
     || p === '/api/marcus/live/performance'
     || p === '/api/marcus/live/session-status'
     || p === '/api/marcus/live/voice/status'
@@ -744,6 +761,7 @@ function normalizeSettingsShape(settings) {
     operatorVoice: normalizeOperatorVoice(parsed.operatorVoice),
     automationConfig: normalizeAutomationConfig(parsed.automationConfig),
     automationDigestQueue: normalizeAutomationDigestQueue(parsed.automationDigestQueue),
+    externalActionDrafts: normalizeExternalActionDrafts(parsed.externalActionDrafts),
   };
 }
 
@@ -1804,26 +1822,188 @@ function maskSecretHint(value) {
   return `••••${raw.slice(-4)}`;
 }
 
-function getGitHubCloudConfig() {
+function getGitHubCloudConfig(saved = {}) {
   const token = typeof process.env.GITHUB_TOKEN === 'string' ? process.env.GITHUB_TOKEN.trim() : '';
+  const savedToken = typeof saved.githubToken === 'string' ? saved.githubToken.trim() : '';
   const owner = typeof process.env.GITHUB_OWNER === 'string' ? process.env.GITHUB_OWNER.trim() : '';
-  return { token, owner, configured: Boolean(token), tokenHint: maskSecretHint(token) };
+  const savedOwner = typeof saved.githubOwner === 'string' ? saved.githubOwner.trim() : '';
+  const effectiveToken = token || savedToken;
+  const effectiveOwner = owner || savedOwner;
+  return { token: effectiveToken, owner: effectiveOwner, configured: Boolean(effectiveToken), tokenHint: maskSecretHint(effectiveToken), source: token ? 'env' : savedToken ? 'settings' : 'none' };
 }
 
-function getCloudflareConfig() {
+function getCloudflareConfig(saved = {}) {
   const token = typeof process.env.CLOUDFLARE_API_TOKEN === 'string' ? process.env.CLOUDFLARE_API_TOKEN.trim() : '';
+  const savedToken = typeof saved.cloudflareApiToken === 'string' ? saved.cloudflareApiToken.trim() : '';
   const accountId = typeof process.env.CLOUDFLARE_ACCOUNT_ID === 'string' ? process.env.CLOUDFLARE_ACCOUNT_ID.trim() : '';
+  const savedAccountId = typeof saved.cloudflareAccountId === 'string' ? saved.cloudflareAccountId.trim() : '';
   const defaultZoneId = typeof process.env.CLOUDFLARE_DEFAULT_ZONE_ID === 'string' ? process.env.CLOUDFLARE_DEFAULT_ZONE_ID.trim() : '';
-  return { token, accountId, defaultZoneId, configured: Boolean(token), tokenHint: maskSecretHint(token) };
+  const savedDefaultZoneId = typeof saved.cloudflareDefaultZoneId === 'string' ? saved.cloudflareDefaultZoneId.trim() : '';
+  const effectiveToken = token || savedToken;
+  return {
+    token: effectiveToken,
+    accountId: accountId || savedAccountId,
+    defaultZoneId: defaultZoneId || savedDefaultZoneId,
+    configured: Boolean(effectiveToken),
+    tokenHint: maskSecretHint(effectiveToken),
+    source: token ? 'env' : savedToken ? 'settings' : 'none',
+  };
 }
 
-function getRenderCloudConfig() {
+function normalizeExternalActionDraft(input = {}) {
+  const raw = input && typeof input === 'object' ? input : {};
+  const type = safeEnum(raw.type, ['email', 'text'], 'email');
+  const to = String(raw.to || raw.recipient || '').trim().slice(0, 500);
+  const subject = String(raw.subject || '').trim().slice(0, 300);
+  const body = String(raw.body || raw.text || raw.message || '').trim().slice(0, 8_000);
+  const projectId = String(raw.projectId || '').trim().slice(0, 160);
+  const projectName = String(raw.projectName || '').trim().slice(0, 300);
+  const reason = String(raw.reason || raw.approvalReason || '').trim().slice(0, 1_000);
+  if (!to) throw new Error('Recipient is required.');
+  if (!body) throw new Error('Message body is required.');
+  if (type === 'email' && !subject) throw new Error('Email subject is required.');
+  const now = nowIso();
+  return {
+    id: makeId(),
+    type,
+    to,
+    subject,
+    body,
+    projectId,
+    projectName,
+    reason: reason || 'External communication requires Mark approval before sending.',
+    status: 'pending_approval',
+    requiresApproval: true,
+    createdAt: now,
+    updatedAt: now,
+    createdBy: 'marcus',
+  };
+}
+
+function normalizeExternalActionDrafts(input) {
+  const list = Array.isArray(input) ? input : [];
+  return list
+    .map((item) => item && typeof item === 'object' ? item : null)
+    .filter(Boolean)
+    .map((item) => ({
+      id: String(item.id || '').trim().slice(0, 120) || makeId(),
+      type: safeEnum(item.type, ['email', 'text'], 'email'),
+      to: String(item.to || '').trim().slice(0, 500),
+      subject: String(item.subject || '').trim().slice(0, 300),
+      body: String(item.body || '').trim().slice(0, 8_000),
+      projectId: String(item.projectId || '').trim().slice(0, 160),
+      projectName: String(item.projectName || '').trim().slice(0, 300),
+      reason: String(item.reason || '').trim().slice(0, 1_000),
+      status: safeEnum(item.status, ['pending_approval', 'approved', 'rejected', 'sent', 'failed'], 'pending_approval'),
+      requiresApproval: true,
+      createdAt: typeof item.createdAt === 'string' ? item.createdAt : nowIso(),
+      updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : '',
+      createdBy: String(item.createdBy || 'marcus').trim().slice(0, 100),
+      approvedAt: typeof item.approvedAt === 'string' ? item.approvedAt : '',
+      approvedBy: String(item.approvedBy || '').trim().slice(0, 100),
+      approvalMessage: String(item.approvalMessage || '').trim().slice(0, 1_000),
+      rejectedAt: typeof item.rejectedAt === 'string' ? item.rejectedAt : '',
+      rejectedBy: String(item.rejectedBy || '').trim().slice(0, 100),
+      rejectionMessage: String(item.rejectionMessage || '').trim().slice(0, 1_000),
+      sentAt: typeof item.sentAt === 'string' ? item.sentAt : '',
+      sendResult: item.sendResult && typeof item.sendResult === 'object' ? item.sendResult : {},
+    }))
+    .filter((item) => item.to && item.body)
+    .slice(-200);
+}
+
+function getRenderCloudConfig(saved = {}) {
   const token = typeof process.env.RENDER_API_KEY === 'string' ? process.env.RENDER_API_KEY.trim() : '';
-  return { token, configured: Boolean(token), tokenHint: maskSecretHint(token) };
+  const savedToken = typeof saved.renderApiKey === 'string' ? saved.renderApiKey.trim() : '';
+  const effectiveToken = token || savedToken;
+  return { token: effectiveToken, configured: Boolean(effectiveToken), tokenHint: maskSecretHint(effectiveToken), source: token ? 'env' : savedToken ? 'settings' : 'none' };
+}
+
+async function buildMarcusOperatorHealth() {
+  const [settings, readiness] = await Promise.all([
+    readSettings(),
+    operationsEngine.readiness(getBusinessKeyFromContext()),
+  ]);
+  const ai = await getAiConfig();
+  const email = getEmailConfig(settings);
+  const github = getGitHubCloudConfig(settings);
+  const cloudflare = getCloudflareConfig(settings);
+  const render = getRenderCloudConfig(settings);
+  const desktopAgeMs = desktopRelayCache?.at ? Date.now() - desktopRelayCache.at : null;
+  const desktopOnline = Number.isFinite(desktopAgeMs) && desktopAgeMs <= DESKTOP_RELAY_TTL_MS;
+  const quoConfigured = Boolean(
+    (typeof process.env.TWILIO_AUTH_TOKEN === 'string' && process.env.TWILIO_AUTH_TOKEN.trim())
+    || (typeof process.env.QUO_WEBHOOK_TOKEN === 'string' && process.env.QUO_WEBHOOK_TOKEN.trim())
+    || (typeof settings.quoAuthToken === 'string' && settings.quoAuthToken.trim())
+    || (typeof settings.quoApiKey === 'string' && settings.quoApiKey.trim())
+  );
+  const canAuditAndPrepareCodex = Boolean(readiness.operationEngineInitialized && readiness.projectRegistryAvailable);
+  const directCodex = readiness.codex?.directAdapterConfigured === true;
+  return {
+    ok: true,
+    businessKey: getBusinessKeyFromContext(),
+    generatedAt: nowIso(),
+    capabilities: {
+      projectOperator: {
+        available: canAuditAndPrepareCodex,
+        mode: directCodex ? 'direct_codex' : 'codex_handoff',
+        provider: readiness.codex?.provider || readiness.codex?.mode || 'unknown',
+        canAuditProjectContext: canAuditAndPrepareCodex,
+        canCreateDurableOperation: Boolean(readiness.operationStoreAvailable),
+        canStartCodexDirectly: directCodex,
+        canPrepareCodexHandoff: canAuditAndPrepareCodex,
+        pendingExternalCodexCount: readiness.pendingExternalCodexCount,
+      },
+      github: {
+        backendTokenConfigured: github.configured,
+        ownerConfigured: Boolean(github.owner),
+        tokenHint: github.tokenHint,
+        source: github.source,
+        access: github.configured ? 'server_api' : 'not_configured_for_server',
+      },
+      cloudflare: {
+        backendTokenConfigured: cloudflare.configured,
+        accountIdConfigured: Boolean(cloudflare.accountId),
+        defaultZoneConfigured: Boolean(cloudflare.defaultZoneId),
+        tokenHint: cloudflare.tokenHint,
+        source: cloudflare.source,
+        access: cloudflare.configured ? 'server_api' : 'not_configured_for_server',
+      },
+      render: {
+        backendTokenConfigured: render.configured,
+        tokenHint: render.tokenHint,
+        source: render.source,
+      },
+      openai: {
+        configured: Boolean(ai.apiKey),
+        source: ai.source,
+        model: ai.model,
+        keyHint: ai.keyHint,
+      },
+      desktopAgent: {
+        relayOnline: desktopOnline,
+        relayAgeMs: desktopAgeMs,
+        actionQueueInitialized: readiness.desktopQueueInitialized,
+      },
+      communication: {
+        emailReadConfigured: email.imapConfigured,
+        emailSendConfigured: email.smtpConfigured,
+        textWebhookConfigured: quoConfigured,
+        externalSendRequiresApproval: true,
+      },
+    },
+    blockers: [
+      !github.configured ? 'GITHUB_TOKEN is not configured for the Marcus server; GitHub reads rely on route/user tooling instead of backend provider access.' : '',
+      !cloudflare.configured ? 'CLOUDFLARE_API_TOKEN is not configured for the Marcus server; Cloudflare reads rely on route/user tooling instead of backend provider access.' : '',
+      !ai.apiKey ? 'OpenAI is not configured; AI chat, transcription, and model-assisted drafting will be limited.' : '',
+      !directCodex ? 'No direct Codex launch adapter is configured; Marcus can prepare durable handoffs and track registered Codex results, but cannot honestly claim a real session started.' : '',
+      !desktopOnline ? 'Desktop agent relay is not currently online; local workspace context/actions may be stale or unavailable.' : '',
+    ].filter(Boolean),
+  };
 }
 
 async function githubApi(pathPart, { method = 'GET', body, timeoutMs = 20_000 } = {}) {
-  const cfg = getGitHubCloudConfig();
+  const cfg = getGitHubCloudConfig(await readSettings());
   if (!cfg.token) throw new Error('GITHUB_TOKEN is not configured.');
   const cleanPath = String(pathPart || '').startsWith('/') ? pathPart : `/${pathPart || ''}`;
   const { resp, data } = await fetchJsonWithTimeout(`https://api.github.com${cleanPath}`, {
@@ -1887,7 +2067,7 @@ async function githubOperationsReadAdapter({ repository, action, input = {} }) {
 }
 
 async function cloudflareApi(pathPart, { method = 'GET', body, timeoutMs = 20_000 } = {}) {
-  const cfg = getCloudflareConfig();
+  const cfg = getCloudflareConfig(await readSettings());
   if (!cfg.token) throw new Error('CLOUDFLARE_API_TOKEN is not configured.');
   const cleanPath = String(pathPart || '').startsWith('/') ? pathPart : `/${pathPart || ''}`;
   const { resp, data } = await fetchJsonWithTimeout(`https://api.cloudflare.com/client/v4${cleanPath}`, {
@@ -1907,7 +2087,7 @@ async function cloudflareApi(pathPart, { method = 'GET', body, timeoutMs = 20_00
 }
 
 async function renderApi(pathPart, { method = 'GET', body, timeoutMs = 20_000 } = {}) {
-  const cfg = getRenderCloudConfig();
+  const cfg = getRenderCloudConfig(await readSettings());
   if (!cfg.token) throw new Error('RENDER_API_KEY is not configured.');
   const cleanPath = String(pathPart || '').startsWith('/') ? pathPart : `/${pathPart || ''}`;
   const { resp, data } = await fetchJsonWithTimeout(`https://api.render.com/v1${cleanPath}`, {
@@ -3041,6 +3221,10 @@ function sanitizeSettingsForClient(settings) {
   delete clone.slackBotToken;
   delete clone.quoAuthToken;
   delete clone.ghlApiKey;
+  delete clone.githubToken;
+  delete clone.cloudflareApiToken;
+  delete clone.renderApiKey;
+  delete clone.externalActionDrafts;
   delete clone.airtableByBusinessKey;
   delete clone.airtablePat;
   delete clone.qdrantApiKey;
@@ -8000,6 +8184,9 @@ app.get('/api/settings', async (req, res) => {
 
   const ghlConfig = await getGhlConfig();
   const ghlConfigured = Boolean(ghlConfig.apiKey && ghlConfig.locationId);
+  const githubCfg = getGitHubCloudConfig(settings);
+  const cloudflareCfg = getCloudflareConfig(settings);
+  const renderCfg = getRenderCloudConfig(settings);
 
   const qdrant = getQdrantConfig(settings);
   const qdrantEnabled = Boolean(qdrant.enabled);
@@ -8045,6 +8232,18 @@ app.get('/api/settings', async (req, res) => {
     emailArchiveKnowledgeEnabled,
     mcpEnabled,
     mcpConfigured,
+    githubConfigured: githubCfg.configured,
+    githubOwner: githubCfg.owner,
+    githubTokenHint: githubCfg.tokenHint,
+    githubSource: githubCfg.source,
+    cloudflareConfigured: cloudflareCfg.configured,
+    cloudflareAccountIdConfigured: Boolean(cloudflareCfg.accountId),
+    cloudflareDefaultZoneConfigured: Boolean(cloudflareCfg.defaultZoneId),
+    cloudflareTokenHint: cloudflareCfg.tokenHint,
+    cloudflareSource: cloudflareCfg.source,
+    renderConfigured: renderCfg.configured,
+    renderTokenHint: renderCfg.tokenHint,
+    renderSource: renderCfg.source,
   });
 });
 
@@ -13149,18 +13348,19 @@ app.get('/api/marcus/live/session', (req, res) => {
 });
 
 app.get('/api/integrations/github/status', async (req, res) => {
-  const cfg = getGitHubCloudConfig();
+  const cfg = getGitHubCloudConfig(await readSettings());
   res.json({
     ok: true,
     configured: Boolean(cfg.configured),
     owner: cfg.owner,
     tokenHint: cfg.tokenHint,
+    source: cfg.source,
   });
 });
 
 app.get('/api/integrations/github/repos', async (req, res) => {
   try {
-    const cfg = getGitHubCloudConfig();
+    const cfg = getGitHubCloudConfig(await readSettings());
     const owner = String(req.query?.owner || cfg.owner || '').trim();
     const limit = Math.max(1, Math.min(100, Number(req.query?.limit) || 30));
     const pathPart = owner
@@ -13206,13 +13406,14 @@ app.get('/api/integrations/github/repo-file', async (req, res) => {
 });
 
 app.get('/api/integrations/cloudflare/status', async (req, res) => {
-  const cfg = getCloudflareConfig();
+  const cfg = getCloudflareConfig(await readSettings());
   res.json({
     ok: true,
     configured: Boolean(cfg.configured),
     accountIdConfigured: Boolean(cfg.accountId),
     defaultZoneIdConfigured: Boolean(cfg.defaultZoneId),
     tokenHint: cfg.tokenHint,
+    source: cfg.source,
   });
 });
 
@@ -13236,7 +13437,7 @@ app.get('/api/integrations/cloudflare/zones', async (req, res) => {
 
 app.get('/api/integrations/cloudflare/dns-records', async (req, res) => {
   try {
-    const cfg = getCloudflareConfig();
+    const cfg = getCloudflareConfig(await readSettings());
     const zoneId = String(req.query?.zoneId || cfg.defaultZoneId || '').trim();
     if (!zoneId) return res.status(400).json({ ok: false, error: 'zoneId is required or CLOUDFLARE_DEFAULT_ZONE_ID must be configured.' });
     const data = await cloudflareApi(`/zones/${encodeURIComponent(zoneId)}/dns_records?per_page=100`);
@@ -13259,8 +13460,8 @@ app.get('/api/integrations/cloudflare/dns-records', async (req, res) => {
 });
 
 app.get('/api/integrations/render/status', async (req, res) => {
-  const cfg = getRenderCloudConfig();
-  res.json({ ok: true, configured: Boolean(cfg.configured), tokenHint: cfg.tokenHint });
+  const cfg = getRenderCloudConfig(await readSettings());
+  res.json({ ok: true, configured: Boolean(cfg.configured), tokenHint: cfg.tokenHint, source: cfg.source });
 });
 
 app.get('/api/integrations/render/services', async (req, res) => {
@@ -14838,12 +15039,131 @@ app.delete('/api/marcus/operational-controls/:section/:id', async (req, res) => 
   }
 });
 
+app.get('/api/marcus/operator-health', async (req, res) => {
+  try {
+    res.json(await buildMarcusOperatorHealth());
+  } catch (err) {
+    res.status(500).json({ ok: false, error: String(err?.message || err) });
+  }
+});
+
+app.get('/api/marcus/external-actions', async (req, res) => {
+  try {
+    const settings = await readSettings();
+    res.json({ ok: true, actions: normalizeExternalActionDrafts(settings.externalActionDrafts).slice(-100).reverse() });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: String(err?.message || err) });
+  }
+});
+
+app.post('/api/marcus/external-actions/draft', async (req, res) => {
+  try {
+    const draft = normalizeExternalActionDraft(req.body || {});
+    writeLock = writeLock.then(async () => {
+      const settings = await readSettings();
+      const existing = normalizeExternalActionDrafts(settings.externalActionDrafts);
+      const next = {
+        ...settings,
+        externalActionDrafts: [...existing, draft].slice(-200),
+        updatedAt: nowIso(),
+      };
+      await writeSettings(next);
+      res.status(201).json({ ok: true, action: draft });
+    });
+    await writeLock;
+  } catch (err) {
+    res.status(400).json({ ok: false, error: String(err?.message || err) });
+  }
+});
+
+app.post('/api/marcus/external-actions/:id/approve', async (req, res) => {
+  const id = String(req.params.id || '').trim();
+  const message = String(req.body?.message || '').trim().slice(0, 1_000);
+  if (!id) return res.status(400).json({ ok: false, error: 'Action id is required.' });
+  if (!/\b(approve|approved|send it|go ahead|proceed)\b/i.test(message)) {
+    return res.status(409).json({ ok: false, approvalRequired: true, error: 'Approval message must explicitly approve this external action.' });
+  }
+  writeLock = writeLock.then(async () => {
+    const settings = await readSettings();
+    const actions = normalizeExternalActionDrafts(settings.externalActionDrafts);
+    const idx = actions.findIndex((item) => item.id === id);
+    if (idx < 0) return res.status(404).json({ ok: false, error: 'External action draft not found.' });
+    if (actions[idx].status !== 'pending_approval') {
+      return res.status(409).json({ ok: false, error: `External action cannot be approved from ${actions[idx].status}.` });
+    }
+    const now = nowIso();
+    actions[idx] = {
+      ...actions[idx],
+      status: 'approved',
+      approvedAt: now,
+      approvedBy: 'mark',
+      approvalMessage: message,
+      updatedAt: now,
+    };
+    await writeSettings({ ...settings, externalActionDrafts: actions, updatedAt: now });
+    res.json({ ok: true, action: actions[idx], note: 'Approval recorded. Sending remains a separate explicit provider action.' });
+  });
+  await writeLock;
+});
+
+app.post('/api/marcus/external-actions/:id/reject', async (req, res) => {
+  const id = String(req.params.id || '').trim();
+  const message = String(req.body?.message || '').trim().slice(0, 1_000);
+  if (!id) return res.status(400).json({ ok: false, error: 'Action id is required.' });
+  writeLock = writeLock.then(async () => {
+    const settings = await readSettings();
+    const actions = normalizeExternalActionDrafts(settings.externalActionDrafts);
+    const idx = actions.findIndex((item) => item.id === id);
+    if (idx < 0) return res.status(404).json({ ok: false, error: 'External action draft not found.' });
+    if (actions[idx].status !== 'pending_approval') {
+      return res.status(409).json({ ok: false, error: `External action cannot be rejected from ${actions[idx].status}.` });
+    }
+    const now = nowIso();
+    actions[idx] = {
+      ...actions[idx],
+      status: 'rejected',
+      rejectedAt: now,
+      rejectedBy: 'mark',
+      rejectionMessage: message,
+      updatedAt: now,
+    };
+    await writeSettings({ ...settings, externalActionDrafts: actions, updatedAt: now });
+    res.json({ ok: true, action: actions[idx] });
+  });
+  await writeLock;
+});
+
+app.post('/api/marcus/project-operator', async (req, res) => {
+  const message = typeof req.body?.message === 'string' ? req.body.message.trim().slice(0, 12_000) : '';
+  const projectId = typeof req.body?.projectId === 'string' ? req.body.projectId.trim().slice(0, 160) : '';
+  if (!message) return res.status(400).json({ ok: false, error: 'Message required' });
+  try {
+    const result = await projectOperatorService.prepareCodexOperation(getBusinessKeyFromContext(), {
+      message,
+      projectId,
+      source: 'project_operator_api',
+    });
+    res.status(result.status === 'needs_project' ? 200 : 201).json(result);
+  } catch (err) {
+    res.status(400).json({ ok: false, error: String(err?.message || err) });
+  }
+});
+
 // Chat from Marcus Live panel
 app.post('/api/marcus/live/chat', async (req, res) => {
   const message = typeof req.body?.message === 'string' ? req.body.message.trim().slice(0, 2000) : '';
   if (!message) return res.status(400).json({ error: 'Empty message' });
 
   try {
+    if (projectOperatorService.shouldHandle(message) && /\b(codex|audit|repo|repository|fix|build|implement|get .* working|start .* session)\b/i.test(message)) {
+      const result = await projectOperatorService.prepareCodexOperation(getBusinessKeyFromContext(), {
+        message,
+        source: 'marcus_live_project_operator',
+      });
+      pushLiveEvent({ type: 'chat', from: 'marcus', text: result.reply, ts: Date.now() });
+      return res.json(result);
+    }
+
     // Marcus Live is a second chat surface, so durable work requests must enter the
     // same operation engine instead of being answered as if an AI chat executed them.
     if (shouldCreateDurableOperationForRequest(message)) {
@@ -17623,7 +17943,7 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
         return { ok: true, results: desktopActionResults.slice(-20) };
       }
       if (toolName === 'github_list_repos') {
-        const cfg = getGitHubCloudConfig();
+        const cfg = getGitHubCloudConfig(await readSettings());
         const owner = typeof args?.owner === 'string' && args.owner.trim() ? args.owner.trim() : cfg.owner;
         const limit = Math.max(1, Math.min(100, Number(args?.limit) || 30));
         const pathPart = owner
@@ -17672,7 +17992,7 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
         };
       }
       if (toolName === 'cloudflare_list_dns_records') {
-        const cfg = getCloudflareConfig();
+        const cfg = getCloudflareConfig(await readSettings());
         const zoneId = typeof args?.zoneId === 'string' && args.zoneId.trim() ? args.zoneId.trim() : cfg.defaultZoneId;
         if (!zoneId) return { ok: false, error: 'zoneId is required or CLOUDFLARE_DEFAULT_ZONE_ID must be configured.' };
         const data = await cloudflareApi(`/zones/${encodeURIComponent(zoneId)}/dns_records?per_page=100`);
@@ -17915,6 +18235,33 @@ app.post('/api/chat', async (req, res) => {
         });
 
         res.json({ reply });
+        return;
+      }
+
+      if (projectOperatorService.shouldHandle(message) && /\b(codex|audit|repo|repository|fix|build|implement|get .* working|start .* session)\b/i.test(message)) {
+        const result = await projectOperatorService.prepareCodexOperation(getBusinessKeyFromContext(), {
+          message,
+          projectId: projectId || '',
+          source: 'main_chat_project_operator',
+        });
+        const reply = String(result.reply || '').trim();
+        if (result.operation?.projectId) {
+          store.projectChats = store.projectChats || {};
+          const existing = store.projectChats[result.operation.projectId];
+          const chatHistory = Array.isArray(existing)
+            ? existing
+            : (existing && typeof existing === 'object' && Array.isArray(existing.messages))
+                ? existing.messages
+                : [];
+          const ts = nowIso();
+          chatHistory.push({ role: 'user', content: message, timestamp: ts });
+          chatHistory.push({ role: 'ai', content: reply, timestamp: ts, mode: 'project_operator', operationId: result.operation.id });
+          store.projectChats[result.operation.projectId] = { messages: chatHistory, updatedAt: ts };
+          store.revision++;
+          store.updatedAt = ts;
+          await writeStore(store);
+        }
+        res.json({ reply, projectOperator: result });
         return;
       }
 
@@ -18180,9 +18527,9 @@ function startProjectEvidenceScheduler() {
       const settings = await readSettings();
       const cfg = getBusinessConfigFromSettings(settings);
       const sources = ['operations', 'airtable'];
-      if (getGitHubCloudConfig().configured) sources.push('github');
-      if (getRenderCloudConfig().configured) sources.push('render');
-      if (getCloudflareConfig().configured) sources.push('cloudflare');
+      if (getGitHubCloudConfig(settings).configured) sources.push('github');
+      if (getRenderCloudConfig(settings).configured) sources.push('render');
+      if (getCloudflareConfig(settings).configured) sources.push('cloudflare');
       for (const business of cfg.businesses || []) {
         const businessKey = normalizeBusinessKey(business?.key || '') || DEFAULT_BUSINESS_KEY;
         await withBusinessKey(businessKey, () => projectEvidenceService.refresh(businessKey, { sources }));

@@ -116,6 +116,7 @@ export class CodexProvider {
   constructor({ mode = 'external_handoff', directAdapter = null, onLifecycleEvent = null } = {}) {
     this.mode = mode === 'direct' && directAdapter ? 'direct' : 'external_handoff';
     this.directAdapter = directAdapter;
+    this.providerName = this.mode === 'direct' ? (safeString(directAdapter?.providerName, 100) || 'direct') : 'external_handoff';
     this.onLifecycleEvent = typeof onLifecycleEvent === 'function' ? onLifecycleEvent : null;
     this.launchesByIdempotencyKey = new Map();
   }
@@ -155,7 +156,7 @@ export class CodexProvider {
     const branchPattern = registryRecord?.repo?.workingBranchPattern || 'codex/{operationId}';
     const branch = branchPattern.replaceAll('{operationId}', operation.id);
     const base = {
-      provider: this.mode,
+      provider: this.providerName,
       recordId: makeOperationId('codexjob'),
       jobId: '',
       operationId: operation.id,
