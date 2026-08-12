@@ -86,7 +86,7 @@ async function withMockQuoApi(callback) {
   const server = http.createServer((req, res) => {
     if (req.method === 'GET' && req.url === '/v1/phone-numbers') {
       res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ data: [{ id: 'PN_TEST', formattedNumber: '+15550001111', users: [{ id: 'US_TEST' }] }] }));
+      res.end(JSON.stringify({ data: [{ id: 'PN_TEST', formattedNumber: '(555) 000-1111', number: '+15550001111', users: [{ id: 'US_TEST' }] }] }));
       return;
     }
     if (req.method === 'POST' && req.url === '/v1/messages') {

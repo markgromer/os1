@@ -2159,7 +2159,16 @@ async function resolveQuoSender(config) {
     || numbers.find((item) => normalizedFrom && [item?.formattedNumber, item?.number].some((value) => String(value || '').replace(/[^\d+]/g, '') === normalizedFrom))
     || (numbers.length === 1 ? numbers[0] : null);
   if (!selected) throw new Error('Quo sender could not be resolved. Configure QUO_DEFAULT_PHONE_NUMBER_ID or QUO_FROM_NUMBER.');
-  const from = String(selected.formattedNumber || selected.number || config.from || '').trim();
+  const from = [selected.number, config.from, selected.formattedNumber]
+    .map((value) => {
+      const raw = String(value || '').trim();
+      if (!raw) return '';
+      const digits = raw.replace(/\D/g, '');
+      if (raw.startsWith('+')) return `+${digits}`;
+      if (digits.length === 10) return `+1${digits}`;
+      return digits.length >= 8 && digits.length <= 15 ? `+${digits}` : '';
+    })
+    .find((value) => /^\+[1-9]\d{7,14}$/.test(value)) || '';
   const userId = String(config.userId || selected.users?.[0]?.id || '').trim();
   if (!/^\+[1-9]\d{7,14}$/.test(from)) throw new Error('Quo sender phone number is missing or invalid.');
   if (!userId) throw new Error('Quo sender user could not be resolved. Configure QUO_USER_ID.');
