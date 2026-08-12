@@ -174,6 +174,25 @@ export function createMarcusRealtimeVoice(options = {}) {
 
   function bindSessionEvents(current, version) {
     const isCurrent = () => session === current && connectionVersion === version;
+    let assistantAudioActive = false;
+    const markAssistantAudioStarted = () => {
+      if (!isCurrent() || assistantAudioActive) return;
+      assistantAudioActive = true;
+      emitEvent('audio_started');
+      setState('speaking', 'Marcus is speaking');
+    };
+    const markAssistantAudioStopped = () => {
+      if (!isCurrent()) return;
+      if (assistantAudioActive) emitEvent('audio_stopped');
+      assistantAudioActive = false;
+      setState('listening', 'Listening');
+    };
+    const markAssistantAudioInterrupted = () => {
+      if (!isCurrent()) return;
+      if (assistantAudioActive) emitEvent('audio_interrupted');
+      assistantAudioActive = false;
+      setState('listening', 'Interrupted; listening');
+    };
     current.transport.on('connection_change', (status) => {
       if (!isCurrent()) return;
       if (status === 'connected') {
@@ -189,21 +208,9 @@ export function createMarcusRealtimeVoice(options = {}) {
     });
     current.on('agent_start', () => { if (isCurrent()) setState('thinking', 'Thinking'); });
     current.on('agent_tool_start', () => { if (isCurrent()) setState('thinking', 'Marcus is working on it'); });
-    current.on('audio_start', () => {
-      if (!isCurrent()) return;
-      emitEvent('audio_started');
-      setState('speaking', 'Marcus is speaking');
-    });
-    current.on('audio_stopped', () => {
-      if (!isCurrent()) return;
-      emitEvent('audio_stopped');
-      setState('listening', 'Listening');
-    });
-    current.on('audio_interrupted', () => {
-      if (!isCurrent()) return;
-      emitEvent('audio_interrupted');
-      setState('listening', 'Interrupted; listening');
-    });
+    current.on('audio_start', markAssistantAudioStarted);
+    current.on('audio_stopped', markAssistantAudioStopped);
+    current.on('audio_interrupted', markAssistantAudioInterrupted);
     current.on('agent_end', () => {
       if (isCurrent() && state !== 'speaking') setState('listening', 'Listening');
     });
@@ -211,7 +218,8 @@ export function createMarcusRealtimeVoice(options = {}) {
       if (!isCurrent()) return;
       if (event?.type === 'input_audio_buffer.speech_started') {
         emitEvent('speech_started');
-        setState('listening', 'Listening');
+        if (assistantAudioActive) markAssistantAudioInterrupted();
+        else setState('listening', 'Listening');
       }
       if (event?.type === 'input_audio_buffer.speech_stopped') {
         emitEvent('speech_stopped');
@@ -227,10 +235,13 @@ export function createMarcusRealtimeVoice(options = {}) {
       if (event?.type === 'response.output_audio_transcript.done') {
         const transcript = String(event.transcript || '').trim();
         if (transcript) {
+          markAssistantAudioStarted();
           emitEvent('assistant_transcript', { length: transcript.length });
           onAssistantText(transcript);
         }
       }
+      if (event?.type === 'response.output_audio_transcript.delta') markAssistantAudioStarted();
+      if (event?.type === 'response.output_audio.done') markAssistantAudioStopped();
     });
     current.on('error', (event) => {
       if (!isCurrent()) return;

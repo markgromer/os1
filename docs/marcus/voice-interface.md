@@ -65,6 +65,7 @@ The browser receives a short-lived client secret from `POST /api/marcus/realtime
 - Every reconnect mints a new ephemeral credential.
 - A connected session renews at 55 minutes before the Realtime session limit.
 - A connection version prevents a stale asynchronous setup from replacing a newer session.
+- WebRTC speaking state is derived from output-audio transcript events because the SDK's generic audio callback is not emitted when WebRTC owns playback; speech detected during that state records barge-in.
 
 Local acceptance covers these lifecycle rules with an SDK-session test double. Production Chromium covers live signaling plus synthetic network and page lifecycle recovery. Installed-Android behavior remains an explicit completion check.
 

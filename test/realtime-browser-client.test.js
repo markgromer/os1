@@ -139,6 +139,38 @@ test('Marcus browser voice reconnects after background and network recovery with
   voice.stop();
 });
 
+test('Marcus browser voice infers WebRTC playback and barge-in from raw Realtime events', async () => {
+  const sessions = [];
+  const telemetry = [];
+  const statuses = [];
+  const voice = createMarcusRealtimeVoice({
+    fetchFn: async () => secretResponse(),
+    sessionFactory: () => {
+      const session = new FakeSession();
+      sessions.push(session);
+      return session;
+    },
+    onEvent: (event) => telemetry.push(event),
+    onStatus: (status) => statuses.push(status),
+    sessionRefreshMs: 60_000,
+  });
+
+  await voice.start();
+  sessions[0].emit('transport_event', { type: 'response.output_audio_transcript.delta', delta: 'Marcus' });
+  assert.equal(voice.getState(), 'speaking');
+  sessions[0].emit('transport_event', { type: 'input_audio_buffer.speech_started' });
+  assert.equal(voice.getState(), 'listening');
+  assert.equal(telemetry.filter((event) => event.type === 'audio_started').length, 1);
+  assert.equal(telemetry.filter((event) => event.type === 'audio_interrupted').length, 1);
+  assert.ok(statuses.some((status) => status.detail === 'Marcus is speaking'));
+
+  sessions[0].emit('transport_event', { type: 'response.output_audio_transcript.delta', delta: 'Again' });
+  sessions[0].emit('transport_event', { type: 'response.output_audio.done' });
+  assert.equal(voice.getState(), 'listening');
+  assert.equal(telemetry.filter((event) => event.type === 'audio_stopped').length, 1);
+  voice.stop();
+});
+
 test('Marcus browser voice retries an expired ephemeral credential with a fresh one', async () => {
   let secretRequests = 0;
   const sessions = [];
