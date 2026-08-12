@@ -33,6 +33,11 @@ import { ProjectOperatorService } from './marcus/operators/project_operator_serv
 import { createGitHubActionsCodexAdapterFromEnv } from './marcus/providers/github_actions_codex_adapter.js';
 import { createHttpCodexAdapterFromEnv } from './marcus/providers/http_codex_adapter.js';
 import {
+  buildMarcusRealtimeClientSecretRequest,
+  DEFAULT_MARCUS_REALTIME_MODEL,
+  DEFAULT_MARCUS_REALTIME_VOICE,
+} from './marcus/voice/realtime_session.js';
+import {
   executeMarcusOperationTool,
   formatOperationStatusForMarcus,
   getMarcusOperationToolDefinitions,
@@ -538,6 +543,12 @@ const ELEVENLABS_API_KEY = typeof process.env.ELEVENLABS_API_KEY === 'string' ? 
 const ELEVENLABS_VOICE_ID = typeof process.env.ELEVENLABS_VOICE_ID === 'string' ? process.env.ELEVENLABS_VOICE_ID.trim() : '';
 const ELEVENLABS_MODEL_ID = typeof process.env.ELEVENLABS_MODEL_ID === 'string' ? process.env.ELEVENLABS_MODEL_ID.trim() : 'eleven_flash_v2_5';
 const ELEVENLABS_OUTPUT_FORMAT = typeof process.env.ELEVENLABS_OUTPUT_FORMAT === 'string' ? process.env.ELEVENLABS_OUTPUT_FORMAT.trim() : 'mp3_44100_128';
+const MARCUS_REALTIME_MODEL = typeof process.env.MARCUS_REALTIME_MODEL === 'string' && process.env.MARCUS_REALTIME_MODEL.trim()
+  ? process.env.MARCUS_REALTIME_MODEL.trim()
+  : DEFAULT_MARCUS_REALTIME_MODEL;
+const MARCUS_REALTIME_VOICE = typeof process.env.MARCUS_REALTIME_VOICE === 'string' && process.env.MARCUS_REALTIME_VOICE.trim()
+  ? process.env.MARCUS_REALTIME_VOICE.trim()
+  : DEFAULT_MARCUS_REALTIME_VOICE;
 const AUTH_COOKIE_NAME = 'ops_admin_token';
 const AUTH_COOKIE_MAX_AGE_SEC = 60 * 60 * 24 * 30;
 
@@ -652,6 +663,7 @@ function isMarcusLiveSessionRoute(req) {
     || p === '/api/marcus/live/session-status'
     || p === '/api/marcus/live/voice/status'
     || p === '/api/marcus/live/voice/speak'
+    || p === '/api/marcus/realtime/client-secret'
     || p === '/api/marcus/transcribe'
     || p === '/api/desktop-context/health';
 }
@@ -2030,6 +2042,12 @@ async function buildMarcusOperatorHealth() {
         source: ai.source,
         model: ai.model,
         keyHint: ai.keyHint,
+        realtimeVoice: {
+          configured: Boolean(ai.apiKey),
+          provider: 'openai_realtime',
+          model: MARCUS_REALTIME_MODEL,
+          voice: MARCUS_REALTIME_VOICE,
+        },
       },
       desktopAgent: {
         relayOnline: desktopOnline,
@@ -13849,7 +13867,72 @@ app.get('/api/marcus/live/voice/status', (req, res) => {
     provider: ELEVENLABS_API_KEY && ELEVENLABS_VOICE_ID ? 'elevenlabs' : 'browser',
     elevenLabsConfigured: Boolean(ELEVENLABS_API_KEY && ELEVENLABS_VOICE_ID),
     model: ELEVENLABS_API_KEY && ELEVENLABS_VOICE_ID ? ELEVENLABS_MODEL_ID : '',
+    realtime: {
+      provider: 'openai_realtime',
+      model: MARCUS_REALTIME_MODEL,
+      voice: MARCUS_REALTIME_VOICE,
+    },
   });
+});
+
+app.post('/api/marcus/realtime/client-secret', async (req, res) => {
+  try {
+    const settings = await readSettings();
+    const openai = getOpenAiSecrets(settings);
+    if (!openai.apiKey) {
+      return res.status(400).json({ ok: false, error: 'OpenAI is not configured for Marcus realtime voice.' });
+    }
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 20_000);
+    let upstream;
+    let data;
+    try {
+      const safetyIdentifier = crypto
+        .createHash('sha256')
+        .update(`marcus:${getBusinessKeyFromContext()}:owner`)
+        .digest('hex');
+      upstream = await fetch('https://api.openai.com/v1/realtime/client_secrets', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${openai.apiKey}`,
+          'Content-Type': 'application/json',
+          'OpenAI-Safety-Identifier': safetyIdentifier,
+        },
+        body: JSON.stringify(buildMarcusRealtimeClientSecretRequest({
+          model: MARCUS_REALTIME_MODEL,
+          voice: MARCUS_REALTIME_VOICE,
+        })),
+        signal: controller.signal,
+      });
+      data = await upstream.json().catch(() => ({}));
+    } finally {
+      clearTimeout(timer);
+    }
+
+    if (!upstream?.ok || !data?.value) {
+      const message = data?.error?.message || data?.message || `OpenAI realtime session setup failed (${upstream?.status || 'unknown'}).`;
+      return res.status(502).json({ ok: false, error: message });
+    }
+
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({
+      ok: true,
+      value: data.value,
+      expiresAt: data.expires_at || data.expiresAt || null,
+      session: {
+        provider: 'openai_realtime',
+        model: MARCUS_REALTIME_MODEL,
+        voice: MARCUS_REALTIME_VOICE,
+      },
+    });
+  } catch (err) {
+    const timedOut = err?.name === 'AbortError';
+    res.status(timedOut ? 504 : 502).json({
+      ok: false,
+      error: timedOut ? 'OpenAI realtime session setup timed out.' : (err?.message || 'OpenAI realtime session setup failed.'),
+    });
+  }
 });
 
 app.post('/api/marcus/transcribe', express.raw({

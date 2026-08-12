@@ -120,6 +120,8 @@ It uses:
 - Live chat from `/api/marcus/live/chat`.
 - Voice status, transcription, and speech endpoints.
 
+The existing Live voice path is a chained fallback: browser or recorded speech input, OpenAI transcription, Marcus text chat, and ElevenLabs or browser speech output.
+
 ## Mobile UI
 
 `public/mobile.html` is the Android-friendly Marcus mobile shell.
@@ -132,6 +134,10 @@ It uses:
 - `GET /api/marcus/live/session` to create a short-lived Live token after auth.
 - `GET /api/marcus/operator-health` to show Codex, GitHub, Cloudflare, and desktop capability status.
 - `POST /api/marcus/live/chat` for conversation-first project operator chat.
+- `public/marcus-realtime.js` for a WebRTC speech-to-speech session.
+- `POST /api/marcus/realtime/client-secret` for a short-lived OpenAI Realtime client secret; the standard OpenAI key remains on the server.
+
+Realtime voice uses `gpt-realtime-2.1` by default with voice `marin`. Its only operational function is `marcus_operator`, which sends substantive spoken requests back through `/api/marcus/live/chat`. The voice model does not own GitHub, Cloudflare, Codex, external communication, or approval authority.
 
 The mobile app is a PWA first. It does not add a separate Android credential store or native notification channel yet.
 

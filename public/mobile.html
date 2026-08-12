@@ -60,6 +60,12 @@
   .composer textarea { min-height: 76px; max-height: 160px; resize: vertical; }
   .quick { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
   .quick .btn { min-height: 38px; padding: 8px; font-size: 12px; }
+  .voice-row { min-height: 44px; display: flex; align-items: center; gap: 10px; }
+  .voice-btn { min-width: 124px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
+  .voice-btn.active { color: #03211d; background: var(--accent); border-color: transparent; font-weight: 800; }
+  .voice-dot { width: 10px; height: 10px; border: 2px solid currentColor; border-radius: 50%; flex: 0 0 auto; }
+  .voice-btn.active .voice-dot { background: currentColor; }
+  .voice-status { min-width: 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
   .install { display: none; padding: 12px; align-items: center; justify-content: space-between; gap: 10px; }
   .install.visible { display: flex; }
   .install p { margin: 0; color: var(--muted); font-size: 13px; }
@@ -105,6 +111,13 @@
         <button class="btn" type="button" data-prompt="Audit my active project and start Codex if there is enough context.">Codex</button>
         <button class="btn" type="button" data-prompt="Draft the text or email I should send next, but do not send it.">Draft</button>
       </div>
+      <div class="voice-row">
+        <button id="voiceBtn" class="btn voice-btn" type="button" aria-pressed="false">
+          <span class="voice-dot" aria-hidden="true"></span>
+          <span id="voiceLabel">Start voice</span>
+        </button>
+        <span id="voiceStatus" class="voice-status" aria-live="polite">OpenAI Realtime ready</span>
+      </div>
       <textarea id="messageInput" placeholder="Talk to Marcus..."></textarea>
       <button id="sendBtn" class="btn primary" type="submit">Send</button>
     </form>
@@ -116,6 +129,7 @@
   </nav>
 </main>
 
+<script src="/marcus-realtime.js"></script>
 <script>
 (() => {
   const els = {
@@ -135,10 +149,14 @@
     send: document.getElementById('sendBtn'),
     openLive: document.getElementById('openLiveBtn'),
     refresh: document.getElementById('refreshBtn'),
+    voice: document.getElementById('voiceBtn'),
+    voiceLabel: document.getElementById('voiceLabel'),
+    voiceStatus: document.getElementById('voiceStatus'),
   };
   let liveToken = '';
   let adminToken = localStorage.getItem('marcus_mobile_admin_token') || '';
   let deferredInstall = null;
+  let realtimeVoice = null;
 
   function setStatus(text, cls = '') {
     els.status.className = `status-pill ${cls}`.trim();
@@ -214,6 +232,52 @@
     }
   }
 
+  function updateVoiceUi({ state, detail, active }) {
+    const labels = {
+      offline: 'Start voice',
+      connecting: 'Connecting',
+      listening: 'Voice on',
+      thinking: 'Working',
+      speaking: 'Speaking',
+      error: 'Retry voice',
+    };
+    els.voiceLabel.textContent = labels[state] || 'Start voice';
+    els.voiceStatus.textContent = detail || (active ? 'OpenAI Realtime active' : 'OpenAI Realtime ready');
+    els.voice.classList.toggle('active', Boolean(active));
+    els.voice.setAttribute('aria-pressed', active ? 'true' : 'false');
+  }
+
+  if (typeof window.createMarcusRealtimeVoice === 'function') {
+    realtimeVoice = window.createMarcusRealtimeVoice({
+      getAuthToken: async () => {
+        if (!(await ensureSession())) return '';
+        return liveToken || adminToken;
+      },
+      invokeMarcus: async (message) => {
+        addMessage('user', message);
+        const data = await api('/api/marcus/live/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message }),
+        });
+        const reply = data.reply || data.message || data.error || 'Marcus responded without text.';
+        addMessage('marcus', reply);
+        refreshHealth().catch(() => {});
+        return {
+          ok: data.ok !== false,
+          reply,
+          operationId: data.operation?.id || '',
+          operationStatus: data.operation?.status || data.status || '',
+        };
+      },
+      onStatus: updateVoiceUi,
+      onError: (error) => addMessage('system', error?.message || 'Marcus voice failed.'),
+    });
+  } else {
+    els.voice.disabled = true;
+    els.voiceStatus.textContent = 'Realtime voice unavailable';
+  }
+
   els.loginBtn.addEventListener('click', async () => {
     try {
       const enteredToken = String(els.adminToken.value || '').trim();
@@ -242,6 +306,17 @@
     location.href = `/live.html?liveToken=${encodeURIComponent(liveToken)}`;
   });
   els.refresh.addEventListener('click', refreshHealth);
+  els.voice.addEventListener('click', async () => {
+    if (!realtimeVoice) return;
+    if (realtimeVoice.isActive()) {
+      realtimeVoice.stop();
+      return;
+    }
+    try {
+      if (!(await ensureSession())) return;
+      await realtimeVoice.start();
+    } catch {}
+  });
 
   window.addEventListener('beforeinstallprompt', (event) => {
     event.preventDefault();
@@ -258,6 +333,7 @@
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/sw.js').catch(() => {});
   }
+  window.addEventListener('pagehide', () => realtimeVoice?.stop());
   addMessage('system', 'Marcus Mobile is ready.');
   refreshHealth();
 })();

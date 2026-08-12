@@ -29,7 +29,8 @@ It can have broad read access to GitHub, Cloudflare, project files, and operatio
 
 The main interface should be conversation, not dashboards.
 
+Voice should feel like the same Marcus conversation, not a separate assistant. The voice layer owns listening, turn-taking, interruption, and natural speech. Marcus remains the authority for memory, project audits, Codex work, approvals, and completion evidence.
+
 Dashboards are useful as supporting surfaces, but the primary loop should be:
 
 `conversation -> project understanding -> audit -> Codex prompt -> Codex session -> verification -> summary -> optional external communication`
-

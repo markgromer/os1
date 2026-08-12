@@ -32,6 +32,7 @@ The server already has environment-driven provider config for:
 - `CLOUDFLARE_DEFAULT_ZONE_ID`
 - `RENDER_API_KEY`
 - `OPENAI_API_KEY`
+- `MARCUS_REALTIME_MODEL` and `MARCUS_REALTIME_VOICE` as non-secret voice configuration overrides
 - Email IMAP/SMTP settings
 - Slack credentials
 - Twilio/Quo webhook verification
@@ -54,6 +55,12 @@ Capability truth source:
 - `GET /api/marcus/operator-health`
 
 This endpoint should be used by the UI and by Marcus responses before claiming what it can actually do. It distinguishes server-side provider credentials from user-machine tooling such as `gh` and `wrangler`.
+
+## Realtime Voice Access
+
+`POST /api/marcus/realtime/client-secret` is authenticated with the existing Marcus admin or Live session token. It uses the standard OpenAI API key only on the server and returns a short-lived client secret to the browser for WebRTC setup.
+
+The Realtime session exposes one function, `marcus_operator`. That function calls Marcus's authenticated Live chat route; it does not expose GitHub, Cloudflare, Codex, email, text, deployment, or DNS credentials to the browser or voice model. Existing approval rules remain authoritative.
 
 External communication draft source:
 

@@ -10,6 +10,7 @@ This folder is an Obsidian-compatible documentation space for Marcus.
 - [[current-system-map]]
 - [[implementation-roadmap]]
 - [[decision-log]]
+- [[voice-interface]]
 
 ## Working Definition
 

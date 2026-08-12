@@ -27,6 +27,12 @@ External communication now follows:
 
 The approval endpoint records Mark's explicit approval but does not mark a message sent. Provider-specific sending should be added as a later action with its own result evidence.
 
+Realtime voice follows:
+
+`microphone -> OpenAI Realtime WebRTC -> marcus_operator -> /api/marcus/live/chat -> durable Marcus result -> spoken response`
+
+The voice model handles conversational audio but cannot bypass the normal project operator, durable operation, or approval paths. A spoken follow-up such as "do it" is sent to the same pending-operation approval handler as typed chat.
+
 ## Execution Brief Contents
 
 Every Codex-bound job should include:

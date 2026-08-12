@@ -106,6 +106,37 @@ Every meaningful Marcus architecture change should update:
 - [[access-model]]
 - [[implementation-roadmap]]
 
+## Phase 7: Production Voice Interface
+
+Decision: use OpenAI Realtime speech-to-speech over WebRTC as the primary mobile conversation layer. Keep ElevenLabs/browser speech as narration fallback and do not build a custom STT/TTS tuning stack.
+
+Implemented slice:
+
+- Server-minted short-lived Realtime client secrets.
+- `gpt-realtime-2.1` and `marin` defaults with environment overrides.
+- Android PWA start/stop voice control.
+- Native realtime turn-taking and interruption transport.
+- A single `marcus_operator` bridge back to the durable Live chat and approval flow.
+- Unit and smoke coverage for session policy, auth, and static assets.
+
+Acceptance tests still required before this phase is complete:
+
+- Start and stop a voice session from the installed Android PWA.
+- Hold a multi-turn project conversation without reselecting the project.
+- Interrupt Marcus while it is speaking and continue naturally.
+- Create a project audit/Codex operation by voice.
+- Approve a waiting operation by voice and confirm the same durable operation advances.
+- Confirm external communication and production mutations still pause for explicit approval.
+- Verify recovery after phone lock, network interruption, and an expired Live token.
+
+Status: code integration is present. A live Android conversation against the production host is not yet verified.
+
+Verified locally on 2026-08-12:
+
+- The configured OpenAI account minted a short-lived `gpt-realtime-2.1` client secret.
+- A Playwright mobile browser authenticated to Marcus, started the voice control, established the OpenAI WebRTC call with HTTP 201, and reached `Voice on` / `Listening` with no browser warnings or errors.
+- This used a synthetic microphone track; it does not replace the installed-Android speech and interruption tests above.
+
 ## Demo Deployment
 
 GitHub demo repo:
