@@ -8,6 +8,8 @@ Decision: After runner completion, query GitHub directly for the target branch, 
 
 Consequence: A successful runner no longer stands in for a successful implementation. Missing/truncated evidence, failed or pending target checks, malformed review output, incomplete criterion coverage, and digest mismatches fail closed. The target collector passed read-only against the real Marcus demo PR #3 before production deployment; production operation acceptance remains required.
 
+Production correction: The first live review of demo PR #4 exposed a false-positive model response: it marked criteria met with blank evidence and claimed tests passed without target test evidence. The operation remained blocked on independent build/test/lint gates. Marcus now supplies a validated evidence catalog, requires every `met` criterion to reference one or more exact catalog IDs, rejects invented/blank references, and rejects execution claims that lack successful target checks or authenticated verification evidence.
+
 ## 2026-08-12: Mission Memory Is Durable Data, Not A Prompt Constant
 
 Context: Marcus retained recent conversation and project requirements, but his overall mission, Mark's standing instructions, and cross-project preferences existed only in code, documentation, or the current conversation. That did not prove durable recall across chat eviction, process restart, business switching, or a later Codex handoff.

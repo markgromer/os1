@@ -87,9 +87,9 @@ test('direct Codex completion is independently reviewed and provider review clai
     message: { content: JSON.stringify({
       verdict: 'pass', confidence: 0.95,
       acceptanceCoverage: [
-        { criterionIndex: 0, status: 'met', evidence: 'The requested implementation is visible.' },
-        { criterionIndex: 1, status: 'met', evidence: 'The diff is scoped to the requested file.' },
-        { criterionIndex: 2, status: 'met', evidence: 'Commit and diff evidence are attached.' },
+        { criterionIndex: 0, status: 'met', evidence: 'The requested implementation is visible.', evidenceRefs: ['diff:src/review.js'] },
+        { criterionIndex: 1, status: 'met', evidence: 'The diff is scoped to the requested file.', evidenceRefs: ['diff:src/review.js'] },
+        { criterionIndex: 2, status: 'met', evidence: 'Commit and diff evidence are attached.', evidenceRefs: ['operation:implementation_evidence'] },
       ],
       findings: [], residualRisks: [],
     }) },
@@ -144,9 +144,9 @@ test('verification retry refreshes settled target checks and independent result 
     message: { content: JSON.stringify({
       verdict: 'pass', confidence: 0.98,
       acceptanceCoverage: [
-        { criterionIndex: 0, status: 'met', evidence: 'Implementation is visible.' },
-        { criterionIndex: 1, status: 'met', evidence: 'The diff is scoped.' },
-        { criterionIndex: 2, status: 'met', evidence: 'Evidence is attached.' },
+        { criterionIndex: 0, status: 'met', evidence: 'Implementation is visible.', evidenceRefs: ['diff:src/settling.js'] },
+        { criterionIndex: 1, status: 'met', evidence: 'The diff is scoped.', evidenceRefs: ['diff:src/settling.js'] },
+        { criterionIndex: 2, status: 'met', evidence: 'Evidence is attached.', evidenceRefs: ['operation:implementation_evidence'] },
       ], findings: [], residualRisks: [],
     }) },
   });

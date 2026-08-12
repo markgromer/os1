@@ -108,7 +108,7 @@ Implemented path:
 - Collect target PR, head commit, changed files, bounded patches, check runs, and commit statuses directly from GitHub after the Reggie runner completes.
 - Bind the stored diff and independent review with a SHA-256 evidence digest.
 - Treat repository patches as untrusted input to a separate AI reviewer.
-- Require explicit coverage of every acceptance criterion, no high/blocker finding, and at least 0.8 confidence before passing `diff_review`.
+- Require explicit coverage of every acceptance criterion with validated evidence-catalog references, no high/blocker finding, no unsupported execution claim, and at least 0.8 confidence before passing `diff_review`.
 - Fail closed on missing/truncated evidence, pending/failed target checks, invalid review output, or provenance mismatch.
 - Refresh GitHub evidence and the independent review on verification retry without relaunching Codex.
 - Keep build, test, lint, typecheck, browser, deployment, merge, and communication gates independent.

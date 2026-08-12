@@ -54,8 +54,8 @@ test('independent Codex result reviewer passes only complete criterion-by-criter
           confidence: 0.94,
           summary: 'The settings dialog and verification gate are visible in the diff.',
           acceptanceCoverage: [
-            { criterionIndex: 0, status: 'met', evidence: 'src/setup.js opens the dialog.' },
-            { criterionIndex: 1, status: 'met', evidence: 'src/setup.js gates sweep on verification.' },
+            { criterionIndex: 0, status: 'met', evidence: 'src/setup.js opens the dialog.', evidenceRefs: ['diff:src/setup.js'] },
+            { criterionIndex: 1, status: 'met', evidence: 'src/setup.js gates sweep on verification.', evidenceRefs: ['diff:src/setup.js'] },
           ],
           findings: [],
           residualRisks: ['Runtime behavior still requires separate test evidence.'],
@@ -82,13 +82,59 @@ test('independent Codex result reviewer cannot pass incomplete criterion coverag
       message: { content: JSON.stringify({
         verdict: 'pass',
         confidence: 0.99,
-        acceptanceCoverage: [{ criterionIndex: 0, status: 'met', evidence: 'One criterion only.' }],
+        acceptanceCoverage: [{ criterionIndex: 0, status: 'met', evidence: 'One criterion only.', evidenceRefs: ['diff:src/setup.js'] }],
         findings: [],
       }) },
     }),
   });
   const artifact = await reviewer.review({ operation: operation(), diff: diff() });
   assert.equal(artifact.metadata.reviewStatus, 'needs_manual_review');
+});
+
+test('independent Codex result reviewer rejects empty citations and unsupported test claims', async () => {
+  const reviewer = new CodexResultReviewer({
+    complete: async () => ({
+      ok: true,
+      provider: 'openai',
+      model: 'gpt-review',
+      message: { content: JSON.stringify({
+        verdict: 'pass',
+        confidence: 0.99,
+        summary: 'The implementation is correct and all tests passed.',
+        acceptanceCoverage: [
+          { criterionIndex: 0, status: 'met', evidence: '' },
+          { criterionIndex: 1, status: 'met', evidence: 'src/setup.js gates sweep on verification.', evidenceRefs: ['diff:src/setup.js'] },
+        ],
+        findings: [],
+      }) },
+    }),
+  });
+  const artifact = await reviewer.review({ operation: operation(), diff: diff() });
+  assert.equal(artifact.metadata.reviewStatus, 'needs_manual_review');
+  const content = JSON.parse(artifact.content);
+  assert.equal(content.review.acceptanceCoverage[0].status, 'unknown');
+  assert.deepEqual(content.review.unsupportedClaims, ['test']);
+});
+
+test('independent Codex result reviewer rejects invented evidence references', async () => {
+  const reviewer = new CodexResultReviewer({
+    complete: async () => ({
+      ok: true, provider: 'openai', model: 'gpt-review',
+      message: { content: JSON.stringify({
+        verdict: 'pass', confidence: 0.99,
+        acceptanceCoverage: [
+          { criterionIndex: 0, status: 'met', evidence: 'The dialog is implemented.', evidenceRefs: ['diff:missing.js'] },
+          { criterionIndex: 1, status: 'met', evidence: 'The sweep is gated.', evidenceRefs: ['diff:src/setup.js'] },
+        ],
+        findings: [],
+      }) },
+    }),
+  });
+  const artifact = await reviewer.review({ operation: operation(), diff: diff() });
+  assert.equal(artifact.metadata.reviewStatus, 'needs_manual_review');
+  const content = JSON.parse(artifact.content);
+  assert.equal(content.review.acceptanceCoverage[0].status, 'unknown');
+  assert.deepEqual(content.review.acceptanceCoverage[0].evidenceRefs, []);
 });
 
 test('independent Codex result reviewer fails closed before model review for incomplete diffs and failed checks', async () => {
