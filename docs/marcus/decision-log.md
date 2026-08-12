@@ -1,5 +1,13 @@
 # Decision Log
 
+## 2026-08-12: Live Memory Is Project-Scoped Before Execution
+
+Context: A deterministic production speech test correctly reached OpenAI Realtime and the Marcus operator, but the answer replayed stale requirements from another project because Live chat assembled recent history before resolving the explicitly named Reggie repository.
+
+Decision: Store project metadata on both turns of every exchange, resolve an explicitly named project before assembling the operator request, select only matching user requirements, and generate a short requirement summary for context-only replies. Preserve compatibility with older exchanges by pairing a user turn with its assistant turn's project metadata.
+
+Consequence: A single spoken or typed command can switch projects and immediately request an audit or Codex handoff without contaminating the prompt with the formerly active project. Regression coverage now switches Reggie to Atlas and back, verifies zero work for an explicit read-only request, and verifies a direct Reggie audit contains no Atlas requirement.
+
 ## 2026-08-12: Voice Acceptance Uses Redacted Durable Telemetry
 
 Context: Production browser signaling tests and screenshots could show UI state, but they could not durably prove recognized speech, assistant audio, interruption, operator completion, or recovery on an installed Android PWA. Retaining transcripts or credentials for acceptance would create unnecessary privacy and security exposure.

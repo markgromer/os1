@@ -176,7 +176,9 @@ The browser lifecycle closes the media session while the PWA is hidden, resumes 
 
 `marcus/voice/realtime_telemetry.js` accepts only allowlisted event types and bounded metadata. It stores no transcript, request, reply, credential, IP address, or raw user agent. Events are capped at 1,000 per business in `data/businesses/<business>/marcus-realtime-telemetry.json`. The acceptance view derives signaling, recognized-speech, assistant-audio-stream, interruption, operator-bridge, network-recovery, background-recovery, and installed-Android-context gates.
 
-`/api/marcus/live/chat` keeps recent conversation turns and an active project on the server. The project operator receives the accumulated user requirements rather than only the latest short follow-up.
+`/api/marcus/live/chat` keeps recent conversation turns and an active project on the server. Both sides of each exchange carry project metadata. When a message explicitly names a project, Marcus resolves that project before building the request and includes only matching user requirements; the explicit target overrides the previously active project. Older conversations remain compatible because a user turn can inherit the project metadata from its paired assistant reply. Context-only replies summarize at most three substantive requirements instead of replaying raw history.
+
+The project operator receives the accumulated project-scoped user requirements rather than only the latest short follow-up. Explicit audit or Codex commands use the same resolved project for repository inspection, prompt composition, operation binding, and provider launch.
 
 The mobile app is a PWA first. Pairing sets the existing secure HttpOnly authentication cookie; the six-digit code is not retained. It does not add a separate Android credential store or native notification channel yet.
 

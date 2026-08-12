@@ -45,6 +45,12 @@ Voice transport recovery follows:
 
 The active project and recent requirements remain server-side during transport recovery; reconnecting does not create a second project conversation or grant new authority.
 
+Project continuity follows:
+
+`explicit project in current turn -> resolve target -> select only target-project user requirements -> audit/plan/execute against that target`
+
+The current explicit project wins over an older active project. Context-only requests return a bounded requirement summary; they do not echo unrelated conversation history or imply that an audit or Codex session ran.
+
 Voice acceptance evidence follows:
 
 `allowlisted browser lifecycle event -> authenticated telemetry batch -> bounded business-scoped event file -> derived acceptance gates`
