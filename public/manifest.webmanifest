@@ -2,6 +2,7 @@
   "name": "M.A.R.C.U.S.",
   "short_name": "Marcus",
   "description": "Mobile access to Marcus project operator chat and live status.",
+  "id": "/mobile.html",
   "start_url": "/mobile.html",
   "scope": "/",
   "display": "standalone",
@@ -10,10 +11,34 @@
   "orientation": "portrait",
   "icons": [
     {
+      "src": "/icons/marcus-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/marcus-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/marcus-maskable-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/icons/marcus-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
       "src": "/icons/marcus.svg",
       "sizes": "any",
       "type": "image/svg+xml",
-      "purpose": "any maskable"
+      "purpose": "any"
     }
   ],
   "shortcuts": [

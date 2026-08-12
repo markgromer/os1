@@ -1,10 +1,14 @@
-const CACHE_NAME = 'marcus-mobile-v14';
+const CACHE_NAME = 'marcus-mobile-v15';
 const SHELL_ASSETS = [
   '/mobile.html',
   '/marcus-realtime.js',
   '/marcus-operation-tracker.js',
   '/manifest.webmanifest',
-  '/icons/marcus.svg'
+  '/icons/marcus.svg',
+  '/icons/marcus-192.png',
+  '/icons/marcus-512.png',
+  '/icons/marcus-maskable-192.png',
+  '/icons/marcus-maskable-512.png'
 ];
 
 self.addEventListener('install', (event) => {
