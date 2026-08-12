@@ -75,20 +75,11 @@
       "command": "node",
       "args": [
         "desktop-agent.cjs",
-        "https://os1-q78n.onrender.com",
-        "${input:adminToken}"
+        "https://task-tracker-5wsa.onrender.com"
       ],
       "isBackground": true,
       "problemMatcher": [],
       "group": "build"
-    }
-  ],
-  "inputs": [
-    {
-      "id": "adminToken",
-      "type": "promptString",
-      "description": "Your ADMIN_TOKEN for the Render server",
-      "password": true
     }
   ]
 }

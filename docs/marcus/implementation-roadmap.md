@@ -179,7 +179,7 @@ Acceptance tests still required before this phase is complete:
 - Verify recovery after phone lock, network interruption, and an expired Live token.
 - Inspect the resulting acceptance session and confirm every physical-device gate is true without relying on transcript storage.
 
-Status: the official SDK, recovery, and acceptance telemetry are live at `https://task-tracker-5wsa.onrender.com/mobile.html`, pass the local `94/94` suite, and passed production synthetic-browser signaling, speech, assistant-audio, interruption, operator-bridge, network-recovery, and background-recovery validation. A real installed-Android speech, barge-in, and recovery conversation is not yet verified.
+Status: the official SDK, recovery, and acceptance telemetry are live at `https://task-tracker-5wsa.onrender.com/mobile.html`, pass the local `95/95` suite, and passed production synthetic-browser signaling, speech, assistant-audio, interruption, operator-bridge, network-recovery, and background-recovery validation. A real installed-Android speech, barge-in, and recovery conversation is not yet verified.
 
 Verified locally on 2026-08-12:
 
@@ -218,9 +218,12 @@ The deployed Worker demonstrates the audit and handoff contract. Its `/codex/sta
 Verified endpoints:
 
 - `/health`
+- `/readiness`
 - `/demo`
 - `/audit`
 - `/codex/start`
+
+The readiness contract was verified live on 2026-08-12 from GitHub commit `4827421` and Cloudflare Worker version `a51aa87d-a3e8-4dc3-ab81-2b9577a5a17c`. It reports the runtime, audit path, Codex handoff, and external-action approval boundary ready. A live Reggie request returned an audited project, a structured Codex goal, `handoff_ready`, and `approvalRequiredForExternalActions: true`.
 
 Production Codex acceptance evidence:
 

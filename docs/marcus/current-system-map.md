@@ -195,6 +195,8 @@ Pairing state is persisted on the Render data volume under an exclusive file loc
 
 The Windows scheduled task `MARCUS-DesktopAgent` targets the canonical Render host. It reads the admin credential from `%APPDATA%/M.A.R.C.U.S/mobile-live-admin-token.txt`, so the secret is not present in Task Scheduler arguments or the `node.exe` command line. Polling is serialized and transient process-spawn failures do not terminate the relay.
 
+The matching VS Code task also targets the canonical Render host and relies on the same protected token file. Production operator health confirmed the relay online after the 2026-08-12 deployment restart.
+
 It can:
 
 - Report active window/workspace/git context.
