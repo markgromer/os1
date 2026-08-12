@@ -152,7 +152,7 @@ Acceptance tests still required before this phase is complete:
 - Confirm external communication and production mutations still pause for explicit approval.
 - Verify recovery after phone lock, network interruption, and an expired Live token.
 
-Status: the original Realtime integration is live at `https://task-tracker-5wsa.onrender.com/mobile.html`. The official SDK and recovery upgrade passes the local `90/90` suite but still requires Render deployment and production browser validation. A real installed-Android speech, barge-in, and recovery conversation is not yet verified.
+Status: the official SDK and recovery upgrade is live at `https://task-tracker-5wsa.onrender.com/mobile.html`, passes the local `91/91` suite, and passed production browser signaling and recovery validation. A real installed-Android speech, barge-in, and recovery conversation is not yet verified.
 
 Verified locally on 2026-08-12:
 
@@ -163,9 +163,12 @@ Verified locally on 2026-08-12:
 Verified against production on 2026-08-12:
 
 - The durable mobile admin credential authenticated on the canonical Render host.
-- The PWA loaded under service worker cache `marcus-mobile-v5`.
+- The PWA loaded under service worker cache `marcus-mobile-v6`; the official SDK bundle was served with gzip.
 - Production minted a short-lived `gpt-realtime-2.1` / `marin` client secret.
-- A mobile Chromium session started voice, reached `Voice on` / `Listening`, and established the OpenAI WebRTC call with HTTP 201 and no browser warnings or errors.
+- A paired mobile Chromium session started voice, reached `Voice on` / `Listening`, and established the OpenAI WebRTC call with HTTP 201.
+- Simulated network loss moved the UI to `Reconnecting` / `Waiting for network`; restoring network minted a fresh credential, opened a new HTTP 201 Realtime call, and returned to `Listening`.
+- A browser `pagehide` / `pageshow` acceptance moved the UI through `Paused` and reconnected with a third fresh credential and HTTP 201 Realtime call.
+- The browser reported no warnings or errors and stored no durable token in local storage.
 - Production operator health reported `direct_codex`, GitHub ready, and Cloudflare ready.
 - One-time six-digit mobile pairing was exercised against production. Cookie authentication succeeded, code reuse returned 401, no durable token was stored in browser storage, and the paired session established the Realtime call.
 

@@ -1,5 +1,13 @@
 # Decision Log
 
+## 2026-08-12: Project Conversation Does Not Imply Execution
+
+Context: A production read-only Reggie continuity check mentioned a repository, auditing, and Codex while explicitly saying not to audit or start Codex. The broad keyword classifier resolved Reggie and inspected two repositories and six files before creating approval-gated operation `op_-3JoirxhsOnaLg`. No provider job started, and the operation was cancelled, but creating it violated the user's instruction.
+
+Decision: Require a positive project-work action instead of treating `repo`, `site`, or `Codex` as execution intent. Remove explicitly negated audit clauses before durable-work classification. Preserve requirements across turns, but let the newest execution instruction supersede old "do not audit/start" controls without removing durable restrictions such as "do not deploy." Support audit/prompt preparation with `autoStart: false` when the current turn explicitly defers starting Codex.
+
+Consequence: Marcus can discuss and retain project requirements without immediately auditing or launching work. Regression coverage proves a read-only Reggie turn creates zero operations, a later positive turn uses the retained API-token/slug requirements, and prepare-without-start creates no provider job.
+
 ## 2026-08-12: Mobile Pairing Survives Render Process Replacement
 
 Context: A production browser acceptance minted a valid pairing code while Render was replacing the application process. The code existed only in the old process's memory, so a pairing request routed to the replacement process returned `Invalid or expired pairing code`.

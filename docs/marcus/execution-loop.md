@@ -21,6 +21,12 @@ The first working slice is:
 
 This is implemented without relying on a model call for the core control flow. Explicit GitHub `owner/repository` references can be added to the project registry, and short mobile follow-ups reuse the active project plus recent requirements. Direct Codex launch remains adapter-dependent.
 
+Conversation-only project context follows:
+
+`project/repository mention -> resolve and retain project plus requirements -> wait for a positive audit/implementation request`
+
+Mentioning `repo`, `site`, or `Codex` does not itself create work. Explicitly negated audit clauses are excluded from execution classification. A later positive instruction supersedes an older "do not audit/start" control while durable constraints such as "do not deploy" remain in the execution brief.
+
 External communication now follows:
 
 `conversation -> draft email/text -> pending approval -> approved/rejected -> provider send -> sent/failed evidence`

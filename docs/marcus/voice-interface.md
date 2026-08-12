@@ -1,6 +1,6 @@
 # Voice Interface
 
-Status: primary architecture selected. The official SDK recovery upgrade is implemented and locally verified; Render deployment and installed-Android speech, interruption, and recovery verification remain open.
+Status: primary architecture selected and deployed. The official SDK signaling and recovery paths are verified in production Chromium; installed-Android speech, interruption, and physical phone-lock/network-handoff verification remain open.
 
 ## Objective
 
@@ -65,13 +65,15 @@ The browser receives a short-lived client secret from `POST /api/marcus/realtime
 - A connected session renews at 55 minutes before the Realtime session limit.
 - A connection version prevents a stale asynchronous setup from replacing a newer session.
 
-Local acceptance covers these lifecycle rules with an SDK-session test double. Production WebRTC and installed-Android behavior remain explicit completion checks.
+Local acceptance covers these lifecycle rules with an SDK-session test double. Production Chromium covers live signaling plus synthetic network and page lifecycle recovery. Installed-Android behavior remains an explicit completion check.
 
 ## Production Evidence
 
-On 2026-08-12 the canonical Render PWA authenticated, obtained a short-lived Realtime client secret, created an OpenAI WebRTC call with HTTP 201, and reached `Voice on` / `Listening`. The browser reported no warning or error console messages. This evidence applies to the first Realtime client under service worker `marcus-mobile-v5`; it does not yet verify the official SDK recovery upgrade under `marcus-mobile-v6`.
+On 2026-08-12 the canonical Render PWA loaded service worker `marcus-mobile-v6`, authenticated through one-time pairing, obtained a short-lived Realtime client secret, created an OpenAI WebRTC call with HTTP 201, and reached `Voice on` / `Listening`. The SDK bundle was served with gzip.
 
-This proves production authentication, PWA assets, ephemeral-key minting, and WebRTC signaling. It does not prove actual Android microphone quality, spoken tool invocation, barge-in, phone-lock recovery, or network handoff; those remain in the completion gate.
+The same production browser went offline and entered `Reconnecting` / `Waiting for network`. Restoring network minted a fresh credential, created a second HTTP 201 Realtime call, and returned to `Listening`. Synthetic `pagehide` / `pageshow` events moved the UI through `Paused` and created a third fresh credential and HTTP 201 call. The run had no browser warnings or errors and no durable token in local storage.
+
+This proves production authentication, PWA assets, ephemeral-key minting, SDK WebRTC signaling, and browser lifecycle recovery. It does not prove actual Android microphone quality, spoken tool invocation, barge-in, physical phone-lock recovery, or cellular/Wi-Fi handoff; those remain in the completion gate.
 
 Android authentication uses the one-time pairing flow in [[access-model]], so voice setup does not require copying the durable server credential to the device. The production pairing-to-voice path passed with no durable token in browser storage.
 

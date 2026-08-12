@@ -78,6 +78,8 @@ It owns:
 - Creating a durable operation and either starting a direct Codex job through the configured adapter or creating an external Codex handoff.
 - Auto-registering an authenticated user's explicit GitHub `owner/repository` target when it is not already in the project registry.
 - Reusing the active mobile project and recent requirements when a follow-up says "check the repo", "do it", or otherwise omits the project name.
+- Requiring a positive work action before auditing or creating an operation; repository, site, and Codex mentions alone remain conversation context.
+- Respecting "do not audit" as context-only and "audit/prepare, but do not start Codex" as a planned operation with no provider start.
 
 The production project registry includes `Reggie` at `markgromer/Reggie`, with `connect.scooper.site` and `Sweep and Go` aliases.
 
