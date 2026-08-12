@@ -115,6 +115,14 @@ Added and tested locally on 2026-08-12:
 
 Production blocker: no real Quo outbound API key/sender or SMTP account is configured. Marcus Mobile now provides an admin-only `Integrations` dialog that stores write-only credentials and verifies Quo/SMTP without sending. Mark must enter both provider accounts there; live verification and one explicitly approved send through each provider remain required.
 
+Production provider-onboarding acceptance on 2026-08-12:
+
+- Render served service worker `marcus-mobile-v12` with the provider dialog at the canonical mobile URL.
+- A fresh one-time pairing code authenticated a 390 x 844 Chromium session; the dialog opened with zero browser errors or warnings and no local/session storage entries.
+- Unauthenticated and Live-session-only provider config requests returned 401; the paired durable-admin context succeeded.
+- Config responses exposed no API key or SMTP password and agreed with operator health that both providers are currently unconfigured and unverified.
+- A Quo no-send verification attempt returned 400 because the real credentials are absent; it did not create an external action or send a message.
+
 Production project-continuity acceptance on 2026-08-11:
 
 - A first mobile API turn set `Reggie` / `markgromer/Reggie` as the active project with the Sweep and Go API-token/slug popup requirement.
