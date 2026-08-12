@@ -17,6 +17,7 @@ import nodemailer from 'nodemailer';
 
 import { mcpCallTool, mcpListTools } from './mcpClient.js';
 import { registerOperationsRoutes } from './marcus/api/operations_routes.js';
+import { registerMissionMemoryRoutes } from './marcus/api/mission_memory_routes.js';
 import { registerProjectEvidenceRoutes } from './marcus/api/project_evidence_routes.js';
 import { scopeAuthorizedPublishActions } from './marcus/approvals/publish_safeguard.js';
 import { buildMarcusSystemPrompt } from './marcus/core/build_system_prompt.js';
@@ -28,6 +29,7 @@ import {
   isMarcusProjectActivityTool,
 } from './marcus/evidence/marcus_project_activity_tools.js';
 import { buildActiveBrief as buildOperationalActiveBrief } from './marcus/intelligence/active_brief.js';
+import { formatMissionMemoryForPrompt, MissionMemoryStore } from './marcus/memory/mission_memory_store.js';
 import { createOperationsEngine } from './marcus/operations/operation_engine.js';
 import { discoverDurableBackupSources } from './marcus/operations/operation_backups.js';
 import { DesktopActionQueue } from './marcus/operations/desktop_action_queue.js';
@@ -240,6 +242,7 @@ const DATA_FILE = path.join(DATA_DIR, 'tasks.json');
 const MARCUS_OPERATIONAL_CONTROLS_FILE = path.join(DATA_DIR, 'marcus-operational-controls.json');
 const MARCUS_SESSION_STATE_FILE = path.join(DATA_DIR, 'marcus-session-state.json');
 const realtimeTelemetryStore = new RealtimeTelemetryStore({ dataDir: DATA_DIR });
+const missionMemoryStore = new MissionMemoryStore({ dataDir: DATA_DIR });
 
 const BUSINESS_DATA_DIR = path.join(DATA_DIR, 'businesses');
 const desktopActionQueue = new DesktopActionQueue({
@@ -279,6 +282,7 @@ const projectOperatorService = new ProjectOperatorService({
   projectEvidenceService,
   getLegacyStore: (businessKey) => readStoreForBusiness(businessKey),
   getDesktopContext: async () => desktopRelayCache?.data || desktopContextCache?.data || {},
+  getMissionMemory: (businessKey, request) => missionMemoryStore.relevant(businessKey, request),
   githubApi: (pathPart, options) => githubApi(pathPart, options),
 });
 
@@ -900,6 +904,11 @@ app.post('/api/auth/logout', (req, res) => {
 
 registerOperationsRoutes(app, {
   engine: operationsEngine,
+  getBusinessKey: () => getBusinessKeyFromContext(),
+});
+
+registerMissionMemoryRoutes(app, {
+  store: missionMemoryStore,
   getBusinessKey: () => getBusinessKeyFromContext(),
 });
 
@@ -2437,9 +2446,10 @@ function getRenderCloudConfig(saved = {}) {
 }
 
 async function buildMarcusOperatorHealth() {
-  const [settings, readiness] = await Promise.all([
+  const [settings, readiness, missionMemory] = await Promise.all([
     readSettings(),
     operationsEngine.readiness(getBusinessKeyFromContext()),
+    missionMemoryStore.list(getBusinessKeyFromContext(), { status: 'active', limit: 100 }),
   ]);
   const ai = await getAiConfig();
   const email = getEmailConfig(settings);
@@ -2457,11 +2467,22 @@ async function buildMarcusOperatorHealth() {
   );
   const canAuditAndPrepareCodex = Boolean(readiness.operationEngineInitialized && readiness.projectRegistryAvailable);
   const directCodex = readiness.codex?.directAdapterConfigured === true;
+  const activeMissionMemories = missionMemory.memories || [];
+  const missionMemoryReady = activeMissionMemories.some((item) => item.kind === 'mission')
+    && activeMissionMemories.some((item) => item.kind === 'standing_instruction');
   return {
     ok: true,
     businessKey: getBusinessKeyFromContext(),
     generatedAt: nowIso(),
     capabilities: {
+      missionMemory: {
+        available: missionMemoryReady,
+        activeCount: activeMissionMemories.length,
+        revision: missionMemory.revision,
+        updatedAt: missionMemory.updatedAt,
+        businessScoped: true,
+        persisted: true,
+      },
       projectOperator: {
         available: canAuditAndPrepareCodex,
         mode: directCodex ? 'direct_codex' : 'codex_handoff',
@@ -2523,6 +2544,7 @@ async function buildMarcusOperatorHealth() {
       },
     },
     blockers: [
+      !missionMemoryReady ? 'Durable mission memory is missing an active mission or standing instruction.' : '',
       !github.configured ? 'GITHUB_TOKEN is not configured for the Marcus server; GitHub reads rely on route/user tooling instead of backend provider access.' : '',
       !cloudflare.configured ? 'CLOUDFLARE_API_TOKEN is not configured for the Marcus server; Cloudflare reads rely on route/user tooling instead of backend provider access.' : '',
       !ai.apiKey ? 'OpenAI is not configured; AI chat, transcription, and model-assisted drafting will be limited.' : '',
@@ -2559,6 +2581,7 @@ async function buildMarcusAcceptanceReport({ sessionId = '' } = {}) {
   const textSend = acceptedSend('text', communication.textProviderVerifiedAt);
   const emailSend = acceptedSend('email', communication.emailProviderVerifiedAt);
   const gates = {
+    missionMemoryReady: health.capabilities?.missionMemory?.available === true,
     projectOperatorReady: health.capabilities?.projectOperator?.canStartCodexDirectly === true,
     githubReady: health.capabilities?.github?.backendTokenConfigured === true,
     cloudflareReady: health.capabilities?.cloudflare?.backendTokenConfigured === true,
@@ -2571,6 +2594,7 @@ async function buildMarcusAcceptanceReport({ sessionId = '' } = {}) {
     physicalAndroidVoiceAccepted: voiceSession?.acceptedOnPhysicalDevice === true,
   };
   const labels = {
+    missionMemoryReady: 'Durable mission memory',
     projectOperatorReady: 'Direct Codex operator',
     githubReady: 'GitHub',
     cloudflareReady: 'Cloudflare',
@@ -14368,6 +14392,78 @@ function buildMarcusLiveProjectRequest(conversation, message, targetProject = co
   return [projectLine, requirementsBlock, ...prior, current].filter(Boolean).join('\n').slice(-12_000);
 }
 
+function parseMissionMemoryCommand(message) {
+  const text = String(message || '').replace(/\s+/g, ' ').trim();
+  if (!text) return null;
+  const queryMatch = text.match(/^(?:what|which|show|list|tell me)\b.{0,45}\b(?:remember|memory|mission|standing instructions?|preferences?)\b(?:\s+(?:about|for|on)\s+(.+))?[?.!]*$/i);
+  if (queryMatch) return { action: 'list', query: String(queryMatch[1] || '').trim() };
+
+  let content = '';
+  let kind = 'standing_instruction';
+  let title = 'Standing instruction from Mark';
+  const missionMatch = text.match(/^(?:please\s+)?(?:your|our|marcus(?:'s)?)\s+mission\s+(?:is|should be|:)\s*(.+)$/i);
+  const preferenceMatch = text.match(/^(?:please\s+)?(?:remember\s+(?:that\s+)?)?(?:my|our)\s+preference\s+(?:is|:)\s*(.+)$/i);
+  const fromNowOnMatch = text.match(/^(?:please\s+)?from now on[, :]\s*(.+)$/i);
+  const rememberMatch = text.match(/^(?:please\s+)?remember(?!\s+to\b)(?:\s+that)?[,:]?\s+(.+)$/i);
+  if (missionMatch) {
+    content = missionMatch[1];
+    kind = 'mission';
+    title = 'Mission from Mark';
+  } else if (preferenceMatch) {
+    content = preferenceMatch[1];
+    kind = 'preference';
+    title = 'Preference from Mark';
+  } else if (fromNowOnMatch) {
+    content = fromNowOnMatch[1];
+  } else if (rememberMatch) {
+    content = rememberMatch[1];
+    if (/^(?:i|we)\s+prefer\b/i.test(content)) {
+      kind = 'preference';
+      title = 'Preference from Mark';
+    } else if (/^(?:we|you|marcus)\s+(?:need|must|should)\b/i.test(content)) {
+      kind = 'standing_instruction';
+    } else {
+      kind = 'fact';
+      title = 'Remembered fact from Mark';
+    }
+  }
+  content = String(content || '').trim();
+  return content ? { action: 'add', kind, title, content } : null;
+}
+
+async function handleMissionMemoryCommand(businessKey, command, source = 'marcus_live_explicit_command') {
+  if (!command) return null;
+  if (command.action === 'list') {
+    const memories = await missionMemoryStore.relevant(businessKey, command.query, { limit: 8 });
+    return {
+      ok: true,
+      status: 'mission_memory_read',
+      memories,
+      reply: memories.length
+        ? `Here is the durable mission memory I am using:\n${memories.map((memory) => `- [${memory.kind}] ${memory.title}: ${memory.content}`).join('\n')}`
+        : 'I do not have a matching durable mission memory yet.',
+    };
+  }
+  try {
+    const result = await missionMemoryStore.add(businessKey, command, {
+      actor: 'mark',
+      source,
+    });
+    return {
+      ok: true,
+      status: result.created ? 'mission_memory_created' : 'mission_memory_confirmed',
+      memory: result.memory,
+      reply: `${result.created ? 'I added' : 'I reconfirmed'} this durable ${result.memory.kind.replaceAll('_', ' ')}: ${result.memory.content}`,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      status: 'mission_memory_rejected',
+      reply: `I did not store that in mission memory: ${String(error?.message || error)}`,
+    };
+  }
+}
+
 function isProjectContextDeclaration(message) {
   const text = String(message || '').trim();
   const explicitRepo = /(?:github\.com[/:]|\b[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\.git)?\b)/i.test(text);
@@ -16385,6 +16481,17 @@ app.post('/api/marcus/live/chat', async (req, res) => {
       return res.json(approvedOperation);
     }
 
+    const missionMemoryCommand = parseMissionMemoryCommand(message);
+    if (missionMemoryCommand) {
+      const memoryResult = await handleMissionMemoryCommand(getBusinessKeyFromContext(), missionMemoryCommand);
+      await recordMarcusLiveExchange(message, memoryResult.reply, {
+        missionMemoryId: memoryResult.memory?.id || '',
+        missionMemoryStatus: memoryResult.status,
+      });
+      pushLiveEvent({ type: 'chat', from: 'marcus', text: memoryResult.reply, ts: Date.now() });
+      return res.status(memoryResult.ok ? 200 : 400).json(memoryResult);
+    }
+
     const declaresProjectContext = isProjectContextDeclaration(message);
     const handlesProjectRequest = projectOperatorService.shouldHandle(message);
     const declaredContext = declaresProjectContext
@@ -16467,6 +16574,11 @@ app.post('/api/marcus/live/chat', async (req, res) => {
     if (conversation.activeProject.name || conversation.activeProject.repo) {
       contextParts.push(`ACTIVE CONVERSATION PROJECT: ${conversation.activeProject.name || 'unnamed'}${conversation.activeProject.repo ? ` (${conversation.activeProject.repo})` : ''}`);
     }
+    try {
+      const memories = await missionMemoryStore.relevant(getBusinessKeyFromContext(), message, { limit: 12 });
+      const formattedMemory = formatMissionMemoryForPrompt(memories);
+      if (formattedMemory) contextParts.push(`DURABLE MISSION MEMORY:\n${formattedMemory}`);
+    } catch {}
     try {
       const registeredProjects = await operationsEngine.listProjectRegistry(getBusinessKeyFromContext());
       if (registeredProjects.length) {
@@ -18172,6 +18284,14 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
       context += 'PROJECT EVIDENCE ACTIVITY: unavailable; do not infer activity from Airtable alone.\n\n';
     }
 
+    try {
+      const missionMemories = await missionMemoryStore.relevant(getBusinessKeyFromContext(), message, { limit: 12 });
+      const formattedMissionMemory = formatMissionMemoryForPrompt(missionMemories);
+      if (formattedMissionMemory) context += `DURABLE MISSION MEMORY (business-scoped; explicit operator instructions):\n${formattedMissionMemory}\n\n`;
+    } catch {
+      context += 'DURABLE MISSION MEMORY: unavailable; do not invent remembered instructions.\n\n';
+    }
+
     if (userMemory) {
       context += `GLOBAL MEMORY (user-provided; treat as true unless contradicted):\n${String(userMemory).slice(0, 12000)}\n\n`;
     }
@@ -19557,6 +19677,13 @@ app.post('/api/chat', async (req, res) => {
         return;
       }
 
+      const missionMemoryCommand = parseMissionMemoryCommand(message);
+      if (missionMemoryCommand) {
+        const memoryResult = await handleMissionMemoryCommand(getBusinessKeyFromContext(), missionMemoryCommand, 'main_chat_explicit_command');
+        res.status(memoryResult.ok ? 200 : 400).json({ reply: memoryResult.reply, missionMemory: memoryResult });
+        return;
+      }
+
       if (projectOperatorService.shouldHandle(message) && /\b(codex|audit|repo|repository|fix|build|implement|get .* working|start .* session)\b/i.test(message)) {
         const result = await projectOperatorService.prepareCodexOperation(getBusinessKeyFromContext(), {
           message,
@@ -19871,6 +19998,9 @@ const httpServer = app.listen(PORT, SERVER_HOST, async () => {
   const businesses = Array.isArray(cachedBusinesses) ? cachedBusinesses : [{ key: DEFAULT_BUSINESS_KEY }];
   for (const biz of businesses) {
     const bKey = normalizeBusinessKey(biz?.key || '') || DEFAULT_BUSINESS_KEY;
+    await missionMemoryStore.ensureDefaults(bKey).catch((error) => {
+      console.error(`Mission memory startup initialization failed for ${bKey}:`, error?.message || error);
+    });
     await withBusinessKey(bKey, async () => {
       await ensureStoreExists();
       const store = await readStore();

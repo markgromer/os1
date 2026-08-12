@@ -8,7 +8,7 @@ import { ProjectEvidenceService } from '../marcus/evidence/project_evidence_serv
 import { createOperationsEngine } from '../marcus/operations/operation_engine.js';
 import { ProjectOperatorService } from '../marcus/operators/project_operator_service.js';
 
-async function withProjectOperator(callback, { directCodexAdapter = null } = {}) {
+async function withProjectOperator(callback, { directCodexAdapter = null, getMissionMemory = async () => [] } = {}) {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'marcus-project-operator-'));
   const legacyByBusiness = {
     personal: {
@@ -87,6 +87,7 @@ async function withProjectOperator(callback, { directCodexAdapter = null } = {})
         gitStatus: [{ status: 'M', file: 'src/booking.tsx' }],
       },
     }),
+    getMissionMemory,
     githubApi: async (pathPart) => {
       githubRequests.push(pathPart);
       if (pathPart.startsWith('/user/repos')) return [
@@ -329,7 +330,7 @@ test('project operator inspects related GitHub repos before composing Codex prom
   });
 });
 
-test('project operator indexes recursive trees and puts request-ranked source evidence in the real Codex handoff', async () => {
+test('project operator indexes recursive trees and puts request-ranked source and mission evidence in the real Codex handoff', async () => {
   await withProjectOperator(async ({ engine, service, githubRequests }) => {
     const project = await engine.createProjectRegistryRecord('personal', {
       canonicalName: 'Reggie',
@@ -345,6 +346,8 @@ test('project operator indexes recursive trees and puts request-ranked source ev
 
     const audit = result.operation.metadata.extra.projectOperator.githubAudit;
     assert.equal(result.operation.metadata.extra.projectOperator.promptVersion, 3);
+    assert.equal(result.operation.metadata.extra.projectOperator.missionMemory[0].id, 'mem_operator_test');
+    assert.equal(result.operation.metadata.extra.projectOperator.missionMemory[0].kind, 'standing_instruction');
     assert.equal(audit.coverage.mode, 'deep');
     assert.equal(audit.coverage.repositoriesInspected, 2);
     assert.equal(audit.coverage.treesIndexed, 2);
@@ -354,14 +357,24 @@ test('project operator indexes recursive trees and puts request-ranked source ev
     assert.ok(audit.coverage.apiCalls >= 10);
     assert.ok(audit.files.some((file) => file.path === 'src/sweep-and-go/settings.ts' && /request terms/i.test(file.reason)));
     assert.match(result.auditBrief, /## Repository Evidence Excerpts/);
+    assert.match(result.auditBrief, /## Operator Mission Memory/);
+    assert.match(result.auditBrief, /Explain the operational outcome before implementation detail/);
     assert.match(result.auditBrief, /saveSweepCredentials/);
     assert.match(result.auditBrief, /head-reggie-/);
     assert.match(result.codexPrompt, /do not silently reduce the requested scope/i);
     assert.match(result.codexPrompt, /saveSweepCredentials/);
     assert.match(result.handoff.content, /saveSweepCredentials/);
+    assert.match(result.handoff.content, /Explain the operational outcome before implementation detail/);
     assert.match(result.operation.metadata.currentArchitecture, /saveSweepCredentials/);
     assert.doesNotMatch(result.auditBrief, /must-not-be-read/);
     assert.equal(githubRequests.some((request) => /contents\/(?:\.env|config\/credentials\.json)/i.test(request)), false);
     assert.match(result.reply, /paths indexed/);
-  });
+  }, { getMissionMemory: async () => [{
+    id: 'mem_operator_test',
+    kind: 'standing_instruction',
+    status: 'active',
+    priority: 5,
+    title: 'Communication standard',
+    content: 'Explain the operational outcome before implementation detail.',
+  }] });
 });

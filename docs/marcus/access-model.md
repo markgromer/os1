@@ -76,6 +76,12 @@ The Realtime session exposes one function, `marcus_operator`. That function call
 
 Every initial connection, reconnect, foreground resume, and scheduled session refresh requests a new ephemeral credential. The browser does not persist the credential, and stale connection attempts are prevented from replacing a newer session.
 
+## Mission Memory Access
+
+`GET/POST/PATCH /api/marcus/memory` requires the durable admin token or pairing cookie. A short-lived Live token receives 401 on those administrative routes. A Live or Realtime conversation may invoke an explicit `remember`, mission, preference, or `from now on` command through the existing authenticated operator bridge; the server records Mark as the source without granting the voice model direct memory API authority.
+
+Memory input is bounded and redacted. Content that matches credential, token, password, private-key, or API-key assignment patterns is rejected rather than stored in redacted but misleading form. Memory is isolated by business key and never broadens project, provider, deployment, communication, or approval authority.
+
 Live-session tokens are process-bound. If a Render restart invalidates one while the installed mobile client still has its valid HttpOnly pairing cookie, authentication falls back to that cookie in the same request and the client obtains a fresh Live token on reconnect. An invalid stale bearer header does not mask a valid pairing cookie.
 
 Voice acceptance telemetry uses the same admin-cookie or short-lived Live-session authentication. `POST /api/marcus/realtime/telemetry` drops every field outside its strict allowlist before persistence. User and assistant transcripts are represented only by bounded character counts. The server stores no request text, reply text, credential, IP address, or raw user agent, and retains at most 1,000 events per business. `GET /api/marcus/realtime/acceptance` exposes only derived gates and coarse client context. `GET /api/marcus/acceptance` combines those gates with non-secret provider and operator readiness; it returns message action IDs/timestamps but no message bodies or credentials.

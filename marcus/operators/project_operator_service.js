@@ -219,7 +219,7 @@ function selectLegacyRows(store = {}, project = {}) {
   };
 }
 
-function formatContextBrief({ request, project, resolution, legacyRows, evidence, activity, desktopContext, repoFiles, audit = {} }) {
+function formatContextBrief({ request, project, resolution, legacyRows, evidence, activity, desktopContext, repoFiles, audit = {}, missionMemory = [] }) {
   const summary = summarizeProject(project);
   const lines = [
     `Original request: ${preview(request, 1000)}`,
@@ -274,12 +274,17 @@ function formatContextBrief({ request, project, resolution, legacyRows, evidence
     ws.gitBranch ? `Active branch: ${ws.gitBranch}.` : '',
     Array.isArray(ws.gitStatus) && ws.gitStatus.length ? `Uncommitted files: ${ws.gitStatus.slice(0, 12).map((s) => `${s.status} ${s.file}`).join(', ')}.` : '',
   ].filter(Boolean);
+  const missionMemoryLines = (Array.isArray(missionMemory) ? missionMemory : []).slice(0, 12).map((memory) =>
+    `- [${preview(memory.kind, 60)}; priority ${Number(memory.priority || 0)}] ${preview(memory.title, 180)}: ${preview(memory.content, 700)}`);
 
   return [
     '# Marcus Project Execution Brief',
     '',
     '## Request And Resolution',
     ...lines.map((line) => `- ${line}`),
+    '',
+    '## Operator Mission Memory',
+    missionMemoryLines.length ? missionMemoryLines.join('\n') : '- No durable mission memory was available.',
     '',
     '## Current Project Signals',
     taskLines.length ? taskLines.join('\n') : '- No matching open tasks were found in the legacy store.',
@@ -369,6 +374,7 @@ export class ProjectOperatorService {
     projectEvidenceService,
     getLegacyStore,
     getDesktopContext = async () => ({}),
+    getMissionMemory = async () => [],
     githubApi = null,
   } = {}) {
     if (!operationsEngine) throw new Error('ProjectOperatorService requires operationsEngine.');
@@ -376,6 +382,7 @@ export class ProjectOperatorService {
     this.projectEvidenceService = projectEvidenceService;
     this.getLegacyStore = typeof getLegacyStore === 'function' ? getLegacyStore : async () => ({});
     this.getDesktopContext = typeof getDesktopContext === 'function' ? getDesktopContext : async () => ({});
+    this.getMissionMemory = typeof getMissionMemory === 'function' ? getMissionMemory : async () => [];
     this.githubApi = typeof githubApi === 'function' ? githubApi : null;
   }
 
@@ -638,7 +645,7 @@ export class ProjectOperatorService {
   async buildExecutionBrief(businessKey, message, resolution) {
     const key = safeBusinessKey(businessKey);
     const project = resolution?.registryRecord || {};
-    const [legacyStore, desktopContext, evidence, activity, audit] = await Promise.all([
+    const [legacyStore, desktopContext, evidence, activity, audit, missionMemory] = await Promise.all([
       this.getLegacyStore(key).catch(() => ({})),
       this.getDesktopContext().catch(() => ({})),
       this.projectEvidenceService && project.id
@@ -648,11 +655,12 @@ export class ProjectOperatorService {
         ? this.projectEvidenceService.getProjectActivity(key, project.id).catch(() => null)
         : null,
       this.buildGithubAudit(message, project),
+      this.getMissionMemory(key, message).catch(() => []),
     ]);
     const repoFiles = audit.files || [];
     const legacyRows = selectLegacyRows(legacyStore, project);
-    const text = formatContextBrief({ request: message, project, resolution, legacyRows, evidence, activity, desktopContext, repoFiles, audit });
-    return { text, legacyRows, evidence, activity, desktopContext, repoFiles, audit };
+    const text = formatContextBrief({ request: message, project, resolution, legacyRows, evidence, activity, desktopContext, repoFiles, audit, missionMemory });
+    return { text, legacyRows, evidence, activity, desktopContext, repoFiles, audit, missionMemory };
   }
 
   async prepareCodexOperation(businessKey, { message, projectId = '', projectRegistryId = '', resolutionRequest = '', source = 'project_operator', autoStart = true } = {}) {
@@ -714,6 +722,15 @@ export class ProjectOperatorService {
           promptVersion: 3,
           promptLength: codexPrompt.length,
           executionBriefLength: brief.text.length,
+          missionMemory: (brief.missionMemory || []).slice(0, 20).map((memory) => ({
+            id: memory.id,
+            kind: memory.kind,
+            title: memory.title,
+            priority: memory.priority,
+            source: memory.source,
+            updatedAt: memory.updatedAt,
+            lastConfirmedAt: memory.lastConfirmedAt,
+          })),
           githubAudit: {
             coverage,
             repos: (brief.audit?.repos || []).map((repo) => ({

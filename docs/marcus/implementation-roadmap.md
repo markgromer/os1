@@ -28,6 +28,12 @@ Production read-only deep-audit acceptance on 2026-08-12 resolved `markgromer/Re
 
 Mobile continuity status: implemented and covered by regression tests. Marcus stores a bounded recent transcript and active project, recognizes explicit GitHub `owner/repository` references, and carries earlier requirements into a later audit/Codex request. `Reggie` is registered in production as `markgromer/Reggie` with `connect.scooper.site` and `Sweep and Go` aliases.
 
+## Phase 1A: Durable Mission Memory
+
+Status: implemented and locally verified. `MissionMemoryStore` persists the overall operator mission, standing instructions, preferences, decisions, and facts independently from the rolling chat and per-project requirements. It is business-scoped, revisioned, atomic, backup-aware, secret-rejecting, and available to Live voice/mobile chat, main chat, project audits, Codex handoffs, operator health, and combined acceptance.
+
+Regression evidence covers default mission seeding, explicit conversational memory and recall, admin-only routes, Live-token rejection, deduplication, archival, restart persistence, business isolation, secret rejection, corrupt-primary recovery, backup discovery, and mission text in the real generated Codex handoff. Production deployment and restart acceptance remain pending.
+
 ## Phase 2: Context Gathering
 
 Add a reusable context gatherer that can pull:

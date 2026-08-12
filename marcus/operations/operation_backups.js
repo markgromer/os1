@@ -18,6 +18,7 @@ export async function discoverDurableBackupSources({ businessDataDir, configured
       ['operations.json', `operations-${businessKey}`],
       ['project-registry.json', `project-registry-${businessKey}`],
       ['project-evidence.json', `project-evidence-${businessKey}`],
+      ['marcus-mission-memory.json', `mission-memory-${businessKey}`],
     ]) {
       const sourceFile = path.join(root, businessKey, fileName);
       try { await fs.access(sourceFile); sources.push({ businessKey, fileName, sourceFile, prefix }); } catch { /* absent files are not fabricated */ }

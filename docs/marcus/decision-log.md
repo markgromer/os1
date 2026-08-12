@@ -1,5 +1,13 @@
 # Decision Log
 
+## 2026-08-12: Mission Memory Is Durable Data, Not A Prompt Constant
+
+Context: Marcus retained recent conversation and project requirements, but his overall mission, Mark's standing instructions, and cross-project preferences existed only in code, documentation, or the current conversation. That did not prove durable recall across chat eviction, process restart, business switching, or a later Codex handoff.
+
+Decision: Add a business-scoped mission-memory store with typed records, provenance, priority, lifecycle status, atomic persistence, sibling backups, and corruption preservation. Seed the mission Mark already supplied. Accept new memory only through explicit operator commands or durable-admin routes, reject credential-like content, and retrieve relevant active records into both conversation prompts and project/Codex execution briefs.
+
+Consequence: Marcus can explain what he durably remembers and carry those instructions into later work without relying on model inference or rolling history. Memory does not grant execution authority, does not bypass approval, and can be superseded or archived with an audit trail instead of silently disappearing.
+
 ## 2026-08-12: Codex Launch Requires Request-Ranked Repository Evidence
 
 Context: The original project operator probed ten hard-coded filenames and collapsed each readable file to a 260-character single-line preview. It could answer immediately without seeing nested request-relevant source, repository topology, current commits, or open pull requests, and the real direct-Codex handoff truncated the brief at 12,000 characters.

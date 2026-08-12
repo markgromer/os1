@@ -33,6 +33,7 @@ Durable operation data:
 
 - `data/businesses/<business>/operations.json`
 - `data/businesses/<business>/project-registry.json`
+- `data/businesses/<business>/marcus-mission-memory.json`
 
 Session/control data:
 
@@ -82,6 +83,21 @@ It owns:
 - Respecting "do not audit" as context-only and "audit/prepare, but do not start Codex" as a planned operation with no provider start.
 
 Repository auditing uses each discovered repository's recursive Git tree, default branch, head commit, recent commits, open pull requests, and request-ranked source/configuration/test files. It excludes generated trees, oversized or binary files, and obvious secret-file paths before reads; evidence is redacted again before persistence. Marcus records coverage, API-call count, failures, selected paths, and elapsed time. The execution brief and real direct-Codex handoff may retain up to 30,000 characters so source evidence is not reduced to filename previews.
+
+## Mission Memory
+
+`marcus/memory/mission_memory_store.js` owns durable cross-project operator memory. It stores bounded typed records for missions, standing instructions, preferences, decisions, and facts with status, priority, source, actor, timestamps, and store revision. Records are business-scoped, atomically written, backed up, recovered from the last valid sibling backup, and archived rather than physically deleted.
+
+The initial durable records encode Mark's trusted-operator mission, evidence-first assistance standard, and preference for a maintained prebuilt voice interface. Explicit `remember`, mission, preference, and `from now on` messages write through deterministic server handling rather than model inference. Credential-like content is rejected. Relevant active records enter normal chat context, project execution briefs, and the real Codex handoff.
+
+Mission memory routes require durable admin authentication; a short-lived Live token cannot call them directly:
+
+- `GET /api/marcus/memory`
+- `GET /api/marcus/memory/relevant`
+- `POST /api/marcus/memory`
+- `PATCH /api/marcus/memory/:id`
+
+Voice and mobile users can still issue an explicit `remember` command through `POST /api/marcus/live/chat`, which records Mark as the source and applies the same validation. Operator health and combined acceptance report whether an active mission and standing instruction exist.
 
 The production project registry includes `Reggie` at `markgromer/Reggie`, with `connect.scooper.site` and `Sweep and Go` aliases.
 

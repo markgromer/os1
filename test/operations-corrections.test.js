@@ -723,7 +723,7 @@ test('recovery examines expired approvals and incomplete verification without as
   });
 });
 
-test('durable backup discovery includes operation and registry files for configured and discovered businesses', async () => {
+test('durable backup discovery includes operation, registry, and mission memory files for configured and discovered businesses', async () => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'durable-backups-'));
   try {
     const businesses = path.join(dataDir, 'businesses');
@@ -731,10 +731,12 @@ test('durable backup discovery includes operation and registry files for configu
       await fs.mkdir(path.join(businesses, key), { recursive: true });
       await fs.writeFile(path.join(businesses, key, 'operations.json'), '{}');
       await fs.writeFile(path.join(businesses, key, 'project-registry.json'), '{}');
+      await fs.writeFile(path.join(businesses, key, 'marcus-mission-memory.json'), '{}');
     }
     const sources = await discoverDurableBackupSources({ businessDataDir: businesses, configuredBusinessKeys: ['personal', 'configured-without-files'] });
     assert.deepEqual(sources.map((item) => item.prefix), [
-      'operations-discovered', 'project-registry-discovered', 'operations-personal', 'project-registry-personal',
+      'operations-discovered', 'project-registry-discovered', 'mission-memory-discovered',
+      'operations-personal', 'project-registry-personal', 'mission-memory-personal',
     ]);
   } finally { await fs.rm(dataDir, { recursive: true, force: true }); }
 });

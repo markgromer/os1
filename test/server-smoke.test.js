@@ -213,6 +213,7 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     assert.equal(mobileIcon.status, 200);
     assert.match(await mobileIcon.text(), /<svg/);
     assert.equal((await fetch(`${base}/api/operations/summary`)).status, 401);
+    assert.equal((await fetch(`${base}/api/marcus/memory`)).status, 401);
     assert.equal((await fetch(`${base}/api/auth/pairing-code`, { method: 'POST' })).status, 401);
     const pairingResponse = await fetch(`${base}/api/auth/pairing-code`, { method: 'POST', headers: adminHeaders, body: '{}' });
     const pairing = await pairingResponse.json();
@@ -239,6 +240,9 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     assert.equal(reusedPair.status, 401);
     assert.equal((await fetch(`${base}/api/tasks`, { headers: adminHeaders })).status, 200);
     assert.equal((await fetch(`${base}/api/projects`, { headers: adminHeaders })).status, 200);
+    const personalMemory = await (await fetch(`${base}/api/marcus/memory?status=active`, { headers: adminHeaders })).json();
+    assert.ok(personalMemory.memories.some((item) => item.kind === 'mission' && /trusted operator/i.test(item.content)));
+    assert.ok(personalMemory.memories.some((item) => item.kind === 'preference' && /prebuilt voice/i.test(item.content)));
     assert.equal((await fetch(`${base}/api/tasks`, { headers: { ...adminHeaders, 'x-business-key': 'not-configured' } })).status, 403);
 
     const switched = await fetch(`${base}/api/businesses/active`, { method: 'POST', headers: adminHeaders, body: JSON.stringify({ key: 'agency' }) });
@@ -252,11 +256,36 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     const chat = await fetch(`${base}/api/chat`, { method: 'POST', headers: adminHeaders, body: JSON.stringify({ message: 'Implement the Atlas repository fix and verify it.' }) });
     assert.equal(chat.status, 200);
     assert.ok((await chat.json()).reply);
+    const mainMemoryResponse = await fetch(`${base}/api/chat`, { method: 'POST', headers: adminHeaders, body: JSON.stringify({
+      message: 'From now on, distinguish verified facts from inferences in every project update.',
+    }) });
+    assert.equal(mainMemoryResponse.status, 200);
+    const mainMemory = await mainMemoryResponse.json();
+    assert.equal(mainMemory.missionMemory.status, 'mission_memory_created');
+    assert.equal(mainMemory.missionMemory.memory.kind, 'standing_instruction');
 
     const sessionResponse = await fetch(`${base}/api/marcus/live/session`, { headers: adminHeaders });
     const session = await sessionResponse.json();
     assert.ok(session.token);
     const liveHeaders = { authorization: `Bearer ${session.token}`, 'x-business-key': 'agency', 'content-type': 'application/json' };
+    assert.equal((await fetch(`${base}/api/marcus/memory`, { headers: liveHeaders })).status, 401);
+    const rememberResponse = await fetch(`${base}/api/marcus/live/chat`, {
+      method: 'POST', headers: liveHeaders, body: JSON.stringify({ message: 'Remember that I prefer project updates to lead with the operational outcome.' }),
+    });
+    assert.equal(rememberResponse.status, 200);
+    const remembered = await rememberResponse.json();
+    assert.equal(remembered.status, 'mission_memory_created');
+    assert.equal(remembered.memory.kind, 'preference');
+    const recallResponse = await fetch(`${base}/api/marcus/live/chat`, {
+      method: 'POST', headers: liveHeaders, body: JSON.stringify({ message: 'What do you remember about project updates?' }),
+    });
+    assert.equal(recallResponse.status, 200);
+    const recalled = await recallResponse.json();
+    assert.equal(recalled.status, 'mission_memory_read');
+    assert.match(recalled.reply, /operational outcome/i);
+    const agencyMemory = await (await fetch(`${base}/api/marcus/memory?status=active`, { headers: { ...adminHeaders, 'x-business-key': 'agency' } })).json();
+    assert.equal(agencyMemory.memories.some((item) => item.id === remembered.memory.id), true);
+    assert.equal(personalMemory.memories.some((item) => item.id === remembered.memory.id), false);
     assert.equal((await fetch(`${base}/api/marcus/realtime/client-secret`, { method: 'POST' })).status, 401);
     assert.equal((await fetch(`${base}/api/marcus/realtime/telemetry`, { method: 'POST' })).status, 401);
     assert.equal((await fetch(`${base}/api/marcus/realtime/acceptance`)).status, 401);
@@ -329,6 +358,7 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     assert.doesNotMatch(JSON.stringify(telemetryAcceptance), /never persist this text/i);
     const systemAcceptance = await (await fetch(`${base}/api/marcus/acceptance?sessionId=${telemetrySessionId}`, { headers: liveHeaders })).json();
     assert.equal(systemAcceptance.voice.session.acceptedOnPhysicalDevice, true);
+    assert.equal(systemAcceptance.gates.missionMemoryReady, true);
     assert.equal(systemAcceptance.gates.physicalAndroidVoiceAccepted, true);
     assert.equal(systemAcceptance.gates.projectOperatorReady, false);
     assert.equal(systemAcceptance.gates.approvedTextSendAccepted, false);
@@ -345,6 +375,8 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     assert.equal(operatorHealth.status, 200);
     const operatorHealthBody = await operatorHealth.json();
     assert.equal(operatorHealthBody.capabilities.projectOperator.available, true);
+    assert.equal(operatorHealthBody.capabilities.missionMemory.available, true);
+    assert.ok(operatorHealthBody.capabilities.missionMemory.activeCount >= 4);
     assert.equal(operatorHealthBody.capabilities.projectOperator.mode, 'codex_handoff');
     assert.equal(operatorHealthBody.capabilities.projectOperator.canStartCodexDirectly, false);
     assert.ok(operatorHealthBody.blockers.some((item) => /direct Codex launch adapter/i.test(item)));
@@ -558,6 +590,45 @@ test('mobile pairing survives a server restart and remains single-use', async ()
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: pairing.code }),
     });
     assert.equal(replay.status, 401);
+  } finally {
+    if (first.child.exitCode === null && first.child.signalCode === null) await first.close();
+    if (second) await second.close();
+    else await fs.rm(first.root, { recursive: true, force: true });
+  }
+});
+
+test('mission memory survives a server restart, rejects secrets, and remains business-scoped', async () => {
+  const headers = { authorization: 'Bearer test-admin-token', 'content-type': 'application/json' };
+  const first = await spawnServer();
+  let second = null;
+  try {
+    await first.waitForReady();
+    const firstBase = `http://127.0.0.1:${first.port}`;
+    const createdResponse = await fetch(`${firstBase}/api/marcus/memory`, {
+      method: 'POST', headers, body: JSON.stringify({
+        kind: 'decision',
+        title: 'Production reporting',
+        content: 'Report production changes only after checking the durable runtime evidence.',
+        priority: 5,
+      }),
+    });
+    assert.equal(createdResponse.status, 201);
+    const created = (await createdResponse.json()).memory;
+    const rejected = await fetch(`${firstBase}/api/marcus/memory`, {
+      method: 'POST', headers, body: JSON.stringify({ kind: 'fact', content: 'api_key="sk-never-store-this-secret"' }),
+    });
+    assert.equal(rejected.status, 400);
+    assert.equal((await rejected.json()).code, 'MEMORY_SECRET_REJECTED');
+    await first.close({ preserveRoot: true });
+
+    second = await spawnServer({ testRoot: first.root });
+    await second.waitForReady();
+    const secondBase = `http://127.0.0.1:${second.port}`;
+    const personal = await (await fetch(`${secondBase}/api/marcus/memory?status=active`, { headers })).json();
+    assert.equal(personal.memories.some((item) => item.id === created.id), true);
+    assert.doesNotMatch(JSON.stringify(personal), /sk-never-store-this-secret/);
+    const crossBusiness = await fetch(`${secondBase}/api/marcus/memory?status=active`, { headers: { ...headers, 'x-business-key': 'agency' } });
+    assert.equal(crossBusiness.status, 403);
   } finally {
     if (first.child.exitCode === null && first.child.signalCode === null) await first.close();
     if (second) await second.close();

@@ -21,6 +21,12 @@ The first working slice is:
 
 This is implemented without relying on a model call for the core control flow. Explicit GitHub `owner/repository` references can be added to the project registry, and short mobile follow-ups reuse the active project plus recent requirements. Direct Codex launch remains adapter-dependent.
 
+Durable mission memory follows:
+
+`explicit remember/mission/preference instruction -> deterministic classification -> credential rejection -> business-scoped atomic store -> relevant retrieval -> normal conversation and Codex execution brief`
+
+Marcus does not infer new standing instructions from ordinary conversation. Repeating the same explicit memory reconfirms the existing record instead of duplicating it. Administrative updates can supersede or archive a record; restart recovery uses the sibling backup and preserves corrupt input for inspection.
+
 Conversation-only project context follows:
 
 `project/repository mention -> resolve and retain project plus requirements -> wait for a positive audit/implementation request`
@@ -78,6 +84,7 @@ Every Codex-bound job should include:
 - User's original request.
 - Objective.
 - Relevant project memory.
+- Relevant durable mission, standing-instruction, and preference memory.
 - Current repo and deployment metadata.
 - Local workspace path, if trusted.
 - Current architecture notes.
