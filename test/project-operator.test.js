@@ -145,6 +145,35 @@ test('project operator starts a direct Codex job when a direct adapter is config
   });
 });
 
+test('project operator can audit and prepare without starting Codex', async () => {
+  const starts = [];
+  await withProjectOperator(async ({ engine, service }) => {
+    const project = await engine.createProjectRegistryRecord('personal', {
+      canonicalName: 'Royal Doody',
+      projectId: 'royal-doody',
+      repo: { fullName: 'markgromer/royal-doody-demo', defaultBranch: 'main' },
+    });
+    const result = await service.prepareCodexOperation('personal', {
+      message: 'Audit the Royal Doody repository and prepare the Codex prompt, but do not start Codex.',
+      projectId: project.id,
+      autoStart: false,
+    });
+    assert.equal(starts.length, 0);
+    assert.equal(result.operation.status, 'planned');
+    assert.match(result.codexPrompt, /Royal Doody/);
+  }, {
+    directCodexAdapter: {
+      providerName: 'test_codex',
+      async startJob(job) { starts.push(job); return { provider: 'test_codex', jobId: 'unexpected', status: 'started' }; },
+      async getJobStatus(job) { return job; },
+      async sendFollowup(job) { return job; },
+      async getArtifacts() { return []; },
+      async getDiff() { return { summary: '' }; },
+      async cancelJob(job) { return job; },
+    },
+  });
+});
+
 test('project operator asks for project clarification when confidence is low', async () => {
   await withProjectOperator(async ({ service }) => {
     const result = await service.prepareCodexOperation('personal', {
@@ -162,6 +191,11 @@ test('project operator detects website install and replace requests', async () =
       service.shouldHandle('The Freedom Scoopers website needs the new Reggie and Reggie hub installed and replace the legacy Reggie.'),
       true,
     );
+    assert.equal(
+      service.shouldHandle('For a read-only continuity check, use markgromer/Reggie. Tell me what you retained. Do not audit or start Codex.'),
+      false,
+    );
+    assert.equal(service.shouldHandle('Audit the Reggie repository, but do not start Codex.'), true);
   });
 });
 

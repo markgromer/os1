@@ -1,6 +1,7 @@
 import { safeBusinessKey, safeObject, safeString } from '../operations/operation_types.js';
+import { explicitlyDefersProjectAudit, withoutExplicitlyNegatedClauses } from '../core/request_intent.js';
 
-const CODEX_OPERATOR_RE = /\b(codex|audit|repo|repository|fix|build|implement|install|replace|migrate|upgrade|website|site|worker|cloudflare|deploy|mobile|broken|get .* working|start .* session)\b/i;
+const PROJECT_OPERATOR_ACTION_RE = /\b(audit|inspect|review|check|fix|build|implement|install(?:ed|ing)?|replace|migrate|upgrade|deploy|publish|modify|change|create|add|prepare|write|set\s*up|get [^.!?\n]{0,80} (?:working|going)|start [^.!?\n]{0,80} session)\b/i;
 
 function preview(value, max = 240) {
   return safeString(value, max).replace(/\s+/g, ' ').trim();
@@ -232,7 +233,9 @@ export class ProjectOperatorService {
   }
 
   shouldHandle(message) {
-    return CODEX_OPERATOR_RE.test(safeString(message, 4_000));
+    const text = safeString(message, 4_000);
+    if (explicitlyDefersProjectAudit(text)) return false;
+    return PROJECT_OPERATOR_ACTION_RE.test(withoutExplicitlyNegatedClauses(text));
   }
 
   async ensureExplicitGithubProject(businessKey, request) {
@@ -405,7 +408,7 @@ export class ProjectOperatorService {
     return { text, legacyRows, evidence, activity, desktopContext, repoFiles, audit };
   }
 
-  async prepareCodexOperation(businessKey, { message, projectId = '', projectRegistryId = '', resolutionRequest = '', source = 'project_operator' } = {}) {
+  async prepareCodexOperation(businessKey, { message, projectId = '', projectRegistryId = '', resolutionRequest = '', source = 'project_operator', autoStart = true } = {}) {
     const key = safeBusinessKey(businessKey);
     const request = safeString(message, 12_000);
     if (!request) throw new Error('message is required.');
@@ -445,7 +448,7 @@ export class ProjectOperatorService {
       requestedBy: 'mark',
       source,
       autoPlan: true,
-      autoStart: true,
+      autoStart: autoStart !== false,
       acceptanceCriteria,
       currentArchitecture: brief.text,
       relevantMemory: [

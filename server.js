@@ -20,7 +20,7 @@ import { registerOperationsRoutes } from './marcus/api/operations_routes.js';
 import { registerProjectEvidenceRoutes } from './marcus/api/project_evidence_routes.js';
 import { scopeAuthorizedPublishActions } from './marcus/approvals/publish_safeguard.js';
 import { buildMarcusSystemPrompt } from './marcus/core/build_system_prompt.js';
-import { explicitlyDefersCodexStart, explicitlyDefersProjectAudit } from './marcus/core/request_intent.js';
+import { explicitlyDefersCodexStart, explicitlyDefersProjectAudit, withoutProjectExecutionDeferrals } from './marcus/core/request_intent.js';
 import { ProjectEvidenceService } from './marcus/evidence/project_evidence_service.js';
 import {
   executeMarcusProjectActivityTool,
@@ -13900,7 +13900,8 @@ function buildMarcusLiveProjectRequest(conversation, message) {
   const prior = recentMarcusLiveMessages(conversation)
     .filter((item) => item.role === 'user')
     .slice(-7)
-    .map((item) => item.content);
+    .map((item) => withoutProjectExecutionDeferrals(item.content))
+    .filter(Boolean);
   const active = conversation?.activeProject || {};
   const projectLine = [active.name, active.repo].filter(Boolean).length
     ? `Active project from this conversation: ${[active.name, active.repo].filter(Boolean).join(' / ')}.`
@@ -15830,8 +15831,9 @@ app.post('/api/marcus/live/chat', async (req, res) => {
       });
       const project = contextResult.project;
       const executionDeferred = explicitlyDefersProjectAudit(message) || explicitlyDefersCodexStart(message);
+      const retainedRequirements = projectRequest.slice(-3_000);
       const reply = project
-        ? `I resolved this conversation to ${project.name}${project.repo ? ` at ${project.repo}` : ''} and set it as the active project. Current request retained: ${message}${executionDeferred ? ' I did not audit the repository or start Codex.' : ' I will carry these requirements into a later repository audit and Codex prompt.'}`
+        ? `I resolved this conversation to ${project.name}${project.repo ? ` at ${project.repo}` : ''} and set it as the active project. Current request retained: ${retainedRequirements}${executionDeferred ? ' I did not audit the repository or start Codex.' : ' I will carry these requirements into a later repository audit and Codex prompt.'}`
         : 'I could not verify that GitHub project yet. Give me the exact owner/repository name so I can inspect the right code instead of guessing.';
       await recordMarcusLiveExchange(message, reply, { project });
       pushLiveEvent({ type: 'chat', from: 'marcus', text: reply, ts: Date.now() });

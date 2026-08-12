@@ -7,6 +7,7 @@ import express from 'express';
 
 import { ApprovalPolicy } from '../marcus/approvals/approval_policy.js';
 import { registerOperationsRoutes } from '../marcus/api/operations_routes.js';
+import { withoutProjectExecutionDeferrals } from '../marcus/core/request_intent.js';
 import { createOperationsEngine } from '../marcus/operations/operation_engine.js';
 import { executeMarcusOperationTool, shouldCreateDurableOperationForRequest } from '../marcus/operations/marcus_operation_tools.js';
 import { normalizeOperation, requiredVerificationPassed } from '../marcus/operations/operation_types.js';
@@ -107,7 +108,10 @@ test('project resolver deterministically scores canonical names, aliases, reposi
 
 test('durable request classification excludes questions and the engine interprets objectives and mobile acceptance criteria', async () => {
   assert.equal(shouldCreateDurableOperationForRequest('How does the WARREN repository work?'), false);
+  assert.equal(shouldCreateDurableOperationForRequest('Tell me what you retained. Do not audit the repository or start Codex.'), false);
   assert.equal(shouldCreateDurableOperationForRequest('Fix the WARREN mobile experience and get Codex working on the repository.'), true);
+  assert.doesNotMatch(withoutProjectExecutionDeferrals('Do not audit or start Codex.'), /audit|Codex/i);
+  assert.match(withoutProjectExecutionDeferrals('Keep auth intact. Do not deploy this change.'), /Do not deploy/i);
   await withEngine(async (engine) => {
     await engine.createProjectRegistryRecord('personal', { canonicalName: 'WARREN', aliases: ['WARREN Creative Studio'] });
     const created = await engine.createFromRequest('personal', {

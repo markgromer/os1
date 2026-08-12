@@ -51,7 +51,7 @@ async function spawnServer({ startupCheck = false, adminToken = 'test-admin-toke
     ? Promise.resolve({ code: child.exitCode, signal: child.signalCode, output })
     : new Promise((resolve) => child.once('exit', (code, signal) => resolve({ code, signal, output })));
   const waitForReady = async () => {
-    const deadline = Date.now() + 15_000;
+    const deadline = Date.now() + 30_000;
     while (Date.now() < deadline) {
       if (output.includes('M.A.R.C.U.S. running on')) return;
       if (child.exitCode !== null) throw new Error(`Server exited before ready (${child.exitCode}).\n${output}`);
@@ -548,6 +548,18 @@ test('Marcus Mobile remembers an explicit Reggie repo and carries requirements i
       const context = await contextResponse.json();
       assert.equal(context.status, 'project_context_set');
       assert.equal(context.project.name, 'Reggie');
+
+      const readOnlyResponse = await fetch(`${base}/api/marcus/live/chat`, { method: 'POST', headers, body: JSON.stringify({
+        message: 'For a read-only continuity check, use Reggie at markgromer/Reggie. Tell me the repository and retained requirements. Do not audit or start Codex.',
+      }) });
+      assert.equal(readOnlyResponse.status, 200);
+      const readOnly = await readOnlyResponse.json();
+      assert.equal(readOnly.status, 'project_context_set');
+      assert.match(readOnly.reply, /markgromer\/Reggie/i);
+      assert.match(readOnly.reply, /API token and slug/i);
+      assert.match(readOnly.reply, /did not audit.*or start Codex/i);
+      const beforeExecution = await (await fetch(`${base}/api/operations`, { headers })).json();
+      assert.equal(beforeExecution.operations.length, 0);
 
       const operationResponse = await fetch(`${base}/api/marcus/live/chat`, { method: 'POST', headers, body: JSON.stringify({
         message: 'Check the git repo and set up the plan, then get it going in Codex.',

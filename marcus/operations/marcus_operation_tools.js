@@ -1,5 +1,6 @@
 import { safeObject, safeString, summarizeOperationProgress } from './operation_types.js';
 import { isStrongConfirmation } from '../approvals/approval_policy.js';
+import { withoutExplicitlyNegatedClauses } from '../core/request_intent.js';
 
 const TOOL_NAMES = new Set([
   'create_operation', 'get_operation', 'list_operations', 'plan_operation', 'start_operation', 'pause_operation',
@@ -150,7 +151,7 @@ export async function executeMarcusOperationTool({ name, args, engine, businessK
 }
 
 export function shouldCreateDurableOperationForRequest(message) {
-  const text = safeString(message, 12_000).toLowerCase();
+  const text = withoutExplicitlyNegatedClauses(safeString(message, 12_000)).toLowerCase();
   if (!text || text.length < 12) return false;
   const asksWork = /\b(fix|build|implement|refactor|audit|publish|deploy|migrate|own|work on|take care of|get .* working)\b/.test(text);
   const durableSignal = /\b(codex|repository|repo|branch|pull request|deploy|production|mobile|across systems|end to end|own the problem)\b/.test(text);
