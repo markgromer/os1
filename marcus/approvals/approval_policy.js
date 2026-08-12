@@ -7,12 +7,13 @@ const CRITICAL_ACTIONS = [
   /destroy.*infrastructure|irreversible.*account|close.*account/i,
   /billing.*change|change.*billing|legal.*commit/i,
   /credential.*change|credential.*rotation|rotate.*credential|revoke.*credential/i,
+  /delete_dns_record|delete.*dns|dns.*delete/i,
 ];
 
 const HIGH_ACTIONS = [
   /\bpush\b|git_push|publish_project_changes/i,
   /\bmerge\b|pull_request_open|open.*pull request/i,
-  /deploy.*production|production.*deploy/i,
+  /deploy.*production|production.*deploy|deploy_worker_version/i,
   /environment.*variable|env.*change|change.*env/i,
   /\bdns\b|database.*migration|run.*migration/i,
   /send.*client|client.*communication|external.*communication/i,

@@ -6,6 +6,7 @@ const TOOL_NAMES = new Set([
   'create_operation', 'get_operation', 'list_operations', 'plan_operation', 'start_operation', 'pause_operation',
   'resume_operation', 'cancel_operation', 'approve_operation_step', 'reject_operation_step',
   'register_external_codex_job', 'resolve_project',
+  'prepare_github_merge', 'prepare_cloudflare_dns_change', 'prepare_cloudflare_worker_deployment',
 ]);
 
 export function getMarcusOperationToolDefinitions() {
@@ -22,6 +23,45 @@ export function getMarcusOperationToolDefinitions() {
             objective: { type: 'string' }, title: { type: 'string' },
             acceptanceCriteria: { type: 'array', items: { type: 'string' } }, autoPlan: { type: 'boolean' },
           },
+        },
+      },
+    },
+    {
+      type: 'function', function: {
+        name: 'prepare_github_merge',
+        description: 'Prepare a durable, exact-SHA GitHub pull-request merge operation. This never merges immediately: Marcus binds the registered repository, audits the PR/check state at execution, and requests separate explicit approval.',
+        parameters: {
+          type: 'object', properties: {
+            projectName: { type: 'string' }, projectRegistryId: { type: 'string' }, repository: { type: 'string', description: 'Exact owner/repository from the registered project.' },
+            pullNumber: { type: 'integer' }, expectedHeadSha: { type: 'string', description: 'Exact 40-character current PR head SHA.' },
+            mergeMethod: { type: 'string', enum: ['squash', 'merge', 'rebase'] }, commitTitle: { type: 'string' }, commitMessage: { type: 'string' },
+          }, required: ['repository', 'pullNumber', 'expectedHeadSha'],
+        },
+      },
+    },
+    {
+      type: 'function', function: {
+        name: 'prepare_cloudflare_dns_change',
+        description: 'Prepare a durable Cloudflare DNS upsert or deletion against the resolved project zone. This never changes DNS immediately and requires separate approval; deletion requires strong confirmation.',
+        parameters: {
+          type: 'object', properties: {
+            projectName: { type: 'string' }, projectRegistryId: { type: 'string' }, action: { type: 'string', enum: ['upsert', 'delete'] },
+            zoneId: { type: 'string' }, recordId: { type: 'string', description: 'Required for deletion; optional for an upsert.' },
+            recordType: { type: 'string', enum: ['A', 'AAAA', 'CAA', 'CNAME', 'MX', 'NS', 'SRV', 'TXT'] },
+            name: { type: 'string' }, content: { type: 'string' }, ttl: { type: 'integer' }, proxied: { type: 'boolean' }, priority: { type: 'integer' }, comment: { type: 'string' },
+          }, required: ['action', 'zoneId', 'recordType', 'name', 'content'],
+        },
+      },
+    },
+    {
+      type: 'function', function: {
+        name: 'prepare_cloudflare_worker_deployment',
+        description: 'Prepare promotion of an existing Cloudflare Worker version to 100% production traffic. The Worker must be bound to the registered project, the current deployment ID is pinned to detect drift, and separate explicit approval is required.',
+        parameters: {
+          type: 'object', properties: {
+            projectName: { type: 'string' }, projectRegistryId: { type: 'string' }, accountId: { type: 'string' }, scriptName: { type: 'string' },
+            versionId: { type: 'string' }, expectedCurrentDeploymentId: { type: 'string' }, message: { type: 'string' },
+          }, required: ['accountId', 'scriptName', 'versionId', 'expectedCurrentDeploymentId'],
         },
       },
     },
@@ -147,6 +187,51 @@ export async function executeMarcusOperationTool({ name, args, engine, businessK
     return { ok: true, operation: await engine.registerExternalCodexJob(businessKey, input.operationId, { ...supplied, registeredBy: 'mark' }) };
   }
   if (name === 'resolve_project') return { ok: true, resolution: await engine.resolveProject(businessKey, input.request, input) };
+  if (name === 'prepare_github_merge') {
+    const actualRequest = safeString(requestMessage, 12_000);
+    if (!/\bmerge\b/i.test(actualRequest)) return { ok: false, error: 'The current authenticated request does not ask Marcus to merge a pull request.' };
+    const result = await engine.createProviderActionFromRequest(businessKey, {
+      originalRequest: actualRequest, projectName: input.projectName, projectRegistryId: input.projectRegistryId,
+      repository: input.repository, provider: 'github_write', action: 'merge_pull_request', requestedBy: 'marcus-chat', source: 'marcus_chat',
+      input: {
+        pullNumber: input.pullNumber, expectedHeadSha: input.expectedHeadSha, mergeMethod: input.mergeMethod,
+        commitTitle: input.commitTitle, commitMessage: input.commitMessage,
+      },
+    });
+    return { ok: true, ...result };
+  }
+  if (name === 'prepare_cloudflare_dns_change') {
+    const actualRequest = safeString(requestMessage, 12_000);
+    if (!/\b(?:dns|record)\b/i.test(actualRequest) || !/\b(?:add|create|change|update|upsert|delete|remove)\b/i.test(actualRequest)) {
+      return { ok: false, error: 'The current authenticated request does not ask Marcus to change DNS.' };
+    }
+    const requestedAction = safeString(input.action, 20).toLowerCase();
+    if (!['upsert', 'delete'].includes(requestedAction)) return { ok: false, error: 'DNS action must be upsert or delete.' };
+    const result = await engine.createProviderActionFromRequest(businessKey, {
+      originalRequest: actualRequest, projectName: input.projectName, projectRegistryId: input.projectRegistryId,
+      provider: 'cloudflare_write', action: requestedAction === 'delete' ? 'delete_dns_record' : 'upsert_dns_record', requestedBy: 'marcus-chat', source: 'marcus_chat',
+      input: {
+        zoneId: input.zoneId, recordId: input.recordId, recordType: input.recordType, name: input.name,
+        content: input.content, ttl: input.ttl, proxied: input.proxied, priority: input.priority, comment: input.comment,
+      },
+    });
+    return { ok: true, ...result };
+  }
+  if (name === 'prepare_cloudflare_worker_deployment') {
+    const actualRequest = safeString(requestMessage, 12_000);
+    if (!/\b(?:deploy|deployment|promote|release)\b/i.test(actualRequest) || !/\b(?:worker|cloudflare)\b/i.test(actualRequest)) {
+      return { ok: false, error: 'The current authenticated request does not ask Marcus to deploy a Cloudflare Worker.' };
+    }
+    const result = await engine.createProviderActionFromRequest(businessKey, {
+      originalRequest: actualRequest, projectName: input.projectName, projectRegistryId: input.projectRegistryId,
+      provider: 'cloudflare_write', action: 'deploy_worker_version', requestedBy: 'marcus-chat', source: 'marcus_chat',
+      input: {
+        accountId: input.accountId, scriptName: input.scriptName, versionId: input.versionId,
+        expectedCurrentDeploymentId: input.expectedCurrentDeploymentId, message: input.message,
+      },
+    });
+    return { ok: true, ...result };
+  }
   return { ok: false, error: `Unknown operation tool: ${name}` };
 }
 

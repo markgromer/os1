@@ -149,12 +149,14 @@ export class OperationRunner {
       } : liveRegistryRecord;
       const input = safeObject(next.input);
       const environment = safeString(input.environment, 100) || 'development';
+      const approvalTarget = safeString(input.approvalTarget, 300);
+      const policyAction = `${next.toolName || next.type}${approvalTarget ? `:${approvalTarget}` : ''}`;
       const classification = this.policy.classify({
         business: businessKey,
         projectRegistryId: operation.projectRegistryId,
         environment,
         provider: next.provider,
-        action: next.toolName || next.type,
+        action: policyAction,
         actionClass: next.toolName || next.type,
         authorization: operation.metadata?.authorizationProvenance,
       });
@@ -210,7 +212,7 @@ export class OperationRunner {
       try {
         result = await promiseWithTimeout(this.invokeProvider({ operation, step: runningStep, registryRecord }), this.providerTimeoutMs);
       } catch (error) {
-        result = { status: error?.code === 'PROVIDER_TIMEOUT' ? 'unknown' : 'failed', error: error?.message || 'Provider failed.' };
+        result = { status: ['PROVIDER_TIMEOUT', 'PROVIDER_STATE_UNKNOWN'].includes(error?.code) ? 'unknown' : 'failed', error: error?.message || 'Provider failed.' };
       }
       if (runningStep.type === 'codex' && normalizeProviderStatus(result?.status) === 'completed' && result?.job) {
         result = await this.collectCodexCompletion(result, { operation, step: runningStep, registryRecord })
@@ -417,6 +419,19 @@ export class OperationRunner {
 
       if (status === 'completed') {
         step.status = 'completed'; step.completedAt = timestamp; step.output = typeof result.output === 'string' ? result.output : JSON.stringify(sanitizeStructured(result.output ?? {}, 20_000)); step.error = '';
+        if (['github_write', 'cloudflare_write'].includes(step.type)) {
+          const evidence = sanitizeStructured(result.output ?? {}, 20_000);
+          draft.verification.push(normalizeVerificationResult({
+            type: 'provider_readback', status: 'passed', required: true, startedAt: step.startedAt, completedAt: timestamp,
+            output: `The ${step.provider} mutation returned authoritative read-back verification.`,
+            evidence: { provider: step.provider, action: step.toolName, result: evidence },
+          }, { operationId, stepId: step.id }));
+          draft.artifacts.push(createArtifact({
+            type: 'provider_mutation_evidence', name: `${step.provider} ${step.toolName} verified result`,
+            mimeType: 'application/json', content: JSON.stringify(evidence),
+            metadata: { provider: step.provider, action: step.toolName, authoritative: true, verified: true },
+          }, { operationId, stepId: step.id }));
+        }
         for (const artifact of Array.isArray(result.artifacts) ? result.artifacts : []) draft.artifacts.push(createArtifact(artifact, { operationId, stepId: step.id }));
         if (result.diff && (result.diff.summary || Object.keys(result.diff).length)) {
           draft.artifacts.push(createCodexDiffArtifact(result.diff, { operationId, stepId: step.id }));

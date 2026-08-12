@@ -3,8 +3,9 @@ import crypto from 'node:crypto';
 import { ApprovalPolicy } from '../approvals/approval_policy.js';
 import { ApprovalService } from '../approvals/approval_service.js';
 import { CodexProvider } from '../providers/codex_provider.js';
+import { CloudflareWriteProvider, CLOUDFLARE_WRITE_ACTIONS, workerMatchesRegisteredDeployment } from '../providers/cloudflare_provider.js';
 import { DesktopProvider } from '../providers/desktop_provider.js';
-import { GitHubReadProvider } from '../providers/github_provider.js';
+import { GitHubReadProvider, GitHubWriteProvider, GITHUB_WRITE_ACTIONS } from '../providers/github_provider.js';
 import { ProjectRegistry } from '../projects/project_registry.js';
 import { ProjectResolver } from '../projects/project_resolver.js';
 import { OperationRecovery } from './operation_recovery.js';
@@ -14,7 +15,7 @@ import { OperationService } from './operation_service.js';
 import { OperationStore } from './operation_store.js';
 import { OperationVerification } from './operation_verification.js';
 import { CodexResultReviewer } from './codex_result_reviewer.js';
-import { makeOperationId, nowIso, safeBusinessKey, safeObject, safeString, summarizeOperationProgress } from './operation_types.js';
+import { makeOperationId, nowIso, safeBusinessKey, safeObject, safeString, sanitizeStructured, summarizeOperationProgress } from './operation_types.js';
 
 function objectiveFromRequest(request) {
   const text = safeString(request, 8_000);
@@ -104,12 +105,35 @@ function deriveTrustedAuthorization({ request, businessKey, projectRegistryId })
   };
 }
 
+function providerActionApprovalTarget(provider, action, input, repository = '') {
+  const raw = safeObject(input);
+  if (provider === 'github_write' && action === 'merge_pull_request') {
+    return `${repository}#${Number(raw.pullNumber) || 0}@${safeString(raw.expectedHeadSha, 40)}`;
+  }
+  if (provider === 'cloudflare_write' && action === 'deploy_worker_version') {
+    return `${safeString(raw.scriptName, 200)}@${safeString(raw.versionId, 64)}`;
+  }
+  if (provider === 'cloudflare_write') {
+    return `${safeString(raw.recordType || raw.type, 16).toUpperCase()} ${safeString(raw.name, 255)} -> ${safeString(raw.content, 160)}`;
+  }
+  return safeString(action, 200);
+}
+
+function providerActionTitle(provider, action, approvalTarget) {
+  if (provider === 'github_write') return `Merge ${approvalTarget}`;
+  if (action === 'deploy_worker_version') return `Deploy Cloudflare Worker ${approvalTarget}`;
+  if (action === 'delete_dns_record') return `Delete Cloudflare DNS ${approvalTarget}`;
+  return `Change Cloudflare DNS ${approvalTarget}`;
+}
+
 export function createOperationsEngine({
   dataDir,
   getLegacyProjects = async () => [],
   getDesktopContext = async () => ({}),
   queueDesktopAction = null,
   githubReadAdapter = null,
+  githubWriteAdapter = null,
+  cloudflareWriteAdapter = null,
   directCodexAdapter = null,
   reviewCodexResult = null,
   providerTimeoutMs = 45_000,
@@ -124,11 +148,13 @@ export function createOperationsEngine({
   const codex = new CodexProvider({ mode: directCodexAdapter ? 'direct' : 'external_handoff', directAdapter: directCodexAdapter });
   const desktop = new DesktopProvider({ queueAction: queueDesktopAction });
   const githubRead = new GitHubReadProvider({ readAdapter: githubReadAdapter });
+  const githubWrite = new GitHubWriteProvider({ writeAdapter: githubWriteAdapter });
+  const cloudflareWrite = new CloudflareWriteProvider({ writeAdapter: cloudflareWriteAdapter });
   const codexResultReviewer = typeof reviewCodexResult === 'function' ? new CodexResultReviewer({ complete: reviewCodexResult }) : null;
   const service = new OperationService({ store, registry, resolver, policy, approvalService, verification });
   const runner = new OperationRunner({
     store, registry, service, policy, approvalService, verification,
-    providers: { codex, desktop, github_read: githubRead },
+    providers: { codex, desktop, github_read: githubRead, github_write: githubWrite, cloudflare_write: cloudflareWrite },
     codexResultReviewer,
     providerTimeoutMs,
   });
@@ -164,7 +190,7 @@ export function createOperationsEngine({
     runner,
     recovery,
     reconciliation,
-    providers: { codex, desktop, githubRead },
+    providers: { codex, desktop, githubRead, githubWrite, cloudflareWrite },
 
     async initializeBusinesses(businessKeys = ['personal']) {
       const output = [];
@@ -279,6 +305,101 @@ export function createOperationsEngine({
       if (raw.autoPlan !== false) operation = await service.planOperation(key, operation.id, raw.plan || {});
       if (raw.autoStart === true && operation.status === 'planned') operation = await service.startOperation(key, operation.id, { actor: raw.requestedBy || 'mark', runCycle: true });
       return { operation, resolution };
+    },
+
+    async createProviderActionFromRequest(businessKey, input = {}) {
+      const key = safeBusinessKey(businessKey);
+      const raw = safeObject(input);
+      const provider = safeString(raw.provider, 100).toLowerCase();
+      const action = safeString(raw.action, 100).toLowerCase();
+      const allowed = provider === 'github_write' ? GITHUB_WRITE_ACTIONS
+        : provider === 'cloudflare_write' ? CLOUDFLARE_WRITE_ACTIONS : null;
+      if (!allowed?.has(action)) throw Object.assign(new Error('The requested provider action is not allowlisted.'), { code: 'PROVIDER_ACTION_NOT_ALLOWED' });
+      const originalRequest = safeString(raw.originalRequest || raw.request, 12_000);
+      if (!originalRequest) throw Object.assign(new Error('The authenticated user request is required.'), { code: 'AUTHENTICATED_REQUEST_REQUIRED' });
+      const requestedInput = sanitizeStructured(raw.input ?? {}, 20_000);
+      const repository = safeString(raw.repository || requestedInput.repository, 500).replace(/\.git$/i, '');
+      const projectQuery = [safeString(raw.projectName, 300), repository, originalRequest].filter(Boolean).join(' ');
+      const resolution = await api.resolveProject(key, projectQuery, {
+        projectId: raw.projectId,
+        registryId: raw.projectRegistryId,
+        currentProjectId: raw.currentProjectId,
+      });
+      const record = resolution.registryRecord;
+      if (!record || resolution.confidence !== 'high') {
+        throw Object.assign(new Error(`An exact registered project is required before preparing ${action}. ${resolution.reason || ''}`.trim()), { code: 'PROJECT_CONFIRMATION_REQUIRED' });
+      }
+      if (provider === 'github_write') {
+        if (!repository || repository.toLowerCase() !== safeString(record.repo?.fullName, 500).toLowerCase()) {
+          throw Object.assign(new Error('The explicit GitHub repository does not match the resolved project registry target.'), { code: 'PROVIDER_TARGET_MISMATCH' });
+        }
+      }
+      if (provider === 'cloudflare_write') {
+        const deployments = safeObject(record.deployments);
+        if (action === 'deploy_worker_version') {
+          const accountId = safeString(requestedInput.accountId || deployments.cloudflareAccountId, 64);
+          const scriptName = safeString(requestedInput.scriptName, 200).toLowerCase();
+          if (deployments.cloudflareAccountId && deployments.cloudflareAccountId !== accountId) {
+            throw Object.assign(new Error('The Cloudflare account does not match the resolved project registry target.'), { code: 'PROVIDER_TARGET_MISMATCH' });
+          }
+          if (!workerMatchesRegisteredDeployment(scriptName, deployments)) {
+            throw Object.assign(new Error('The Worker script is not bound to the resolved project registry target.'), { code: 'PROVIDER_TARGET_MISMATCH' });
+          }
+        } else {
+          const zoneId = safeString(requestedInput.zoneId || deployments.cloudflareZoneId, 64);
+          if (deployments.cloudflareZoneId && deployments.cloudflareZoneId !== zoneId) {
+            throw Object.assign(new Error('The Cloudflare zone does not match the resolved project registry target.'), { code: 'PROVIDER_TARGET_MISMATCH' });
+          }
+        }
+      }
+      const approvalTarget = providerActionApprovalTarget(provider, action, requestedInput, repository);
+      const fingerprint = crypto.createHash('sha256').update(JSON.stringify({
+        businessKey: key, projectRegistryId: record.id, provider, action, approvalTarget, input: requestedInput,
+      })).digest('hex');
+      const duplicate = (await store.listAll(key, { nonterminal: true })).find((candidate) =>
+        candidate.metadata?.extra?.providerActionFingerprint === fingerprint);
+      if (duplicate) return { operation: duplicate, resolution, reused: true };
+
+      const authorizationProvenance = {
+        source: 'authenticated_request', businessKey: key, projectRegistryId: record.id,
+        environment: 'production', providers: [provider], actionClasses: [action],
+        requestDigest: crypto.createHash('sha256').update(originalRequest).digest('hex'), createdAt: nowIso(), revoked: false,
+      };
+      const title = providerActionTitle(provider, action, approvalTarget);
+      let operation = await service.createOperation(key, {
+        projectId: record.projectId,
+        projectName: record.canonicalName,
+        projectRegistryId: record.id,
+        title,
+        objective: `${title} only after explicit approval, then verify the exact provider state.`,
+        originalRequest,
+        requestedBy: safeString(raw.requestedBy, 200) || 'mark',
+        source: safeString(raw.source, 100) || 'marcus_chat',
+        acceptanceCriteria: [
+          `${title} is applied to the exact registered provider target.`,
+          'The provider response and an authoritative read-back agree on the resulting state.',
+          'No adjacent repository, zone, DNS record, Worker, or deployment is changed.',
+        ],
+        metadata: {
+          projectResolution: { resolved: true, confidence: 'high', score: resolution.score, reason: resolution.reason, alternatives: [], confirmed: true },
+          providerActionFingerprint: fingerprint,
+        },
+      }, { authorizationProvenance });
+      operation = await service.planOperation(key, operation.id, {
+        steps: [
+          {
+            id: 'context', title: 'Bind the immutable provider target', type: 'internal', provider: 'internal',
+            toolName: 'prepare_operation_context', input: {},
+          },
+          {
+            id: 'provider-action', title, description: operation.objective, type: provider, provider,
+            toolName: action, dependsOn: ['context'], maxAttempts: 2,
+            input: { ...requestedInput, environment: 'production', approvalTarget },
+          },
+        ],
+      });
+      operation = await service.startOperation(key, operation.id, { actor: safeString(raw.requestedBy, 100) || 'mark', runCycle: true });
+      return { operation, resolution, reused: false };
     },
 
     async listOperations(businessKey, filters = {}) {

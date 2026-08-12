@@ -49,6 +49,13 @@ export function registerOperationsRoutes(app, { engine, getBusinessKey }) {
     res.status(201).json({ ok: true, ...result });
   }));
 
+  router.post('/operations/provider-action', asyncRoute(async (req, res) => {
+    const result = await engine.createProviderActionFromRequest(business(req), {
+      ...(req.body || {}), requestedBy: 'authenticated_operator', source: 'provider_action_api',
+    });
+    res.status(result.reused ? 200 : 201).json({ ok: true, ...result });
+  }));
+
   router.get('/operations/:id', asyncRoute(async (req, res) => {
     const operation = await engine.getOperation(business(req), req.params.id);
     if (!operation) throw Object.assign(new Error('Operation not found.'), { code: 'OPERATION_NOT_FOUND' });

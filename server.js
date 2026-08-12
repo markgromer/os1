@@ -261,6 +261,8 @@ const operationsEngine = createOperationsEngine({
   getDesktopContext: async () => desktopRelayCache?.data || desktopContextCache?.data || {},
   queueDesktopAction: async (action) => queueDesktopAction(action),
   githubReadAdapter: async (input) => githubOperationsReadAdapter(input),
+  githubWriteAdapter: async (input) => githubOperationsWriteAdapter(input),
+  cloudflareWriteAdapter: async (input) => cloudflareOperationsWriteAdapter(input),
   directCodexAdapter,
   reviewCodexResult: async ({ messages, timeoutMs, responseFormat }) => aiChatCompletion({
     routeKey: 'marcusChat',
@@ -2527,6 +2529,10 @@ async function buildMarcusOperatorHealth() {
         tokenHint: github.tokenHint,
         source: github.source,
         access: github.configured ? 'server_api' : 'not_configured_for_server',
+        readAccess: github.configured,
+        approvedMutationPathAvailable: github.configured,
+        approvedMutationActions: ['merge_pull_request'],
+        mergeSafety: 'registered_repository_exact_head_sha_checks_and_readback',
       },
       cloudflare: {
         backendTokenConfigured: cloudflare.configured,
@@ -2535,6 +2541,10 @@ async function buildMarcusOperatorHealth() {
         tokenHint: cloudflare.tokenHint,
         source: cloudflare.source,
         access: cloudflare.configured ? 'server_api' : 'not_configured_for_server',
+        readAccess: cloudflare.configured,
+        approvedMutationPathAvailable: Boolean(cloudflare.configured && cloudflare.accountId),
+        approvedMutationActions: ['upsert_dns_record', 'delete_dns_record', 'deploy_worker_version'],
+        mutationSafety: 'registered_project_target_drift_check_idempotency_and_readback',
       },
       render: {
         backendTokenConfigured: render.configured,
@@ -2668,7 +2678,9 @@ async function githubApi(pathPart, { method = 'GET', body, timeoutMs = 20_000 } 
   const cfg = getGitHubCloudConfig(await readSettings());
   if (!cfg.token) throw new Error('GITHUB_TOKEN is not configured.');
   const cleanPath = String(pathPart || '').startsWith('/') ? pathPart : `/${pathPart || ''}`;
-  const { resp, data } = await fetchJsonWithTimeout(`https://api.github.com${cleanPath}`, {
+  const testBase = process.env.NODE_ENV === 'test' ? String(process.env.MARCUS_TEST_GITHUB_API_BASE_URL || '').trim().replace(/\/$/, '') : '';
+  const githubApiBase = /^http:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?(?:\/|$)/.test(testBase) ? testBase : 'https://api.github.com';
+  const { resp, data } = await fetchJsonWithTimeout(`${githubApiBase}${cleanPath}`, {
     timeoutMs,
     method,
     headers: {
@@ -2679,7 +2691,11 @@ async function githubApi(pathPart, { method = 'GET', body, timeoutMs = 20_000 } 
     },
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
-  if (!resp.ok) throw new Error(data?.message || `GitHub API failed (${resp.status}).`);
+  if (!resp.ok) {
+    const error = new Error(data?.message || `GitHub API failed (${resp.status}).`);
+    error.status = resp.status;
+    throw error;
+  }
   return data;
 }
 
@@ -2728,11 +2744,87 @@ async function githubOperationsReadAdapter({ repository, action, input = {} }) {
   throw new Error('Unsupported GitHub read action.');
 }
 
+function githubChecksAreSettled(checks, statuses) {
+  const checkRuns = Array.isArray(checks?.check_runs) ? checks.check_runs : [];
+  const contexts = Array.isArray(statuses?.statuses) ? statuses.statuses : [];
+  const unsuccessfulChecks = checkRuns.filter((run) => run?.status !== 'completed'
+    || !['success', 'neutral', 'skipped'].includes(String(run?.conclusion || '').toLowerCase()));
+  const unsuccessfulStatuses = contexts.filter((status) => String(status?.state || '').toLowerCase() !== 'success');
+  return {
+    settled: unsuccessfulChecks.length === 0 && unsuccessfulStatuses.length === 0,
+    totalCheckRuns: checkRuns.length,
+    totalStatuses: contexts.length,
+    unsuccessfulChecks: unsuccessfulChecks.map((run) => ({ id: run.id, name: run.name, status: run.status, conclusion: run.conclusion })),
+    unsuccessfulStatuses: unsuccessfulStatuses.map((status) => ({ id: status.id, context: status.context, state: status.state })),
+  };
+}
+
+function providerStateUnknown(message, cause) {
+  const error = new Error(message);
+  error.code = 'PROVIDER_STATE_UNKNOWN';
+  if (cause) error.cause = cause;
+  return error;
+}
+
+async function githubOperationsWriteAdapter({ repository, action, input = {}, operationId = '' }) {
+  if (action !== 'merge_pull_request') throw new Error('Unsupported GitHub write action.');
+  const [owner, repo] = String(repository || '').split('/');
+  if (!/^[A-Za-z0-9_.-]+$/.test(owner || '') || !/^[A-Za-z0-9_.-]+$/.test(repo || '')) throw new Error('Registered GitHub repository is invalid.');
+  const pullNumber = Number(input.pullNumber);
+  const expectedHeadSha = String(input.expectedHeadSha || '').toLowerCase();
+  const base = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+  const pullPath = `${base}/pulls/${pullNumber}`;
+  let pull = await githubApi(pullPath);
+  if (String(pull?.head?.sha || '').toLowerCase() !== expectedHeadSha) {
+    throw new Error(`Pull request head changed. Expected ${expectedHeadSha}, found ${pull?.head?.sha || 'unknown'}; merge was refused.`);
+  }
+  if (pull?.merged === true) {
+    return {
+      action, repository, pullNumber, expectedHeadSha, idempotentReplay: true, verified: true,
+      merged: true, mergeCommitSha: pull.merge_commit_sha, htmlUrl: pull.html_url,
+    };
+  }
+  if (pull?.state !== 'open' || pull?.draft === true) throw new Error('The pull request is not an open, non-draft merge target.');
+  if (pull?.mergeable === null) {
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    pull = await githubApi(pullPath);
+  }
+  if (pull?.mergeable === false) throw new Error(`GitHub reports that pull request #${pullNumber} is not mergeable.`);
+  const [checks, statuses] = await Promise.all([
+    githubApi(`${base}/commits/${encodeURIComponent(expectedHeadSha)}/check-runs?per_page=100`),
+    githubApi(`${base}/commits/${encodeURIComponent(expectedHeadSha)}/status?per_page=100`),
+  ]);
+  const checkEvidence = githubChecksAreSettled(checks, statuses);
+  if (!checkEvidence.settled) {
+    throw new Error(`Pull request checks are not all settled successfully: ${JSON.stringify(checkEvidence)}`);
+  }
+  const mergeBody = {
+    sha: expectedHeadSha,
+    merge_method: ['merge', 'squash', 'rebase'].includes(input.mergeMethod) ? input.mergeMethod : 'squash',
+    ...(input.commitTitle ? { commit_title: input.commitTitle } : {}),
+    ...(input.commitMessage ? { commit_message: input.commitMessage } : {}),
+  };
+  const merged = await githubApi(`${pullPath}/merge`, { method: 'PUT', body: mergeBody });
+  if (merged?.merged !== true || !merged?.sha) throw new Error(merged?.message || 'GitHub did not confirm the pull request merge.');
+  let verified;
+  try { verified = await githubApi(pullPath); }
+  catch (error) { throw providerStateUnknown('GitHub accepted the merge but its final state could not be read back.', error); }
+  if (verified?.merged !== true || verified?.merge_commit_sha !== merged.sha) {
+    throw new Error('GitHub accepted the merge request but authoritative read-back did not confirm the same merge commit.');
+  }
+  return {
+    action, repository, pullNumber, expectedHeadSha, operationId, idempotentReplay: false, verified: true,
+    merged: true, mergeCommitSha: verified.merge_commit_sha, htmlUrl: verified.html_url, checks: checkEvidence,
+  };
+}
+
 async function cloudflareApi(pathPart, { method = 'GET', body, timeoutMs = 20_000 } = {}) {
   const cfg = getCloudflareConfig(await readSettings());
   if (!cfg.token) throw new Error('CLOUDFLARE_API_TOKEN is not configured.');
   const cleanPath = String(pathPart || '').startsWith('/') ? pathPart : `/${pathPart || ''}`;
-  const { resp, data } = await fetchJsonWithTimeout(`https://api.cloudflare.com/client/v4${cleanPath}`, {
+  const testBase = process.env.NODE_ENV === 'test' ? String(process.env.MARCUS_TEST_CLOUDFLARE_API_BASE_URL || '').trim().replace(/\/$/, '') : '';
+  const cloudflareApiBase = /^http:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?(?:\/|$)/.test(testBase) ? testBase : 'https://api.cloudflare.com/client/v4';
+  const { resp, data } = await fetchJsonWithTimeout(`${cloudflareApiBase}${cleanPath}`, {
     timeoutMs,
     method,
     headers: {
@@ -2743,9 +2835,225 @@ async function cloudflareApi(pathPart, { method = 'GET', body, timeoutMs = 20_00
   });
   if (!resp.ok || data?.success === false) {
     const msg = Array.isArray(data?.errors) && data.errors[0]?.message ? data.errors[0].message : `Cloudflare API failed (${resp.status}).`;
-    throw new Error(msg);
+    const error = new Error(msg);
+    error.status = resp.status;
+    throw error;
   }
   return data;
+}
+
+function cloudflareResultRows(data, nestedKey = '') {
+  const result = data?.result;
+  if (Array.isArray(result)) return result;
+  return nestedKey && Array.isArray(result?.[nestedKey]) ? result[nestedKey] : [];
+}
+
+function cloudflareDnsRecordView(record) {
+  if (!record) return null;
+  return {
+    id: record.id, type: record.type, name: record.name, content: record.content,
+    ttl: record.ttl, proxied: Boolean(record.proxied), priority: Number(record.priority || 0),
+    comment: record.comment || '', modifiedOn: record.modified_on,
+  };
+}
+
+function cloudflareDnsStateMatches(record, desired) {
+  return Boolean(record)
+    && String(record.type || '').toUpperCase() === desired.recordType
+    && String(record.name || '').toLowerCase().replace(/\.$/, '') === desired.name
+    && String(record.content || '') === desired.content
+    && Number(record.ttl || 1) === desired.ttl
+    && Boolean(record.proxied) === desired.proxied
+    && (!['MX'].includes(desired.recordType) || Number(record.priority || 0) === desired.priority);
+}
+
+function urlHostname(value) {
+  try { return new URL(value).hostname.toLowerCase(); } catch { return ''; }
+}
+
+async function validateCloudflareZoneTarget(input, registryTarget) {
+  const deployments = registryTarget?.deployments || {};
+  const zoneData = await cloudflareApi(`/zones/${encodeURIComponent(input.zoneId)}`);
+  const zone = zoneData?.result;
+  const zoneName = String(zone?.name || '').toLowerCase();
+  const registeredZoneId = String(deployments.cloudflareZoneId || '');
+  const registeredZoneName = String(deployments.cloudflareZoneName || '').toLowerCase();
+  const productionHost = urlHostname(deployments.productionUrl);
+  const bound = (registeredZoneId && registeredZoneId === input.zoneId)
+    || (registeredZoneName && registeredZoneName === zoneName)
+    || (productionHost && (productionHost === zoneName || productionHost.endsWith(`.${zoneName}`)));
+  if (!zone?.id || !zoneName || !bound) throw new Error('The Cloudflare zone is not bound to the resolved project registry target.');
+  if (!(input.name === zoneName || input.name.endsWith(`.${zoneName}`))) throw new Error('The DNS record name is outside the bound Cloudflare zone.');
+  return { id: zone.id, name: zone.name, accountId: zone.account?.id || '' };
+}
+
+async function cloudflareDnsMutation({ action, input, registryTarget }) {
+  const zone = await validateCloudflareZoneTarget(input, registryTarget);
+  const query = new URLSearchParams({ type: input.recordType, name: input.name, per_page: '100' });
+  const listed = await cloudflareApi(`/zones/${encodeURIComponent(input.zoneId)}/dns_records?${query}`);
+  const matches = cloudflareResultRows(listed).filter((record) =>
+    String(record.type || '').toUpperCase() === input.recordType
+    && String(record.name || '').toLowerCase().replace(/\.$/, '') === input.name);
+  let current = input.recordId ? matches.find((record) => record.id === input.recordId) : (matches.length === 1 ? matches[0] : null);
+  if (!input.recordId && matches.length > 1) throw new Error('Multiple DNS records match this type and name; an exact record ID is required.');
+  if (action === 'upsert_dns_record' && input.recordId && !current) {
+    throw new Error('The exact DNS record ID no longer exists under the approved type and name; update was refused instead of creating a replacement.');
+  }
+
+  if (action === 'delete_dns_record') {
+    if (!current) {
+      const expectedStillExists = matches.some((record) => String(record.content || '') === input.content);
+      if (expectedStillExists) throw new Error('The expected DNS value still exists under a different record ID; deletion was refused.');
+      return { action, zone, recordId: input.recordId, idempotentReplay: true, verified: true, deleted: true };
+    }
+    if (!cloudflareDnsStateMatches(current, input)) throw new Error('The DNS record no longer matches the exact approved type, name, content, TTL, proxy, and priority state.');
+    const before = cloudflareDnsRecordView(current);
+    await cloudflareApi(`/zones/${encodeURIComponent(input.zoneId)}/dns_records/${encodeURIComponent(input.recordId)}`, { method: 'DELETE' });
+    let afterList;
+    try { afterList = await cloudflareApi(`/zones/${encodeURIComponent(input.zoneId)}/dns_records?${query}`); }
+    catch (error) { throw providerStateUnknown('Cloudflare accepted the DNS deletion but its final state could not be read back.', error); }
+    const remains = cloudflareResultRows(afterList).some((record) => record.id === input.recordId);
+    if (remains) throw new Error('Cloudflare accepted the delete request but read-back still found the record.');
+    return { action, zone, before, recordId: input.recordId, idempotentReplay: false, verified: true, deleted: true };
+  }
+
+  if (current && cloudflareDnsStateMatches(current, input)) {
+    return { action, zone, before: cloudflareDnsRecordView(current), after: cloudflareDnsRecordView(current), idempotentReplay: true, verified: true };
+  }
+  const body = {
+    type: input.recordType, name: input.name, content: input.content, ttl: input.ttl, proxied: input.proxied,
+    ...(input.comment ? { comment: input.comment } : {}),
+    ...(input.recordType === 'MX' ? { priority: input.priority } : {}),
+  };
+  const before = cloudflareDnsRecordView(current);
+  const changed = current
+    ? await cloudflareApi(`/zones/${encodeURIComponent(input.zoneId)}/dns_records/${encodeURIComponent(current.id)}`, { method: 'PUT', body })
+    : await cloudflareApi(`/zones/${encodeURIComponent(input.zoneId)}/dns_records`, { method: 'POST', body });
+  const changedId = changed?.result?.id;
+  if (!changedId) throw new Error('Cloudflare did not return a DNS record ID.');
+  let readBack;
+  try { readBack = await cloudflareApi(`/zones/${encodeURIComponent(input.zoneId)}/dns_records/${encodeURIComponent(changedId)}`); }
+  catch (error) { throw providerStateUnknown('Cloudflare accepted the DNS change but its final state could not be read back.', error); }
+  if (!cloudflareDnsStateMatches(readBack?.result, input)) throw new Error('Cloudflare accepted the DNS change but read-back did not match the approved state.');
+  return { action, zone, before, after: cloudflareDnsRecordView(readBack.result), idempotentReplay: false, verified: true };
+}
+
+async function cloudflareWorkerDeployment({ input, registryTarget, operationId }) {
+  const cfg = getCloudflareConfig(await readSettings());
+  const deployments = registryTarget?.deployments || {};
+  if (!cfg.accountId || input.accountId !== cfg.accountId) throw new Error('The Worker account does not match Marcus\'s configured Cloudflare account.');
+  if (deployments.cloudflareAccountId && input.accountId !== deployments.cloudflareAccountId) throw new Error('The Worker account does not match the project registry target.');
+  const registeredScript = String(deployments.cloudflareProject || '').toLowerCase();
+  const productionHost = urlHostname(deployments.productionUrl);
+  const bound = registeredScript === input.scriptName
+    || (productionHost.endsWith('.workers.dev') && productionHost.split('.')[0] === input.scriptName);
+  if (!bound) throw new Error('The Worker script is not bound to the resolved project registry target.');
+
+  const root = `/accounts/${encodeURIComponent(input.accountId)}/workers/scripts/${encodeURIComponent(input.scriptName)}`;
+  const [versionData, currentData] = await Promise.all([
+    cloudflareApi(`${root}/versions/${encodeURIComponent(input.versionId)}`),
+    cloudflareApi(`${root}/deployments`),
+  ]);
+  if (versionData?.result?.id !== input.versionId) throw new Error('The target Worker version could not be verified.');
+  const current = cloudflareResultRows(currentData, 'deployments')[0];
+  if (!current?.id) throw new Error('The current Worker deployment could not be determined.');
+  if (current.id !== input.expectedCurrentDeploymentId) {
+    throw new Error(`The Worker deployment changed after preparation. Expected ${input.expectedCurrentDeploymentId}, found ${current.id}; deployment was refused.`);
+  }
+  const currentVersions = Array.isArray(current.versions) ? current.versions : [];
+  if (currentVersions.length === 1 && currentVersions[0]?.version_id === input.versionId && Number(currentVersions[0]?.percentage) === 100) {
+    return { action: 'deploy_worker_version', scriptName: input.scriptName, deploymentId: current.id, versionId: input.versionId, idempotentReplay: true, verified: true };
+  }
+  const created = await cloudflareApi(`${root}/deployments`, {
+    method: 'POST',
+    body: {
+      strategy: 'percentage', versions: [{ version_id: input.versionId, percentage: 100 }],
+      annotations: {
+        'workers/message': input.message || `Marcus operation ${operationId}`,
+        'workers/triggered_by': 'marcus-approved-operation',
+      },
+    },
+  });
+  const deploymentId = created?.result?.id;
+  if (!deploymentId) throw new Error('Cloudflare did not return a Worker deployment ID.');
+  let readBack;
+  try { readBack = await cloudflareApi(`${root}/deployments/${encodeURIComponent(deploymentId)}`); }
+  catch (error) { throw providerStateUnknown('Cloudflare accepted the Worker deployment but its final state could not be read back.', error); }
+  const versions = Array.isArray(readBack?.result?.versions) ? readBack.result.versions : [];
+  if (readBack?.result?.id !== deploymentId || versions.length !== 1
+    || versions[0]?.version_id !== input.versionId || Number(versions[0]?.percentage) !== 100) {
+    throw new Error('Cloudflare accepted the deployment but read-back did not confirm the approved version at 100%.');
+  }
+  return { action: 'deploy_worker_version', scriptName: input.scriptName, priorDeploymentId: current.id, deploymentId, versionId: input.versionId, idempotentReplay: false, verified: true };
+}
+
+async function cloudflareOperationsWriteAdapter({ action, input = {}, registryTarget = {}, operationId = '' }) {
+  if (action === 'deploy_worker_version') return cloudflareWorkerDeployment({ input, registryTarget, operationId });
+  if (action === 'upsert_dns_record' || action === 'delete_dns_record') return cloudflareDnsMutation({ action, input, registryTarget });
+  throw new Error('Unsupported Cloudflare write action.');
+}
+
+async function inspectGitHubPullRequest(ownerValue, repoValue, pullNumberValue) {
+  const owner = String(ownerValue || '').trim();
+  const repo = String(repoValue || '').trim();
+  const pullNumber = Number(pullNumberValue);
+  if (!/^[A-Za-z0-9_.-]+$/.test(owner) || !/^[A-Za-z0-9_.-]+$/.test(repo) || !Number.isSafeInteger(pullNumber) || pullNumber < 1) {
+    throw new Error('A valid owner, repository, and pull request number are required.');
+  }
+  const base = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+  const pull = await githubApi(`${base}/pulls/${pullNumber}`);
+  const headSha = String(pull?.head?.sha || '');
+  const [checks, statuses] = headSha ? await Promise.all([
+    githubApi(`${base}/commits/${encodeURIComponent(headSha)}/check-runs?per_page=100`),
+    githubApi(`${base}/commits/${encodeURIComponent(headSha)}/status?per_page=100`),
+  ]) : [{ check_runs: [] }, { statuses: [] }];
+  return {
+    repository: `${owner}/${repo}`, pullNumber, title: pull?.title || '', state: pull?.state,
+    draft: Boolean(pull?.draft), merged: Boolean(pull?.merged), mergeable: pull?.mergeable,
+    mergeableState: pull?.mergeable_state, base: pull?.base?.ref, head: pull?.head?.ref, headSha,
+    htmlUrl: pull?.html_url, checks: githubChecksAreSettled(checks, statuses),
+  };
+}
+
+async function cloudflareWorkerInspection(kind, scriptNameValue = '') {
+  const cfg = getCloudflareConfig(await readSettings());
+  if (!cfg.accountId) throw new Error('CLOUDFLARE_ACCOUNT_ID is not configured.');
+  if (kind === 'workers') {
+    const data = await cloudflareApi(`/accounts/${encodeURIComponent(cfg.accountId)}/workers/scripts`);
+    return {
+      accountId: cfg.accountId,
+      workers: cloudflareResultRows(data).slice(0, 200).map((worker) => ({
+        id: worker.id, createdOn: worker.created_on, modifiedOn: worker.modified_on,
+        compatibilityDate: worker.compatibility_date, usageModel: worker.usage_model,
+      })),
+    };
+  }
+  const scriptName = String(scriptNameValue || '').trim().toLowerCase();
+  if (!/^[a-z0-9][a-z0-9_-]{0,62}$/.test(scriptName)) throw new Error('A valid Worker script name is required.');
+  const root = `/accounts/${encodeURIComponent(cfg.accountId)}/workers/scripts/${encodeURIComponent(scriptName)}`;
+  if (kind === 'versions') {
+    const data = await cloudflareApi(`${root}/versions?deployable=true&per_page=50`);
+    return {
+      accountId: cfg.accountId, scriptName,
+      versions: cloudflareResultRows(data).slice(0, 50).map((version) => ({
+        id: version.id, number: version.number, createdOn: version.metadata?.created_on,
+        source: version.metadata?.source, authorEmail: version.metadata?.author_email,
+        message: version.annotations?.['workers/message'] || version.metadata?.annotations?.['workers/message'] || '',
+      })),
+    };
+  }
+  if (kind === 'deployments') {
+    const data = await cloudflareApi(`${root}/deployments`);
+    return {
+      accountId: cfg.accountId, scriptName,
+      deployments: cloudflareResultRows(data, 'deployments').slice(0, 50).map((deployment) => ({
+        id: deployment.id, createdOn: deployment.created_on, source: deployment.source,
+        versions: Array.isArray(deployment.versions) ? deployment.versions.map((version) => ({ versionId: version.version_id, percentage: version.percentage })) : [],
+        message: deployment.annotations?.['workers/message'] || '',
+      })),
+    };
+  }
+  throw new Error('Unsupported Cloudflare Worker inspection.');
 }
 
 async function renderApi(pathPart, { method = 'GET', body, timeoutMs = 20_000 } = {}) {
@@ -14600,6 +14908,15 @@ app.get('/api/integrations/cloudflare/status', async (req, res) => {
   });
 });
 
+app.get('/api/integrations/github/pull-request', async (req, res) => {
+  try {
+    const result = await inspectGitHubPullRequest(req.query?.owner, req.query?.repo, req.query?.pullNumber);
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: err?.message || 'Failed to inspect GitHub pull request.' });
+  }
+});
+
 app.get('/api/integrations/cloudflare/zones', async (req, res) => {
   try {
     const data = await cloudflareApi('/zones?per_page=50');
@@ -14645,6 +14962,30 @@ app.get('/api/integrations/cloudflare/dns-records', async (req, res) => {
 app.get('/api/integrations/render/status', async (req, res) => {
   const cfg = getRenderCloudConfig(await readSettings());
   res.json({ ok: true, configured: Boolean(cfg.configured), tokenHint: cfg.tokenHint, source: cfg.source });
+});
+
+app.get('/api/integrations/cloudflare/workers', async (req, res) => {
+  try {
+    res.json({ ok: true, ...await cloudflareWorkerInspection('workers') });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: err?.message || 'Failed to list Cloudflare Workers.' });
+  }
+});
+
+app.get('/api/integrations/cloudflare/worker-versions', async (req, res) => {
+  try {
+    res.json({ ok: true, ...await cloudflareWorkerInspection('versions', req.query?.scriptName) });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: err?.message || 'Failed to list Cloudflare Worker versions.' });
+  }
+});
+
+app.get('/api/integrations/cloudflare/worker-deployments', async (req, res) => {
+  try {
+    res.json({ ok: true, ...await cloudflareWorkerInspection('deployments', req.query?.scriptName) });
+  } catch (err) {
+    res.status(400).json({ ok: false, error: err?.message || 'Failed to list Cloudflare Worker deployments.' });
+  }
 });
 
 app.get('/api/integrations/render/services', async (req, res) => {
@@ -19049,6 +19390,17 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
       {
         type: 'function',
         function: {
+          name: 'github_get_pull_request',
+          description: 'Inspect one GitHub pull request, its exact head SHA, merge state, check runs, and commit statuses before preparing a merge. Read-only.',
+          parameters: {
+            type: 'object', properties: { owner: { type: 'string' }, repo: { type: 'string' }, pullNumber: { type: 'integer' } },
+            required: ['owner', 'repo', 'pullNumber'],
+          },
+        },
+      },
+      {
+        type: 'function',
+        function: {
           name: 'cloudflare_list_zones',
           description: 'List Cloudflare zones available to hosted Marcus credentials. Read-only.',
           parameters: { type: 'object', properties: {} },
@@ -19065,6 +19417,30 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
               zoneId: { type: 'string', description: 'Cloudflare zone id. Defaults to CLOUDFLARE_DEFAULT_ZONE_ID.' },
             },
           },
+        },
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'cloudflare_list_workers',
+          description: 'List Worker scripts in Marcus\'s configured Cloudflare account. Read-only.',
+          parameters: { type: 'object', properties: {} },
+        },
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'cloudflare_list_worker_versions',
+          description: 'List deployable versions for one Worker script in Marcus\'s configured Cloudflare account. Read-only.',
+          parameters: { type: 'object', properties: { scriptName: { type: 'string' } }, required: ['scriptName'] },
+        },
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'cloudflare_list_worker_deployments',
+          description: 'List current/recent deployments and version percentages for one Worker script before preparing a production promotion. Read-only.',
+          parameters: { type: 'object', properties: { scriptName: { type: 'string' } }, required: ['scriptName'] },
         },
       },
       {
@@ -19166,7 +19542,7 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
             systemPrompt +
             (effectiveThreadId === 'operator_bio'
               ? "\n\nIMPORTANT: Use set_operator_bio to persist changes to the bio."
-              : "\n\nIMPORTANT: When Mark asks for an internal/admin action, use tools instead of only describing the action. Use create_operation for multi-step code/project work, work spanning systems, work that must survive interruption, approval-gated work, or work requiring later verification. Do not create operations for trivial questions. Use the operation lifecycle tools to report the resolved project, risk, approvals, and what is actually running versus waiting. Use project activity tools for focus, staleness, momentum, and bottleneck questions, and cite their evidence instead of Airtable status. For project updates use create_project / update_project / create_tasks. For local project work use open_project_in_vscode when a workspace path is available. If Mark names a GitHub repo that is not local and the desktop agent is available, use clone_github_project; if Mark is remote or the desktop is offline, use the GitHub cloud tools to inspect repos/files. For Cloudflare and Render questions, use the cloud read tools when configured. For build/test/lint/preview requests, use run_project_script with a package.json script name. For publish requests, use prepare_project_publish first unless Mark has already explicitly approved committing/pushing. publish_project_changes is server-guarded and requires explicit approval in Mark's message. For high-impact external actions like publish/deploy/merge/send/billing/delete/DNS changes, prepare the action and ask for explicit approval before executing. Never claim Codex or another provider is running unless an operation runner actually started that provider path. When Mark asks whether a queued local action finished, use get_desktop_action_results."),
+              : "\n\nIMPORTANT: When Mark asks for an internal/admin action, use tools instead of only describing the action. Use create_operation for multi-step code/project work, work spanning systems, work that must survive interruption, approval-gated work, or work requiring later verification. Do not create operations for trivial questions. Use the operation lifecycle tools to report the resolved project, risk, approvals, and what is actually running versus waiting. Use project activity tools for focus, staleness, momentum, and bottleneck questions, and cite their evidence instead of Airtable status. For project updates use create_project / update_project / create_tasks. For local project work use open_project_in_vscode when a workspace path is available. If Mark names a GitHub repo that is not local and the desktop agent is available, use clone_github_project; if Mark is remote or the desktop is offline, use the GitHub cloud tools to inspect repos/files. Before a GitHub merge, inspect the exact pull request with github_get_pull_request, then use prepare_github_merge with its exact head SHA. Before a Cloudflare Worker deployment, inspect workers, versions, and current deployments, then use prepare_cloudflare_worker_deployment with the exact target version and current deployment ID. Use prepare_cloudflare_dns_change for exact project-bound DNS mutations. These preparation tools create durable approval-gated operations and never perform the mutation immediately. For build/test/lint/preview requests, use run_project_script with a package.json script name. For publish requests, use prepare_project_publish first unless Mark has already explicitly approved committing/pushing. publish_project_changes is server-guarded and requires explicit approval in Mark's message. For high-impact external actions like publish/deploy/merge/send/billing/delete/DNS changes, prepare the action and ask for explicit approval before executing. Never claim Codex or another provider is running unless an operation runner actually started that provider path. When Mark asks whether a queued local action finished, use get_desktop_action_results."),
         },
       ];
 
@@ -19449,6 +19825,9 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
         const content = encoded ? Buffer.from(encoded, 'base64').toString('utf8') : '';
         return { ok: true, type: data?.type || 'file', name: data?.name || '', path: data?.path || filePath, size: data?.size || 0, content: content.slice(0, 40_000) };
       }
+      if (toolName === 'github_get_pull_request') {
+        return { ok: true, ...await inspectGitHubPullRequest(args?.owner, args?.repo, args?.pullNumber) };
+      }
       if (toolName === 'cloudflare_list_zones') {
         const data = await cloudflareApi('/zones?per_page=50');
         return {
@@ -19480,6 +19859,13 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
             modifiedOn: record.modified_on,
           })),
         };
+      }
+      if (toolName === 'cloudflare_list_workers') {
+        return { ok: true, ...await cloudflareWorkerInspection('workers') };
+      }
+      if (toolName === 'cloudflare_list_worker_versions' || toolName === 'cloudflare_list_worker_deployments') {
+        const kind = toolName === 'cloudflare_list_worker_versions' ? 'versions' : 'deployments';
+        return { ok: true, ...await cloudflareWorkerInspection(kind, args?.scriptName) };
       }
       if (toolName === 'render_list_services') {
         const limit = Math.max(1, Math.min(100, Number(args?.limit) || 50));

@@ -39,7 +39,7 @@ export const VERIFICATION_STATUSES = Object.freeze([
 export const RISK_LEVELS = Object.freeze(['low', 'medium', 'high', 'critical']);
 
 export const STEP_TYPES = Object.freeze([
-  'internal', 'desktop', 'github_read', 'codex', 'verification', 'approval',
+  'internal', 'desktop', 'github_read', 'github_write', 'cloudflare_write', 'codex', 'verification', 'approval',
 ]);
 
 export const TERMINAL_OPERATION_STATUSES = Object.freeze(['completed', 'failed', 'cancelled']);
