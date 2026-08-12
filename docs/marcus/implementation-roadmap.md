@@ -50,7 +50,7 @@ Requirements:
 - Store Codex job id, branch, artifacts, and status.
 - Poll or reconcile status.
 
-Status: handoff mode is implemented and tested. Direct Codex launch is adapter-ready through `marcus/providers/http_codex_adapter.js` for HTTP services and `marcus/providers/github_actions_codex_adapter.js` for the Reggie-style GitHub Actions runner.
+Status: handoff mode and direct launch are implemented. Production uses the Reggie-style GitHub Actions adapter. The first complete production acceptance operation dispatched `openai/codex-action@v1`, recovered from a failed runner attempt, opened a pull request, and completed after independent verification evidence was registered.
 
 Direct adapter environment:
 
@@ -59,7 +59,7 @@ Direct adapter environment:
 - Optional path overrides: `MARCUS_CODEX_ADAPTER_START_PATH`, `MARCUS_CODEX_ADAPTER_STATUS_PATH`, `MARCUS_CODEX_ADAPTER_FOLLOWUP_PATH`, `MARCUS_CODEX_ADAPTER_ARTIFACTS_PATH`, `MARCUS_CODEX_ADAPTER_DIFF_PATH`, `MARCUS_CODEX_ADAPTER_CANCEL_PATH`
 - Optional timeout: `MARCUS_CODEX_ADAPTER_TIMEOUT_MS`
 
-When configured, `/api/marcus/operator-health` reports `mode: direct_codex` and provider `http_codex`. When not configured, Marcus stays in `codex_handoff` mode and does not claim a real session started.
+When configured, `/api/marcus/operator-health` reports `mode: direct_codex` and the active provider. When no direct adapter is configured, Marcus stays in `codex_handoff` mode and does not claim a real session started.
 
 Reggie-style GitHub Actions adapter environment:
 
@@ -69,7 +69,7 @@ Reggie-style GitHub Actions adapter environment:
 - Optional runner event: `MARCUS_CODEX_RUNNER_EVENT_TYPE` or `CODEX_RUNNER_EVENT_TYPE`
 - Optional workflow file: `MARCUS_CODEX_RUNNER_WORKFLOW` or `CODEX_RUNNER_WORKFLOW`
 
-When this adapter is configured, `/api/marcus/operator-health` reports provider `github_actions_codex`. The default Reggie runner uses `REGGIE_OPENAI_API_KEY` and `REGGIE_GITHUB_TOKEN`, which already exist in the Reggie repository secrets as of the last checked run.
+When this adapter is configured, `/api/marcus/operator-health` reports provider `github_actions_codex`. The default Reggie runner uses `REGGIE_OPENAI_API_KEY` and `REGGIE_GITHUB_TOKEN`, which were verified through a successful production run on 2026-08-12.
 
 ## Phase 4: Result Review
 
@@ -129,13 +129,21 @@ Acceptance tests still required before this phase is complete:
 - Confirm external communication and production mutations still pause for explicit approval.
 - Verify recovery after phone lock, network interruption, and an expired Live token.
 
-Status: code integration is present. A live Android conversation against the production host is not yet verified.
+Status: the integration is live at `https://task-tracker-5wsa.onrender.com/mobile.html`. A real installed-Android speech, barge-in, and recovery conversation is not yet verified.
 
 Verified locally on 2026-08-12:
 
 - The configured OpenAI account minted a short-lived `gpt-realtime-2.1` client secret.
 - A Playwright mobile browser authenticated to Marcus, started the voice control, established the OpenAI WebRTC call with HTTP 201, and reached `Voice on` / `Listening` with no browser warnings or errors.
 - This used a synthetic microphone track; it does not replace the installed-Android speech and interruption tests above.
+
+Verified against production on 2026-08-12:
+
+- The durable mobile admin credential authenticated on the canonical Render host.
+- The PWA loaded under service worker cache `marcus-mobile-v4`.
+- Production minted a short-lived `gpt-realtime-2.1` / `marin` client secret.
+- A mobile Chromium session started voice, reached `Voice on` / `Listening`, and established the OpenAI WebRTC call with HTTP 201 and no browser warnings or errors.
+- Production operator health reported `direct_codex`, GitHub ready, and Cloudflare ready.
 
 ## Demo Deployment
 
@@ -147,7 +155,7 @@ Live Cloudflare Worker:
 
 - `https://marcus-operator-demo-worker.markgromer.workers.dev`
 
-This Worker demonstrates the audit and handoff contract. Its `/codex/start` endpoint is intentionally simulated and should not be treated as proof that a real Codex implementation session exists.
+The deployed Worker demonstrates the audit and handoff contract. Its `/codex/start` endpoint is intentionally simulated and should not be treated as proof that a real Codex implementation session exists. The real execution proof is the durable Marcus operation and Reggie runner evidence below.
 
 Verified endpoints:
 
@@ -155,3 +163,14 @@ Verified endpoints:
 - `/demo`
 - `/audit`
 - `/codex/start`
+
+Production Codex acceptance evidence:
+
+- Durable operation: `op_N_PUttVpm72mWw`
+- Resolved project: `Marcus Operator Demo`
+- Audit scope: one repository and three important files
+- Codex runner: `https://github.com/markgromer/Reggie/actions/runs/31566699387`
+- Review pull request: `https://github.com/markgromer/marcus-operator-demo-worker/pull/3`
+- Result: operation completed with build, test, syntax/lint substitute, artifact, and diff-review evidence passed
+- Verified branch: five tests passed and `wrangler deploy --dry-run` passed
+- The pull request remains unmerged and undeployed, preserving the review and production-approval boundary.

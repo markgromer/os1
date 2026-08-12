@@ -1,6 +1,6 @@
 # Voice Interface
 
-Status: primary architecture selected and initial mobile integration implemented. Local WebRTC setup is verified; production Android speech verification remains open.
+Status: primary architecture selected and deployed. Local and production desktop-mobile WebRTC setup are verified; installed-Android speech and interruption verification remains open.
 
 ## Objective
 
@@ -54,6 +54,12 @@ The Realtime voice layer may not independently:
 - `MARCUS_REALTIME_VOICE`: optional voice override.
 
 The browser receives a short-lived client secret from `POST /api/marcus/realtime/client-secret`. The standard API key is never returned to the browser.
+
+## Production Evidence
+
+On 2026-08-12 the canonical Render PWA authenticated, obtained a short-lived Realtime client secret, created an OpenAI WebRTC call with HTTP 201, and reached `Voice on` / `Listening`. The browser reported no warning or error console messages. Service worker `marcus-mobile-v4` controlled the page.
+
+This proves production authentication, PWA assets, ephemeral-key minting, and WebRTC signaling. It does not prove actual Android microphone quality, spoken tool invocation, barge-in, phone-lock recovery, or network handoff; those remain in the completion gate.
 
 ## Completion Gate
 

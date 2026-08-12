@@ -56,6 +56,15 @@ Capability truth source:
 
 This endpoint should be used by the UI and by Marcus responses before claiming what it can actually do. It distinguishes server-side provider credentials from user-machine tooling such as `gh` and `wrangler`.
 
+Production status verified on 2026-08-12:
+
+- GitHub server access can enumerate repositories and read repository files.
+- GitHub Actions dispatch can start the Reggie `openai/codex-action` runner and reconcile its result.
+- Cloudflare server access can enumerate all 29 zones and read DNS records for the configured default zone.
+- The Cloudflare credential is the dedicated account token `Marcus Production Operator`, not the local Wrangler OAuth token.
+- Render admin authentication and the canonical `BASE_URL` point to `https://task-tracker-5wsa.onrender.com`.
+- `RENDER_API_KEY` remains unconfigured; Render management currently uses authenticated operator tooling rather than Marcus server API access.
+
 ## Realtime Voice Access
 
 `POST /api/marcus/realtime/client-secret` is authenticated with the existing Marcus admin or Live session token. It uses the standard OpenAI API key only on the server and returns a short-lived client secret to the browser for WebRTC setup.

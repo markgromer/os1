@@ -53,7 +53,7 @@ services:
       - key: GITHUB_TOKEN
         sync: false
       - key: GITHUB_OWNER
-        sync: false
+        value: markgromer
       - key: CLOUDFLARE_API_TOKEN
         sync: false
       - key: CLOUDFLARE_ACCOUNT_ID
@@ -62,6 +62,12 @@ services:
         sync: false
       - key: RENDER_API_KEY
         sync: false
+      - key: MARCUS_CODEX_GITHUB_ACTIONS_ENABLED
+        value: true
+      - key: MARCUS_CODEX_GITHUB_TOKEN
+        sync: false
+      - key: MARCUS_CODEX_RUNNER_REPO
+        value: markgromer/Reggie
     disk:
       name: task-tracker-data
       mountPath: /var/data/task-tracker

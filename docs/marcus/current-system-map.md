@@ -15,6 +15,13 @@ It owns:
 - Scheduler startup.
 - Static UI serving.
 
+Production runtime:
+
+- Render service: `task-tracker`
+- Canonical host: `https://task-tracker-5wsa.onrender.com`
+- Mobile PWA: `https://task-tracker-5wsa.onrender.com/mobile.html`
+- Persistent disk: `/var/data/task-tracker`
+
 ## Data
 
 Legacy data:
@@ -90,6 +97,10 @@ Current routes:
 The HTTP Codex adapter is enabled only when `MARCUS_CODEX_ADAPTER_URL` or `CODEX_ADAPTER_URL` is configured. It calls start/status/follow-up/artifact/diff/cancel endpoints and keeps the durable operation lifecycle in the existing provider runner.
 
 The GitHub Actions Codex adapter borrows Reggie's runner pattern. It is enabled only when `MARCUS_CODEX_GITHUB_ACTIONS_ENABLED=true` and a GitHub token is available through `MARCUS_CODEX_GITHUB_TOKEN`, `CODEX_GITHUB_TOKEN`, or `GITHUB_TOKEN`. It dispatches `repository_dispatch` event `marcus_codex_job` to `MARCUS_CODEX_RUNNER_REPO` or `markgromer/Reggie`, where `.github/workflows/marcus-codex-runner.yml` runs `openai/codex-action@v1` with Reggie's existing runner secrets.
+
+Production currently uses this GitHub Actions adapter. GitHub repository reads, repository dispatch, runner reconciliation, pull-request creation, and durable verification completion were exercised end to end on the Marcus demo project.
+
+Cloudflare production access uses a dedicated account token named `Marcus Production Operator`. It covers the Developer Services policy plus DNS write and zone read. It excludes billing, membership, and API-token administration. Production reads of all zones and the configured zone's DNS records have passed.
 
 ## Evidence
 
