@@ -62,13 +62,20 @@ export class OperationRecovery {
       const queuedDesktop = operation.desktopCorrelations.filter((item) => ['queued', 'running'].includes(item.status));
       const unknownActions = operation.providerActions.filter((item) => item.status === 'unknown');
       const runningWithoutJob = operation.steps.filter((step) => step.status === 'running' && !activeJobs.some(([stepId]) => stepId === step.id));
+      const pendingApprovals = operation.approvals.filter((approval) => approval.status === 'pending');
       const expiredApprovals = operation.approvals.filter((approval) => approval.status === 'pending' && approval.expiresAt && Date.parse(approval.expiresAt) <= Date.now());
       const implementationFinished = operation.steps.some((step) => step.type === 'codex' && step.status === 'completed');
       const verificationIncomplete = implementationFinished && !requiredVerificationPassed(operation);
-      const verificationNeedsClassification = verificationIncomplete && (operation.status !== 'blocked'
+      const postImplementationWorkPending = implementationFinished && operation.steps.some((step) => step.type !== 'verification'
+        && !['completed', 'skipped', 'cancelled'].includes(step.status));
+      const activeVerificationBlocker = operation.blockers.some((item) => item.type === 'verification_required' && item.status === 'active');
+      const staleVerificationClassification = postImplementationWorkPending && activeVerificationBlocker;
+      const approvalStateMismatch = pendingApprovals.length > 0 && operation.status !== 'waiting_for_approval';
+      const verificationNeedsClassification = verificationIncomplete && !postImplementationWorkPending && (operation.status !== 'blocked'
         || !operation.blockers.some((item) => item.type === 'verification_required' && item.status === 'active'));
       const inconsistentJobStatus = activeJobs.length && !['awaiting_provider', 'running', 'queued', 'paused'].includes(operation.status);
-      if (!activeJobs.length && !queuedDesktop.length && !unknownActions.length && !runningWithoutJob.length && !expiredApprovals.length && !verificationNeedsClassification && !inconsistentJobStatus) continue;
+      if (!activeJobs.length && !queuedDesktop.length && !unknownActions.length && !runningWithoutJob.length && !expiredApprovals.length
+        && !verificationNeedsClassification && !staleVerificationClassification && !approvalStateMismatch && !inconsistentJobStatus) continue;
 
       const restoredDesktopIds = new Set();
       for (const correlation of queuedDesktop) {
@@ -81,7 +88,15 @@ export class OperationRecovery {
 
       await this.store.update(businessKey, operation.id, (draft) => {
         const timestamp = nowIso();
-        let state = '';
+        let state = pendingApprovals.length ? 'waiting_for_approval' : '';
+        if (staleVerificationClassification) {
+          for (const blocker of draft.blockers) {
+            if (blocker.type !== 'verification_required' || blocker.status !== 'active') continue;
+            blocker.status = 'resolved';
+            blocker.resolvedAt = timestamp;
+            blocker.resolution = 'Post-implementation operation steps remain pending; final verification has not started.';
+          }
+        }
         for (const approval of draft.approvals) {
           if (approval.status === 'pending' && approval.expiresAt && Date.parse(approval.expiresAt) <= Date.now()) {
             approval.status = 'expired';
@@ -130,7 +145,7 @@ export class OperationRecovery {
         if (state === 'blocked' && !draft.blockers.some((item) => item.type === 'verification_required' && item.status === 'active')) {
           draft.blockers.push({ id: makeOperationId('blocker'), operationId: draft.id, type: 'verification_required', status: 'active', message: 'Implementation is complete but required verification is incomplete.', createdAt: timestamp });
         }
-        draft.activityLog.push({ id: makeOperationId('evt'), operationId: draft.id, stepId: draft.currentStepId, type: 'operation_recovered', actor: 'system', message: `Startup reconciliation classified this operation as ${draft.status}; no completion was assumed.`, data: { activeJobs: activeJobs.length, queuedDesktop: queuedDesktop.length, restoredDesktop: restoredDesktopIds.size, unknownActions: unknownActions.length, expiredApprovals: expiredApprovals.length }, timestamp });
+        draft.activityLog.push({ id: makeOperationId('evt'), operationId: draft.id, stepId: draft.currentStepId, type: 'operation_recovered', actor: 'system', message: `Startup reconciliation classified this operation as ${draft.status}; no completion was assumed.`, data: { activeJobs: activeJobs.length, queuedDesktop: queuedDesktop.length, restoredDesktop: restoredDesktopIds.size, unknownActions: unknownActions.length, expiredApprovals: expiredApprovals.length, pendingApprovals: pendingApprovals.length, staleVerificationClassificationRepaired: staleVerificationClassification }, timestamp });
         return draft;
       });
       recovered.push(operation.id);

@@ -838,6 +838,41 @@ test('recovery examines expired approvals and incomplete verification without as
   });
 });
 
+test('recovery preserves post-Codex approval waits and repairs stale verification classification', async () => {
+  await withEngine(async (engine) => {
+    const waiting = await engine.store.create('personal', {
+      title: 'Waiting after Codex', objective: 'Create repository after implementation', status: 'waiting_for_approval',
+      steps: [
+        { id: 'implemented', title: 'Implement', type: 'codex', status: 'completed' },
+        { id: 'create-repo', title: 'Create repository', type: 'github_write', status: 'waiting_for_approval' },
+        { id: 'verify-delivery', title: 'Verify', type: 'verification', status: 'pending' },
+      ],
+      approvals: [{ id: 'approval-create', stepId: 'create-repo', action: 'create_repository:owner/repo (private)', status: 'pending' }],
+    });
+    assert.deepEqual(await engine.recovery.recoverBusiness('personal'), []);
+    assert.equal((await engine.getOperation('personal', waiting.id)).status, 'waiting_for_approval');
+
+    const stale = await engine.store.create('personal', {
+      title: 'Stale blocked approval', objective: 'Repair recovery state', status: 'blocked',
+      steps: [
+        { id: 'stale-implemented', title: 'Implement', type: 'codex', status: 'completed' },
+        { id: 'stale-create-repo', title: 'Create repository', type: 'github_write', status: 'waiting_for_approval' },
+        { id: 'stale-push', title: 'Publish', type: 'desktop', status: 'pending' },
+        { id: 'stale-verify', title: 'Verify', type: 'verification', status: 'pending' },
+      ],
+      approvals: [{ id: 'stale-approval', stepId: 'stale-create-repo', action: 'create_repository:owner/repo (private)', status: 'pending' }],
+      blockers: [{ id: 'stale-verification-blocker', type: 'verification_required', status: 'active', message: 'Verification incomplete.' }],
+    });
+    const recovered = await engine.recovery.recoverBusiness('personal');
+    assert.deepEqual(recovered, [stale.id]);
+    const repaired = await engine.getOperation('personal', stale.id);
+    assert.equal(repaired.status, 'waiting_for_approval');
+    assert.equal(repaired.currentStepId, 'stale-create-repo');
+    assert.equal(repaired.blockers.find((item) => item.id === 'stale-verification-blocker').status, 'resolved');
+    assert.equal(repaired.activityLog.at(-1).data.staleVerificationClassificationRepaired, true);
+  });
+});
+
 test('recovery leaves a stable blocked operation with an already completed Codex job unchanged', async () => {
   await withEngine(async (engine) => {
     const operation = await engine.store.create('personal', {

@@ -1,6 +1,6 @@
 # Voice Interface
 
-Status: primary architecture selected and deployed. The official SDK signaling and recovery paths and the v18 physical-phone acceptance dashboard are verified in production Chromium; installed-Android speech, interruption, and physical phone-lock/network-handoff verification remain open.
+Status: primary architecture selected and deployed. The installed Android PWA now proves real signaling, recognized speech, durable operator completion, and spoken output. Physical interruption, network recovery, lock/background recovery, and same-session confirmation remain open.
 
 ## Objective
 
@@ -17,6 +17,8 @@ Voice should be the fastest way for Mark to use the same Marcus operator. It sho
 - Existing fallback: OpenAI file transcription plus ElevenLabs or browser speech synthesis.
 
 OpenAI's current voice-agent guidance recommends Realtime speech-to-speech for low first-audio latency, barge-in, natural turn-taking, and realtime tool use. It recommends WebRTC for browser and mobile clients. Sources: [Voice agents](https://developers.openai.com/api/docs/guides/voice-agents), [Realtime WebRTC](https://developers.openai.com/api/docs/guides/realtime-webrtc), and [Realtime tools](https://developers.openai.com/api/docs/guides/realtime-mcp).
+
+Selection revalidation on 2026-08-13 UTC: the current official Agents SDK documentation still identifies browser WebRTC with ephemeral client tokens as the lowest-friction browser speech-to-speech path and includes automatic interruption handling, tools, approvals, and delegation. ElevenLabs now offers a strong hosted agent platform and native Android/iOS SDK path, while LiveKit offers the strongest provider-neutral turn-taking and media framework. Marcus keeps OpenAI Realtime because Mark already has the OpenAI trust/configuration boundary, the PWA needs no native rebuild, and all substantive authority remains in one existing `marcus_operator` bridge rather than a second hosted memory/tool plane.
 
 ## Why This Fits Marcus
 
@@ -97,6 +99,10 @@ Service worker `marcus-mobile-v19` is live and adds retry review for an exact dr
 
 The status request explicitly prohibited audits, Codex, and operation creation. Production still had four operations afterward, with the latest created at `2026-08-12T07:13:48.308Z`, before this acceptance run. The acceptance response reported that transcript text, request text, and credentials are not stored.
 
+## Current Physical Evidence
+
+The latest installed-Android session `36635644-825c-4185-b8f8-994e6a642a5c` contains 66 content-free telemetry events and passes 5/8 derived gates: installed context, signaling, recognized speech, operator bridge completion, and assistant audio. It does not yet prove interruption, network recovery, or lock/background recovery, and `physicalReviewConfirmed` remains false.
+
 ## Completion Gate
 
-This capability is not complete until every acceptance test in [[implementation-roadmap]] passes on the installed Android PWA against the durable production host.
+This capability is not complete until the same fresh installed-Android session passes all eight derived gates and Mark selects `Confirm on this phone`. Broader product acceptance also exercises multi-project voice conversation, Codex operation creation, and exact approval behavior as described in [[implementation-roadmap]].

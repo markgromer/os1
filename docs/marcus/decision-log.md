@@ -1,12 +1,20 @@
 # Decision Log
 
+## 2026-08-12: Post-Codex Approval Work Precedes Final Verification
+
+Context: the from-scratch demo completed local Codex and then correctly stopped for private GitHub repository approval. A Render restart saw that final verification was not yet passed, ignored the unfinished repository/push/deployment steps, and mislabeled the whole operation `blocked` with a verification-required blocker even though its current step remained `waiting_for_approval`.
+
+Decision: startup recovery treats unfinished non-verification steps as authoritative workflow state. A pending exact approval keeps the operation `waiting_for_approval`; final verification classification applies only after post-implementation work is no longer pending. Recovery repairs an existing stale verification blocker and status without approving or executing the action.
+
+Consequence: the phone and durable record agree about what Mark is being asked to authorize, and a restart cannot turn a normal approval pause into an unrelated verification failure. Focused recovery tests cover both an already-correct approval wait and repair of the stale production shape.
+
 ## 2026-08-12: Full PC Access Is Explicit, Project-Scoped, And Visible
 
 Context: Mark wants Marcus to use everything available on his PC, switch projects reliably, create applications from an empty folder, and make local Codex work visible in real time. The former relay exposed only a narrow action list and could confuse the active Codex workspace with the project named in conversation.
 
 Decision: Let the desktop relay explicitly declare broad-root authorization and a dedicated new-project root. Attest each exact workspace before execution, launch Codex locally with `workspace-write` scope, stream bounded events to a per-job capability monitor, and open that monitor in Chrome kiosk mode. Add deterministic project switching and a durable blank-project workflow. Keep destructive filesystem actions, credential changes/disclosure, messages, repository creation/publication, deployments, DNS, and production mutations behind typed exact-action approvals.
 
-Consequence: Marcus can inspect Mark's authorized Windows files and perform ordinary project work without repeated folder approvals, while consequential actions remain reviewable and recoverable. Hosted Marcus enables the desktop route by default but uses it only for an exact attested local workspace; remote-only work retains its configured Codex fallback. Local code and the `138/138` suite are complete; deployment, relay restart, and phone-to-PC production acceptance remain open.
+Consequence: Marcus can inspect Mark's authorized Windows files and perform ordinary project work without repeated folder approvals, while consequential actions remain reviewable and recoverable. Hosted Marcus enables the desktop route by default but uses it only for an exact attested local workspace; remote-only work retains its configured Codex fallback. Production phone-to-PC acceptance now proves exact project switching, new-folder creation, local Codex, same-thread correction, and kiosk monitoring. GitHub creation, push, and Cloudflare deployment remain separate exact approvals.
 
 ## 2026-08-12: Voice Acceptance Survives Reload But Cannot Cross Install Contexts
 

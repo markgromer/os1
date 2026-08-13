@@ -62,7 +62,7 @@ Status: GitHub deep gathering is implemented in the project operator and persist
 
 ## Phase 3: Codex Session Launch
 
-Current Codex support can create strong handoffs and launch both GitHub Actions and local desktop jobs. Production enablement of the local desktop path remains pending.
+Current Codex support creates strong handoffs and launches both GitHub Actions and local desktop jobs. The local desktop path is enabled and verified in production.
 
 Requirements:
 
@@ -72,7 +72,7 @@ Requirements:
 - Store Codex job id, branch, artifacts, and status.
 - Poll or reconcile status.
 
-Status: handoff mode and direct launch are implemented. Production uses the Reggie-style GitHub Actions adapter. The first complete production acceptance operation dispatched `openai/codex-action@v1`, recovered from a failed runner attempt, opened a pull request, and completed after independent verification evidence was registered.
+Status: handoff mode and direct launch are implemented. Production reports `direct_codex` through `desktop_codex_with_fallback`: exact attested Windows workspaces use the desktop, while repository-only work retains the configured HTTP/GitHub Actions fallback. Job `desktop_codex_094e6bbb13d8ec8ef2d98ae9` completed in the generated demo workspace, retained its original thread across a correction, rotated and reopened its kiosk capability for a later follow-up, and stored bounded events and file evidence.
 
 Local desktop adapter environment:
 
@@ -82,13 +82,15 @@ Local desktop adapter environment:
 - `MARCUS_NEW_PROJECT_ROOT` for blank-project creation
 - `MARCUS_CODEX_MONITOR_MODE=kiosk` or `app`
 
-Status: implementation and local acceptance pass. The adapter queues each launch once, survives restart, validates the exact desktop agent, streams redacted Codex JSONL events, records final output and Git evidence, supports follow-up and cancellation, and serves a token-scoped real-time monitor. A routing adapter sends only exact attested local workspaces to desktop Codex and preserves the configured HTTP or GitHub Actions adapter for repository-only work. A real disposable Codex run created the requested file exactly. The complete local suite passes `138/138`. Deployment, desktop scheduled-task restart, and installed-phone acceptance are still pending.
+Status: implementation and production acceptance pass. The adapter queues each launch once, survives restart, validates the exact desktop agent and project registry binding, streams redacted Codex JSONL events, records final output and Git evidence, supports same-thread follow-up and cancellation, and serves a token-scoped real-time monitor. A routing adapter sends only exact attested local workspaces to desktop Codex and preserves the configured HTTP or GitHub Actions adapter for repository-only work. The scheduled task is running against the canonical Render host; production opened the exact Scoop Fairies workspace and completed the generated demo's implementation and correction jobs. Physical Android voice acceptance is independent and remains pending.
 
 ## Phase 3A: From-Scratch Project Operator
 
-Status: implemented locally; production acceptance is pending.
+Status: implemented and partially accepted in production. Local workspace creation, attestation, VS Code launch, Codex implementation, same-thread correction, kiosk monitoring, and independent checks pass. The workflow is intentionally paused before its first external mutation.
 
 `POST /api/marcus/project-bootstrap` and matching Marcus Live intent create a project registry record, reserve an exact pending Windows path, and create an eight-step durable operation covering local folder creation, local Codex implementation, GitHub repository creation, origin connection, publishing, Cloudflare deployment, and verification. Project switching is deterministic and opens the selected verified workspace. GitHub creation defaults to private and refuses to adopt or overwrite a pre-existing repository. External repository creation, publication, and Cloudflare deployment remain separate exact-target approvals.
+
+Production operation `op_EejJJ-WR7eHJCw` created `C:\Users\markg\OneDrive\Documents\Marcus Projects\marcus-pc-bridge-demo`, initialized Git, and built the Worker through local Codex. Independent acceptance passes 4/4 tests, lint, `tsc --noEmit`, and `wrangler deploy --dry-run`. The next action is exact private repository creation for `markgromer/marcus-pc-bridge-demo`; origin connection, push, Cloudflare deployment, and live URL verification remain downstream. Startup recovery formerly mislabeled that waiting approval as a verification blocker; the correction preserves post-Codex work and repairs stale records without executing an approval.
 
 Direct adapter environment:
 
@@ -168,7 +170,7 @@ The action allowlist is deliberately narrower than the credentials. Marcus does 
 Verification on 2026-08-12:
 
 - The real-server integration harness performed a GitHub merge, DNS create, and Worker deployment exactly once against stateful mock providers, then verified provider read-back and evidence persistence.
-- Focused provider tests passed `7/7`; the current complete local suite passes `132/132`; JavaScript syntax passes for 66 files.
+- At that implementation snapshot, focused provider tests passed `7/7`, the complete suite passed `132/132`, and JavaScript syntax passed for 66 files.
 - GitHub CI runs `31615296935` and `31615747675` passed for commits `0409400` and `17769b0`.
 - Render deployed both commits. Production operator health reports GitHub merge plus Cloudflare DNS/Worker mutation paths available.
 - Live read-only inspection resolved demo PR #4 at exact head `4ee4135eb98be5bc57385be0ff128ee78fa42729`, with settled checks and no failures.
@@ -204,9 +206,9 @@ Added and tested locally on 2026-08-12:
 - Configuration and no-send verification require durable admin-cookie/token authority; a Live-session token alone receives 401.
 - Secret values are never returned, and blank secret inputs preserve existing values.
 - Quo sender resolution and SMTP authentication persist bounded verification evidence and issue no message request or SMTP `DATA`.
-- The complete local suite passes `98/98` with provider setup, redaction, authorization, no-send verification, approved-send/idempotency checks, deep GitHub audits, and mobile acceptance aggregation.
+- At that implementation snapshot, the complete local suite passed `98/98` with provider setup, redaction, authorization, no-send verification, approved-send/idempotency checks, deep GitHub audits, and mobile acceptance aggregation.
 
-Production status: Quo approved acceptance action `rv1v4_RKB38v` reached `sent` with provider acceptance on 2026-08-12. SMTP authenticates through Resend for `Marcus <marcus@gromore.media>`, and the domain is verified, but the borrowed key rejected approved draft `V8uMUUZjiRz1` with SMTP `550` because it is not authorized for that domain. No email was sent. Install a dedicated Resend sending key scoped to `gromore.media`, verify it, and retry the retained exact approval before the email gate can pass.
+Production status: Quo and SMTP are both configured, fingerprint-bound, no-send verified, and accepted through exact approved drafts. `GET /api/marcus/acceptance` reports all four messaging gates true: both providers verified and both approved test sends backed by retained provider receipts. The earlier SMTP `550` remains historical failed-closed evidence and is not treated as delivery.
 
 Production provider-onboarding acceptance on 2026-08-12:
 
@@ -278,7 +280,7 @@ Acceptance tests still required before this phase is complete:
 
 The production paired-admin `Verify` dashboard starts a fresh acceptance session, persists only its ID/start time/coarse platform-display context for up to two hours, shows each voice/provider gate, and enables physical confirmation only after all eight Android voice gates pass in installed standalone mode. Context matching prevents browser-tab evidence from being reused after a standalone launch. `GET /api/marcus/acceptance` combines that evidence with provider, approved-send, Codex, GitHub, Cloudflare, OpenAI, and desktop readiness. Service worker `marcus-mobile-v19` adds fingerprint-preserved provider settings and exact-draft retry after an approved delivery failure; physical-phone acceptance remains pending.
 
-Status: the official SDK, recovery, acceptance telemetry, durable-work tracking, PWA install assets, exact-target operation approval, exact-draft message review/retry, and mobile deployment contract remain covered in the current local `132/132` suite and 66-file syntax lint. At 390x844, Playwright confirmed the acceptance and review dialogs fit without overlap, standalone Android context is recorded, the same voice session survives reload, and a browser/standalone context mismatch invalidates the saved ID. Production cache `marcus-mobile-v19` and all four required 192x192/512x512 `any`/`maskable` PNG icons are live. Direct Live-token draft access returns 401 and conversational Live-token approval returns `reauthenticationRequired`. Both provider credentials pass current no-send verification; exact Quo draft `RIjL8nE5HmIQ` and the approved Resend retry `V8uMUUZjiRz1` await Mark. A real installed-Android speech, barge-in, and recovery conversation remains pending.
+Status: the official SDK, recovery, acceptance telemetry, durable-work tracking, PWA install assets, exact-target operation approval, exact-draft messaging, and mobile deployment contract are deployed. Production cache `marcus-mobile-v19` and all required raster/maskable icons are live. Direct Live-token mutations return 401 and conversational Live-token approval requires durable reauthentication. Both provider credentials and approved sends now pass. The latest installed-Android session proves app context, signaling, speech recognition, operator completion, and spoken audio; interruption, network recovery, lock/background recovery, and physical confirmation remain pending.
 
 Verified locally on 2026-08-12:
 
@@ -303,6 +305,16 @@ Verified against production on 2026-08-12:
 - The spoken request was read-only and explicitly prohibited audit, Codex, and operation creation. Production retained four operations, with no operation created during the acceptance run.
 
 ## Demo Deployment
+
+Current requested from-scratch demo:
+
+- Local project: `C:\Users\markg\OneDrive\Documents\Marcus Projects\marcus-pc-bridge-demo`
+- Durable operation: `op_EejJJ-WR7eHJCw`
+- Intended private GitHub repository: `https://github.com/markgromer/marcus-pc-bridge-demo`
+- Intended Cloudflare Worker: configured by the project's `wrangler.jsonc`
+- Current state: local implementation and all independent checks pass; GitHub creation, push, and Worker deployment await separate exact approvals
+
+The following older demo remains a historical result-review and provider-mutation acceptance artifact; it does not satisfy the new from-scratch workflow by itself.
 
 GitHub demo repo:
 
@@ -375,7 +387,7 @@ Provider acceptance status on 2026-08-12:
 - Quo authenticated sender lookup verified the Operations line `+18886107667`, resolved its phone-number and user ids, and reported `sent: false`.
 - Production text acceptance action `rv1v4_RKB38v` was explicitly approved and provider-accepted at `2026-08-12T15:56:49.822Z`.
 - Resend SMTP is configured at `smtp.resend.com` for `Marcus <marcus@gromore.media>`. The domain is verified, but the borrowed key rejected the approved production attempt with SMTP `550`; draft `V8uMUUZjiRz1` remains approved and retryable after a dedicated key is installed.
-- The remaining combined acceptance gates are approved email send and physical installed-Android voice acceptance.
+- The approved email-send gate later passed with provider receipt evidence. The remaining combined acceptance gate is physical installed-Android voice acceptance.
 
 Production false-project correction on 2026-08-12:
 

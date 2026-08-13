@@ -63,6 +63,8 @@ Durable mobile follow-through now follows:
 
 The phone does not tick operations or read full operation records. Closing or locking the phone does not stop the server monitor. Waiting approvals, blocked operations, recovery-required work, and terminal states are never advanced automatically by that monitor.
 
+Startup recovery preserves the workflow's next real boundary. A completed Codex step does not trigger final-verification blocking while repository creation, publication, deployment, or another non-verification step remains unfinished. A pending exact approval restores `waiting_for_approval`; stale verification classification is resolved without executing the action.
+
 Voice transport recovery follows:
 
 `background, network loss, connection loss, or 55-minute refresh -> close stale WebRTC session -> mint a new ephemeral credential -> reconnect -> resume listening`
