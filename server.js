@@ -988,6 +988,18 @@ app.get('/api/codex/jobs', async (_req, res) => {
   res.json({ ok: true, enabled: true, jobs: await desktopCodexAdapter.listJobs({ limit: 50 }) });
 });
 
+app.post('/api/codex/jobs/:jobId/followup', async (req, res) => {
+  if (!desktopCodexAdapter) return res.status(404).json({ ok: false, error: 'Desktop Codex is not enabled.' });
+  const message = typeof req.body?.message === 'string' ? req.body.message.trim().slice(0, 8_000) : '';
+  if (!message) return res.status(400).json({ ok: false, error: 'Follow-up message is required.' });
+  try {
+    const job = await desktopCodexAdapter.sendFollowup({ jobId: req.params.jobId }, message);
+    res.status(202).json({ ok: true, job });
+  } catch (error) {
+    res.status(error?.code === 'CODEX_JOB_NOT_FOUND' ? 404 : 400).json({ ok: false, error: String(error?.message || error) });
+  }
+});
+
 /**
  * File format:
  * {

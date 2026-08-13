@@ -72,14 +72,21 @@ test('desktop Codex adapter durably queues one local job and exposes token-scope
     });
     assert.equal((await adapter.getJobStatus(started)).status, 'completed');
 
+    const followedUp = await adapter.sendFollowup(started, 'Fix the independently verified typecheck failures.');
+    assert.equal(followedUp.status, 'queued');
+    assert.equal(actions.length, 2);
+    assert.equal(actions[1].type, 'followup-local-codex-job');
+    assert.equal(actions[1].payload.threadId, 'thread-1');
+    assert.equal(actions[1].payload.message, 'Fix the independently verified typecheck failures.');
+
     const reloaded = new DesktopCodexAdapter({
       dataDir,
       monitorBaseUrl: 'https://marcus.example.test',
       queueAction: async (action) => { actions.push(action); return action; },
     });
     const replay = await reloaded.startJob(input, { idempotencyKey: 'idem-1' });
-    assert.equal(replay.status, 'completed');
-    assert.equal(actions.length, 1);
+    assert.equal(replay.status, 'queued');
+    assert.equal(actions.length, 2);
   } finally {
     await fs.rm(dataDir, { recursive: true, force: true });
   }

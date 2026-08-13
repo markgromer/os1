@@ -95,6 +95,8 @@ Local visible Codex execution follows:
 
 `phone request -> exact project resolution -> approved and attested Windows workspace -> durable Codex job -> desktop action claim -> visible Chrome kiosk monitor -> codex exec JSONL stream -> redacted job events -> changed-file and diff summary -> operation verification`
 
+An independent review failure can call `POST /api/codex/jobs/:jobId/followup` with an authenticated, bounded correction brief. The desktop relay resumes the same Codex thread, retains prior job evidence, streams the correction into the existing monitor, and updates the same durable job instead of creating an unrelated session.
+
 A command such as `switch to Scoop Fairies` updates the active conversation project and opens that project's verified workspace in VS Code. It does not reuse an unrelated active Codex project. A from-scratch request follows:
 
 `extract safe project name -> reserve exact pending workspace -> create folder -> git init -> open VS Code -> local Codex build -> exact GitHub repository approval -> connect origin -> publish approval -> Cloudflare deployment approval -> artifact verification`
