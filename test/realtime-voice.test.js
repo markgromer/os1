@@ -7,7 +7,7 @@ import {
   DEFAULT_MARCUS_REALTIME_VOICE,
 } from '../marcus/voice/realtime_session.js';
 
-test('Marcus realtime voice delegates substantive work to the durable operator', () => {
+test('Marcus realtime voice is Marcus and delegates durable work to the operator', () => {
   const request = buildMarcusRealtimeClientSecretRequest();
   const session = request.session;
 
@@ -22,6 +22,10 @@ test('Marcus realtime voice delegates substantive work to the durable operator',
   assert.equal(session.parallel_tool_calls, false);
   assert.match(session.instructions, /You are Marcus/i);
   assert.match(session.instructions, /one or two spoken sentences/i);
+  assert.match(session.instructions, /Smart dry humor/i);
+  assert.match(session.instructions, /Protect Mark's time/i);
+  assert.match(session.instructions, /ordinary conversation/i);
+  assert.match(session.instructions, /Do not read long PR numbers/i);
   assert.match(session.instructions, /Never bypass Marcus approval requirements/i);
   assert.equal(session.tool_choice, 'auto');
   assert.equal(session.tools.length, 1);

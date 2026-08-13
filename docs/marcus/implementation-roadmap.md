@@ -42,6 +42,29 @@ Production mission-memory acceptance on 2026-08-12 created standing instruction 
 
 Render then replaced the process: uptime reset from 103 seconds to 14.5 seconds after an observed outage. The memory store remained at revision 3 with all four active records, a newly minted Live session recalled the standing instruction, and the staged operation remained cancelled with zero jobs. Operator health and combined acceptance both reported mission memory ready. GitHub CI run `31582262882` passed for the acceptance-record commit.
 
+## Phase 1B: Context Memory And Obsidian Graph
+
+Status: doctrine documented; implementation remains planned. See [[context-memory]].
+
+Goal: Marcus should retrieve and maintain context across days, projects, people, clients, money obligations, decisions, relationships, and reusable systems rather than relying only on the active project or rolling chat. The Obsidian-compatible vault should contain concise linked notes with useful tags so Marcus can quickly answer questions such as what Mark worked on on a date, which client owes money, what was decided last time, and which prior project solved a similar problem.
+
+Planned implementation:
+
+- Automatic daily work-note creation from meaningful sessions, operations, and explicit note commands.
+- Project, person/client, money, decision, and system notes with stable hyphen-case filenames, tags, and wiki links.
+- Vault indexing by date, tag, entity, aliases, and links.
+- Retrieval into Marcus chat, voice, active brief, and Codex handoffs when context is relevant.
+- Secret filtering and source/provenance fields before note writes.
+- Correction flow for outdated, wrong, sensitive, or low-value notes.
+
+Acceptance:
+
+- Ask by date and retrieve the correct daily work note.
+- Ask about any project and retrieve related notes, operations, decisions, and client context.
+- Ask who owes money and retrieve invoice/payment context without leaking credentials.
+- Ask about a person/client and retrieve relationship history and open obligations.
+- Confirm note writes are concise, tagged, wiki-linked, and free of secrets.
+
 ## Phase 2: Context Gathering
 
 Add a reusable context gatherer that can pull:
@@ -86,19 +109,19 @@ Status: implementation and production acceptance pass. The adapter queues each l
 
 ## Phase 3A: From-Scratch Project Operator
 
-Status: implemented and partially accepted in production. Local workspace creation, attestation, VS Code launch, Codex implementation, same-thread correction, kiosk monitoring, and independent checks pass. The workflow is intentionally paused before its first external mutation.
+Status: implemented and accepted in production. Local workspace creation, attestation, VS Code launch, Codex implementation, same-thread correction, kiosk monitoring, GitHub publication, Cloudflare deployment, and independent checks pass.
 
 `POST /api/marcus/project-bootstrap` and matching Marcus Live intent create a project registry record, reserve an exact pending Windows path, and create an eight-step durable operation covering local folder creation, local Codex implementation, GitHub repository creation, origin connection, publishing, Cloudflare deployment, and verification. Project switching is deterministic and opens the selected verified workspace. GitHub creation defaults to private and refuses to adopt or overwrite a pre-existing repository. External repository creation, publication, and Cloudflare deployment remain separate exact-target approvals.
 
-Production operation `op_EejJJ-WR7eHJCw` created `C:\Users\markg\OneDrive\Documents\Marcus Projects\marcus-pc-bridge-demo`, initialized Git, and built the Worker through local Codex. Independent acceptance passes 4/4 tests, lint, `tsc --noEmit`, and `wrangler deploy --dry-run`. The next action is exact private repository creation for `markgromer/marcus-pc-bridge-demo`; origin connection, push, Cloudflare deployment, and live URL verification remain downstream. Startup recovery formerly mislabeled that waiting approval as a verification blocker; the 2026-08-13 UTC deployment repaired the live record to `waiting_for_approval`, resolved the stale blocker, and executed no approval.
+Production operation `op_EejJJ-WR7eHJCw` created `C:\Users\markg\OneDrive\Documents\Marcus Projects\marcus-pc-bridge-demo`, initialized Git, and built the Worker through local Codex. Mark separately approved private repository creation, publication, and production deployment. GitHub read-back reports private repository `markgromer/marcus-pc-bridge-demo` at commit `2f5ea63018649caa0fccdb190684cefe3675f4a3`. The first deploy failed before Cloudflare ran because Windows rejected direct `npx.cmd` spawning; commit `b3b0aa9` fixed the launcher without rewriting the failed operation. Corrective operation `op_rh-nlu6uWEfZrA` deployed the exact registered workspace and completed after independent HTTP 200 evidence from `https://marcus-pc-bridge-demo.markgromer.workers.dev/` and `/health`.
 
 ## Phase 3B: Trusted PC Operator
 
-Status: implemented, deployed, and live over the configured Documents/OneDrive Documents/Downloads roots. The scheduled relay loads a non-secret policy from `%APPDATA%/M.A.R.C.U.S/desktop-agent.json`, advertises its exact roots and capabilities, and implements inventory, filename search, directory listing, bounded non-secret text reads, installed-application discovery, and visible open/launch actions. Main chat and Marcus Live use synchronous typed tools, while `GET /api/marcus/pc/capabilities` and `POST /api/marcus/pc/actions` provide deterministic authenticated acceptance routes. The paired mobile `Verify` view can prepare an exact-agent critical drive-root operation through `POST /api/marcus/pc/access-request`; it cannot self-approve the grant. Cache `marcus-mobile-v21` also lists every redacted pending operation approval in risk order so the PC grant and demo publication workflow cannot hide behind one active-operation selection.
+Status: implemented, deployed, and live with an exact approved `C:\` full-PC policy on desktop agent `Marks_PC`. The scheduled relay loads a non-secret policy from `%APPDATA%/M.A.R.C.U.S/desktop-agent.json`, advertises its exact roots and capabilities, and implements inventory, filename search, directory listing, bounded non-secret text reads, installed-application discovery, and visible open/launch actions. Main chat and Marcus Live use synchronous typed tools, while `GET /api/marcus/pc/capabilities` and `POST /api/marcus/pc/actions` provide deterministic authenticated acceptance routes. The paired mobile `Verify` view can prepare an exact-agent critical drive-root operation through `POST /api/marcus/pc/access-request`; it cannot self-approve the grant. Cache `marcus-mobile-v22` also lists every redacted pending operation approval in risk order so a consequential action cannot hide behind one active-operation selection.
 
 Safety is part of the capability contract. Secret-bearing files are refused. Files, pages, email, and tool results are untrusted and cannot authorize an action. Open/launch tools require Mark's direct current request. Arbitrary commands, deletion, downloads/installs, access changes, credentials, publishing, and external representation are not generic PC tools and retain exact approval paths.
 
-Local unit coverage verifies root containment, prefix-escape rejection, bounded search, directory metadata, secret-file refusal, critical risk classification, no pre-approval queueing, exact-agent binding, persisted policy evidence, required read-back verification, and preservation of PC evidence in the desktop action envelope. Server integration verifies the relay declaration and queue/result round trip. The complete suite passes `145/145`; syntax lint passes for 71 JavaScript files. Production reports the relay online with eight capabilities and active `C:\` full-PC scope. Inventory, search, directory listing, and bounded non-secret read acceptance pass through the hosted API.
+Local unit coverage verifies root containment, prefix-escape rejection, bounded search, directory metadata, secret-file refusal, critical risk classification, no pre-approval queueing, exact-agent binding, persisted policy evidence, required read-back verification, preservation of PC evidence in the desktop action envelope, and the shell-free Windows Wrangler launcher. Server integration verifies the relay declaration and queue/result round trip. The complete suite passes `147/147`; syntax lint passes for 72 JavaScript files. Production reports the relay online with eight capabilities and active `C:\` full-PC scope. Inventory, search, directory listing, bounded non-secret read, and exact approved Cloudflare deployment acceptance pass through the hosted API.
 
 Direct adapter environment:
 
@@ -257,7 +280,7 @@ Decision: use OpenAI Realtime speech-to-speech over WebRTC as the primary mobile
 Implemented slice:
 
 - Server-minted short-lived Realtime client secrets.
-- `gpt-realtime-2.1` and `marin` defaults with environment overrides.
+- `gpt-realtime-2.1` and `cedar` defaults with environment overrides.
 - Official `@openai/agents-realtime` browser session rather than a hand-written Realtime transport.
 - Semantic VAD, barge-in, near-field noise reduction, and `gpt-live-transcribe` input transcription.
 - Android PWA start/stop voice control.
@@ -265,6 +288,7 @@ Implemented slice:
 - Network and WebRTC disconnect recovery with bounded backoff.
 - Scheduled renewal at 55 minutes before the Realtime session limit.
 - A single `marcus_operator` bridge back to the durable Live chat and approval flow.
+- Voice instructions that make Marcus speak directly as Marcus, allow ordinary conversation/advice without tool dispatch when no durable state is needed, use concise spoken answers, avoid unnecessary spoken machine identifiers, and allow natural variable tone with smart dry humor.
 - A persistent active-work strip that follows the same durable operation across refresh and shows current step, step progress, verification counts, blockers, and approval/recovery state through the redacted operation-summary API.
 - A server-side monitor that keeps execution-safe durable jobs moving when the phone is closed, without ticking approval-gated, blocked, paused, recovery-required, or terminal operations.
 - Selective Realtime announcements for persisted completion, failure, cancellation, approval, blocker, and recovery transitions.
@@ -275,7 +299,7 @@ Implemented slice:
 - Unit and smoke coverage for session policy, auth, static assets, interruption state, network/background recovery, expired credentials, and stale-connection races.
 - Unit coverage for monitor state allowlisting/serialization, summary redaction, tracker persistence/deduplication, terminal handoff, and voice announcements.
 
-Acceptance tests still required before this phase is complete:
+Physical acceptance exercises completed for this phase:
 
 - Start and stop a voice session from the installed Android PWA.
 - Hold a multi-turn project conversation without reselecting the project.
@@ -286,9 +310,9 @@ Acceptance tests still required before this phase is complete:
 - Verify recovery after phone lock, network interruption, and an expired Live token.
 - Inspect the resulting acceptance session and confirm every physical-device gate is true without relying on transcript storage.
 
-The production paired-admin `Verify` dashboard starts a fresh acceptance session, persists only its ID/start time/coarse platform-display context for up to two hours, shows each voice/provider gate, and enables physical confirmation only after all eight Android voice gates pass in installed standalone mode. Context matching prevents browser-tab evidence from being reused after a standalone launch. `GET /api/marcus/acceptance` combines that evidence with provider, approved-send, Codex, GitHub, Cloudflare, OpenAI, and desktop readiness. Service worker `marcus-mobile-v21` includes fingerprint-preserved provider settings, exact-draft retry after an approved delivery failure, and the complete redacted operation-approval queue; physical-phone acceptance remains pending.
+The production paired-admin `Verify` dashboard starts a fresh acceptance session, persists only its ID/start time/coarse platform-display context for up to two hours, shows each voice/provider gate, and enables physical confirmation only after all eight Android voice gates pass in installed standalone mode. Context matching prevents browser-tab evidence from being reused after a standalone launch. `GET /api/marcus/acceptance` combines that evidence with provider, approved-send, Codex, GitHub, Cloudflare, OpenAI, and desktop readiness. Service worker `marcus-mobile-v22` includes fingerprint-preserved provider settings, exact-draft retry after an approved delivery failure, the complete redacted operation-approval queue, and an explicit completed confirmation label. Physical-phone acceptance passes.
 
-Status: the official SDK, recovery, acceptance telemetry, durable-work tracking, PWA install assets, exact-target operation approval, exact-draft messaging, and mobile deployment contract are deployed. Production cache `marcus-mobile-v21` and all required raster/maskable icons are live. Direct Live-token mutations return 401 and conversational Live-token approval requires durable reauthentication. Both provider credentials and approved sends now pass. The latest installed-Android session proves app context, signaling, speech recognition, operator completion, and spoken audio; interruption, network recovery, lock/background recovery, and physical confirmation remain pending.
+Status: the official SDK, recovery, acceptance telemetry, durable-work tracking, PWA install assets, exact-target operation approval, exact-draft messaging, and mobile deployment contract are deployed and accepted. Production cache `marcus-mobile-v22` and all required raster/maskable icons are live. Direct Live-token mutations return 401 and conversational Live-token approval requires durable reauthentication. Both provider credentials and approved sends pass. The accepted installed-Android session proves all eight lifecycle gates plus explicit physical confirmation; combined production acceptance passes 13/13.
 
 Verified locally on 2026-08-12:
 

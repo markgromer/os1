@@ -1,5 +1,37 @@
 # Decision Log
 
+## 2026-08-13: Accept The Original Trusted-Operator Goal
+
+Context: The goal required durable memory, deep project audits, direct Codex work, GitHub and Cloudflare capability, approved messaging, Obsidian documentation, secure verification, Android voice, full-PC project use, durable hosting, and a from-scratch repository deployed to a live Worker. Earlier acceptance was incomplete because physical Android lifecycle gates and the new demo publication were still pending.
+
+Decision: Accept the original goal after the combined production report reached 13/13, the installed Android session passed all eight voice gates plus explicit phone confirmation, the private demo repository and exact commit were read back from GitHub, the approved Wrangler deployment completed, and independent root and health requests returned HTTP 200. Preserve the original failed deployment operation as immutable evidence and use the completed corrective operation as the success record.
+
+Consequence: The durable operator foundation is accepted. Automatic whole-context Obsidian writing/indexing, more connectors, and future voice refinements remain explicit product enhancements in [[context-memory]] and [[implementation-roadmap]], not hidden blockers or inflated claims about current behavior.
+
+## 2026-08-13: Marcus Memory Covers The Whole Operating Context
+
+Context: Mark clarified that Obsidian notes must cover everything Marcus and Mark work on, not just pull requests, Codex runs, or project history. Marcus should eventually know Mark's schedule, conversations, workload, current status, obligations, project state, people, clients, money, and decisions.
+
+Decision: Expand the vault model with [[schedule-index]], [[conversation-index]], [[workload-index]], [[status-index]], and [[source-index]]. Keep notes concise and source-grounded. Store conversation summaries, not transcript dumps. Treat schedule, relationship, client, money, health, family, and private communication context as sensitive by default. Use [[current-status]] for current rollups and [[source-map]] for source/connector boundaries.
+
+Consequence: Marcus now has a documented target memory model for whole-life operating context. Automatic ingestion, calendar/communication connectors, workload rollups, and current-status refresh remain planned work in [[context-memory]] until implemented and verified.
+
+## 2026-08-13: Obsidian Context Uses Typed Note Folders And Templates
+
+Context: Mark wants to set up the Obsidian notes the best way possible before implementing automatic memory writes. The vault already had Marcus system notes, but it did not yet have durable operational locations for daily work, projects, people, clients, money, standalone decisions, workflows, or unsorted inbox captures.
+
+Decision: Keep the root `docs/marcus/` notes as the Marcus system layer. Add typed operational indexes for [[daily-index]], [[project-index]], [[people-index]], [[client-index]], [[money-index]], [[decision-index]], [[workflow-index]], and [[inbox-index]], plus matching templates for manual notes. Use lowercase hyphen-case filenames, wiki links, status lines, tags, source/provenance fields, and concise fact capture instead of transcript dumps.
+
+Consequence: Manual notes now have stable places to live, and the future automatic writer/indexer has an explicit target structure. This is a documentation and organization change only; automatic note creation and retrieval remain planned work in [[context-memory]].
+
+## 2026-08-13: Marcus Is A Context Partner, Not An Instance Chatbot
+
+Context: Mark wants Marcus to feel like Marcus in voice and text: concise, naturally variable in tone, smart with dry humor, protective of time and resources, and aware across days, projects, people, clients, money, decisions, and relationships. The existing system has mission memory, active brief intelligence, client/project stores, operation history, desktop context, and an Obsidian-compatible documentation vault, but it does not yet automatically maintain a complete Obsidian context graph.
+
+Decision: Update runtime personality and knowledge doctrine so Marcus speaks with natural tone, can use light sarcasm and dry humor when appropriate, protects Mark's time/money/reputation, and retrieves context beyond the active project. Add [[context-memory]] as the target architecture for daily, project, person/client, relationship, money, decision, and system notes with tags and wiki links. Keep the automatic Obsidian writer/indexer as planned work until implemented and verified.
+
+Consequence: Marcus's voice and text prompts now have clearer style and memory expectations, while the docs honestly distinguish existing durable memory from the planned Obsidian graph. Future work has an explicit acceptance standard for date/project/person/money context retrieval.
+
 ## 2026-08-13: Persistent Drive Access Is A Critical Durable Operation
 
 Context: Mark wants Marcus to use the whole PC, but the prior safe installation covered only Documents, OneDrive Documents, and Downloads. A command-line `C:\` grant was rejected because a broad statement was not an exact informed authorization for persistent drive scope and hosted metadata/content relay.

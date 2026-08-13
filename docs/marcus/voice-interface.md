@@ -4,17 +4,21 @@ Status: primary architecture selected and deployed. The installed Android PWA no
 
 ## Objective
 
-Voice should be the fastest way for Mark to use the same Marcus operator. It should not create a second project memory, tool catalog, approval model, or assistant personality.
+Voice should be the fastest way for Mark to talk to Marcus directly. It should not feel like a dispatcher in front of Marcus, and it should not create a second project memory, tool catalog, approval model, or assistant personality.
 
 ## Selected Stack
 
 - Conversation model: OpenAI Realtime `gpt-realtime-2.1`.
 - Browser session library: `@openai/agents-realtime`.
 - Browser/mobile transport: WebRTC.
-- Default voice: `marin`.
+- Default voice: `cedar`.
 - Operational bridge: `marcus_operator` -> `POST /api/marcus/live/chat`.
 - Acceptance evidence: redacted lifecycle events -> `POST /api/marcus/realtime/telemetry` -> `GET /api/marcus/realtime/acceptance` and combined `GET /api/marcus/acceptance`.
 - Existing fallback: OpenAI file transcription plus ElevenLabs or browser speech synthesis.
+
+## Spoken Persona
+
+Marcus voice is Marcus, not an intermediary. It may answer ordinary conversation, general questions, and requested advice directly when no durable project state, tool access, approval, or execution evidence is needed. Spoken answers should be concise by default: one or two short sentences unless Mark asks for more detail or the situation truly needs context. Machine identifiers such as PR numbers, operation IDs, project IDs, hashes, and URLs should not be read aloud unless Mark asks for them or they are needed to disambiguate.
 
 OpenAI's current voice-agent guidance recommends Realtime speech-to-speech for low first-audio latency, barge-in, natural turn-taking, and realtime tool use. It recommends WebRTC for browser and mobile clients. Sources: [Voice agents](https://developers.openai.com/api/docs/guides/voice-agents), [Realtime WebRTC](https://developers.openai.com/api/docs/guides/realtime-webrtc), and [Realtime tools](https://developers.openai.com/api/docs/guides/realtime-mcp).
 
@@ -95,14 +99,14 @@ Production telemetry acceptance on 2026-08-12 used service worker `marcus-mobile
 
 A separate one-shot project-continuity run used acceptance session `b1af050e-d971-470d-8632-749329fe0c8d`. It transcribed the Reggie request, called the real operator once, returned the exact saved setup-button, API-token, slug, verification, and blocking requirements, streamed assistant audio, created no operation, and stored no transcript/request text or credentials. That run exposed final-transcript event ordering that could leave the UI on `Speaking`; service worker `marcus-mobile-v10` applies and tests the corrected ordering.
 
-Service worker `marcus-mobile-v21` is live. It preserves exact-draft retry review and adds a complete risk-ordered required-approval queue without weakening operation authentication. The manifest has stable app ID `/mobile.html`, explicit 192x192 and 512x512 PNG icons for `any` and `maskable` purposes, and the mobile acceptance dialog exposes install, new-test, voice, operation approval, message review, and PC operator controls. Local Playwright at 390x844 verified the earlier dialog layout, installed-context gate, same-session reload recovery, display-context isolation, and PC operator section. Production fetches verify the `v21` markup and cache; direct signed-in visual control was unavailable during the `v21` deployment check. This does not replace the physical installed-Android run.
+Service worker `marcus-mobile-v22` is live. It preserves exact-draft retry review, adds a complete risk-ordered required-approval queue without weakening operation authentication, and displays `Phone confirmed` after physical acceptance. The manifest has stable app ID `/mobile.html`, explicit 192x192 and 512x512 PNG icons for `any` and `maskable` purposes, and the mobile acceptance dialog exposes install, new-test, voice, operation approval, message review, and PC operator controls. Local Playwright at 390x844 verified the earlier dialog layout, installed-context gate, same-session reload recovery, display-context isolation, and PC operator section. Production fetches verify the `v22` markup and cache.
 
 The status request explicitly prohibited audits, Codex, and operation creation. Production still had four operations afterward, with the latest created at `2026-08-12T07:13:48.308Z`, before this acceptance run. The acceptance response reported that transcript text, request text, and credentials are not stored.
 
 ## Current Physical Evidence
 
-The latest installed-Android session `36635644-825c-4185-b8f8-994e6a642a5c` contains 66 content-free telemetry events and passes 5/8 derived gates: installed context, signaling, recognized speech, operator bridge completion, and assistant audio. It does not yet prove interruption, network recovery, or lock/background recovery, and `physicalReviewConfirmed` remains false.
+The accepted installed-Android session `0c65d609-36e7-4bab-bb10-d3885a6ac8d2` runs in Android standalone context and passes all eight derived gates: installed context, signaling, recognized speech, operator bridge completion, assistant audio, interruption, network recovery, and background recovery. `physicalReviewConfirmed` and `acceptedOnPhysicalDevice` are both true. The combined production acceptance report passes all 13 system gates.
 
 ## Completion Gate
 
-This capability is not complete until the same fresh installed-Android session passes all eight derived gates and Mark selects `Confirm on this phone`. Broader product acceptance also exercises multi-project voice conversation, Codex operation creation, and exact approval behavior as described in [[implementation-roadmap]].
+The physical completion gate passed on 2026-08-13. Continued product work may still evaluate microphone quality, latency, conversational tone, and new voice-driven workflows, but those enhancements do not invalidate the accepted Realtime lifecycle and durable-operator path.
