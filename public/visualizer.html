@@ -1311,6 +1311,7 @@
     let voiceHeld = false;
     let threadContextId = "";
     let threadMessages = [];
+    let baseStatus = { label: "Loading live awareness", tone: "ok" };
 
     const byId = (id) => projects.find((project) => project.id === id) || projects[0];
     const selected = () => byId(selectedId);
@@ -1386,10 +1387,15 @@
       return `Project context detected for ${project.name}. I would answer directly, update my understanding if you correct me, or turn the prompt into executable Marcus work if you ask me to move.`;
     }
 
-    function updateStatus(label, tone = "ok") {
+    function updateStatus(label, tone = "ok", remember = true) {
+      if (remember) baseStatus = { label, tone };
       const el = document.getElementById("dataStatus");
       if (!el) return;
       el.innerHTML = `<span class="dot ${tone === "warn" ? "amber" : tone === "error" ? "red" : "green"}"></span> ${plain(label)}`;
+    }
+
+    function restoreBaseStatus() {
+      updateStatus(baseStatus.label, baseStatus.tone, false);
     }
 
     function stateFromLive(item) {
@@ -1747,7 +1753,11 @@
       button.classList.toggle("listening", listening);
       button.setAttribute("aria-pressed", listening ? "true" : "false");
       button.textContent = state === "connecting" ? "Connecting" : voiceHeld ? "Listening" : "Hold Space";
-      if (detail) updateStatus(detail, state === "error" ? "error" : "ok");
+      if (state === "idle" || state === "offline") {
+        restoreBaseStatus();
+        return;
+      }
+      if (detail) updateStatus(detail, state === "error" ? "error" : "ok", false);
     }
 
     async function invokeMarcusVoice(message) {
