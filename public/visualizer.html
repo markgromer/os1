@@ -1337,6 +1337,37 @@
     const selected = () => byId(selectedId);
     const stamp = () => new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     const plain = (value, fallback = "") => String(value ?? fallback).replace(/[<>]/g, "").replace(/\s+/g, " ").trim();
+    const storedAdminToken = () => {
+      try { return String(localStorage.getItem("opsAdminToken") || "").trim(); } catch { return ""; }
+    };
+    const storedBusinessKey = () => {
+      try { return String(localStorage.getItem("opsBusinessKey") || "personal").trim(); } catch { return "personal"; }
+    };
+
+    async function visualizerFetch(url, options = {}) {
+      const headers = new Headers(options.headers || {});
+      const token = storedAdminToken();
+      const businessKey = storedBusinessKey();
+      if (token) headers.set("Authorization", `Bearer ${token}`);
+      if (businessKey) headers.set("X-Business-Key", businessKey);
+      let response = await fetch(url, { ...options, credentials: "include", headers });
+      if ((response.status === 401 || response.status === 403) && !token) {
+        const entered = plain(window.prompt("This Marcus server is protected. Paste ADMIN_TOKEN to continue:") || "");
+        if (entered) {
+          try { localStorage.setItem("opsAdminToken", entered); } catch {}
+          const retryHeaders = new Headers(headers);
+          retryHeaders.set("Authorization", `Bearer ${entered}`);
+          await fetch("/api/auth/login", {
+            method: "POST",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ token: entered, remember: true })
+          }).catch(() => {});
+          response = await fetch(url, { ...options, credentials: "include", headers: retryHeaders });
+        }
+      }
+      return response;
+    }
 
     function confidenceBar(value, colorClass = "") {
       const count = Math.round(Number(value || 0) * 7);
@@ -1671,8 +1702,8 @@
       updateStatus("Syncing live Codex queue");
       try {
         const [jobsResult, desktopResult] = await Promise.allSettled([
-          fetch("/api/codex/jobs", { credentials: "include" }),
-          fetch("/api/desktop-context", { credentials: "include" })
+          visualizerFetch("/api/codex/jobs"),
+          visualizerFetch("/api/desktop-context")
         ]);
         if (jobsResult.status !== "fulfilled") throw jobsResult.reason;
         const response = jobsResult.value;
@@ -1708,7 +1739,7 @@
         renderAll();
         const sourceLabel = workspaces.length ? `${workspaces.length} open workspaces` : `${projects.length} active jobs`;
         updateStatus(projects.length ? `Live Codex: ${sourceLabel}` : "Live Codex: no open workspaces or active jobs reported", projects.length ? "ok" : "warn");
-        fetch("/api/marcus/active-brief", { credentials: "include" })
+        visualizerFetch("/api/marcus/active-brief")
           .then((briefResponse) => briefResponse.json())
           .then((brief) => { liveBrief = brief; })
           .catch(() => {});
@@ -1927,9 +1958,8 @@
       appendThread("user", plain(value));
       setThreadState("Marcus is reading the live brief");
       try {
-        const response = await fetch("/api/marcus/command", {
+        const response = await visualizerFetch("/api/marcus/live/chat", {
           method: "POST",
-          credentials: "include",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ message: value })
         });
@@ -2001,9 +2031,8 @@
       if (!text) return { ok: false, error: "No voice message was captured." };
       appendThread("user", text);
       setThreadState("Voice routed through live operator");
-      const response = await fetch("/api/marcus/live/chat", {
+      const response = await visualizerFetch("/api/marcus/live/chat", {
         method: "POST",
-        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: text })
       });

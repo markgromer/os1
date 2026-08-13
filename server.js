@@ -2155,9 +2155,9 @@ function maskSecretHint(value) {
 }
 
 function getGitHubCloudConfig(saved = {}) {
-  const token = typeof process.env.GITHUB_TOKEN === 'string' ? process.env.GITHUB_TOKEN.trim() : '';
+  const token = firstNonEmptyString(process.env, ['GITHUB_TOKEN', 'MARCUS_CODEX_GITHUB_TOKEN', 'MARCUS_GITHUB_TOKEN', 'GH_TOKEN']);
   const savedToken = typeof saved.githubToken === 'string' ? saved.githubToken.trim() : '';
-  const owner = typeof process.env.GITHUB_OWNER === 'string' ? process.env.GITHUB_OWNER.trim() : '';
+  const owner = firstNonEmptyString(process.env, ['GITHUB_OWNER', 'MARCUS_GITHUB_OWNER', 'MARCUS_CODEX_GITHUB_OWNER', 'GITHUB_USER']);
   const savedOwner = typeof saved.githubOwner === 'string' ? saved.githubOwner.trim() : '';
   const effectiveToken = token || savedToken;
   const effectiveOwner = owner || savedOwner;
