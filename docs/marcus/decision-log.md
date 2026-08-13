@@ -344,4 +344,4 @@ Context: Obsidian evidence updates triggered full Render replacements because ev
 
 Decision: Keep automatic runtime deployment enabled, but add `buildFilter.ignoredPaths: [docs/**]` to the Blueprint-managed service. Application code, tests, configuration, and mobile assets still trigger deployment; only `docs/` changes are excluded.
 
-Consequence: Blueprint commit `d318950` deployed successfully, and the Render settings dashboard shows `docs/**` as the sole ignored path. A docs-only follow-up push must now be skipped while the current production process remains healthy.
+Consequence: Blueprint commit `d318950` deployed successfully, and the Render settings dashboard shows `docs/**` as the sole ignored path. Docs-only commit `02fec3d` then produced no replacement: eight checks over two minutes returned HTTP 200 while uptime increased from 191.9 to 297.6 seconds. Obsidian maintenance no longer creates an avoidable Marcus outage.
