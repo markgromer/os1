@@ -33,6 +33,7 @@ const {
   openPcItem,
   readPcTextFile,
   searchPcFiles,
+  toDesktopActionOutcome,
 } = require('./desktop-pc-operator.cjs');
 
 const SERVER_URL = (process.argv[2] || process.env.MARCUS_SERVER_URL || '').trim();
@@ -1253,6 +1254,7 @@ async function checkDesktopActions() {
       } else if (type === 'pc-launch-application') {
         outcome = launchInstalledApplication(action?.payload || {});
       }
+      if (type.startsWith('pc-')) outcome = toDesktopActionOutcome(outcome);
 
       responses.push({
         id, type, jobId: String(action?.payload?.jobId || ''), businessKey: String(action?.payload?.businessKey || ''), operationId: String(action?.payload?.operationId || ''),

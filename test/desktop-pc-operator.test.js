@@ -12,6 +12,7 @@ const {
   listPcDirectory,
   readPcTextFile,
   searchPcFiles,
+  toDesktopActionOutcome,
   validatePcPath,
 } = require('../desktop-pc-operator.cjs');
 
@@ -70,5 +71,24 @@ test('PC directory listing reports type and sensitivity without reading content'
     assert.equal(listing.ok, true);
     assert.equal(listing.entries.some((entry) => entry.name === 'Projects' && entry.type === 'directory'), true);
     assert.equal(listing.entries.some((entry) => entry.name === '.env' && entry.sensitive === true), true);
+  });
+});
+
+test('PC operator outcomes preserve bounded evidence in the desktop result envelope', async () => {
+  await withFixture(async ({ root }) => {
+    const policy = createPcAccessPolicy({ fullPcAccess: true, pcAccessRoots: [root] });
+    const search = toDesktopActionOutcome(searchPcFiles({ query: 'scoop fairies', limit: 10 }, policy));
+    assert.equal(search.ok, true);
+    assert.equal(search.details.results[0].name, 'Scoop Fairies');
+
+    const read = toDesktopActionOutcome(readPcTextFile({ path: path.join(root, 'Projects', 'Scoop Fairies', 'README.md') }, policy));
+    assert.equal(read.ok, true);
+    assert.equal(read.details.content, '# Scoop Fairies\n');
+
+    const refused = toDesktopActionOutcome(readPcTextFile({ path: path.join(root, '.env') }, policy));
+    assert.equal(refused.ok, false);
+    assert.equal(refused.details.sensitive, true);
+    assert.equal(refused.details.approvalRequired, true);
+    assert.doesNotMatch(JSON.stringify(refused), /never-relay/);
   });
 });

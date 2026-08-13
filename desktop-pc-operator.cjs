@@ -352,6 +352,16 @@ function getPcInventory(policy) {
   };
 }
 
+function toDesktopActionOutcome(raw = {}) {
+  const value = raw && typeof raw === 'object' ? raw : {};
+  const { ok, error, ...details } = value;
+  return {
+    ok: ok === true,
+    error: typeof error === 'string' ? error : '',
+    details,
+  };
+}
+
 module.exports = {
   createPcAccessPolicy,
   getPcInventory,
@@ -363,5 +373,6 @@ module.exports = {
   pathWithin,
   readPcTextFile,
   searchPcFiles,
+  toDesktopActionOutcome,
   validatePcPath,
 };
