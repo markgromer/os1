@@ -1,5 +1,13 @@
 # Decision Log
 
+## 2026-08-13: Marcus Voice Must Not Sound Like Generic ChatGPT
+
+Context: Mark tested the Android Realtime voice using `gpt-realtime-2.1` and `cedar` and found the conversation style unacceptable: too much like a ChatGPT shell, too many polite assistant tails, too much recap of Mark's own request, and too much conversational padding. The problem is not only the acoustic voice; it is the spoken interaction contract.
+
+Decision: Add explicit Realtime voice instructions that ban generic assistant filler, customer-support closers, "let me know" tails, recap-before-answer behavior, unnecessary next-step menus, and motivational padding. Marcus should answer the last thing Mark said, stop when the useful answer is complete, and acknowledge voice/style frustration briefly rather than explaining at length. Lower the Realtime session `max_output_tokens` from 1200 to 480 to reduce bloat pressure.
+
+Consequence: Marcus's voice contract is now stricter and more opinionated. This does not prove the selected OpenAI voice/model is the final product fit; it creates a better baseline for testing whether prompt/style control is enough before moving primary voice identity to ElevenLabs or another stack.
+
 ## 2026-08-13: Accept The Original Trusted-Operator Goal
 
 Context: The goal required durable memory, deep project audits, direct Codex work, GitHub and Cloudflare capability, approved messaging, Obsidian documentation, secure verification, Android voice, full-PC project use, durable hosting, and a from-scratch repository deployed to a live Worker. Earlier acceptance was incomplete because physical Android lifecycle gates and the new demo publication were still pending.
