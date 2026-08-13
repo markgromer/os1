@@ -91,6 +91,16 @@ Direct GitHub Actions result review follows:
 
 `runner reports success -> query target repository through GitHub API -> resolve PR/branch/head SHA -> collect bounded redacted patches and target checks -> calculate evidence digest -> strict semantic review of implementation criteria + deterministic proof of Marcus control criteria -> retain independent build/test/browser/deployment gates`
 
+Local visible Codex execution follows:
+
+`phone request -> exact project resolution -> approved and attested Windows workspace -> durable Codex job -> desktop action claim -> visible Chrome kiosk monitor -> codex exec JSONL stream -> redacted job events -> changed-file and diff summary -> operation verification`
+
+A command such as `switch to Scoop Fairies` updates the active conversation project and opens that project's verified workspace in VS Code. It does not reuse an unrelated active Codex project. A from-scratch request follows:
+
+`extract safe project name -> reserve exact pending workspace -> create folder -> git init -> open VS Code -> local Codex build -> exact GitHub repository approval -> connect origin -> publish approval -> Cloudflare deployment approval -> artifact verification`
+
+GitHub repository creation defaults to private unless Mark explicitly asks for public. Repository creation and Cloudflare publication are separate approval gates; completing the local build does not imply either one.
+
 The runner's success proves only that the runner completed. Codex output and provider-supplied review claims remain untrusted. Marcus constructs a validated evidence catalog from authoritative changed-file patches, successful GitHub checks, authenticated verification, durable audit/handoff records, implementation artifacts, and PR state. A strict JSON schema forces the semantic reviewer to return one citation-bearing entry for every supplied implementation criterion. Marcus itself proves generated audit, handoff, and completion-control criteria from durable records; prior `diff_review` results are excluded so the review cannot prove itself. `diff_review` passes only when all changed files and patches are present, the digest matches the stored diff, every criterion is covered, confidence is at least 0.8, and no high/blocker finding, unsupported execution claim, or failed/pending target check exists. Otherwise the operation remains blocked for stronger evidence. Retrying verification invalidates the short evidence cache, re-queries GitHub, and re-runs review without launching Codex again, so settled evidence can advance without duplicate implementation.
 
 ## Execution Brief Contents

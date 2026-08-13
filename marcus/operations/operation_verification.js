@@ -61,6 +61,7 @@ export class OperationVerification {
       if (requirement.type === 'artifact_present') {
         const evidenceArtifacts = (operation.artifacts || []).filter((artifact) => [
           'codex_result', 'codex_diff', 'commit', 'external_job', 'implementation_result', 'github_result_evidence', 'github_pull_request',
+          'local_codex_result',
         ].includes(artifact.type));
         results.push(normalizeVerificationResult({
           id: prior?.id || makeOperationId('verify'), type: requirement.type, required: requirement.required,

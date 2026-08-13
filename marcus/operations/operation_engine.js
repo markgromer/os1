@@ -94,6 +94,8 @@ function deriveTrustedAuthorization({ request, businessKey, projectRegistryId })
   const scriptDenied = /\b(?:do\s+not|don't|dont|never|no)\s+(?:\w+\s+){0,4}(?:test|build|lint|typecheck|verify|verification)\b/.test(text);
   if (permitsMutation && !codexDenied && new RegExp(`\\b${implementationAction}\\b`).test(text)) actionClasses.push('codex_implementation');
   if (permitsMutation && !scriptDenied && /\b(test|build|lint|typecheck|verify|verification)\b/.test(text)) actionClasses.push('run-project-script');
+  const createsNewProject = permitsMutation && /\b(?:create|start|make|build)\b[^.!?]{0,100}\b(?:new project|project from scratch|empty project|new app|new application)\b/.test(text);
+  if (createsNewProject) actionClasses.push('create-project-workspace', 'connect-github-repository');
   if (/\b(read|inspect|compare|github|repository|pull request|workflow)\b/.test(text)) {
     actionClasses.push('repository_metadata', 'default_branch', 'branch_metadata', 'commit_metadata', 'repository_file', 'compare_refs', 'pull_request_metadata', 'workflow_status');
   }
@@ -102,6 +104,7 @@ function deriveTrustedAuthorization({ request, businessKey, projectRegistryId })
     environment: 'development', providers: [
       ...(actionClasses.includes('codex_implementation') ? ['codex'] : []),
       ...(actionClasses.includes('run-project-script') ? ['desktop'] : []),
+      ...(actionClasses.some((item) => ['create-project-workspace', 'connect-github-repository'].includes(item)) ? ['desktop'] : []),
       ...(actionClasses.some((item) => item.includes('repository') || item.includes('branch') || item.includes('commit') || item.includes('workflow') || item.includes('pull_request') || item === 'compare_refs' || item === 'default_branch') ? ['github_read'] : []),
     ],
     actionClasses: [...new Set(actionClasses)], requestDigest: crypto.createHash('sha256').update(text).digest('hex'), createdAt: nowIso(), revoked: false,
@@ -507,7 +510,6 @@ export function createOperationsEngine({
       return registry.update(businessKey, id, patch);
     },
     async approveProjectWorkspace(businessKey, id, input) {
-      await assertRegistryTargetMutable(businessKey, id, ['localWorkspace']);
       const project = await registry.approveWorkspace(businessKey, id, input);
       const challenge = safeObject(project.localWorkspace?.approvalChallenge);
       if (project.localWorkspace?.trustStatus === 'pending' && challenge.status === 'pending' && queueDesktopAction) {
@@ -531,6 +533,31 @@ export function createOperationsEngine({
       return project;
     },
     attestProjectWorkspace: (businessKey, id, input) => registry.attestWorkspace(businessKey, id, input),
+    prepareNewProjectWorkspace: (businessKey, id, input = {}) => registry.approveWorkspace(businessKey, id, {
+      desktopAgentId: safeString(input.desktopAgentId, 200),
+      remoteValidation: true,
+      actor: 'mark_full_pc_authorization',
+      message: 'Mark authorized Marcus to create this exact new project path on the bound desktop agent.',
+    }),
+    async approveCreatedProjectWorkspace(businessKey, id, input = {}) {
+      const raw = safeObject(input);
+      const project = await registry.approveWorkspace(businessKey, id, {
+        desktopAgentId: raw.desktopAgentId,
+        remoteValidation: true,
+        actor: 'mark_full_pc_authorization',
+        message: 'Workspace created by the exact durable desktop action authorized for this new project.',
+      });
+      const challenge = safeObject(project.localWorkspace?.approvalChallenge);
+      return registry.attestWorkspace(businessKey, id, {
+        ok: true,
+        challengeId: challenge.id,
+        businessKey,
+        projectRegistryId: id,
+        desktopAgentId: raw.desktopAgentId,
+        registeredPath: raw.registeredPath,
+        canonicalPath: raw.canonicalPath,
+      });
+    },
   };
 
   return api;

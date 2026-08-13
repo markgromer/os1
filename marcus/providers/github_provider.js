@@ -5,7 +5,7 @@ export const GITHUB_READ_ACTIONS = new Set([
   'compare_refs', 'pull_request_metadata', 'workflow_status',
 ]);
 
-export const GITHUB_WRITE_ACTIONS = new Set(['merge_pull_request']);
+export const GITHUB_WRITE_ACTIONS = new Set(['merge_pull_request', 'create_repository']);
 
 function safeRef(value) {
   const ref = safeString(value, 240);
@@ -62,9 +62,26 @@ export class GitHubWriteProvider {
     if (!this.writeAdapter) return { status: 'failed', error: 'GitHub write integration is not configured.' };
     const action = safeString(step.toolName, 100);
     if (!GITHUB_WRITE_ACTIONS.has(action)) return { status: 'failed', error: `GitHub write action is not allowlisted: ${action || '(missing)'}.` };
+    const raw = safeObject(step.input);
+    if (action === 'create_repository') {
+      const input = {
+        owner: safeString(raw.owner, 200),
+        name: safeString(raw.name, 200),
+        description: safeString(raw.description, 1_000),
+        private: raw.private !== false,
+      };
+      if (!/^[A-Za-z0-9_.-]+$/.test(input.owner) || !/^[A-Za-z0-9_.-]+$/.test(input.name)) {
+        return { status: 'failed', error: 'A valid GitHub owner and repository name are required.' };
+      }
+      const result = await this.writeAdapter({
+        repository: `${input.owner}/${input.name}`, action, input, businessKey: operation.businessKey,
+        projectRegistryId: registryRecord.id, operationId: operation.id, idempotencyKey: safeString(idempotencyKey, 240),
+      });
+      if (result?.verified !== true) return { status: 'failed', error: 'GitHub did not verify the created repository.' };
+      return { status: 'completed', output: sanitizeStructured(result, 40_000) };
+    }
     const repository = safeString(registryRecord?.repo?.fullName, 500);
     if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) return { status: 'failed', error: 'No valid GitHub repository is registered for this project.' };
-    const raw = safeObject(step.input);
     const input = {
       pullNumber: safeInteger(raw.pullNumber, 0, 1, 1_000_000_000),
       expectedHeadSha: safeString(raw.expectedHeadSha, 40).toLowerCase(),

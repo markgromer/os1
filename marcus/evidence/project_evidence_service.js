@@ -559,16 +559,16 @@ export class ProjectEvidenceService {
     try { return await run; } finally { if (this.refreshes.get(key) === run) this.refreshes.delete(key); }
   }
 
-  async getActivity(businessKey, { recalculate = false } = {}) {
+  async getActivity(businessKey, { recalculate = false, nowMs = Date.now() } = {}) {
     const key = safeBusinessKey(businessKey);
     const [document, operations] = await Promise.all([this.store.readDocument(key), this.listOperations(key, { limit: 5_000 })]);
     const analysis = safeObject(document.analysis);
     if (analysis.operationsWatermark !== operationsWatermark(operations)) {
       await this.collectOperations(key, await this.activeProjects(key), operations);
-      return this.recalculate(key);
+      return this.recalculate(key, { nowMs });
     }
     if (recalculate || !analysis.calculatedAt || !Array.isArray(analysis.snapshots)
-      || analysis.evidenceWatermark !== evidenceWatermark(document.evidence)) return this.recalculate(key);
+      || analysis.evidenceWatermark !== evidenceWatermark(document.evidence)) return this.recalculate(key, { nowMs });
     return structuredClone(analysis);
   }
 

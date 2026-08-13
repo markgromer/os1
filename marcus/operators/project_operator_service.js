@@ -461,6 +461,23 @@ export class ProjectOperatorService {
     return asksForStatus && namesProjectSurface;
   }
 
+  async applyDesktopAuthorization(businessKey, project, desktop) {
+    const authorization = safeObject(desktop?.desktopAuthorization);
+    const agentId = safeString(authorization.agentId, 200);
+    if (!project?.id || project.localWorkspace?.trustStatus === 'approved'
+      || authorization.scope !== 'full_pc' || authorization.broadWorkspaceRootsAllowed !== true || !agentId) return project;
+    try {
+      return await this.operationsEngine.approveProjectWorkspace(businessKey, project.id, {
+        desktopAgentId: agentId,
+        remoteValidation: true,
+        actor: 'mark_full_pc_authorization',
+        message: 'Mark explicitly authorized Marcus to use the full PC. Exact workspace access remains bound to desktop attestation.',
+      });
+    } catch {
+      return project;
+    }
+  }
+
   async ensureExplicitGithubProject(businessKey, request) {
     const key = safeBusinessKey(businessKey);
     const explicit = extractExplicitGitHubRepositories(request)[0] || '';
@@ -521,7 +538,7 @@ export class ProjectOperatorService {
       return (candidatePath && recordPath === candidatePath)
         || (candidateRepo && recordRepo.toLowerCase() === candidateRepo.toLowerCase());
     });
-    if (existing) return existing;
+    if (existing) return this.applyDesktopAuthorization(key, existing, desktop);
 
     const canonicalName = safeString(candidate.projectName, 300)
       || humanizeWorkspaceName(candidate.folderName)
@@ -535,7 +552,7 @@ export class ProjectOperatorService {
       defaultBranch: safeString(candidate.gitBranch, 200) || 'main',
     } : {};
     try {
-      return await this.operationsEngine.createProjectRegistryRecord(key, {
+      const created = await this.operationsEngine.createProjectRegistryRecord(key, {
         canonicalName,
         aliases: [...new Set([
           safeString(candidate.folderName, 300),
@@ -551,13 +568,14 @@ export class ProjectOperatorService {
           codexSessionModifiedAt: safeString(candidate.modifiedAt, 64),
         },
       });
+      return this.applyDesktopAuthorization(key, created, desktop);
     } catch (error) {
       const refreshed = await this.operationsEngine.listProjectRegistry(key);
       const raced = refreshed.find((record) => {
         const recordPath = safeString(record.localWorkspace?.path, 2_000).toLowerCase();
         return candidatePath && recordPath === candidatePath;
       });
-      if (raced) return raced;
+      if (raced) return this.applyDesktopAuthorization(key, raced, desktop);
       throw error;
     }
   }

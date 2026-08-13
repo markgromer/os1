@@ -62,7 +62,7 @@ Status: GitHub deep gathering is implemented in the project operator and persist
 
 ## Phase 3: Codex Session Launch
 
-Current Codex support can create strong handoffs. The next upgrade is launch orchestration.
+Current Codex support can create strong handoffs and launch both GitHub Actions and local desktop jobs. Production enablement of the local desktop path remains pending.
 
 Requirements:
 
@@ -73,6 +73,22 @@ Requirements:
 - Poll or reconcile status.
 
 Status: handoff mode and direct launch are implemented. Production uses the Reggie-style GitHub Actions adapter. The first complete production acceptance operation dispatched `openai/codex-action@v1`, recovered from a failed runner attempt, opened a pull request, and completed after independent verification evidence was registered.
+
+Local desktop adapter environment:
+
+- `MARCUS_DESKTOP_CODEX_ENABLED=true` on the server
+- `MARCUS_ALLOW_BROAD_WORKSPACE_ROOTS=true` on the desktop relay
+- `MARCUS_ALLOWED_WORKSPACE_ROOTS` with explicit Windows roots
+- `MARCUS_NEW_PROJECT_ROOT` for blank-project creation
+- `MARCUS_CODEX_MONITOR_MODE=kiosk` or `app`
+
+Status: implementation and local acceptance pass. The adapter queues each launch once, survives restart, validates the exact desktop agent, streams redacted Codex JSONL events, records final output and Git evidence, supports follow-up and cancellation, and serves a token-scoped real-time monitor. A real disposable Codex run created the requested file exactly. The complete local suite passes `137/137`. Render configuration, desktop scheduled-task restart, and installed-phone acceptance are still pending.
+
+## Phase 3A: From-Scratch Project Operator
+
+Status: implemented locally; production acceptance is pending.
+
+`POST /api/marcus/project-bootstrap` and matching Marcus Live intent create a project registry record, reserve an exact pending Windows path, and create an eight-step durable operation covering local folder creation, local Codex implementation, GitHub repository creation, origin connection, publishing, Cloudflare deployment, and verification. Project switching is deterministic and opens the selected verified workspace. GitHub creation defaults to private and refuses to adopt or overwrite a pre-existing repository. External repository creation, publication, and Cloudflare deployment remain separate exact-target approvals.
 
 Direct adapter environment:
 

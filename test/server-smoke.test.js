@@ -519,6 +519,10 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     await fs.mkdir(codexWorkspace, { recursive: true });
     const relayResponse = await fetch(`${base}/api/desktop-context/relay`, { method: 'POST', headers: agencyHeaders, body: JSON.stringify({
       agentId: 'agent-smoke', windowTitle: 'Codex', processName: 'ChatGPT', idleSeconds: 1,
+      desktopAuthorization: {
+        scope: 'full_pc', broadWorkspaceRootsAllowed: true,
+        allowedRoots: [server.workspaceRoot], newProjectRoot: server.workspaceRoot,
+      },
       codexWorkspaces: [{
         sessionId: 'session-smoke', workspacePath: codexWorkspace, folderName: 'scoopFairies', projectName: 'Scoop Fairies',
         modifiedAt: new Date().toISOString(), source: 'vscode', originator: 'codex_vscode', gitBranch: 'main',
@@ -531,6 +535,21 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     const relayedContext = await (await fetch(`${base}/api/desktop-context`, { headers: agencyHeaders })).json();
     assert.equal(relayedContext.codexWorkspaces[0].projectName, 'Scoop Fairies');
     assert.equal(Object.hasOwn(relayedContext.codexWorkspaces[0], 'transcript'), false);
+    assert.equal(relayedContext.desktopAuthorization.scope, 'full_pc');
+    const bootstrapResponse = await fetch(`${base}/api/marcus/live/chat`, { method: 'POST', headers: agencyHeaders, body: JSON.stringify({
+      message: 'Create a new project called Smoke Forge from scratch and publish it through GitHub and Cloudflare.',
+    }) });
+    const bootstrap = await bootstrapResponse.json();
+    assert.equal(bootstrapResponse.status, 200);
+    assert.equal(bootstrap.status, 'project_bootstrap_started');
+    assert.equal(bootstrap.project.canonicalName, 'Smoke Forge');
+    assert.equal(bootstrap.operation.steps.some((step) => step.toolName === 'create_repository'), true);
+    assert.equal(bootstrap.operation.steps.some((step) => step.toolName === 'deploy-cloudflare-project'), true);
+    const bootstrapActions = await (await fetch(`${base}/api/desktop-context/actions?agentId=agent-smoke`, { headers: agencyHeaders })).json();
+    const bootstrapAction = bootstrapActions.actions.find((item) => item.requestedBy === `operation:${bootstrap.operation.id}`);
+    assert.ok(bootstrapAction, JSON.stringify({ operation: bootstrap.operation, actions: bootstrapActions.actions }, null, 2));
+    assert.equal(bootstrapAction.type, 'create-project-workspace');
+    assert.match(bootstrapAction.payload.path, /smoke-forge$/i);
     const liveStatusResponse = await fetch(`${base}/api/marcus/live/chat`, { method: 'POST', headers: agencyHeaders, body: JSON.stringify({
       message: 'What is the status of the Scoop Fairies project?',
     }) });
@@ -539,6 +558,12 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     assert.equal(liveStatus.status, 'project_status');
     assert.equal(liveStatus.project.name, 'Scoop Fairies');
     assert.match(liveStatus.reply, /Codex workspace/i);
+    const switchedResponse = await fetch(`${base}/api/marcus/live/chat`, { method: 'POST', headers: agencyHeaders, body: JSON.stringify({
+      message: 'Switch to the Scoop Fairies project.',
+    }) });
+    const switchedProject = await switchedResponse.json();
+    assert.equal(switchedProject.status, 'project_switched');
+    assert.equal(switchedProject.project.name, 'Scoop Fairies');
     const workspace = path.join(server.workspaceRoot, 'desktop-smoke');
     await fs.mkdir(workspace, { recursive: true });
     await fs.writeFile(path.join(workspace, 'package.json'), JSON.stringify({ scripts: { test: 'node --test' } }));

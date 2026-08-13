@@ -21,6 +21,21 @@ Marcus may prepare but should require approval for:
 - Billing or invoice actions.
 - Any customer-facing communication.
 
+## Mark's Full-PC Authorization
+
+Status: implemented locally; production relay restart and physical acceptance are pending.
+
+Mark explicitly authorizes Marcus to use his PC and the files available to his Windows account for project discovery, context gathering, local application work, and launching visible Codex jobs. The desktop relay advertises that authorization explicitly; the server does not infer it from a broad filesystem path.
+
+The grant is configured with:
+
+- `MARCUS_ALLOW_BROAD_WORKSPACE_ROOTS=true`
+- `MARCUS_ALLOWED_WORKSPACE_ROOTS` for the exact Windows roots Marcus may inspect
+- `MARCUS_NEW_PROJECT_ROOT` for from-scratch project creation
+- `MARCUS_CODEX_MONITOR_MODE=kiosk` for visible local execution
+
+Broad discovery does not make every command or external mutation implicit. Local Codex is still launched in `workspace-write` mode against one exact project path. The desktop action allowlist, project binding, durable operation state, and provider approval policy remain authoritative. Deleting data, exposing or changing credentials, sending messages, publishing Git changes, creating external repositories, deploying Cloudflare resources, changing DNS, and other consequential external actions require an exact reviewed action or a separately recorded standing policy.
+
 ## Current Code Support
 
 The server already has environment-driven provider config for:
@@ -148,3 +163,6 @@ Implemented policy:
 - Code edits through Codex: allowed after Marcus creates a durable operation.
 - External communication: explicit approval required.
 - GitHub, DNS, and Worker mutation: explicit action-specific approval required; critical deletion also requires strong confirmation.
+- Broad PC access: accepted only when the desktop relay sends an explicit authorization declaration; exact discovered workspaces are challenged and attested before use.
+- New local projects: an exact folder is created below `MARCUS_NEW_PROJECT_ROOT`, initialized as Git, opened in VS Code, and then used by the local Codex bridge.
+- Local Codex: the prompt is sent to the desktop relay, which runs `codex exec --json --sandbox workspace-write` in the bound workspace and streams bounded, redacted events to a token-scoped monitor.

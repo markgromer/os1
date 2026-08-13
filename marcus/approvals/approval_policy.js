@@ -12,6 +12,7 @@ const CRITICAL_ACTIONS = [
 
 const HIGH_ACTIONS = [
   /\bpush\b|git_push|publish_project_changes/i,
+  /create.*repository|repository.*create/i,
   /\bmerge\b|pull_request_open|open.*pull request/i,
   /deploy.*production|production.*deploy|deploy_worker_version/i,
   /environment.*variable|env.*change|change.*env/i,

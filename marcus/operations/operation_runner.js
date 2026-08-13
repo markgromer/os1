@@ -53,6 +53,15 @@ function createCodexDiffArtifact(diff, defaults = {}) {
   }, defaults);
 }
 
+function workspaceTargetIdentity(value = {}) {
+  const workspace = safeObject(value);
+  return {
+    path: safeString(workspace.path, 2_000),
+    platform: safeString(workspace.platform, 100),
+    desktopAgentId: safeString(workspace.desktopAgentId, 200),
+  };
+}
+
 export class OperationRunner {
   constructor({ store, registry, service, policy, approvalService, providers, verification, codexResultReviewer = null, maxStepsPerCycle = 10, cycleTimeoutMs = 60_000, providerTimeoutMs = 45_000 }) {
     Object.assign(this, { store, registry, service, policy, approvalService, providers, verification, codexResultReviewer });
@@ -133,7 +142,7 @@ export class OperationRunner {
         executionTarget.businessKey !== operation.businessKey
         || executionTarget.projectRegistryId !== operation.projectRegistryId
         || JSON.stringify(executionTarget.repository || {}) !== JSON.stringify(liveRegistryRecord?.repo || {})
-        || JSON.stringify(executionTarget.localWorkspace || {}) !== JSON.stringify(liveRegistryRecord?.localWorkspace || {})
+        || JSON.stringify(workspaceTargetIdentity(executionTarget.localWorkspace)) !== JSON.stringify(workspaceTargetIdentity(liveRegistryRecord?.localWorkspace))
         || JSON.stringify(executionTarget.deployments || {}) !== JSON.stringify(liveRegistryRecord?.deployments || {})
         || JSON.stringify(executionTarget.commands || {}) !== JSON.stringify(liveRegistryRecord?.commands || {})
       )) return this.markRecoveryRequired(businessKey, operationId, next.id, 'The registered execution target changed after this operation started. Provider execution was refused.');
@@ -143,7 +152,7 @@ export class OperationRunner {
         projectId: executionTarget.projectId,
         canonicalName: executionTarget.canonicalName,
         repo: executionTarget.repository,
-        localWorkspace: executionTarget.localWorkspace,
+        localWorkspace: liveRegistryRecord?.localWorkspace || executionTarget.localWorkspace,
         deployments: executionTarget.deployments,
         commands: executionTarget.commands,
       } : liveRegistryRecord;
@@ -218,6 +227,14 @@ export class OperationRunner {
         result = await this.collectCodexCompletion(result, { operation, step: runningStep, registryRecord })
           .catch((error) => ({ status: 'unknown', job: result.job, error: `Codex completed but its artifacts could not be collected: ${error?.message || 'unknown error'}` }));
       }
+      if (runningStep.provider === 'github_write' && runningStep.toolName === 'create_repository'
+        && normalizeProviderStatus(result?.status) === 'completed') {
+        try {
+          await this.bindCreatedRepository(businessKey, operation, result.output);
+        } catch (error) {
+          result = { status: 'unknown', error: `GitHub created the repository but Marcus could not durably bind it to the project: ${error?.message || 'unknown error'}` };
+        }
+      }
       executed += 1;
       operation = await this.applyProviderResult(businessKey, operationId, runningStep, result);
       if (!['running', 'queued', 'verifying'].includes(operation.status)) return operation;
@@ -232,6 +249,36 @@ export class OperationRunner {
       });
     }
     return operation;
+  }
+
+  async bindCreatedRepository(businessKey, operation, output = {}) {
+    const result = safeObject(output);
+    const fullName = safeString(result.repository, 500);
+    const match = fullName.match(/^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)$/);
+    if (!match || result.verified !== true || !safeString(result.htmlUrl, 2_000)) {
+      throw new Error('The GitHub provider result did not contain a verified repository identity.');
+    }
+    const repository = {
+      provider: 'github', owner: match[1], name: match[2], fullName,
+      url: safeString(result.htmlUrl, 2_000), defaultBranch: safeString(result.defaultBranch, 200) || 'main',
+      workingBranchPattern: 'codex/{operationId}',
+    };
+    await this.registry.update(businessKey, operation.projectRegistryId, { repo: repository });
+    await this.store.update(businessKey, operation.id, (draft) => {
+      const metadata = safeObject(draft.metadata);
+      draft.metadata = {
+        ...metadata,
+        executionTarget: { ...safeObject(metadata.executionTarget), repository },
+        projectSnapshot: { ...safeObject(metadata.projectSnapshot), repo: repository },
+      };
+      appendEvent(draft, {
+        type: 'project_repository_bound', actor: 'runner',
+        message: `Bound the verified GitHub repository ${fullName} to this project.`,
+        data: { repository: fullName, repositoryId: result.repositoryId },
+      });
+      return draft;
+    });
+    return repository;
   }
 
   async collectCodexCompletion(result, { operation = null, step = null, registryRecord = null } = {}) {

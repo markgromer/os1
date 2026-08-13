@@ -271,3 +271,14 @@ It can:
 - Prepare publish checks.
 - Publish project changes only when authorized.
 - Validate workspace trust challenges.
+- Declare Mark's explicit broad-PC authorization and the exact permitted roots.
+- Discover and switch between recent Codex workspaces instead of binding the conversation to whichever project was most recently active.
+- Create an exact new project folder below `MARCUS_NEW_PROJECT_ROOT`, initialize Git, and open it in VS Code.
+- Run local Codex through `codex exec --json --sandbox workspace-write` and stream lifecycle events to the server.
+- Open `/codex-run.html` in Chrome kiosk or app mode so Mark can watch the job in real time.
+- Connect a verified GitHub repository as `origin` and run the existing approved publish path.
+- Run an approval-gated Wrangler Worker deployment and return the verified `workers.dev` or `pages.dev` URL.
+
+`marcus/providers/desktop_codex_adapter.js` is the durable server-side local-job adapter. It stores job status independently from the desktop action queue, issues a per-job monitor capability whose hash is retained in the job store, validates that updates come from the bound desktop agent, and exposes bounded events, final output, changed files, diff summary, follow-up, and cancellation. The public monitor API accepts only the unguessable per-job capability; it does not accept or reveal the Marcus admin token.
+
+Local verification on 2026-08-12 passed a real disposable Codex CLI run that created an exact requested file in a new Git repository. The complete repository suite passes `137/137`, and syntax lint passes for 69 JavaScript files. Production enablement requires `MARCUS_DESKTOP_CODEX_ENABLED=true` plus a restarted desktop relay carrying the broad-root and kiosk settings; those production steps are not yet claimed complete.

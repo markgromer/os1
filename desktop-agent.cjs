@@ -16,12 +16,13 @@
 //
 // The agent runs until you press Ctrl+C.
 // ─────────────────────────────────────────────────────────────
-const { execFile, exec } = require('child_process');
+const { execFile, exec, spawn } = require('child_process');
 const https = require('https');
 const http = require('http');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const readline = require('readline');
 const { discoverRecentCodexWorkspaces, parseGitStatus } = require('./desktop-codex-sessions.cjs');
 
 const SERVER_URL = (process.argv[2] || process.env.MARCUS_SERVER_URL || '').trim();
@@ -45,6 +46,10 @@ const ADMIN_TOKEN = (process.argv[3] || process.env.ADMIN_TOKEN || readAdminToke
 const DESKTOP_AGENT_ID = String(process.env.MARCUS_DESKTOP_AGENT_ID || os.hostname()).trim().slice(0, 200);
 const ALLOWED_WORKSPACE_ROOT_VALUES = String(process.env.MARCUS_ALLOWED_WORKSPACE_ROOTS || '')
   .split(path.delimiter).map((value) => value.trim()).filter(Boolean);
+const ALLOW_BROAD_WORKSPACE_ROOTS = String(process.env.MARCUS_ALLOW_BROAD_WORKSPACE_ROOTS || '').trim().toLowerCase() === 'true';
+const CODEX_MONITOR_MODE = String(process.env.MARCUS_CODEX_MONITOR_MODE || 'kiosk').trim().toLowerCase();
+const NEW_PROJECT_ROOT = String(process.env.MARCUS_NEW_PROJECT_ROOT
+  || path.join(os.homedir(), 'OneDrive', 'Documents', 'Marcus Projects')).trim();
 
 if (!SERVER_URL) {
   console.error('Usage: node desktop-agent.cjs <SERVER_URL> [ADMIN_TOKEN]');
@@ -252,7 +257,7 @@ function allowedWorkspaceRoots() {
   for (const value of ALLOWED_WORKSPACE_ROOT_VALUES) {
     let canonical;
     try { canonical = fs.realpathSync.native(path.resolve(value)); } catch { continue; }
-    if (broad.has(comparablePath(canonical))) continue;
+    if (!ALLOW_BROAD_WORKSPACE_ROOTS && broad.has(comparablePath(canonical))) continue;
     if (!roots.some((root) => comparablePath(root) === comparablePath(canonical))) roots.push(canonical);
   }
   return roots;
@@ -700,6 +705,266 @@ function openVsCode(projectPath) {
   });
 }
 
+const activeLocalCodexJobs = new Map();
+
+function chromeExecutable() {
+  const candidates = [
+    path.join(process.env.ProgramFiles || '', 'Google', 'Chrome', 'Application', 'chrome.exe'),
+    path.join(process.env['ProgramFiles(x86)'] || '', 'Google', 'Chrome', 'Application', 'chrome.exe'),
+    path.join(process.env.LOCALAPPDATA || '', 'Google', 'Chrome', 'Application', 'chrome.exe'),
+    path.join(process.env.ProgramFiles || '', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+  ];
+  return candidates.find((candidate) => candidate && fs.existsSync(candidate)) || '';
+}
+
+function validateNewWorkspacePath(projectPath) {
+  const target = path.resolve(String(projectPath || '').trim());
+  if (!path.isAbsolute(target) || !path.basename(target)) return { ok: false, error: 'A valid absolute project path is required' };
+  const roots = allowedWorkspaceRoots();
+  if (!roots.length) return { ok: false, error: 'No MARCUS_ALLOWED_WORKSPACE_ROOTS are configured' };
+  const root = roots.find((candidate) => pathWithin(candidate, target) && comparablePath(candidate) !== comparablePath(target));
+  if (!root) return { ok: false, error: 'The new project path is outside the configured workspace roots' };
+  const relative = path.relative(root, target);
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return { ok: false, error: 'Invalid new project path' };
+  return { ok: true, path: target, root };
+}
+
+async function createProjectWorkspace(payload) {
+  const valid = validateNewWorkspacePath(payload?.path);
+  if (!valid.ok) return valid;
+  const destination = valid.path;
+  const binding = {
+    operationId: String(payload?.operationId || '').trim(),
+    projectRegistryId: String(payload?.projectRegistryId || '').trim(),
+  };
+  const markerPath = path.join(destination, '.git', 'marcus-project.json');
+  try {
+    if (fs.existsSync(destination)) {
+      const entries = fs.readdirSync(destination);
+      if (entries.length) {
+        let marker = null;
+        try { marker = JSON.parse(fs.readFileSync(markerPath, 'utf8')); } catch {}
+        const sameOperation = marker
+          && binding.operationId
+          && binding.projectRegistryId
+          && String(marker.operationId || '') === binding.operationId
+          && String(marker.projectRegistryId || '') === binding.projectRegistryId;
+        if (!sameOperation) {
+          return { ok: false, error: 'The destination already exists and is not bound to this exact Marcus project operation' };
+        }
+      }
+    } else {
+      fs.mkdirSync(destination, { recursive: true });
+    }
+  } catch (error) {
+    return { ok: false, error: `Project folder could not be created: ${String(error?.message || error)}` };
+  }
+  let gitResult = { ok: true, skipped: true };
+  if (payload?.initializeGit !== false && !fs.existsSync(path.join(destination, '.git'))) {
+    gitResult = await runLocalCommand(destination, 'git', ['init', '-b', 'main'], 30_000);
+    if (!gitResult.ok) return { ok: false, error: 'git init failed', details: { destination, gitResult } };
+  }
+  if (!fs.existsSync(path.join(destination, '.git'))) {
+    return { ok: false, error: 'The project workspace is not a Git repository' };
+  }
+  fs.writeFileSync(markerPath, `${JSON.stringify({ ...binding, createdAt: new Date().toISOString() }, null, 2)}\n`, 'utf8');
+  const openResult = payload?.openInVsCode === false ? { ok: true, skipped: true } : await openVsCode(destination);
+  let canonicalPath = destination;
+  try { canonicalPath = fs.realpathSync.native(destination); } catch {}
+  return {
+    ok: openResult.ok,
+    error: openResult.ok ? '' : openResult.error,
+    details: {
+      projectName: String(payload?.projectName || path.basename(destination)).slice(0, 300),
+      registeredPath: String(payload?.path || destination),
+      canonicalPath,
+      destination,
+      gitResult,
+      openResult,
+    },
+  };
+}
+
+async function connectGithubRepository(payload) {
+  const valid = validateWorkspaceFolder(payload?.path, { ...payload, requireProjectBinding: true });
+  if (!valid.ok) return valid;
+  const repoUrl = String(payload?.repoUrl || '').trim();
+  if (!/^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\.git)?$/i.test(repoUrl)) {
+    return { ok: false, error: 'A valid GitHub repository URL is required' };
+  }
+  const current = await gitCmd(valid.path, ['remote', 'get-url', 'origin']);
+  const args = current ? ['remote', 'set-url', 'origin', repoUrl] : ['remote', 'add', 'origin', repoUrl];
+  const result = await runLocalCommand(valid.path, 'git', args, 30_000);
+  return { ok: result.ok, error: result.ok ? '' : 'Could not configure the GitHub origin', details: { path: valid.path, repoUrl, previousOrigin: current, result } };
+}
+
+function cloudflareDeploymentUrl(output) {
+  const text = String(output || '');
+  const matches = text.match(/https:\/\/[A-Za-z0-9.-]+(?:\.workers\.dev|\.pages\.dev)(?:\/[^\s]*)?/gi) || [];
+  return matches[matches.length - 1] || '';
+}
+
+async function deployCloudflareProject(payload) {
+  const valid = validateWorkspaceFolder(payload?.path, { ...payload, requireProjectBinding: true });
+  if (!valid.ok) return valid;
+  const configNames = ['wrangler.jsonc', 'wrangler.json', 'wrangler.toml'];
+  if (!configNames.some((name) => fs.existsSync(path.join(valid.path, name)))) {
+    return { ok: false, error: 'The project has no Wrangler configuration. Codex must prepare a Cloudflare Worker or Pages project first.' };
+  }
+  const result = await runLocalCommand(valid.path, 'npx.cmd', ['wrangler', 'deploy'], 240_000);
+  const deploymentUrl = cloudflareDeploymentUrl(`${result.stdout}\n${result.stderr}`);
+  return {
+    ok: result.ok && Boolean(deploymentUrl),
+    error: result.ok ? (deploymentUrl ? '' : 'Wrangler completed without reporting a live URL') : 'Cloudflare deployment failed',
+    details: { path: valid.path, deploymentUrl, result },
+  };
+}
+
+function openCodexMonitor(url) {
+  const target = String(url || '').trim();
+  if (!/^https?:\/\//i.test(target)) return { ok: false, error: 'A valid Codex monitor URL is required' };
+  const executable = chromeExecutable();
+  if (!executable) return { ok: false, error: 'Chrome or Edge was not found' };
+  try {
+    const args = CODEX_MONITOR_MODE === 'kiosk'
+      ? ['--new-window', '--kiosk', target]
+      : ['--new-window', `--app=${target}`];
+    const child = spawn(executable, args, { detached: true, stdio: 'ignore', windowsHide: false });
+    child.unref();
+    return { ok: true, mode: CODEX_MONITOR_MODE === 'kiosk' ? 'kiosk' : 'app' };
+  } catch (error) {
+    return { ok: false, error: String(error?.message || error) };
+  }
+}
+
+function codexEventDetails(event, state) {
+  if (!event || typeof event !== 'object') return;
+  const type = String(event.type || '').trim();
+  if (type === 'thread.started') state.threadId = String(event.thread_id || event.threadId || '').trim();
+  if (type === 'item.completed' && event.item?.type === 'agent_message') {
+    state.finalOutput = String(event.item?.text || event.item?.content || '').trim().slice(0, 40_000);
+  }
+  if (type === 'error') state.error = String(event.message || event.error?.message || event.error || 'Codex reported an error').slice(0, 8_000);
+}
+
+async function collectLocalCodexGitEvidence(cwd) {
+  const [statusRaw, diffStat, branch] = await Promise.all([
+    gitCmd(cwd, ['status', '--porcelain', '--untracked-files=normal']),
+    gitCmd(cwd, ['diff', '--stat', 'HEAD']),
+    gitCmd(cwd, ['rev-parse', '--abbrev-ref', 'HEAD']),
+  ]);
+  const parsed = parseGitStatus(statusRaw, 300);
+  const changedFiles = parsed.entries.map((entry) => `${entry.status} ${entry.file}`);
+  return {
+    branch,
+    changedFiles,
+    diffSummary: String(diffStat || changedFiles.join('\n')).slice(0, 40_000),
+  };
+}
+
+function startCodexProcess(payload, { resume = false } = {}) {
+  const jobId = String(payload?.jobId || '').trim();
+  const cwd = String(payload?.path || '').trim();
+  const prompt = String(resume ? payload?.message : payload?.prompt || '').trim();
+  if (!jobId || !cwd || !prompt) return { ok: false, error: 'Codex job id, workspace, and prompt are required' };
+  if (activeLocalCodexJobs.has(jobId)) return { ok: true, details: { jobId, alreadyRunning: true } };
+
+  const state = {
+    jobId,
+    threadId: String(payload?.threadId || '').trim(),
+    finalOutput: '',
+    error: '',
+    events: [],
+    flushTimer: null,
+  };
+  const flush = async (status = 'running', extra = {}) => {
+    if (state.flushTimer) clearTimeout(state.flushTimer);
+    state.flushTimer = null;
+    const events = state.events.splice(0, 100);
+    await relay({
+      jobId,
+      desktopAgentId: DESKTOP_AGENT_ID,
+      status,
+      threadId: state.threadId,
+      finalOutput: state.finalOutput,
+      error: state.error,
+      events,
+      ...extra,
+    }, '/api/desktop-context/codex-updates');
+    if (state.events.length) state.flushTimer = setTimeout(() => { void flush(status); }, 250);
+  };
+  const queueEvent = (event) => {
+    codexEventDetails(event, state);
+    state.events.push(event);
+    if (state.events.length >= 20) void flush('running');
+    else if (!state.flushTimer) state.flushTimer = setTimeout(() => { void flush('running'); }, 350);
+  };
+
+  const args = resume
+    ? ['exec', '--json', '--sandbox', 'workspace-write', '--cd', cwd, 'resume', state.threadId, '-']
+    : ['exec', '--json', '--sandbox', 'workspace-write', '--cd', cwd, '--skip-git-repo-check', '-'];
+  let child;
+  try {
+    child = spawn('codex', args, { cwd, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+  } catch (error) {
+    return { ok: false, error: `Codex could not start: ${String(error?.message || error)}` };
+  }
+  activeLocalCodexJobs.set(jobId, { child, state, cwd });
+  const stdout = readline.createInterface({ input: child.stdout });
+  stdout.on('line', (line) => {
+    const text = String(line || '').trim();
+    if (!text) return;
+    try { queueEvent(JSON.parse(text)); }
+    catch { queueEvent({ type: 'codex.output', text: text.slice(0, 8_000) }); }
+  });
+  child.stderr.on('data', (chunk) => {
+    const text = String(chunk || '').trim();
+    if (text) {
+      state.error = `${state.error}\n${text}`.trim().slice(-8_000);
+      queueEvent({ type: 'codex.stderr', text: text.slice(0, 8_000) });
+    }
+  });
+  child.on('error', (error) => {
+    state.error = String(error?.message || error).slice(0, 8_000);
+  });
+  child.on('close', async (code, signal) => {
+    activeLocalCodexJobs.delete(jobId);
+    stdout.close();
+    const evidence = await collectLocalCodexGitEvidence(cwd);
+    const status = code === 0 ? 'completed' : signal ? 'cancelled' : 'failed';
+    if (code !== 0 && !state.error) state.error = `Codex exited with code ${code}.`;
+    queueEvent({ type: 'desktop_codex.completed', status, code, signal: signal || '', evidence });
+    await flush(status, { ...evidence, completedAt: new Date().toISOString() });
+  });
+  child.stdin.end(prompt);
+  queueEvent({ type: 'desktop_codex.started', jobId, workspacePath: cwd, resumed: resume });
+  void flush('running');
+  return { ok: true, details: { jobId, pid: child.pid, workspacePath: cwd, resumed: resume } };
+}
+
+function startLocalCodexJob(payload) {
+  const monitor = openCodexMonitor(payload?.monitorUrl);
+  const result = startCodexProcess(payload);
+  return { ...result, details: { ...(result.details || {}), monitor } };
+}
+
+function followupLocalCodexJob(payload) {
+  if (!String(payload?.threadId || '').trim()) return { ok: false, error: 'The Codex thread id is not available for follow-up' };
+  return startCodexProcess(payload, { resume: true });
+}
+
+function cancelLocalCodexJob(payload) {
+  const jobId = String(payload?.jobId || '').trim();
+  const active = activeLocalCodexJobs.get(jobId);
+  if (!active) return { ok: true, details: { jobId, alreadyStopped: true } };
+  try {
+    active.child.kill();
+    return { ok: true, details: { jobId, signalSent: true } };
+  } catch (error) {
+    return { ok: false, error: String(error?.message || error) };
+  }
+}
+
 async function checkDesktopActions() {
   try {
     const result = await httpGet(`/api/desktop-context/actions?agentId=${encodeURIComponent(DESKTOP_AGENT_ID)}`);
@@ -713,7 +978,11 @@ async function checkDesktopActions() {
       if (!id || !type) continue;
 
       let outcome = { ok: false, error: `Unsupported desktop action: ${type}` };
-      const pathAction = ['open-vscode', 'prepare-publish', 'publish-project-changes', 'run-project-script', 'validate-workspace'].includes(type);
+      const pathAction = [
+        'open-vscode', 'prepare-publish', 'publish-project-changes', 'run-project-script',
+        'validate-workspace', 'start-local-codex-job', 'followup-local-codex-job',
+        'connect-github-repository', 'deploy-cloudflare-project',
+      ].includes(type);
       if (pathAction) {
         const operationBound = String(action?.requestedBy || '').startsWith('operation:');
         const valid = validateWorkspaceFolder(action?.payload?.path, { ...action?.payload, requireProjectBinding: operationBound || type === 'validate-workspace' });
@@ -754,6 +1023,18 @@ async function checkDesktopActions() {
         outcome = await cloneGithubProject(action?.payload || {});
       } else if (type === 'set-performance-profile') {
         outcome = await setPerformanceProfile(action?.payload || {});
+      } else if (type === 'start-local-codex-job') {
+        outcome = startLocalCodexJob(action?.payload || {});
+      } else if (type === 'followup-local-codex-job') {
+        outcome = followupLocalCodexJob(action?.payload || {});
+      } else if (type === 'cancel-local-codex-job') {
+        outcome = cancelLocalCodexJob(action?.payload || {});
+      } else if (type === 'create-project-workspace') {
+        outcome = await createProjectWorkspace(action?.payload || {});
+      } else if (type === 'connect-github-repository') {
+        outcome = await connectGithubRepository(action?.payload || {});
+      } else if (type === 'deploy-cloudflare-project') {
+        outcome = await deployCloudflareProject(action?.payload || {});
       }
 
       responses.push({
@@ -1158,6 +1439,12 @@ async function tick() {
   }
   const payload = {
     agentId: DESKTOP_AGENT_ID,
+    desktopAuthorization: {
+      scope: ALLOW_BROAD_WORKSPACE_ROOTS ? 'full_pc' : 'workspace_roots',
+      broadWorkspaceRootsAllowed: ALLOW_BROAD_WORKSPACE_ROOTS,
+      allowedRoots: ALLOWED_WORKSPACE_ROOT_VALUES,
+      newProjectRoot: NEW_PROJECT_ROOT,
+    },
     windowTitle: ctx.windowTitle,
     processName: ctx.processName,
     idleSeconds: ctx.idleSeconds,

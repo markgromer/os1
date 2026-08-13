@@ -35,6 +35,7 @@ import { discoverDurableBackupSources } from './marcus/operations/operation_back
 import { DesktopActionQueue } from './marcus/operations/desktop_action_queue.js';
 import { startOperationMonitor } from './marcus/operations/operation_monitor.js';
 import { extractExplicitGitHubRepositories, ProjectOperatorService } from './marcus/operators/project_operator_service.js';
+import { DesktopCodexAdapter } from './marcus/providers/desktop_codex_adapter.js';
 import { createGitHubActionsCodexAdapterFromEnv } from './marcus/providers/github_actions_codex_adapter.js';
 import { createHttpCodexAdapterFromEnv } from './marcus/providers/http_codex_adapter.js';
 import {
@@ -250,7 +251,15 @@ const desktopActionQueue = new DesktopActionQueue({
   dataDir: DATA_DIR,
   leaseMs: process.env.MARCUS_DESKTOP_ACTION_LEASE_MS,
 });
-const directCodexAdapter = createHttpCodexAdapterFromEnv(process.env) || createGitHubActionsCodexAdapterFromEnv(process.env);
+const desktopCodexEnabled = String(process.env.MARCUS_DESKTOP_CODEX_ENABLED || '').trim().toLowerCase() === 'true';
+const desktopCodexAdapter = desktopCodexEnabled ? new DesktopCodexAdapter({
+  dataDir: DATA_DIR,
+  queueAction: async (action) => queueDesktopAction(action),
+  monitorBaseUrl: process.env.RENDER_EXTERNAL_URL || process.env.MARCUS_PUBLIC_URL || '',
+}) : null;
+const directCodexAdapter = desktopCodexAdapter
+  || createHttpCodexAdapterFromEnv(process.env)
+  || createGitHubActionsCodexAdapterFromEnv(process.env);
 
 const operationsEngine = createOperationsEngine({
   dataDir: DATA_DIR,
@@ -750,6 +759,7 @@ function isPublicApiRoute(req) {
   if (method === 'POST' && p === '/api/auth/logout') return true;
   if (method === 'GET' && p === '/api/auth/status') return true;
   if (method === 'GET' && p === '/api/health') return true;
+  if (method === 'GET' && /^\/api\/codex-monitor\/jobs\/[^/]+$/.test(p)) return true;
   if (method === 'POST' && p === '/api/integrations/slack/events') return true;
   if (method === 'POST' && p === '/api/integrations/crm/webhook') return true;
   if (method === 'POST' && p === '/api/integrations/quo/sms') return true;
@@ -827,6 +837,7 @@ function isMarcusLiveSessionRoute(req) {
     || p === '/api/marcus/live/dashboard'
     || p === '/api/marcus/operator-health'
     || p === '/api/marcus/project-operator'
+    || p === '/api/marcus/project-bootstrap'
     || p === '/api/marcus/live/performance'
     || p === '/api/marcus/live/session-status'
     || p === '/api/marcus/live/voice/status'
@@ -942,6 +953,35 @@ registerMissionMemoryRoutes(app, {
 registerProjectEvidenceRoutes(app, {
   service: projectEvidenceService,
   getBusinessKey: () => getBusinessKeyFromContext(),
+});
+
+app.post('/api/desktop-context/codex-updates', async (req, res) => {
+  if (!desktopCodexAdapter) return res.status(404).json({ ok: false, error: 'Desktop Codex is not enabled.' });
+  try {
+    const job = await desktopCodexAdapter.ingestUpdate({
+      ...(req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {}),
+      desktopAgentId: String(req.body?.desktopAgentId || req.body?.agentId || '').trim().slice(0, 200),
+    });
+    res.json({ ok: true, job });
+  } catch (error) {
+    const status = error?.code === 'CODEX_JOB_NOT_FOUND' ? 404 : error?.code === 'CODEX_AGENT_MISMATCH' ? 403 : 400;
+    res.status(status).json({ ok: false, error: String(error?.message || error), code: error?.code || 'CODEX_UPDATE_REJECTED' });
+  }
+});
+
+app.get('/api/codex-monitor/jobs/:jobId', async (req, res) => {
+  if (!desktopCodexAdapter) return res.status(404).json({ ok: false, error: 'Desktop Codex is not enabled.' });
+  const token = String(req.query?.monitorToken || '').trim();
+  const after = Math.max(0, Number(req.query?.after) || 0);
+  const job = await desktopCodexAdapter.getPublicJob(req.params.jobId, token, { after });
+  if (!job) return res.status(401).json({ ok: false, error: 'Invalid or expired Codex monitor link.' });
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({ ok: true, job });
+});
+
+app.get('/api/codex/jobs', async (_req, res) => {
+  if (!desktopCodexAdapter) return res.json({ ok: true, enabled: false, jobs: [] });
+  res.json({ ok: true, enabled: true, jobs: await desktopCodexAdapter.listJobs({ limit: 50 }) });
 });
 
 /**
@@ -2805,6 +2845,48 @@ function providerStateUnknown(message, cause) {
 }
 
 async function githubOperationsWriteAdapter({ repository, action, input = {}, operationId = '' }) {
+  if (action === 'create_repository') {
+    const cfg = getGitHubCloudConfig(await readSettings());
+    const owner = String(input.owner || '').trim();
+    const name = String(input.name || '').trim();
+    if (!cfg.owner || owner.toLowerCase() !== String(cfg.owner).toLowerCase()) {
+      throw new Error('The approved repository owner does not match the configured GitHub account.');
+    }
+    if (!/^[A-Za-z0-9_.-]+$/.test(name)) throw new Error('The approved GitHub repository name is invalid.');
+    let existing = null;
+    try { existing = await githubApi(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`); }
+    catch (error) { if (Number(error?.status) !== 404) throw error; }
+    if (existing) throw new Error(`GitHub repository ${owner}/${name} already exists; Marcus refused to adopt or overwrite it as a new project.`);
+    await githubApi('/user/repos', {
+        method: 'POST',
+        body: {
+          name,
+          description: String(input.description || '').trim().slice(0, 1_000),
+          private: input.private !== false,
+          has_issues: true,
+          has_projects: true,
+          has_wiki: false,
+          auto_init: false,
+        },
+    });
+    const verified = await githubApi(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`);
+    if (!verified?.id || String(verified.full_name || '').toLowerCase() !== `${owner}/${name}`.toLowerCase()
+      || Boolean(verified.private) !== (input.private !== false)) {
+      throw new Error('GitHub did not confirm the exact approved repository after creation.');
+    }
+    return {
+      action,
+      operationId,
+      verified: true,
+      idempotentReplay: false,
+      repository: verified.full_name,
+      repositoryId: verified.id,
+      private: Boolean(verified.private),
+      defaultBranch: verified.default_branch || 'main',
+      htmlUrl: verified.html_url,
+      cloneUrl: verified.clone_url,
+    };
+  }
   if (action !== 'merge_pull_request') throw new Error('Unsupported GitHub write action.');
   const [owner, repo] = String(repository || '').split('/');
   if (!/^[A-Za-z0-9_.-]+$/.test(owner || '') || !/^[A-Za-z0-9_.-]+$/.test(repo || '')) throw new Error('Registered GitHub repository is invalid.');
@@ -14143,6 +14225,9 @@ app.post('/api/projects/:id/auto-suggest-tasks', async (req, res) => {
 
 let desktopActionResults = [];      // [{id,type,ok,error?,completedAt}]
 const DESKTOP_ACTION_RESULT_TTL_MS = 10 * 60_000;
+const LOCAL_CODEX_DESKTOP_ACTIONS = new Set([
+  'start-local-codex-job', 'followup-local-codex-job', 'cancel-local-codex-job',
+]);
 
 function pruneDesktopActionResults() {
   const cutoff = Date.now() - DESKTOP_ACTION_RESULT_TTL_MS;
@@ -14259,10 +14344,49 @@ app.post('/api/desktop-context/action-results', async (req, res) => {
           });
           count++;
           accepted = true;
+        } else if (LOCAL_CODEX_DESKTOP_ACTIONS.has(type)) {
+          count++;
+          accepted = true;
+          if (!result.ok && desktopCodexAdapter) {
+            await desktopCodexAdapter.ingestUpdate({
+              jobId: typeof details?.jobId === 'string' ? details.jobId : id,
+              desktopAgentId: result.desktopAgentId,
+              status: 'failed',
+              error: result.error || `Desktop action ${type} failed.`,
+              events: [{ type: 'desktop_codex.launch_failed', data: { actionType: type, error: result.error } }],
+            }).catch(() => {});
+          }
         } else {
           const reconciled = await operationsEngine.reconcileDesktopResult(result, { runCycle: false });
           count++;
           accepted = true;
+          if (type === 'create-project-workspace' && result.ok) {
+            await operationsEngine.approveCreatedProjectWorkspace(businessKey, result.projectRegistryId, {
+              desktopAgentId: result.desktopAgentId,
+              registeredPath: typeof details?.registeredPath === 'string' ? details.registeredPath : '',
+              canonicalPath: typeof details?.canonicalPath === 'string' ? details.canonicalPath : '',
+            });
+          }
+          if (type === 'deploy-cloudflare-project' && result.ok && typeof details?.deploymentUrl === 'string') {
+            const deploymentUrl = new URL(details.deploymentUrl).toString();
+            if (!/\.(?:workers|pages)\.dev$/i.test(new URL(deploymentUrl).hostname)) {
+              throw new Error('Desktop deployment result did not contain a verified Cloudflare URL.');
+            }
+            const current = await operationsEngine.registry.get(businessKey, result.projectRegistryId);
+            const deployments = { ...(current?.deployments || {}), productionUrl: deploymentUrl };
+            await operationsEngine.registry.update(businessKey, result.projectRegistryId, { deployments });
+            if (reconciled.operation?.id) {
+              await operationsEngine.store.update(businessKey, reconciled.operation.id, (draft) => {
+                const metadata = draft.metadata && typeof draft.metadata === 'object' ? draft.metadata : {};
+                draft.metadata = {
+                  ...metadata,
+                  executionTarget: { ...(metadata.executionTarget || {}), deployments },
+                  projectSnapshot: { ...(metadata.projectSnapshot || {}), deployments },
+                };
+                return draft;
+              });
+            }
+          }
           if (reconciled.operation?.status === 'queued') setImmediate(() => operationsEngine.tick(businessKey, reconciled.operation.id).catch(() => {}));
         }
       } catch (error) {
@@ -14273,7 +14397,7 @@ app.post('/api/desktop-context/action-results', async (req, res) => {
       accepted = true;
     }
     if (accepted) {
-      if (businessKey && result.projectRegistryId && type !== 'validate-workspace') {
+      if (businessKey && result.projectRegistryId && type !== 'validate-workspace' && !LOCAL_CODEX_DESKTOP_ACTIONS.has(type)) {
         try {
           await projectEvidenceService.recordDesktopActionResult(businessKey, result);
         } catch {
@@ -14473,7 +14597,23 @@ app.post('/api/desktop-context/relay', (req, res) => {
     })
     .filter((item) => item.workspacePath && item.folderName);
 
-  const data = { ok: true, windowTitle: wt, processName: pn, idleSeconds: idle, source: 'relay', workspace, codexWorkspaces };
+  const desktopAuthorizationInput = req.body?.desktopAuthorization && typeof req.body.desktopAuthorization === 'object'
+    ? req.body.desktopAuthorization
+    : {};
+  const desktopAuthorization = {
+    agentId: typeof req.body?.agentId === 'string' ? req.body.agentId.trim().slice(0, 200) : '',
+    scope: desktopAuthorizationInput.scope === 'full_pc' && desktopAuthorizationInput.broadWorkspaceRootsAllowed === true
+      ? 'full_pc'
+      : 'workspace_roots',
+    broadWorkspaceRootsAllowed: desktopAuthorizationInput.broadWorkspaceRootsAllowed === true,
+    allowedRoots: Array.isArray(desktopAuthorizationInput.allowedRoots)
+      ? desktopAuthorizationInput.allowedRoots.slice(0, 40).map((item) => typeof item === 'string' ? item.trim().slice(0, 512) : '').filter(Boolean)
+      : [],
+    newProjectRoot: typeof desktopAuthorizationInput.newProjectRoot === 'string'
+      ? desktopAuthorizationInput.newProjectRoot.trim().slice(0, 512)
+      : '',
+  };
+  const data = { ok: true, windowTitle: wt, processName: pn, idleSeconds: idle, source: 'relay', workspace, codexWorkspaces, desktopAuthorization };
 
   // System health telemetry from the desktop agent
   if (req.body?.systemHealth && typeof req.body.systemHealth === 'object') {
@@ -14884,6 +15024,150 @@ function isProjectContextDeclaration(message) {
   const text = String(message || '').trim();
   const explicitRepo = extractExplicitGitHubRepositories(text).length > 0;
   return explicitRepo || (/\b(project|repo|repository)\b/i.test(text) && /\bgithub\b/i.test(text));
+}
+
+function isProjectSwitchRequest(message) {
+  const text = String(message || '').trim();
+  return /^(?:please\s+)?(?:switch|change|move)(?:\s+(?:the\s+)?(?:active\s+)?project)?\s+(?:to\s+)?[^.!?]{2,160}[.!?]*$/i.test(text)
+    || /^(?:please\s+)?(?:work\s+on|open)\s+(?:the\s+)?[^.!?]{2,160}?\s+(?:project|repo|repository)[.!?]*$/i.test(text);
+}
+
+function isNewProjectBootstrapRequest(message) {
+  const text = String(message || '').trim();
+  if (/\b(?:do not|don't|dont|never)\b[^.!?]{0,80}\b(?:create|start|make|build)\b/i.test(text)) return false;
+  return /\b(?:create|start|make|build)\b[^.!?]{0,120}\b(?:new project|project from scratch|empty project|new app|new application)\b/i.test(text)
+    || /\b(?:new project|project from scratch|empty project|new app|new application)\b[^.!?]{0,120}\b(?:create|start|make|build)\b/i.test(text);
+}
+
+function projectNameFromBootstrapRequest(message, explicitName = '') {
+  const supplied = String(explicitName || '').replace(/\s+/g, ' ').trim();
+  if (supplied) return supplied.slice(0, 120);
+  const text = String(message || '').replace(/\s+/g, ' ').trim();
+  const quoted = text.match(/\b(?:called|named)\s+["']([^"']{2,120})["']/i);
+  if (quoted) return quoted[1].trim();
+  const named = text.match(/\b(?:called|named)\s+([A-Za-z0-9][A-Za-z0-9 &._-]{1,119}?)(?=\s+(?:that|which|for|from|to|with|and\s+(?:publish|deploy|create))\b|[,.!?]|$)/i);
+  if (named) return named[1].trim();
+  const beforeType = text.match(/\bnew\s+([A-Za-z0-9][A-Za-z0-9 &._-]{1,80}?)\s+(?:project|app|application)\b/i);
+  if (beforeType && !/^(?:empty|software|web|mobile)$/i.test(beforeType[1].trim())) return beforeType[1].trim();
+  return '';
+}
+
+function projectSlug(value) {
+  return String(value || '').normalize('NFKD').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase().slice(0, 80);
+}
+
+async function prepareNewProjectBootstrap(message, { projectName = '', source = 'marcus_live' } = {}) {
+  const businessKey = getBusinessKeyFromContext();
+  const request = String(message || '').trim().slice(0, 12_000);
+  const name = projectNameFromBootstrapRequest(request, projectName);
+  if (!name) {
+    return { ok: true, status: 'needs_project_name', reply: 'What should I call the new project? Give me the project name and I will create its folder, start the watched Codex build, and prepare the GitHub and Cloudflare approvals.' };
+  }
+  const desktop = desktopRelayCache?.data || desktopContextCache?.data || {};
+  const authorization = desktop.desktopAuthorization && typeof desktop.desktopAuthorization === 'object' ? desktop.desktopAuthorization : {};
+  if (authorization.scope !== 'full_pc' || authorization.broadWorkspaceRootsAllowed !== true || !authorization.agentId) {
+    return { ok: false, status: 'desktop_authorization_required', reply: 'The desktop agent has not yet reported the full-PC authorization. I will not create a folder or start local Codex until that exact machine grant is active.' };
+  }
+  const slug = projectSlug(name);
+  if (!slug) return { ok: false, status: 'invalid_project_name', reply: 'That project name cannot produce a safe folder and repository name.' };
+  const root = String(authorization.newProjectRoot || '').trim();
+  if (!/^[A-Za-z]:\\/.test(root)) return { ok: false, status: 'project_root_required', reply: 'The desktop agent has not reported a valid Windows root for new Marcus projects.' };
+  const workspacePath = path.win32.join(root, slug);
+  const projects = await operationsEngine.listProjectRegistry(businessKey);
+  const duplicate = projects.find((project) => project.canonicalName.toLowerCase() === name.toLowerCase()
+    || String(project.localWorkspace?.path || '').toLowerCase() === workspacePath.toLowerCase());
+  if (duplicate) {
+    return { ok: false, status: 'project_exists', project: duplicate, reply: `${duplicate.canonicalName} already exists in Marcus. Say "switch to ${duplicate.canonicalName}" or give the new project a different name.` };
+  }
+  const github = getGitHubCloudConfig(await readSettings());
+  if (!github.configured || !github.owner) {
+    return { ok: false, status: 'github_required', reply: 'GitHub is not connected on the Marcus server, so I cannot create the full project workflow yet.' };
+  }
+  const deployCloudflare = !/\b(?:do not|don't|dont|without|no)\b[^.!?]{0,50}\b(?:cloudflare|deploy|publish|live)\b/i.test(request);
+  const repositoryPrivate = !/\bpublic\s+(?:repo|repository|project)\b/i.test(request);
+  let project = await operationsEngine.createProjectRegistryRecord(businessKey, {
+    canonicalName: name,
+    aliases: [slug, `${name} project`, `${name} app`],
+    description: `Project created from Mark's request through the Marcus desktop and local Codex workflow.`,
+    localWorkspace: { path: workspacePath, platform: 'win32', desktopAgentId: authorization.agentId },
+    metadata: {
+      projectBootstrap: true,
+      bootstrapSource: source,
+      requestedRepository: `${github.owner}/${slug}`,
+      requestedCloudflareDeployment: deployCloudflare,
+    },
+  });
+  project = await operationsEngine.prepareNewProjectWorkspace(businessKey, project.id, { desktopAgentId: authorization.agentId });
+  const steps = [
+    {
+      id: 'context', title: 'Prepare new project context', type: 'internal', provider: 'internal',
+      toolName: 'prepare_operation_context', description: 'Bind the new project name, workspace, repository target, build request, and approval boundaries.',
+      input: {}, maxAttempts: 2,
+    },
+    {
+      id: 'workspace', title: 'Create the local project workspace', type: 'desktop', provider: 'desktop',
+      toolName: 'create-project-workspace', description: `Create ${workspacePath}, initialize Git, and open it visibly on Mark's PC.`,
+      dependsOn: ['context'], input: { projectName: name, initializeGit: true, openInVsCode: true }, maxAttempts: 2,
+    },
+    {
+      id: 'codex', title: 'Build the project with local Codex', type: 'codex', provider: 'codex',
+      toolName: 'codex_implementation', description: `${request}\n\nBuild a complete working application in the new workspace. Include a production-ready Wrangler configuration so the approved Cloudflare deployment can run without manual packaging.`,
+      dependsOn: ['workspace'], input: { providerMode: 'desktop_codex' }, maxAttempts: 2,
+      verificationRequirements: ['artifact_present'],
+    },
+    {
+      id: 'github', title: `Create GitHub repository ${github.owner}/${slug}`, type: 'github_write', provider: 'github_write',
+      toolName: 'create_repository', description: `Create the exact ${repositoryPrivate ? 'private' : 'public'} GitHub repository after Mark approves it.`,
+      dependsOn: ['codex'], input: {
+        owner: github.owner, name: slug, description: `${name} - created by Marcus`, private: repositoryPrivate,
+        environment: 'production', approvalTarget: `${github.owner}/${slug} (${repositoryPrivate ? 'private' : 'public'})`,
+      }, maxAttempts: 1,
+    },
+    {
+      id: 'origin', title: 'Connect the local project to GitHub', type: 'desktop', provider: 'desktop',
+      toolName: 'connect-github-repository', description: 'Bind the verified new repository as the local Git origin.',
+      dependsOn: ['github'], input: {}, maxAttempts: 2,
+    },
+    {
+      id: 'push', title: 'Commit and push the built project', type: 'desktop', provider: 'desktop',
+      toolName: 'publish-project-changes', description: 'Commit the reviewed local build and push main to the exact new repository after Mark approves it.',
+      dependsOn: ['origin'], input: {
+        commitMessage: `Build ${name}`, environment: 'production', approvalTarget: `${github.owner}/${slug}:main`,
+      }, maxAttempts: 1,
+    },
+    ...(deployCloudflare ? [{
+      id: 'cloudflare', title: 'Deploy the project to Cloudflare', type: 'desktop', provider: 'desktop',
+      toolName: 'deploy-cloudflare-project', description: 'Run the project Wrangler deployment and record the verified workers.dev or pages.dev URL after Mark approves it.',
+      dependsOn: ['push'], input: { environment: 'production', approvalTarget: `${slug} to Cloudflare production` }, maxAttempts: 1,
+    }] : []),
+    {
+      id: 'verify', title: 'Verify the delivered project', type: 'verification', provider: 'verification',
+      toolName: 'verify_operation', description: 'Require recorded implementation evidence before the durable workflow can complete.',
+      dependsOn: [deployCloudflare ? 'cloudflare' : 'push'], input: { requirements: [{ type: 'artifact_present', required: true }] }, maxAttempts: 2,
+    },
+  ];
+  const created = await operationsEngine.createFromRequest(businessKey, {
+    originalRequest: request,
+    objective: `Create ${name} from scratch as a working application, publish its new GitHub repository,${deployCloudflare ? ' deploy it to Cloudflare,' : ''} and verify the result.`,
+    projectRegistryId: project.id,
+    projectName: name,
+    requestedBy: 'mark',
+    source,
+    riskLevel: 'medium',
+    autoPlan: true,
+    autoStart: true,
+    plan: { steps },
+    acceptanceCriteria: [
+      `${name} exists in a new local Git workspace and implements Mark's request.`,
+      'The Codex run is visible on Mark\'s PC and its events and final result are durably recorded.',
+      `The exact GitHub repository ${github.owner}/${slug} is created only after explicit approval and receives the project commit.`,
+      ...(deployCloudflare ? ['Cloudflare reports a live deployment URL after explicit production approval.'] : []),
+      'Marcus retains evidence for each completed stage and does not infer completion from a model claim.',
+    ],
+    metadata: { projectBootstrap: { slug, workspacePath, githubOwner: github.owner, deployCloudflare, repositoryPrivate } },
+  });
+  const reply = `I created the durable ${name} build workflow and queued the exact local workspace on your PC. Local Codex will open in the live monitor after the folder is attested. GitHub creation, push, and${deployCloudflare ? ' Cloudflare production deployment' : ' publishing'} each remain tied to exact approvals. Operation: ${created.operation.id}.`;
+  return { ok: true, status: 'project_bootstrap_started', project, operation: created.operation, reply };
 }
 
 function rememberMarcusLiveAction(action) {
@@ -16901,6 +17185,18 @@ app.post('/api/marcus/project-operator', async (req, res) => {
   }
 });
 
+app.post('/api/marcus/project-bootstrap', async (req, res) => {
+  const message = typeof req.body?.message === 'string' ? req.body.message.trim().slice(0, 12_000) : '';
+  const projectName = typeof req.body?.projectName === 'string' ? req.body.projectName.trim().slice(0, 120) : '';
+  if (!message) return res.status(400).json({ ok: false, error: 'Message required' });
+  try {
+    const result = await prepareNewProjectBootstrap(message, { projectName, source: 'project_bootstrap_api' });
+    res.status(result.status === 'project_bootstrap_started' ? 201 : 200).json(result);
+  } catch (error) {
+    res.status(400).json({ ok: false, error: String(error?.message || error) });
+  }
+});
+
 // Chat from Marcus Live panel
 app.post('/api/marcus/live/chat', async (req, res) => {
   const message = typeof req.body?.message === 'string' ? req.body.message.trim().slice(0, 2000) : '';
@@ -16940,6 +17236,47 @@ app.post('/api/marcus/live/chat', async (req, res) => {
       });
       pushLiveEvent({ type: 'chat', from: 'marcus', text: memoryResult.reply, ts: Date.now() });
       return res.status(memoryResult.ok ? 200 : 400).json(memoryResult);
+    }
+
+    if (isNewProjectBootstrapRequest(message)) {
+      const result = await prepareNewProjectBootstrap(message, { source: 'marcus_live_project_bootstrap' });
+      const project = result.project ? {
+        projectRegistryId: result.project.id,
+        projectId: result.project.projectId,
+        name: result.project.canonicalName,
+        repo: result.project.repo?.fullName || '',
+      } : null;
+      await recordMarcusLiveExchange(message, result.reply, {
+        operationId: result.operation?.id || '',
+        project,
+      });
+      pushLiveEvent({ type: 'chat', from: 'marcus', text: result.reply, ts: Date.now() });
+      return res.status(result.ok ? 200 : 400).json(result);
+    }
+
+    if (isProjectSwitchRequest(message)) {
+      const switched = await projectOperatorService.resolveProjectContext(getBusinessKeyFromContext(), {
+        message,
+        currentProjectId: conversation.activeProject.projectRegistryId || conversation.activeProject.projectId,
+      });
+      const project = switched.project;
+      if (!project) {
+        const reply = 'I could not resolve that project with enough confidence. Use its exact project name or GitHub owner/repository.';
+        await recordMarcusLiveExchange(message, reply);
+        return res.json({ ok: false, status: 'needs_project', reply });
+      }
+      let desktopActionId = '';
+      if (project.workspacePath && project.workspaceTrust === 'approved') {
+        const action = await queueDesktopAction({
+          type: 'open-vscode', payload: { path: project.workspacePath }, requestedBy: 'marcus-project-switch',
+        });
+        desktopActionId = action.id;
+      }
+      const projectRef = { projectRegistryId: project.id, projectId: project.projectId, name: project.name, repo: project.repo };
+      const reply = `Active project: ${project.name}${project.repo ? ` (${project.repo})` : ''}.${desktopActionId ? ' I also queued its verified workspace to open on your PC.' : project.workspacePath ? ' Its workspace authorization is still being attested.' : ''}`;
+      await recordMarcusLiveExchange(message, reply, { project: projectRef });
+      pushLiveEvent({ type: 'chat', from: 'marcus', text: reply, ts: Date.now() });
+      return res.json({ ok: true, status: 'project_switched', project, desktopActionId, reply });
     }
 
     if (projectOperatorService.shouldHandleStatus(message)) {
@@ -20196,6 +20533,12 @@ app.post('/api/chat', async (req, res) => {
       if (missionMemoryCommand) {
         const memoryResult = await handleMissionMemoryCommand(getBusinessKeyFromContext(), missionMemoryCommand, 'main_chat_explicit_command');
         res.status(memoryResult.ok ? 200 : 400).json({ reply: memoryResult.reply, missionMemory: memoryResult });
+        return;
+      }
+
+      if (isNewProjectBootstrapRequest(message)) {
+        const result = await prepareNewProjectBootstrap(message, { source: 'main_chat_project_bootstrap' });
+        res.status(result.ok ? 200 : 400).json({ reply: result.reply, projectBootstrap: result });
         return;
       }
 

@@ -294,7 +294,7 @@ test('desktop activity aggregates bounded sessions and deployment ingestion requ
     assert.equal(sessions.length, 1);
     assert.ok(sessions[0].workspace.activeMinutes >= 10);
     assert.deepEqual(new Set(sessions[0].workspace.filesObserved), new Set(['server.js', 'README.md']));
-    const desktopActivity = await service.getActivity('personal');
+    const desktopActivity = await service.getActivity('personal', { nowMs: NOW });
     assert.ok(desktopActivity.snapshots.find((item) => item.projectRegistryId === 'desktop').desktopActiveMinutes7d >= 10);
 
     const deployments = await service.collectDeployments('personal', [trustedProject, duplicateA, duplicateB]);
