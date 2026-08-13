@@ -345,3 +345,19 @@ Context: Obsidian evidence updates triggered full Render replacements because ev
 Decision: Keep automatic runtime deployment enabled, but add `buildFilter.ignoredPaths: [docs/**]` to the Blueprint-managed service. Application code, tests, configuration, and mobile assets still trigger deployment; only `docs/` changes are excluded.
 
 Consequence: Blueprint commit `d318950` deployed successfully, and the Render settings dashboard shows `docs/**` as the sole ignored path. Docs-only commit `02fec3d` then produced no replacement: eight checks over two minutes returned HTTP 200 while uptime increased from 191.9 to 297.6 seconds. Obsidian maintenance no longer creates an avoidable Marcus outage.
+
+## 2026-08-13: Verify Is The Complete Approval Queue
+
+Context: Marcus Mobile persisted one tracked operation for progress and transition announcements. When two durable operations simultaneously needed approval, the active-work card could surface only one, forcing Mark to locate or switch operations before completing system acceptance.
+
+Decision: Keep single-operation tracking for progress announcements, but make `Verify` load the complete redacted operation-summary feed and list every pending approval in critical-to-low risk order. Selecting a queue item binds the exact summarized operation to the existing paired-admin review dialog. After approval, reopen `Verify` so the next pending approval and physical acceptance gates remain visible.
+
+Consequence: Production cache `marcus-mobile-v21` exposes the prepared `Marks_PC: C:\` critical grant and `create_repository:markgromer/marcus-pc-bridge-demo (private)` high-risk approval in one acceptance surface. Prompts, artifacts, provider input, patches, and credentials remain absent from the queue. Commit `ad99e29` passed all 144 tests and syntax lint before deployment; production served `v21` over HTTP 200 on 2026-08-13 UTC.
+
+## 2026-08-13: Full-PC Acceptance Requires Returned Evidence
+
+Context: Mark approved the exact `Marks_PC: C:\` critical grant, and policy persistence plus read-back passed. The first production file actions executed successfully, but their search, listing, and read fields were placed at the desktop response top level while the hosted action queue retains only `details`, causing successful responses with `details: null`.
+
+Decision: Normalize every typed PC operator result into an explicit desktop action envelope: `ok` and `error` remain control fields, while bounded evidence and refusal metadata are stored in `details`. Retain the existing secret-path refusal and hosted result-size bound. Add regression coverage for search evidence, bounded file content, and credential-file refusal.
+
+Consequence: Commit `dd0c7e3` passes all 145 tests and syntax lint. After restarting only `MARCUS-DesktopAgent`, production returned the `C:\` inventory, one matching demo `package.json`, twelve directory entries, and an untruncated 545-byte read with SHA-256 `9313db803af3cafb4770014cf1746c528f42bdc88c9b0f45798aab6ee0c68ba2`. Combined production acceptance now passes 12/13 gates; only physical Android voice acceptance remains.
