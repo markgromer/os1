@@ -15077,31 +15077,50 @@ async function prepareNewProjectBootstrap(message, { projectName = '', source = 
   const root = String(authorization.newProjectRoot || '').trim();
   if (!/^[A-Za-z]:\\/.test(root)) return { ok: false, status: 'project_root_required', reply: 'The desktop agent has not reported a valid Windows root for new Marcus projects.' };
   const workspacePath = path.win32.join(root, slug);
-  const projects = await operationsEngine.listProjectRegistry(businessKey);
-  const duplicate = projects.find((project) => project.canonicalName.toLowerCase() === name.toLowerCase()
-    || String(project.localWorkspace?.path || '').toLowerCase() === workspacePath.toLowerCase());
-  if (duplicate) {
-    return { ok: false, status: 'project_exists', project: duplicate, reply: `${duplicate.canonicalName} already exists in Marcus. Say "switch to ${duplicate.canonicalName}" or give the new project a different name.` };
-  }
   const github = getGitHubCloudConfig(await readSettings());
   if (!github.configured || !github.owner) {
     return { ok: false, status: 'github_required', reply: 'GitHub is not connected on the Marcus server, so I cannot create the full project workflow yet.' };
   }
+  const projects = await operationsEngine.listProjectRegistry(businessKey);
+  const duplicate = projects.find((project) => project.canonicalName.toLowerCase() === name.toLowerCase()
+    || String(project.localWorkspace?.path || '').toLowerCase() === workspacePath.toLowerCase());
+  if (duplicate) {
+    const existingOperations = await operationsEngine.listOperations(businessKey, { projectRegistryId: duplicate.id, limit: 20 });
+    const existingOperation = existingOperations.find((operation) => operation.metadata?.projectBootstrap);
+    if (existingOperation) {
+      return {
+        ok: true,
+        status: 'project_bootstrap_started',
+        project: duplicate,
+        operation: existingOperation,
+        reply: `${duplicate.canonicalName} already has durable operation ${existingOperation.id}. I resumed that exact workflow instead of creating a duplicate.`,
+      };
+    }
+    const isRecoverableOrphan = duplicate.metadata?.projectBootstrap === true
+      && String(duplicate.localWorkspace?.path || '').toLowerCase() === workspacePath.toLowerCase()
+      && duplicate.localWorkspace?.desktopAgentId === authorization.agentId
+      && String(duplicate.metadata?.requestedRepository || '').toLowerCase() === `${github.owner}/${slug}`.toLowerCase();
+    if (!isRecoverableOrphan) {
+      return { ok: false, status: 'project_exists', project: duplicate, reply: `${duplicate.canonicalName} already exists in Marcus. Say "switch to ${duplicate.canonicalName}" or give the new project a different name.` };
+    }
+  }
   const deployCloudflare = !/\b(?:do not|don't|dont|without|no)\b[^.!?]{0,50}\b(?:cloudflare|deploy|publish|live)\b/i.test(request);
   const repositoryPrivate = !/\bpublic\s+(?:repo|repository|project)\b/i.test(request);
-  let project = await operationsEngine.createProjectRegistryRecord(businessKey, {
-    canonicalName: name,
-    aliases: [slug, `${name} project`, `${name} app`],
-    description: `Project created from Mark's request through the Marcus desktop and local Codex workflow.`,
-    localWorkspace: { path: workspacePath, platform: 'win32', desktopAgentId: authorization.agentId },
-    metadata: {
-      projectBootstrap: true,
-      bootstrapSource: source,
-      requestedRepository: `${github.owner}/${slug}`,
-      requestedCloudflareDeployment: deployCloudflare,
-    },
-  });
-  project = await operationsEngine.prepareNewProjectWorkspace(businessKey, project.id, { desktopAgentId: authorization.agentId });
+  let project = duplicate || await operationsEngine.createProjectRegistryRecord(businessKey, {
+      canonicalName: name,
+      aliases: [slug, `${name} project`, `${name} app`],
+      description: `Project created from Mark's request through the Marcus desktop and local Codex workflow.`,
+      localWorkspace: { path: workspacePath, platform: 'win32', desktopAgentId: authorization.agentId },
+      metadata: {
+        projectBootstrap: true,
+        bootstrapSource: source,
+        requestedRepository: `${github.owner}/${slug}`,
+        requestedCloudflareDeployment: deployCloudflare,
+      },
+    });
+  if (!project.localWorkspace?.approvalChallenge?.id && project.localWorkspace?.trustStatus !== 'approved') {
+    project = await operationsEngine.prepareNewProjectWorkspace(businessKey, project.id, { desktopAgentId: authorization.agentId });
+  }
   const steps = [
     {
       id: 'context', title: 'Prepare new project context', type: 'internal', provider: 'internal',

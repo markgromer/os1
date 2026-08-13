@@ -545,6 +545,13 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     assert.equal(bootstrap.project.canonicalName, 'Smoke Forge');
     assert.equal(bootstrap.operation.steps.some((step) => step.toolName === 'create_repository'), true);
     assert.equal(bootstrap.operation.steps.some((step) => step.toolName === 'deploy-cloudflare-project'), true);
+    const bootstrapReplayResponse = await fetch(`${base}/api/marcus/live/chat`, { method: 'POST', headers: agencyHeaders, body: JSON.stringify({
+      message: 'Create a new project called Smoke Forge from scratch and publish it through GitHub and Cloudflare.',
+    }) });
+    const bootstrapReplay = await bootstrapReplayResponse.json();
+    assert.equal(bootstrapReplayResponse.status, 200);
+    assert.equal(bootstrapReplay.status, 'project_bootstrap_started');
+    assert.equal(bootstrapReplay.operation.id, bootstrap.operation.id);
     const bootstrapActions = await (await fetch(`${base}/api/desktop-context/actions?agentId=agent-smoke`, { headers: agencyHeaders })).json();
     const bootstrapAction = bootstrapActions.actions.find((item) => item.requestedBy === `operation:${bootstrap.operation.id}`);
     assert.ok(bootstrapAction, JSON.stringify({ operation: bootstrap.operation, actions: bootstrapActions.actions }, null, 2));
