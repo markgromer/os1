@@ -92,6 +92,14 @@ Status: implemented and partially accepted in production. Local workspace creati
 
 Production operation `op_EejJJ-WR7eHJCw` created `C:\Users\markg\OneDrive\Documents\Marcus Projects\marcus-pc-bridge-demo`, initialized Git, and built the Worker through local Codex. Independent acceptance passes 4/4 tests, lint, `tsc --noEmit`, and `wrangler deploy --dry-run`. The next action is exact private repository creation for `markgromer/marcus-pc-bridge-demo`; origin connection, push, Cloudflare deployment, and live URL verification remain downstream. Startup recovery formerly mislabeled that waiting approval as a verification blocker; the 2026-08-13 UTC deployment repaired the live record to `waiting_for_approval`, resolved the stale blocker, and executed no approval.
 
+## Phase 3B: Trusted PC Operator
+
+Status: implemented, deployed, and live over the configured Documents/OneDrive Documents/Downloads roots. The scheduled relay now loads a non-secret policy from `%APPDATA%/M.A.R.C.U.S/desktop-agent.json`, advertises its exact roots and capabilities, and implements inventory, filename search, directory listing, bounded non-secret text reads, installed-application discovery, and visible open/launch actions. Main chat and Marcus Live use synchronous typed tools, while `GET /api/marcus/pc/capabilities` and `POST /api/marcus/pc/actions` provide deterministic authenticated acceptance routes.
+
+Safety is part of the capability contract. Secret-bearing files are refused. Files, pages, email, and tool results are untrusted and cannot authorize an action. Open/launch tools require Mark's direct current request. Arbitrary commands, deletion, downloads/installs, access changes, credentials, publishing, and external representation are not generic PC tools and retain exact approval paths.
+
+Local unit coverage verifies root containment, prefix-escape rejection, bounded search, directory metadata, and secret-file refusal. Server integration verifies the full relay declaration and queue/result round trip. The complete suite passes `143/143`; syntax lint passes for 71 JavaScript files. Production reports the relay online with eight capabilities. Whole-drive `C:\` policy and production inventory/search/read acceptance remain pending Mark's exact informed approval of the persistent root and hosted metadata/content relay.
+
 Direct adapter environment:
 
 - `MARCUS_CODEX_ADAPTER_URL` or `CODEX_ADAPTER_URL`
