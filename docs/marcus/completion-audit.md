@@ -38,7 +38,7 @@ The latest installed Android session has 5/8 derived voice gates:
 - Passed: installed app, Realtime signaling, speech recognition, durable operator completion, spoken reply.
 - Pending: interruption, network recovery, lock/background recovery, and final physical confirmation.
 
-The new demo operation has completed 3/8 durable steps and is waiting at one exact high-risk approval. A recovery defect that mislabeled this state as `blocked` is fixed and regression-tested; deployment will repair the stored status to `waiting_for_approval` without executing the approval.
+The new demo operation has completed 3/8 durable steps and is waiting at one exact high-risk approval. The 2026-08-13 UTC Render restart repaired its stale `blocked` classification to `waiting_for_approval`, resolved the obsolete verification blocker, and executed no approval or external action.
 
 ## Required Operator Actions
 
