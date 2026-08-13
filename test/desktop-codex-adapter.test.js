@@ -83,6 +83,12 @@ test('desktop Codex adapter durably queues one local job and exposes token-scope
     assert.equal(actions[1].payload.desktopAgentId, input.desktopAgentId);
     assert.equal(actions[1].payload.threadId, 'thread-1');
     assert.equal(actions[1].payload.message, 'Fix the independently verified typecheck failures.');
+    const followupMonitor = new URL(actions[1].payload.monitorUrl);
+    const followupMonitorToken = followupMonitor.searchParams.get('monitorToken');
+    assert.ok(followupMonitorToken);
+    assert.notEqual(followupMonitorToken, monitorToken);
+    assert.equal((await adapter.getPublicJob(started.jobId, monitorToken)), null);
+    assert.equal((await adapter.getPublicJob(started.jobId, followupMonitorToken)).status, 'queued');
 
     const reloaded = new DesktopCodexAdapter({
       dataDir,
@@ -109,6 +115,42 @@ test('desktop Codex adapter rejects updates from a different machine', async () 
       adapter.ingestUpdate({ jobId: started.jobId, desktopAgentId: 'desktop-2', status: 'completed' }),
       (error) => error.code === 'CODEX_AGENT_MISMATCH',
     );
+  } finally {
+    await fs.rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('desktop Codex follow-up restores the prior terminal job if durable dispatch fails', async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'marcus-desktop-codex-followup-'));
+  const actions = [];
+  let rejectDispatch = false;
+  try {
+    const adapter = new DesktopCodexAdapter({
+      dataDir,
+      monitorBaseUrl: 'https://marcus.example.test',
+      queueAction: async (action) => {
+        if (rejectDispatch) throw new Error('queue unavailable');
+        actions.push(action);
+        return action;
+      },
+    });
+    const started = await adapter.startJob({
+      operationId: 'op-rollback', stepId: 'step-rollback', businessKey: 'personal', projectRegistryId: 'project-rollback',
+      projectName: 'Rollback Project', workspacePath: 'C:\\work\\rollback', desktopAgentId: 'desktop-1', prompt: 'Build it.',
+    }, { idempotencyKey: 'idem-rollback' });
+    const originalMonitorToken = new URL(actions[0].payload.monitorUrl).searchParams.get('monitorToken');
+    await adapter.ingestUpdate({
+      jobId: started.jobId, desktopAgentId: 'desktop-1', status: 'completed', threadId: 'thread-rollback', finalOutput: 'Done.',
+    });
+
+    rejectDispatch = true;
+    await assert.rejects(() => adapter.sendFollowup(started, 'Make one correction.'), /queue unavailable/);
+    assert.equal((await adapter.getJobStatus(started)).status, 'completed');
+    assert.equal((await adapter.getPublicJob(started.jobId, originalMonitorToken)).finalOutput, 'Done.');
+
+    const reloaded = new DesktopCodexAdapter({ dataDir, queueAction: async (action) => action });
+    assert.equal((await reloaded.getJobStatus(started)).status, 'completed');
+    assert.equal((await reloaded.getPublicJob(started.jobId, originalMonitorToken)).threadId, 'thread-rollback');
   } finally {
     await fs.rm(dataDir, { recursive: true, force: true });
   }

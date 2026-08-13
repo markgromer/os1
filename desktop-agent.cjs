@@ -980,7 +980,9 @@ function startLocalCodexJob(payload) {
 
 function followupLocalCodexJob(payload) {
   if (!String(payload?.threadId || '').trim()) return { ok: false, error: 'The Codex thread id is not available for follow-up' };
-  return startCodexProcess(payload, { resume: true });
+  const monitor = openCodexMonitor(payload?.monitorUrl);
+  const result = startCodexProcess(payload, { resume: true });
+  return { ...result, details: { ...(result.details || {}), monitor } };
 }
 
 function cancelLocalCodexJob(payload) {

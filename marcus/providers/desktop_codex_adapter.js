@@ -266,25 +266,44 @@ export class DesktopCodexAdapter {
     await this.ensureLoaded();
     const record = this.jobs.get(safeString(job?.jobId, 300));
     if (!record) throw new Error('Local Codex job was not found.');
-    await this.queueAction({
-      type: 'followup-local-codex-job',
-      requestedBy: `operation:${record.operationId}`,
-      payload: {
-        jobId: record.jobId,
-        operationId: record.operationId,
-        stepId: record.stepId,
-        businessKey: record.businessKey,
-        projectRegistryId: record.projectRegistryId,
-        threadId: record.threadId,
-        path: record.workspacePath,
-        message: safeString(message, 8_000),
-        desktopAgentId: record.desktopAgentId,
-      },
-    });
+    const followup = safeString(message, 8_000);
+    if (!followup) throw new Error('Local Codex follow-up message is required.');
+    const previous = {
+      monitorTokenHash: record.monitorTokenHash,
+      status: record.status,
+      completedAt: record.completedAt,
+      updatedAt: record.updatedAt,
+      error: record.error,
+    };
+    const monitorToken = crypto.randomBytes(24).toString('base64url');
+    record.monitorTokenHash = hash(monitorToken);
     record.status = 'queued';
     record.completedAt = '';
+    record.error = '';
     record.updatedAt = nowIso();
     await this.persist();
+    try {
+      await this.queueAction({
+        type: 'followup-local-codex-job',
+        requestedBy: `operation:${record.operationId}`,
+        payload: {
+          jobId: record.jobId,
+          operationId: record.operationId,
+          stepId: record.stepId,
+          businessKey: record.businessKey,
+          projectRegistryId: record.projectRegistryId,
+          threadId: record.threadId,
+          path: record.workspacePath,
+          message: followup,
+          desktopAgentId: record.desktopAgentId,
+          monitorUrl: this.monitorUrl(record.jobId, monitorToken),
+        },
+      });
+    } catch (error) {
+      Object.assign(record, previous);
+      await this.persist();
+      throw error;
+    }
     return this.providerJob(record);
   }
 
