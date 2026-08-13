@@ -249,6 +249,8 @@
     .online strong { color: var(--cyan); }
     .online .ok { color: var(--green); }
 
+    .online .warn { color: var(--amber); }
+
     .top-actions {
       display: flex;
       justify-content: end;
@@ -613,6 +615,35 @@
     .detail-card p { margin: 0 0 10px; }
     .detail-card ul { margin: 0; padding-left: 15px; }
 
+    .decision-box {
+      border-color: rgba(240,185,65,0.18);
+      background: rgba(240,185,65,0.035);
+      padding: 12px;
+      border-radius: 6px;
+    }
+
+    .decision-box h4 {
+      color: var(--amber);
+    }
+
+    .decision-options {
+      display: grid;
+      gap: 6px;
+      margin: 9px 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .decision-options li {
+      border-left: 2px solid rgba(240,185,65,0.48);
+      padding-left: 9px;
+    }
+
+    .decision-recommendation {
+      color: var(--text);
+      font-weight: 650;
+    }
+
     .micro {
       display: flex;
       align-items: center;
@@ -924,6 +955,18 @@
       letter-spacing: 0.06em;
     }
 
+    .voice-button {
+      min-width: 78px;
+      border-color: rgba(126,216,117,0.34);
+      color: var(--green);
+    }
+
+    .voice-button.listening {
+      background: rgba(126,216,117,0.18);
+      color: var(--text);
+      box-shadow: 0 0 18px rgba(126,216,117,0.2);
+    }
+
     @media (prefers-reduced-motion: reduce) {
       *,
       *::before,
@@ -987,10 +1030,11 @@
 
       <section class="online">
         <span><strong>MARCUS</strong> is online</span>
-        <span><span class="dot green"></span> All systems nominal</span>
+        <span id="dataStatus"><span class="dot green"></span> Loading live awareness</span>
         <div class="top-actions" aria-label="Dashboard actions">
           <button class="action-button" type="button" data-action="evidence">Evidence</button>
           <button class="action-button" type="button" data-action="compact">Compact</button>
+          <button class="action-button voice-button" type="button" data-action="voice" aria-pressed="false">Hold Space</button>
           <button class="action-button" type="button" data-action="refresh">Refresh</button>
         </div>
       </section>
@@ -1012,7 +1056,7 @@
           </div>
         </header>
         <div class="project-list" id="projectList">
-          <p class="fixture-note"><strong>Prototype:</strong> this is demonstration data showing the intended Marcus-owned awareness model. It is not live Marcus awareness yet.</p>
+          <p class="fixture-note"><strong>Live-first:</strong> this view syncs from Marcus ActiveBrief when available. Demo data remains as the offline fallback.</p>
         </div>
       </section>
 
@@ -1086,8 +1130,9 @@
     </section>
   </main>
 
+  <script src="/marcus-realtime.js"></script>
   <script>
-    const projects = [
+    let projects = [
       {
         id: "poopsites",
         name: "PoopSites V2",
@@ -1145,10 +1190,20 @@
         detail: {
           believe: "I need approval before increasing the context window tier because it may affect cost. The code direction appears clear; the decision boundary is Mark's.",
           changed: ["PR #512 merged", "Context window tuning is ready", "Cost-impact approval is not resolved"],
-          next: "Approve or reject the context window change before the next rollout.",
+          next: "Decide whether Marcus can use the higher context tier for this workflow.",
           evidence: 5,
           nextConfidence: 0.6,
-          refs: ["GitHub: PR #512 merged", "Codex: rollout waiting on approval", "Other: cost impact still unconfirmed"]
+          refs: ["GitHub: PR #512 merged", "Codex: rollout waiting on approval", "Other: cost impact still unconfirmed"],
+          decision: {
+            question: "Should Marcus raise the context window tier for this workflow?",
+            options: [
+              "Approve the higher tier for Marcus Core work only.",
+              "Keep the current tier and accept shorter context.",
+              "Pause rollout until cost limits are defined."
+            ],
+            recommendation: "Approve it for Marcus Core only, then monitor cost before making it global.",
+            why: "The capability improves long-context reasoning, but it should not silently increase cost across every project."
+          }
         }
       },
       {
@@ -1166,10 +1221,20 @@
         detail: {
           believe: "The app looks stable, but the migration path is blocked because the backfill strategy is unresolved. I should not let Codex keep moving without that decision.",
           changed: ["Migration 017 was added", "Backfill strategy was not decided", "Production migration remains blocked"],
-          next: "Unblock the migration decision, then ship the next build to regain momentum.",
+          next: "Choose the production backfill strategy for migration 017.",
           evidence: 4,
           nextConfidence: 0.71,
-          refs: ["Codex: migration 017 added", "GitHub: backend schema change staged", "Deploy: production migration blocked"]
+          refs: ["Codex: migration 017 added", "GitHub: backend schema change staged", "Deploy: production migration blocked"],
+          decision: {
+            question: "How should Marcus handle existing production records before running migration 017?",
+            options: [
+              "A: Write and test a one-time backfill script, then run migration 017.",
+              "B: Run the schema migration now and manually reconcile older records afterward.",
+              "C: Pause the migration and redesign the schema before touching production."
+            ],
+            recommendation: "Pick A. It is slower now, but it keeps production data consistent and gives Codex something testable.",
+            why: "Without this choice, Codex cannot safely know whether existing records need generated defaults, manual review, or a schema change."
+          }
         }
       },
       {
@@ -1216,7 +1281,7 @@
       }
     ];
 
-    const events = [
+    let events = [
       { time: "11:42:18", projectId: "poopsites", project: "PoopSites V2", text: "Fixed flaky test in Checkout.spec.ts", source: "Codex", color: "blue" },
       { time: "11:39:07", projectId: "poopsites", project: "PoopSites V2", text: "Pushed 2 commits to main", source: "GitHub", color: "gray" },
       { time: "11:13:55", projectId: "warren", project: "WARREN Creative Studio", text: "Deployed v1.4.2 to production", source: "Deploy", color: "green" },
@@ -1227,10 +1292,14 @@
 
     let selectedId = "poopsites";
     let talkMode = "read";
+    let liveBrief = null;
+    let realtimeVoice = null;
+    let voiceHeld = false;
 
     const byId = (id) => projects.find((project) => project.id === id) || projects[0];
     const selected = () => byId(selectedId);
     const stamp = () => new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const plain = (value, fallback = "") => String(value ?? fallback).replace(/[<>]/g, "").replace(/\s+/g, " ").trim();
 
     function confidenceBar(value, colorClass = "") {
       const count = Math.round(Number(value || 0) * 7);
@@ -1259,7 +1328,8 @@
     }
 
     function evidenceRead(project) {
-      return `Evidence I am using for ${project.name}: ${project.detail.refs.join("; ")}. My current confidence is ${Math.round(project.confidence * 100)}%. The next-action confidence is ${Math.round(project.detail.nextConfidence * 100)}%.`;
+      const decision = project.detail.decision ? ` Decision needed: ${project.detail.decision.question} Marcus recommends: ${project.detail.decision.recommendation}` : "";
+      return `Evidence I am using for ${project.name}: ${project.detail.refs.join("; ")}. My current confidence is ${Math.round(project.confidence * 100)}%. The next-action confidence is ${Math.round(project.detail.nextConfidence * 100)}%.${decision}`;
     }
 
     function classifyPrompt(value, project) {
@@ -1274,6 +1344,128 @@
         return `Approval or blocker intent detected for ${project.name}. I would surface the decision, affected work, confidence, and recommended action before continuing.`;
       }
       return `Project context detected for ${project.name}. I would answer directly, update my understanding if you correct me, or turn the prompt into executable Marcus work if you ask me to move.`;
+    }
+
+    function updateStatus(label, tone = "ok") {
+      const el = document.getElementById("dataStatus");
+      if (!el) return;
+      el.innerHTML = `<span class="dot ${tone === "warn" ? "amber" : tone === "error" ? "red" : "green"}"></span> ${plain(label)}`;
+    }
+
+    function stateFromLive(item) {
+      const raw = plain(item?.projectState || item?.status || item?.bucket || "").toLowerCase();
+      if (raw.includes("blocked") || raw.includes("stuck")) return ["blocked", "Blocked"];
+      if (raw.includes("waiting_on_mark") || raw.includes("needs_mark") || raw.includes("decision") || raw.includes("approval")) return ["needs_mark", "Needs Mark"];
+      if (raw.includes("quiet") || raw.includes("stale") || raw.includes("dormant") || raw.includes("historical") || raw.includes("parked")) return ["quiet", "Quiet"];
+      if (raw.includes("complete") || raw.includes("launched") || raw.includes("verified")) return ["verified", "Verified"];
+      return ["moving", "Moving"];
+    }
+
+    function initials(name) {
+      return plain(name || "M").split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase() || "M";
+    }
+
+    function decisionForProject(projectName, brief) {
+      const decisions = Array.isArray(brief?.decisionQueue) ? brief.decisionQueue : [];
+      const key = plain(projectName).toLowerCase();
+      return decisions.find((decision) => JSON.stringify(decision || {}).toLowerCase().includes(key)) || null;
+    }
+
+    function liveItemToProject(item, index, brief) {
+      const title = plain(item?.name || item?.title || item?.projectName || item?.canonicalName || `Live project ${index + 1}`);
+      const [state, stateLabel] = stateFromLive(item);
+      const confidence = Number.isFinite(Number(item?.confidence)) ? Math.max(0.05, Math.min(0.99, Number(item.confidence))) : 0.64;
+      const decision = decisionForProject(title, brief);
+      const recommended = plain(decision?.recommendedAction || decision?.summary || item?.recommendedAction || item?.nextAction || item?.reason || item?.summary || "Inspect this item before taking action.");
+      const question = plain(decision?.question || decision?.title || "");
+      return {
+        id: plain(item?.id || item?.projectRegistryId || item?.target || title).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || `live-${index}`,
+        name: title,
+        avatar: initials(title),
+        avatarClass: state === "blocked" ? "red" : state === "needs_mark" ? "amber" : state === "quiet" ? "purple" : "",
+        belief: plain(item?.summary || item?.detail || item?.reason || item?.description || "Live Marcus project signal."),
+        sources: ["codex", "github", "deploy"].slice(0, Math.max(1, Math.min(3, Number(item?.evidenceCount || item?.sourceCount || 2)))),
+        latestAge: plain(item?.latestAge || item?.lastActivityAt || item?.updatedAt || "live"),
+        latest: plain(item?.latest || item?.recommendedAction || item?.nextAction || item?.reason || "Marcus live awareness signal"),
+        state,
+        stateLabel,
+        confidence,
+        detail: {
+          believe: plain(item?.summary || item?.detail || item?.reason || "Marcus is deriving this from the live ActiveBrief."),
+          changed: [
+            plain(item?.reason || item?.recommendedAction || "Live signal ranked by Marcus"),
+            plain(item?.status || item?.projectState || "Current state observed"),
+            plain(item?.source || item?.bucket || "ActiveBrief source")
+          ].filter(Boolean).slice(0, 3),
+          next: recommended,
+          evidence: Math.max(1, Number(item?.evidenceCount || item?.score || item?.activityScore || 3) || 3),
+          nextConfidence: confidence,
+          refs: [
+            plain(item?.source || "ActiveBrief"),
+            plain(item?.id || item?.projectRegistryId || ""),
+            plain(item?.bucket || item?.status || "")
+          ].filter(Boolean),
+          decision: question ? {
+            question,
+            options: Array.isArray(decision?.options) && decision.options.length
+              ? decision.options.map((option) => plain(option)).slice(0, 4)
+              : ["Approve Marcus's recommended action.", "Hold and ask Marcus for more evidence.", "Dismiss or park this for later."],
+            recommendation: recommended,
+            why: plain(decision?.why || decision?.reason || decision?.summary || "Marcus marked this as needing Mark because execution should not continue without a clear choice.")
+          } : null
+        }
+      };
+    }
+
+    function hydrateFromBrief(brief) {
+      const active = Array.isArray(brief?.worldModel?.activeWork) ? brief.worldModel.activeWork : [];
+      const focus = brief?.currentFocus ? [brief.currentFocus] : [];
+      const priority = Array.isArray(brief?.controlledAttention?.topPriorities) ? brief.controlledAttention.topPriorities : Array.isArray(brief?.topPriorities) ? brief.topPriorities : [];
+      const rows = [...focus, ...active, ...priority].filter(Boolean);
+      const seen = new Set();
+      const mapped = rows.map((item, index) => liveItemToProject(item, index, brief)).filter((project) => {
+        if (!project.id || seen.has(project.id)) return false;
+        seen.add(project.id);
+        return true;
+      }).slice(0, 8);
+      if (mapped.length) {
+        projects = mapped;
+        if (!projects.some((project) => project.id === selectedId)) selectedId = projects[0].id;
+      }
+
+      const activity = [
+        ...(Array.isArray(brief?.sessionContext?.changedSinceLastCheckIn) ? brief.sessionContext.changedSinceLastCheckIn : []),
+        ...(Array.isArray(brief?.operationalSignals) ? brief.operationalSignals : []),
+        ...priority
+      ].slice(0, 8);
+      if (activity.length) {
+        events = activity.map((item, index) => {
+          const project = projects.find((row) => JSON.stringify(item || {}).toLowerCase().includes(row.name.toLowerCase())) || projects[index % projects.length] || projects[0];
+          return {
+            time: plain(item?.updatedAt || item?.createdAt || "").slice(11, 19) || stamp(),
+            projectId: project?.id || selectedId,
+            project: project?.name || plain(item?.title || "Marcus"),
+            text: plain(item?.title || item?.summary || item?.recommendedAction || "Live awareness changed"),
+            source: plain(item?.source || item?.type || "Marcus"),
+            color: index % 3 === 0 ? "blue" : index % 3 === 1 ? "gray" : "green"
+          };
+        });
+      }
+    }
+
+    async function loadLiveBrief() {
+      updateStatus("Syncing live awareness");
+      try {
+        const response = await fetch("/api/marcus/active-brief", { credentials: "include" });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || data?.ok === false) throw new Error(data?.error || `ActiveBrief failed (${response.status})`);
+        liveBrief = data;
+        hydrateFromBrief(data);
+        renderAll();
+        updateStatus("Live awareness connected");
+      } catch (error) {
+        updateStatus("Demo fallback; live awareness unavailable", "warn");
+      }
     }
 
     function renderProjects() {
@@ -1304,9 +1496,14 @@
                 <ul>${project.detail.changed.map((item) => `<li>${item}</li>`).join("")}</ul>
                 <p class="micro">Evidence <strong>${Math.max(3, Math.round(project.detail.evidence / 4))}</strong></p>
               </section>
-              <section class="detail-card">
-                <h4>→ Likely next move</h4>
-                <p>${project.detail.next}</p>
+              <section class="detail-card ${project.detail.decision ? "decision-box" : ""}">
+                <h4>${project.detail.decision ? "Decision needed" : "→ Likely next move"}</h4>
+                ${project.detail.decision ? `
+                  <p><strong>${project.detail.decision.question}</strong></p>
+                  <ul class="decision-options">${project.detail.decision.options.map((item) => `<li>${item}</li>`).join("")}</ul>
+                  <p class="decision-recommendation">Marcus recommends: ${project.detail.decision.recommendation}</p>
+                  <p>${project.detail.decision.why}</p>
+                ` : `<p>${project.detail.next}</p>`}
                 <p class="micro">Confidence <strong>${Math.round(project.detail.nextConfidence * 100)}%</strong>${confidenceBar(project.detail.nextConfidence, "blue")}</p>
               </section>
             </div>
@@ -1340,8 +1537,8 @@
         <div class="decision" data-focus="${project.id}" role="button" tabindex="0" aria-label="Inspect ${project.name}">
           <div class="rank">●<br>${index + 1}</div>
           <div>
-            <strong>${project.name} - ${project.detail.next.split(",")[0]}</strong>
-            <p>${project.detail.believe}</p>
+            <strong>${project.name} - ${project.detail.decision?.question || project.detail.next}</strong>
+            <p>${project.detail.decision?.recommendation || project.detail.believe}</p>
             <p class="micro">Evidence <strong>${project.detail.evidence}</strong> Confidence <strong>${Math.round(project.confidence * 100)}%</strong></p>
           </div>
           <div class="side-confidence">${Math.round(project.confidence * 100)}%${confidenceBar(project.confidence, "amber")}</div>
@@ -1365,8 +1562,8 @@
         <div class="recommend-card" data-focus="${rec.id}" role="button" tabindex="0" aria-label="Inspect ${rec.name}">
           <div class="check">✓</div>
           <div>
-            <strong>Recover focus on ${rec.name}</strong>
-            <p>${rec.detail.next}</p>
+            <strong>${rec.detail.decision ? `Decide: ${rec.detail.decision.question}` : `Recover focus on ${rec.name}`}</strong>
+            <p>${rec.detail.decision?.recommendation || rec.detail.next}</p>
             <p class="micro">Impact <strong>High</strong> Effort <strong>Medium</strong> Confidence <strong>${Math.round(rec.detail.nextConfidence * 100)}%</strong>${confidenceBar(rec.detail.nextConfidence, "green")}</p>
           </div>
         </div>
@@ -1423,10 +1620,36 @@
       renderTalk();
     }
 
-    function submitPrompt() {
+    function summarizeCommandResponse(data) {
+      const title = plain(data?.title || "Marcus response");
+      const reply = plain(data?.reply || data?.message || data?.error || "");
+      const cards = Array.isArray(data?.cards) ? data.cards.slice(0, 3) : [];
+      const cardText = cards
+        .map((card) => plain(card?.question || card?.title || card?.name || card?.summary))
+        .filter(Boolean)
+        .map((text, index) => `${index + 1}. ${text}`)
+        .join(" ");
+      return `<strong>${title}</strong><br>${reply || "Marcus returned no text."}${cardText ? `<br><br>Cards: ${cardText}` : ""}`;
+    }
+
+    async function submitPrompt() {
       const input = document.getElementById("talkInput");
-      if (!input.value.trim()) return;
-      setTalk(classifyPrompt(input.value, selected()));
+      const value = input.value.trim();
+      if (!value) return;
+      setTalk("Marcus is reading the live brief and routing this through the command layer.");
+      try {
+        const response = await fetch("/api/marcus/command", {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message: value })
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || data?.ok === false) throw new Error(data?.error || `Marcus command failed (${response.status})`);
+        setTalk(summarizeCommandResponse(data));
+      } catch (error) {
+        setTalk(`${classifyPrompt(value, selected())} Live command fallback: ${plain(error?.message || "command endpoint unavailable")}.`);
+      }
       input.value = "";
     }
 
@@ -1458,7 +1681,8 @@
 
     document.querySelector("[data-action='refresh']").addEventListener("click", () => {
       talkMode = "read";
-      setTalk(`Demo refresh complete. I would now reconcile Codex sessions, GitHub events, deployments, calendar holds, approvals, and memory deltas before changing any project status.`);
+      setTalk(`Refreshing live Marcus awareness across Codex sessions, GitHub events, deployments, calendar holds, approvals, and memory deltas.`);
+      loadLiveBrief();
     });
 
     document.querySelector(".close").addEventListener("click", () => {
@@ -1466,7 +1690,100 @@
       setTalk(`Global Marcus command surface reset. Select a project, inspect evidence, or send a prompt that can become Codex work, an approval, a memory correction, or a calendar action.`);
     });
 
+    function updateVoiceButton(state = "idle", detail = "") {
+      const button = document.querySelector("[data-action='voice']");
+      if (!button) return;
+      const listening = state === "listening" || state === "thinking" || state === "speaking" || voiceHeld;
+      button.classList.toggle("listening", listening);
+      button.setAttribute("aria-pressed", listening ? "true" : "false");
+      button.textContent = state === "connecting" ? "Connecting" : voiceHeld ? "Listening" : "Hold Space";
+      if (detail) updateStatus(detail, state === "error" ? "error" : "ok");
+    }
+
+    async function invokeMarcusVoice(message) {
+      const text = plain(message).slice(0, 12000);
+      if (!text) return { ok: false, error: "No voice message was captured." };
+      setTalk(`You said: ${text}<br><br>Marcus is routing that through the live operator.`);
+      const response = await fetch("/api/marcus/live/chat", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: text })
+      });
+      const data = await response.json().catch(() => ({}));
+      const reply = plain(data?.reply || data?.message || data?.error || "Marcus responded without text.");
+      setTalk(reply);
+      await loadLiveBrief();
+      return {
+        ok: data?.ok !== false && response.ok,
+        reply,
+        operationId: data?.operation?.id || "",
+        operationStatus: data?.operation?.status || data?.status || ""
+      };
+    }
+
+    async function ensureRealtimeVoice() {
+      if (realtimeVoice || typeof window.createMarcusRealtimeVoice !== "function") return realtimeVoice;
+      realtimeVoice = window.createMarcusRealtimeVoice({
+        getAuthToken: async () => "",
+        invokeMarcus: invokeMarcusVoice,
+        onStatus: (status) => updateVoiceButton(status?.state || "idle", status?.detail || ""),
+        onTranscript: (text) => {
+          const input = document.getElementById("talkInput");
+          if (input && text) input.value = text;
+        },
+        onAssistantText: (text) => {
+          if (text) setTalk(plain(text));
+        },
+        onError: (error) => {
+          updateVoiceButton("error", plain(error?.message || "Marcus voice failed."));
+          setTalk(`Voice is not ready: ${plain(error?.message || "check microphone permission and Marcus realtime configuration")}.`);
+        }
+      });
+      return realtimeVoice;
+    }
+
+    async function startHoldToTalk() {
+      if (voiceHeld) return;
+      voiceHeld = true;
+      updateVoiceButton("connecting", "Hold-to-talk starting");
+      try {
+        const voice = await ensureRealtimeVoice();
+        if (!voice) throw new Error("Realtime voice client is unavailable.");
+        if (!voice.isActive()) await voice.start();
+        updateVoiceButton("listening", "Listening while Space is held");
+      } catch (error) {
+        voiceHeld = false;
+        updateVoiceButton("error", plain(error?.message || "Hold-to-talk failed."));
+      }
+    }
+
+    function stopHoldToTalk() {
+      if (!voiceHeld) return;
+      voiceHeld = false;
+      try { realtimeVoice?.stop(); } catch {}
+      updateVoiceButton("idle", "Voice off");
+    }
+
+    document.querySelector("[data-action='voice']").addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      startHoldToTalk();
+    });
+    window.addEventListener("pointerup", stopHoldToTalk);
+    window.addEventListener("keydown", (event) => {
+      if (event.code !== "Space" || event.repeat) return;
+      if (event.target && ["INPUT", "TEXTAREA", "SELECT"].includes(event.target.tagName)) return;
+      event.preventDefault();
+      startHoldToTalk();
+    });
+    window.addEventListener("keyup", (event) => {
+      if (event.code !== "Space") return;
+      event.preventDefault();
+      stopHoldToTalk();
+    });
+
     renderAll();
+    loadLiveBrief();
   </script>
 </body>
 </html>
