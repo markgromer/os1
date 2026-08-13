@@ -1817,7 +1817,9 @@
         updateVoiceButton("listening", "Listening while Space is held");
       } catch (error) {
         voiceHeld = false;
-        updateVoiceButton("error", plain(error?.message || "Hold-to-talk failed."));
+        const message = plain(error?.message || "Hold-to-talk failed.");
+        updateVoiceButton("error", message);
+        setTalk(`Voice did not start: ${message}. Text model OPENAI_MODEL does not control voice; hold-to-talk uses MARCUS_REALTIME_MODEL for OpenAI Realtime.`);
       }
     }
 
