@@ -3,24 +3,25 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#0f1113">
+  <meta name="theme-color" content="#05090d">
   <title>MARCUS Visualizer Demo</title>
   <style>
     :root {
       color-scheme: dark;
-      --bg: #0f1113;
-      --panel: #15181b;
-      --panel-2: #191d20;
-      --line: rgba(255,255,255,0.075);
-      --soft-line: rgba(255,255,255,0.048);
-      --text: #f2f0e9;
-      --muted: #a9b0ad;
-      --faint: #727d82;
+      --bg: #05090d;
+      --panel: rgba(8, 15, 20, 0.88);
+      --panel-strong: rgba(13, 24, 31, 0.92);
+      --line: rgba(95, 206, 229, 0.18);
+      --line-soft: rgba(255,255,255,0.075);
+      --text: #f4f2ea;
+      --muted: #a8b2b4;
+      --faint: #6f7d84;
       --cyan: #56d7e7;
-      --green: #70d597;
-      --amber: #e4b659;
-      --red: #ef7770;
-      --violet: #b7a6ff;
+      --cyan-soft: rgba(86, 215, 231, 0.12);
+      --green: #7ed875;
+      --amber: #f0b941;
+      --red: #ff675f;
+      --violet: #b38cff;
       --mono: "SFMono-Regular", "Cascadia Code", "Roboto Mono", Consolas, monospace;
       --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
@@ -32,519 +33,764 @@
 
     body {
       margin: 0;
-      background: var(--bg);
+      background:
+        radial-gradient(circle at 72% 6%, rgba(86,215,231,0.12), transparent 24%),
+        radial-gradient(circle at 88% 12%, rgba(179,140,255,0.1), transparent 20%),
+        linear-gradient(180deg, #071016 0%, #05090d 48%, #05080b 100%);
       color: var(--text);
       font-family: var(--sans);
       letter-spacing: 0;
+      overflow: hidden;
     }
 
     button,
-    textarea { font: inherit; }
+    input { font: inherit; }
 
     .shell {
-      min-height: 100vh;
+      height: 100vh;
       display: grid;
-      grid-template-rows: 50px minmax(0, 1fr);
-      gap: 8px;
-      padding: 8px;
+      grid-template-rows: 74px minmax(0, 1fr);
+      gap: 10px;
+      padding: 14px;
     }
 
-    .topbar,
+    .topbar {
+      display: grid;
+      grid-template-columns: 288px minmax(0, 1fr) 360px 190px;
+      align-items: center;
+      gap: 16px;
+      min-width: 0;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      min-width: 0;
+    }
+
+    .logo {
+      width: 50px;
+      height: 50px;
+      display: grid;
+      place-items: center;
+      color: var(--cyan);
+      font-size: 42px;
+      font-weight: 820;
+      line-height: 1;
+      letter-spacing: -0.03em;
+    }
+
+    .brand h1 {
+      margin: 0;
+      font-size: 28px;
+      line-height: 1;
+      font-weight: 520;
+      letter-spacing: 0.04em;
+    }
+
+    .brand p {
+      margin: 4px 0 0;
+      color: var(--cyan);
+      font-size: 15px;
+    }
+
+    .telemetry {
+      display: grid;
+      grid-template-columns: repeat(4, max-content);
+      justify-content: start;
+      gap: 0;
+      min-width: 0;
+    }
+
+    .telemetry-item {
+      min-width: 126px;
+      border-left: 1px solid rgba(255,255,255,0.08);
+      padding: 3px 18px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+      white-space: nowrap;
+    }
+
+    .telemetry-item strong {
+      color: var(--text);
+      font-weight: 650;
+    }
+
+    .status-dot,
+    .dot {
+      width: 8px;
+      height: 8px;
+      display: inline-block;
+      border-radius: 50%;
+      background: currentColor;
+    }
+
+    .status-dot {
+      margin-right: 8px;
+      color: var(--cyan);
+    }
+
+    .confidence-ring {
+      width: 20px;
+      height: 20px;
+      display: inline-block;
+      margin-left: 8px;
+      border-radius: 50%;
+      border: 3px solid rgba(86,215,231,0.22);
+      border-top-color: var(--cyan);
+      animation: spin 2.8s linear infinite;
+      vertical-align: -5px;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .brain-band {
+      height: 66px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .brain {
+      position: absolute;
+      right: 74px;
+      top: 5px;
+      width: 96px;
+      height: 54px;
+      border: 1px solid rgba(86,215,231,0.45);
+      border-radius: 42% 48% 36% 44%;
+      background:
+        radial-gradient(circle at 30% 55%, rgba(86,215,231,0.7), transparent 10%),
+        radial-gradient(circle at 58% 36%, rgba(179,140,255,0.65), transparent 10%),
+        linear-gradient(135deg, rgba(86,215,231,0.08), rgba(179,140,255,0.13));
+      box-shadow: 0 0 24px rgba(86,215,231,0.12);
+      animation: breathe 3.8s ease-in-out infinite;
+    }
+
+    .brain::before,
+    .brain::after {
+      content: "";
+      position: absolute;
+      inset: -12px;
+      border-radius: inherit;
+      background:
+        linear-gradient(35deg, transparent 42%, rgba(86,215,231,0.38) 43%, transparent 45%),
+        linear-gradient(112deg, transparent 54%, rgba(179,140,255,0.38) 55%, transparent 57%),
+        radial-gradient(circle at 18% 24%, var(--cyan) 0 1px, transparent 2px),
+        radial-gradient(circle at 76% 22%, var(--violet) 0 1px, transparent 2px),
+        radial-gradient(circle at 88% 64%, var(--cyan) 0 1px, transparent 2px);
+      opacity: 0.56;
+    }
+
+    .brain::after {
+      inset: 8px -112px 0 96px;
+      border-radius: 0;
+      background:
+        linear-gradient(20deg, transparent 45%, rgba(86,215,231,0.55) 46%, transparent 47%),
+        linear-gradient(-18deg, transparent 60%, rgba(86,215,231,0.38) 61%, transparent 62%),
+        radial-gradient(circle at 12% 28%, var(--cyan) 0 1px, transparent 2px),
+        radial-gradient(circle at 42% 62%, var(--cyan) 0 1px, transparent 2px),
+        radial-gradient(circle at 74% 35%, var(--violet) 0 1px, transparent 2px);
+    }
+
+    @keyframes breathe {
+      0%, 100% { transform: scale(0.98) rotate(-1deg); }
+      50% { transform: scale(1.04) rotate(2deg); }
+    }
+
+    .online {
+      justify-self: end;
+      align-self: center;
+      display: grid;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .online strong { color: var(--cyan); }
+    .online .ok { color: var(--green); }
+
+    .grid {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: minmax(680px, 1fr) 540px;
+      grid-template-rows: minmax(0, 1fr) 220px;
+      gap: 10px;
+    }
+
     .panel {
+      min-height: 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.018), 0 18px 52px rgba(0,0,0,0.28);
+      overflow: hidden;
+    }
+
+    .tracking {
+      min-height: 0;
+      display: grid;
+      grid-template-rows: 56px minmax(0, 1fr);
+    }
+
+    .right-rail {
+      min-height: 0;
+      display: grid;
+      grid-template-rows: auto auto auto;
+      align-content: start;
+      gap: 10px;
+      background: transparent;
+      border: 0;
+      box-shadow: none;
+      overflow: auto;
+    }
+
+    .activity {
+      grid-column: 1 / 2;
+      min-height: 0;
+      display: grid;
+      grid-template-rows: 42px minmax(0, 1fr);
+    }
+
+    .talk-panel {
+      grid-column: 2 / 3;
+      min-height: 0;
+      display: grid;
+      grid-template-rows: 44px minmax(0, 1fr) 58px;
+    }
+
+    .panel-head {
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 0 18px;
+      border-bottom: 1px solid var(--line-soft);
+      background: rgba(255,255,255,0.012);
+    }
+
+    .head-title {
+      display: flex;
+      align-items: center;
+      gap: 11px;
+      min-width: 0;
+    }
+
+    .head-icon {
+      color: var(--cyan);
+      font-family: var(--mono);
+      font-size: 18px;
+    }
+
+    .panel h2,
+    .panel h3 {
+      margin: 0;
+      font-size: 15px;
+      line-height: 1;
+      font-weight: 720;
+      letter-spacing: 0.055em;
+      text-transform: uppercase;
+    }
+
+    .legend,
+    .sources,
+    .meta,
+    .activity-legend {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .legend .dot,
+    .activity-legend .dot {
+      width: 9px;
+      height: 9px;
+    }
+
+    .blue { color: #4abde8; }
+    .gray { color: #8794a0; }
+    .green { color: var(--green); }
+    .purple { color: var(--violet); }
+    .amber { color: var(--amber); }
+    .red { color: var(--red); }
+
+    .project-list {
+      overflow: auto;
+      padding: 0 10px 10px;
+    }
+
+    .fixture-note {
+      margin: 0 0 8px;
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--line-soft);
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.35;
+    }
+
+    .fixture-note strong { color: var(--amber); }
+
+    .project {
+      position: relative;
+      display: grid;
+      grid-template-columns: 68px minmax(210px, 1fr) 116px 116px 86px 92px 92px;
+      gap: 16px;
+      align-items: center;
+      min-height: 78px;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+      padding: 11px 10px 11px 16px;
+      cursor: pointer;
+    }
+
+    .project.selected {
+      border: 1px solid rgba(86,215,231,0.76);
+      border-left-width: 6px;
+      border-radius: 8px;
+      margin: 0 0 0 -1px;
+      background: linear-gradient(90deg, rgba(86,215,231,0.11), rgba(86,215,231,0.025) 52%, transparent);
+      box-shadow: 0 0 28px rgba(86,215,231,0.12);
+    }
+
+    .avatar {
+      width: 52px;
+      height: 52px;
+      display: grid;
+      place-items: center;
+      border: 1px solid rgba(86,215,231,0.32);
+      border-radius: 8px;
+      background: rgba(86,215,231,0.07);
+      color: var(--cyan);
+      font-size: 20px;
+      font-weight: 820;
+    }
+
+    .avatar.amber { border-color: rgba(240,185,65,0.42); background: rgba(240,185,65,0.1); color: var(--amber); }
+    .avatar.red { border-color: rgba(255,103,95,0.42); background: rgba(255,103,95,0.1); color: var(--red); }
+    .avatar.purple { border-color: rgba(179,140,255,0.42); background: rgba(179,140,255,0.1); color: var(--violet); }
+    .avatar.green { border-color: rgba(126,216,117,0.42); background: rgba(126,216,117,0.1); color: var(--green); }
+
+    .project-title {
+      margin: 0;
+      font-size: 16px;
+      line-height: 1.15;
+      font-weight: 760;
+    }
+
+    .project-copy {
+      margin: 6px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .evidence-dots {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .evidence-dots .dot {
+      width: 10px;
+      height: 10px;
+      box-shadow: 0 0 10px currentColor;
+    }
+
+    .latest {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .latest strong {
+      display: block;
+      margin-bottom: 3px;
+      color: var(--text);
+      font-weight: 500;
+    }
+
+    .state {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 92px;
+      height: 30px;
+      border: 1px solid currentColor;
+      border-radius: 5px;
+      background: rgba(255,255,255,0.035);
+      font-size: 12px;
+      font-weight: 760;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    .state.moving { color: var(--cyan); background: rgba(86,215,231,0.085); }
+    .state.needs_mark { color: var(--amber); background: rgba(240,185,65,0.085); }
+    .state.blocked { color: var(--red); background: rgba(255,103,95,0.085); }
+    .state.quiet { color: #aab5bc; background: rgba(138,150,158,0.06); }
+    .state.verified { color: var(--green); background: rgba(126,216,117,0.085); }
+
+    .confidence {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .bar {
+      width: 72px;
+      height: 6px;
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      gap: 3px;
+      margin-top: 6px;
+    }
+
+    .bar span {
+      border-radius: 2px;
+      background: rgba(255,255,255,0.09);
+    }
+
+    .bar span.on { background: currentColor; }
+
+    .talk {
+      height: 32px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      border: 1px solid rgba(86,215,231,0.5);
+      border-radius: 5px;
+      background: rgba(86,215,231,0.04);
+      color: var(--cyan);
+      cursor: pointer;
+      font-size: 13px;
+    }
+
+    .talk.warn {
+      border-color: rgba(240,185,65,0.55);
+      color: var(--amber);
+    }
+
+    .talk.danger {
+      border-color: rgba(255,103,95,0.55);
+      color: var(--red);
+    }
+
+    .detail {
+      grid-column: 2 / -1;
+      display: none;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 18px;
+      padding: 14px 10px 4px 0;
+      border-top: 1px solid var(--line-soft);
+    }
+
+    .project.selected .detail {
+      display: grid;
+    }
+
+    .detail-card {
+      min-width: 0;
+      border-right: 1px solid rgba(255,255,255,0.08);
+      padding-right: 18px;
+    }
+
+    .detail-card:last-child { border-right: 0; }
+
+    .detail-card h4 {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 0 0 10px;
+      color: var(--cyan);
+      font-size: 12px;
+      font-weight: 650;
+    }
+
+    .detail-card p,
+    .detail-card li {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.42;
+    }
+
+    .detail-card p { margin: 0 0 10px; }
+    .detail-card ul { margin: 0; padding-left: 15px; }
+
+    .micro {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .micro strong { color: var(--cyan); font-weight: 650; }
+
+    .intel-panel {
+      display: grid;
+      grid-template-rows: 54px auto;
       border: 1px solid var(--line);
       border-radius: 8px;
       background: var(--panel);
       overflow: hidden;
     }
 
-    .topbar {
+    .intel-panel .panel-head {
+      height: 54px;
+    }
+
+    .intel-panel.need { border-color: rgba(240,185,65,0.22); }
+    .intel-panel.thread { border-color: rgba(179,140,255,0.22); }
+    .intel-panel.recommend { border-color: rgba(126,216,117,0.22); }
+
+    .intel-panel.need .panel-head { color: var(--amber); }
+    .intel-panel.thread .panel-head { color: var(--violet); }
+    .intel-panel.recommend .panel-head { color: var(--green); }
+
+    .count {
+      margin-left: auto;
+      color: currentColor;
+      font-size: 12px;
+      text-transform: none;
+      letter-spacing: 0;
+    }
+
+    .intel-body {
+      padding: 10px 12px;
       display: grid;
-      grid-template-columns: 260px minmax(0, 1fr) 360px;
-      align-items: center;
-      gap: 12px;
-      padding: 0 12px;
-    }
-
-    .brand {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      min-width: 0;
-    }
-
-    .glyph {
-      position: relative;
-      width: 30px;
-      height: 30px;
-      border: 1px solid rgba(86,215,231,0.72);
-      border-radius: 50%;
-      background:
-        linear-gradient(90deg, transparent 47%, rgba(86,215,231,0.9) 48%, rgba(86,215,231,0.9) 52%, transparent 53%),
-        linear-gradient(0deg, transparent 47%, rgba(86,215,231,0.45) 48%, rgba(86,215,231,0.45) 52%, transparent 53%);
-    }
-
-    .glyph::after {
-      content: "";
-      position: absolute;
-      inset: 6px;
-      border-radius: 38% 46% 35% 43%;
-      background: rgba(86,215,231,0.12);
-      animation: think 3.6s ease-in-out infinite;
-    }
-
-    @keyframes think {
-      0%, 100% { transform: rotate(-4deg) scale(0.94); }
-      50% { transform: rotate(3deg) scale(1.06); }
-    }
-
-    .brand h1 {
-      margin: 0;
-      font-size: 14px;
-      line-height: 1.1;
-      font-weight: 760;
-    }
-
-    .brand p {
-      margin: 2px 0 0;
-      color: var(--muted);
-      font-size: 10px;
-    }
-
-    .status-strip,
-    .actions,
-    .sources,
-    .meta-row {
-      display: flex;
-      align-items: center;
-      gap: 7px;
-      min-width: 0;
-      flex-wrap: wrap;
-    }
-
-    .status-strip { justify-content: center; }
-    .actions { justify-content: flex-end; }
-
-    .chip,
-    .source,
-    .badge,
-    .talk,
-    .ghost {
-      display: inline-flex;
-      align-items: center;
-      border-radius: 999px;
-      white-space: nowrap;
-    }
-
-    .chip {
-      height: 24px;
-      gap: 7px;
-      padding: 0 9px;
-      border: 1px solid var(--line);
-      background: rgba(255,255,255,0.025);
-      color: var(--muted);
-      font-size: 11px;
-    }
-
-    .chip strong { color: var(--text); }
-
-    .pulse {
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      background: var(--green);
-      animation: pulse 2.2s infinite;
-    }
-
-    @keyframes pulse {
-      0% { box-shadow: 0 0 0 0 rgba(112,213,151,0.42); }
-      72% { box-shadow: 0 0 0 8px rgba(112,213,151,0); }
-      100% { box-shadow: 0 0 0 0 rgba(112,213,151,0); }
-    }
-
-    .ghost,
-    .talk {
-      height: 26px;
-      border: 1px solid var(--line);
-      background: rgba(255,255,255,0.025);
-      color: var(--muted);
-      padding: 0 10px;
-      font-size: 11px;
-      cursor: pointer;
-    }
-
-    .talk {
-      color: var(--cyan);
-      border-color: rgba(86,215,231,0.38);
-      background: rgba(86,215,231,0.055);
-      font-weight: 700;
-    }
-
-    .ghost:hover,
-    .talk:hover {
-      color: var(--text);
-      border-color: rgba(255,255,255,0.16);
-    }
-
-    .workspace {
-      min-height: 0;
-      display: grid;
-      grid-template-columns: minmax(620px, 1fr) 390px;
       gap: 8px;
     }
 
-    .tracking-panel {
+    .decision {
       display: grid;
-      grid-template-rows: 38px minmax(0, 1fr) 150px;
-    }
-
-    .right-panel {
-      display: grid;
-      grid-template-rows: 38px minmax(0, 1fr);
-    }
-
-    .panel-header {
-      height: 38px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
+      grid-template-columns: 40px minmax(0, 1fr) 82px;
       gap: 12px;
-      padding: 0 12px;
-      border-bottom: 1px solid var(--soft-line);
-      background: rgba(255,255,255,0.012);
+      align-items: center;
+      border: 1px solid rgba(240,185,65,0.35);
+      border-radius: 6px;
+      background: rgba(240,185,65,0.045);
+      padding: 12px;
     }
 
-    .panel-title {
-      margin: 0;
-      color: #d2d6d3;
-      font-size: 11px;
+    .thread-item,
+    .recommend-card {
+      border: 1px solid rgba(179,140,255,0.28);
+      border-radius: 6px;
+      background: rgba(179,140,255,0.04);
+      padding: 12px;
+    }
+
+    .recommend-card {
+      display: grid;
+      grid-template-columns: 42px minmax(0, 1fr);
+      gap: 12px;
+      border-color: rgba(126,216,117,0.28);
+      background: rgba(126,216,117,0.045);
+    }
+
+    .rank {
+      color: var(--amber);
+      font-size: 18px;
       font-weight: 720;
-      letter-spacing: 0.055em;
-      text-transform: uppercase;
+      text-align: center;
     }
 
-    .panel-note {
-      color: var(--faint);
-      font-family: var(--mono);
-      font-size: 10px;
-    }
-
-    .demo-banner {
-      border-bottom: 1px solid var(--soft-line);
-      padding: 9px 12px;
-      color: var(--muted);
-      font-size: 11px;
-      line-height: 1.35;
-      background: rgba(228,182,89,0.055);
-    }
-
-    .demo-banner strong { color: var(--amber); }
-
-    .project-list {
-      overflow: auto;
-    }
-
-    .project {
-      border-bottom: 1px solid var(--soft-line);
-      background: transparent;
-    }
-
-    .project.selected {
-      background: rgba(86,215,231,0.035);
-    }
-
-    .project-main {
-      width: 100%;
-      display: grid;
-      grid-template-columns: 5px minmax(0, 1fr) 132px 86px 124px;
-      align-items: center;
-      gap: 12px;
-      border: 0;
-      background: transparent;
-      color: inherit;
-      padding: 11px 12px;
-      text-align: left;
-      cursor: pointer;
-    }
-
-    .state-bar {
-      width: 5px;
-      height: 38px;
-      border-radius: 999px;
-      background: var(--cyan);
-    }
-
-    .state-bar.waiting_mark { background: var(--amber); }
-    .state-bar.losing_thread { background: var(--red); }
-    .state-bar.dormant { background: var(--faint); opacity: 0.8; }
-    .state-bar.verified { background: var(--green); }
-
-    .project-name {
-      margin: 0;
-      font-size: 14px;
-      line-height: 1.18;
-      font-weight: 740;
-    }
-
-    .belief {
-      margin: 4px 0 0;
-      color: var(--muted);
-      font-size: 11px;
-      line-height: 1.35;
-    }
-
-    .source {
-      height: 18px;
-      padding: 0 6px;
-      border: 1px solid rgba(255,255,255,0.07);
-      color: var(--faint);
-      font-family: var(--mono);
-      font-size: 9px;
-      text-transform: uppercase;
-    }
-
-    .badge {
-      height: 20px;
-      justify-content: center;
-      border: 1px solid currentColor;
-      padding: 0 7px;
-      max-width: 124px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      font-size: 9px;
-      font-weight: 760;
-      text-transform: uppercase;
-    }
-
-    .badge.moving { color: var(--cyan); }
-    .badge.waiting_mark { color: var(--amber); }
-    .badge.losing_thread { color: var(--red); }
-    .badge.dormant { color: var(--faint); }
-    .badge.verified { color: var(--green); }
-    .badge.inferred { color: var(--violet); }
-
-    .latest,
-    .confidence {
-      min-width: 0;
-      color: var(--muted);
-      font-size: 11px;
-      line-height: 1.3;
-    }
-
-    .confidence strong {
+    .decision strong,
+    .thread-item strong,
+    .recommend-card strong {
       display: block;
+      margin-bottom: 5px;
       color: var(--text);
-      font-size: 12px;
+      font-size: 14px;
+      line-height: 1.25;
+      font-weight: 680;
     }
 
-    .project-detail {
-      display: none;
-      margin: 0 12px 11px 29px;
-      padding-top: 10px;
-      border-top: 1px solid var(--soft-line);
-    }
-
-    .project.selected .project-detail { display: block; }
-
-    .detail-grid {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 10px;
-    }
-
-    .detail-block {
-      min-width: 0;
-    }
-
-    .detail-block span {
-      display: block;
-      margin-bottom: 4px;
-      color: var(--faint);
-      font-size: 9px;
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
-    }
-
-    .detail-block p {
+    .decision p,
+    .thread-item p,
+    .recommend-card p {
       margin: 0;
       color: var(--muted);
-      font-size: 11px;
+      font-size: 12px;
       line-height: 1.4;
     }
 
-    .codex-strip {
-      margin-top: 10px;
-      display: grid;
-      gap: 6px;
+    .side-confidence {
+      color: var(--amber);
+      font-size: 12px;
+      text-align: right;
     }
 
-    .codex-item {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
-      gap: 10px;
-      border-top: 1px solid var(--soft-line);
-      padding-top: 7px;
-      color: var(--muted);
-      font-size: 11px;
-      line-height: 1.35;
+    .side-confidence .bar {
+      margin-left: auto;
     }
 
-    .activity-panel {
-      border-top: 1px solid var(--soft-line);
+    .thread-item {
       display: grid;
-      grid-template-rows: 32px minmax(0, 1fr);
-      background: rgba(0,0,0,0.1);
+      grid-template-columns: minmax(0, 1fr) 84px;
+      gap: 12px;
     }
 
-    .activity-list {
+    .thread-item .side-confidence {
+      color: var(--violet);
+    }
+
+    .check {
+      width: 34px;
+      height: 34px;
+      display: grid;
+      place-items: center;
+      border: 2px solid var(--green);
+      border-radius: 50%;
+      color: var(--green);
+      font-size: 18px;
+      font-weight: 760;
+    }
+
+    .activity .panel-head {
+      height: 42px;
+    }
+
+    .activity-table {
       overflow: auto;
-      padding: 0 12px 9px;
+      padding: 0 18px 10px;
     }
 
-    .event {
+    .activity-row {
       display: grid;
-      grid-template-columns: 64px minmax(0, 1fr) auto;
-      gap: 10px;
-      padding: 7px 0;
-      border-top: 1px solid var(--soft-line);
+      grid-template-columns: 84px 180px minmax(0, 1fr) 90px;
+      gap: 14px;
+      align-items: center;
+      min-height: 31px;
+      border-top: 1px solid rgba(255,255,255,0.06);
       color: var(--muted);
-      font-size: 11px;
-      line-height: 1.35;
+      font-size: 12px;
     }
 
-    .event time {
-      color: var(--faint);
+    .activity-row time {
+      color: var(--muted);
       font-family: var(--mono);
-      font-size: 10px;
+      font-size: 11px;
     }
 
-    .event button {
+    .activity-row strong {
+      color: var(--muted);
+      font-weight: 550;
+    }
+
+    .source-label {
+      text-align: right;
+      color: var(--cyan);
+    }
+
+    .talk-panel .panel-head h2 {
+      text-transform: none;
+      letter-spacing: 0;
+      font-size: 16px;
+      font-weight: 660;
+    }
+
+    .close {
       border: 0;
       background: transparent;
-      color: var(--cyan);
-      font-size: 10px;
+      color: var(--muted);
+      font-size: 22px;
       cursor: pointer;
     }
 
-    .right-scroll {
+    .conversation {
       overflow: auto;
-      padding: 0 12px 12px;
+      padding: 14px;
     }
 
-    .intel-section {
-      padding: 12px 0;
-      border-bottom: 1px solid var(--soft-line);
+    .message {
+      display: grid;
+      grid-template-columns: 38px minmax(0, 1fr);
+      gap: 12px;
+      align-items: start;
+      margin-bottom: 10px;
     }
 
-    .intel-section h3 {
-      margin: 0 0 8px;
-      color: #d2d6d3;
-      font-size: 11px;
-      font-weight: 720;
-      letter-spacing: 0.055em;
-      text-transform: uppercase;
+    .message .mini-brain,
+    .message .mini-avatar {
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      border: 1px solid rgba(86,215,231,0.34);
+      background: rgba(86,215,231,0.08);
     }
 
-    .intel-card {
-      margin-top: 7px;
-      padding: 9px 0 0;
-      border-top: 1px solid var(--soft-line);
+    .message .mini-brain {
+      border-radius: 38% 45% 34% 42%;
+      background:
+        radial-gradient(circle at 36% 60%, rgba(86,215,231,0.7), transparent 18%),
+        radial-gradient(circle at 64% 36%, rgba(179,140,255,0.7), transparent 18%);
     }
 
-    .intel-card:first-of-type {
-      border-top: 0;
-      padding-top: 0;
-    }
-
-    .intel-card strong {
-      display: block;
-      margin-bottom: 4px;
-      color: var(--text);
-      font-size: 12px;
-      line-height: 1.25;
-    }
-
-    .intel-card p {
-      margin: 0;
+    .bubble {
+      max-width: 390px;
+      border-radius: 8px;
+      background: rgba(255,255,255,0.045);
+      padding: 11px 13px;
       color: var(--muted);
-      font-size: 11px;
-      line-height: 1.42;
+      font-size: 12px;
+      line-height: 1.45;
     }
 
-    .intel-actions {
-      display: flex;
-      gap: 7px;
-      margin-top: 8px;
-      flex-wrap: wrap;
-    }
-
-    .basis {
+    .bubble time {
+      display: block;
+      margin-top: 6px;
       color: var(--faint);
       font-family: var(--mono);
-      font-size: 9px;
-      text-transform: uppercase;
+      font-size: 10px;
     }
 
-    .modal-backdrop {
-      position: fixed;
-      inset: 0;
-      display: none;
-      align-items: center;
-      justify-content: center;
-      padding: 20px;
-      background: rgba(0,0,0,0.62);
+    .composer {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 46px;
+      gap: 8px;
+      padding: 10px 14px 14px;
+      border-top: 1px solid var(--line-soft);
     }
 
-    .modal-backdrop.open { display: flex; }
-
-    .modal {
-      width: min(620px, 100%);
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      background: #15181b;
-      overflow: hidden;
-    }
-
-    .modal-head {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      padding: 12px;
-      border-bottom: 1px solid var(--soft-line);
-    }
-
-    .modal-head h2 {
-      margin: 0;
-      font-size: 14px;
-    }
-
-    .modal-body { padding: 12px; }
-
-    .sample-prompts {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 7px;
-      margin: 10px 0;
-    }
-
-    textarea {
-      width: 100%;
-      min-height: 94px;
-      resize: vertical;
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      background: #101214;
+    .composer input {
+      min-width: 0;
+      height: 40px;
+      border: 1px solid rgba(86,215,231,0.35);
+      border-radius: 6px;
+      background: rgba(3,8,12,0.78);
       color: var(--text);
-      padding: 10px;
+      padding: 0 13px;
       font-size: 12px;
     }
 
-    .modal-foot {
-      display: flex;
-      justify-content: flex-end;
-      gap: 8px;
-      padding: 12px;
-      border-top: 1px solid var(--soft-line);
+    .send {
+      height: 40px;
+      border: 1px solid rgba(86,215,231,0.45);
+      border-radius: 6px;
+      background: rgba(86,215,231,0.12);
+      color: var(--cyan);
+      cursor: pointer;
+      font-size: 20px;
+    }
+
+    .demo-pill {
+      display: inline-flex;
+      height: 22px;
+      align-items: center;
+      border: 1px solid rgba(240,185,65,0.36);
+      border-radius: 999px;
+      color: var(--amber);
+      padding: 0 9px;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
     }
 
     @media (prefers-reduced-motion: reduce) {
@@ -557,392 +803,411 @@
       }
     }
 
-    @media (max-width: 1120px) {
+    @media (max-width: 1240px) {
       .shell { height: auto; }
-      .topbar { grid-template-columns: 1fr; height: auto; padding: 10px 12px; }
-      .status-strip,
-      .actions { justify-content: flex-start; }
-      .workspace { grid-template-columns: 1fr; }
-      .project-main { grid-template-columns: 5px minmax(0, 1fr); }
+      .topbar { grid-template-columns: 1fr; height: auto; }
+      .telemetry { grid-template-columns: repeat(2, max-content); }
+      .brain-band { display: none; }
+      .online { justify-self: start; }
+      .grid { grid-template-columns: 1fr; grid-template-rows: auto; }
+      .right-rail,
+      .talk-panel,
+      .activity { grid-column: 1; }
+      .project { grid-template-columns: 54px minmax(0, 1fr); }
+      .evidence-dots,
       .latest,
+      .state,
       .confidence,
-      .project-main > .badge,
-      .project-main > .talk { margin-left: 17px; }
-      .detail-grid { grid-template-columns: 1fr; }
+      .project > .talk { grid-column: 2; }
+      .detail { grid-column: 1 / -1; grid-template-columns: 1fr; }
+      .detail-card { border-right: 0; border-bottom: 1px solid rgba(255,255,255,0.08); padding: 0 0 12px; }
     }
   </style>
 </head>
 <body>
   <main class="shell">
     <header class="topbar">
-      <div class="brand">
-        <div class="glyph" aria-hidden="true"></div>
+      <section class="brand" aria-label="MARCUS Operational Awareness">
+        <div class="logo" aria-hidden="true">M</div>
         <div>
           <h1>MARCUS</h1>
           <p>Operational Awareness</p>
         </div>
-      </div>
-      <div class="status-strip" aria-label="Overall system state">
-        <span class="chip"><span class="pulse"></span><strong>4</strong> watched</span>
-        <span class="chip"><strong>sync</strong> demo fixture</span>
-        <span class="chip"><strong>confidence</strong> mixed</span>
-      </div>
-      <div class="actions">
-        <button class="ghost" type="button">Evidence</button>
-        <button class="ghost" type="button">Compact</button>
-        <button class="ghost" type="button">Refresh</button>
-      </div>
-    </header>
-
-    <section class="workspace">
-      <section class="panel tracking-panel">
-        <div class="panel-header">
-          <h2 class="panel-title">What I'm Tracking</h2>
-          <span class="panel-note">demonstration data</span>
-        </div>
-        <div class="project-list" id="projectList">
-          <div class="demo-banner">
-            <strong>Prototype:</strong> this screen is fixture data showing the intended Marcus-owned awareness model. It is not live project truth yet.
-          </div>
-        </div>
-        <section class="activity-panel">
-          <div class="panel-header">
-            <h2 class="panel-title">What I've Seen Changing</h2>
-            <span class="panel-note" id="clock">00:00</span>
-          </div>
-          <div class="activity-list" id="activityList"></div>
-        </section>
       </section>
 
-      <aside class="panel right-panel">
-        <div class="panel-header">
-          <h2 class="panel-title">Marcus Intelligence</h2>
-          <span class="panel-note">read-only</span>
+      <section class="telemetry" aria-label="System summary">
+        <div class="telemetry-item"><span class="status-dot"></span><strong>Active</strong> 24/7</div>
+        <div class="telemetry-item">Watching <strong id="watchCount">0</strong> projects</div>
+        <div class="telemetry-item">Evidence ingested <strong>1,247</strong></div>
+        <div class="telemetry-item">Confidence <strong>78%</strong><span class="confidence-ring" aria-hidden="true"></span></div>
+      </section>
+
+      <section class="brain-band" aria-hidden="true">
+        <div class="brain"></div>
+      </section>
+
+      <section class="online">
+        <span><strong>MARCUS</strong> is online</span>
+        <span><span class="dot green"></span> All systems nominal</span>
+      </section>
+    </header>
+
+    <section class="grid">
+      <section class="panel tracking">
+        <header class="panel-head">
+          <div class="head-title">
+            <span class="head-icon">▣</span>
+            <h2>What I'm Tracking</h2>
+          </div>
+          <div class="legend">
+            <span>Evidence:</span>
+            <span><span class="dot blue"></span> Codex</span>
+            <span><span class="dot gray"></span> GitHub</span>
+            <span><span class="dot green"></span> Deploy</span>
+            <span><span class="dot purple"></span> Other</span>
+          </div>
+        </header>
+        <div class="project-list" id="projectList">
+          <p class="fixture-note"><strong>Prototype:</strong> this is demonstration data showing the intended Marcus-owned awareness model. It is not live Marcus awareness yet.</p>
         </div>
-        <div class="right-scroll" id="rightRail"></div>
+      </section>
+
+      <aside class="right-rail" aria-label="Marcus intelligence">
+        <section class="intel-panel need">
+          <header class="panel-head">
+            <div class="head-title"><span class="head-icon">♙</span><h3>I Need Mark</h3></div>
+            <span class="count">2 items</span>
+          </header>
+          <div class="intel-body" id="needMark"></div>
+        </section>
+
+        <section class="intel-panel thread">
+          <header class="panel-head">
+            <div class="head-title"><span class="head-icon">◎</span><h3>I May Be Losing The Thread</h3></div>
+            <span class="count">2 cooling projects</span>
+          </header>
+          <div class="intel-body" id="threadRisk"></div>
+        </section>
+
+        <section class="intel-panel recommend">
+          <header class="panel-head">
+            <div class="head-title"><span class="head-icon">☉</span><h3>My Recommendation</h3></div>
+          </header>
+          <div class="intel-body" id="recommendation"></div>
+        </section>
       </aside>
+
+      <section class="panel activity">
+        <header class="panel-head">
+          <div class="head-title"><span class="head-icon">⌁</span><h2>What I've Seen Changing</h2></div>
+          <div class="activity-legend">
+            <span><span class="dot blue"></span> Codex</span>
+            <span><span class="dot gray"></span> GitHub</span>
+            <span><span class="dot green"></span> Deploy</span>
+            <span><span class="dot purple"></span> Other</span>
+          </div>
+        </header>
+        <div class="activity-table" id="activityTable"></div>
+      </section>
+
+      <section class="panel talk-panel" aria-label="Talk to MARCUS">
+        <header class="panel-head">
+          <h2 id="talkTitle">Talk to MARCUS</h2>
+          <button class="close" type="button" aria-label="Close talk panel">×</button>
+        </header>
+        <div class="conversation">
+          <div class="message">
+            <div class="mini-brain" aria-hidden="true"></div>
+            <div class="bubble" id="talkRead">Here's my read. Ask anything, challenge me, or request a deeper dive.<time id="talkTime">--:--</time></div>
+          </div>
+          <span class="demo-pill">demo conversation</span>
+        </div>
+        <div class="composer">
+          <input id="talkInput" type="text" placeholder="Ask, correct me, recommend something, or request help...">
+          <button class="send" type="button" aria-label="Send demo message">➤</button>
+        </div>
+      </section>
     </section>
   </main>
 
-  <div class="modal-backdrop" id="talkModal" role="dialog" aria-modal="true" aria-labelledby="talkTitle">
-    <div class="modal">
-      <div class="modal-head">
-        <h2 id="talkTitle">Talk to MARCUS</h2>
-        <button class="ghost" type="button" id="closeTalk">Close</button>
-      </div>
-      <div class="modal-body">
-        <p class="belief" id="talkContext"></p>
-        <div class="sample-prompts" id="samplePrompts"></div>
-        <textarea id="talkInput" placeholder="Ask Marcus what is happening, correct his understanding, or ask him to coordinate Codex work."></textarea>
-      </div>
-      <div class="modal-foot">
-        <button class="ghost" type="button" id="classifyDemo">Classify demo message</button>
-        <button class="talk" type="button">Send to MARCUS later</button>
-      </div>
-    </div>
-  </div>
-
   <script>
-    const awareness = {
-      projects: [
-        {
-          id: "viz",
-          name: "MARCUS Visualizer",
-          state: "moving",
-          stateLabel: "Moving",
-          basis: "observed + inferred",
-          belief: "I believe Mark wants a second-monitor view of my operational awareness, not another tracker he has to maintain.",
-          sources: ["Codex", "Docs", "Conversation"],
-          latest: "Direction changed from visual graph to Marcus-owned awareness model.",
-          confidence: 0.82,
-          confidenceLabel: "High",
-          changed: "The product model was corrected: I own discovery, state, decay, and recommendations.",
-          waiting: "I am waiting for Mark to react to the awareness-oriented prototype.",
-          next: "Lock the information hierarchy, then build the real awareness service behind it.",
-          evidence: [
-            "Attached request explicitly rejects tracker-admin behavior.",
-            "docs/marcus/visualizer-operational-awareness.md now records the model.",
-            "public/visualizer.html is still fixture-only."
-          ],
-          conflicts: ["The live data service does not exist yet, so this screen cannot claim real awareness."],
-          codex: [
-            { label: "Prepared", text: "Prototype refactor is scoped to fixture UI and docs." },
-            { label: "Next packet", text: "Build awareness_store and evidence_reconciler after demo direction is accepted." }
-          ]
-        },
-        {
-          id: "freedom",
-          name: "Freedom Scoopers Quote Flow",
-          state: "waiting_mark",
-          stateLabel: "Waiting on Mark",
-          basis: "observed",
-          belief: "I believe the quote flow has implementation work ready, but production publishing remains approval-gated.",
-          sources: ["Operations", "Codex", "Approval"],
-          latest: "A deployment-capable step is staged but not approved.",
-          confidence: 0.74,
-          confidenceLabel: "Medium",
-          changed: "Codex-side layout work is separate from the production deploy boundary.",
-          waiting: "I need Mark to approve or reject the exact production target before anything publishes.",
-          next: "Ask for approval with target, branch, and expected result.",
-          evidence: [
-            "Operation summary includes pending approval metadata.",
-            "Approval policy requires exact authorization for production actions."
-          ],
-          conflicts: ["Fixture does not include the live operation id."],
-          codex: [
-            { label: "Completed but unverified", text: "Layout changes can be reviewed before deployment." },
-            { label: "Approval", text: "Production publish is waiting outside Codex." }
-          ]
-        },
-        {
-          id: "reggie",
-          name: "Reggie Runner Follow-through",
-          state: "losing_thread",
-          stateLabel: "Thread risk",
-          basis: "inferred",
-          belief: "I think a runner-side PR may be unresolved, but I need stronger evidence before deciding whether it is active, blocked, or intentionally quiet.",
-          sources: ["GitHub", "Codex", "Inference"],
-          latest: "Open PR context exists, but the intended next move is ambiguous.",
-          confidence: 0.49,
-          confidenceLabel: "Low",
-          changed: "The signal is old enough that I should surface it before it disappears from working attention.",
-          waiting: "I need Mark to clarify whether to continue, revise, or let it cool.",
-          next: "Ask Mark for clarification, then either recover the thread or mark it intentionally dormant.",
-          evidence: [
-            "Recent docs mention an open Reggie PR.",
-            "No verified completion evidence is attached in this fixture."
-          ],
-          conflicts: ["An open PR can mean active review, abandoned work, or intentionally parked work."],
-          codex: [
-            { label: "Not dispatched", text: "I should not launch more runner work until the objective is clear." }
-          ]
-        },
-        {
-          id: "demo-worker",
-          name: "Marcus Operator Demo Worker",
-          state: "verified",
-          stateLabel: "Verified",
-          basis: "observed",
-          belief: "I believe the demo worker objective is complete enough to preserve context and monitor lightly.",
-          sources: ["Cloudflare", "GitHub", "Verification"],
-          latest: "Root and health checks passed after deployment.",
-          confidence: 0.91,
-          confidenceLabel: "High",
-          changed: "Completion evidence exists and no active Codex job is attached.",
-          waiting: "I am not waiting on Mark unless the demo needs a new objective.",
-          next: "Archive active attention while preserving deployment and verification evidence.",
-          evidence: [
-            "Deployment URL returned HTTP 200.",
-            "Health route returned HTTP 200.",
-            "Regression checks passed in the recorded acceptance run."
-          ],
-          conflicts: [],
-          codex: [
-            { label: "Verified", text: "No new Codex work recommended from this fixture." }
-          ]
-        },
-        {
-          id: "kb",
-          name: "Knowledge Base Cleanup",
-          state: "dormant",
-          stateLabel: "Dormant?",
-          basis: "inferred",
-          belief: "I think this is context work, not active implementation, but I do not yet know whether Mark intentionally paused it.",
-          sources: ["Docs", "Memory", "Inference"],
-          latest: "Obsidian note topology changed, then went quiet.",
-          confidence: 0.58,
-          confidenceLabel: "Medium",
-          changed: "The vault structure exists, but automatic note capture is still planned work.",
-          waiting: "I may need Mark to say whether this should stay in active attention.",
-          next: "Continue monitoring unless Mark asks me not to let it drop.",
-          evidence: [
-            "docs/marcus/context-memory.md describes planned automatic capture.",
-            "No live writer/indexer is implemented yet."
-          ],
-          conflicts: ["Quiet docs work may be fine; lack of commits alone is not decay proof."],
-          codex: [
-            { label: "Monitoring", text: "No Codex dispatch should happen without a clearer objective." }
-          ]
+    const projects = [
+      {
+        id: "poopsites",
+        name: "PoopSites V2",
+        avatar: "PS",
+        avatarClass: "",
+        belief: "Refining core flows and fixing edge-case bugs ahead of wider release.",
+        sources: ["codex", "github", "deploy", "other"],
+        latestAge: "3m ago",
+        latest: "Fixed flaky test in Checkout.spec.ts",
+        state: "moving",
+        stateLabel: "Moving",
+        confidence: 0.84,
+        detail: {
+          believe: "The checkout flow is stabilizing and test reliability is improving. A couple of edge cases remain around promo codes and tax estimation. Release is close.",
+          changed: ["Fixed flaky test in Checkout.spec.ts", "Tightened promo code validation", "Adjusted tax calculation for EU regions"],
+          next: "Harden promo code edge cases, rerun E2E suite, then cut RC build and prep release notes.",
+          evidence: 23,
+          nextConfidence: 0.76
         }
-      ],
-      events: [
-        { at: "now", source: "Docs", text: "Recorded the visualizer awareness architecture and boundaries.", ref: "visualizer-operational-awareness.md" },
-        { at: "2m", source: "Codex", text: "Refactored the fixture toward Marcus-owned conclusions and Talk buttons.", ref: "public/visualizer.html" },
-        { at: "8m", source: "Conversation", text: "Mark rejected the tracker-admin model and clarified that Marcus owns accuracy.", ref: "attached request" },
-        { at: "18m", source: "Inference", text: "Reggie appears at risk of thread loss, but evidence is not strong enough for a firm conclusion.", ref: "fixture" },
-        { at: "yesterday", source: "Verification", text: "Demo worker deployment and health checks were recorded as accepted.", ref: "current-system-map.md" }
-      ]
-    };
-
-    const prompts = [
-      "What's happening here?",
-      "Where did Codex leave off?",
-      "I think Codex is going in the wrong direction.",
-      "Have Codex continue this.",
-      "This isn't important right now.",
-      "This is finished - verify it.",
-      "What do you recommend?"
+      },
+      {
+        id: "warren",
+        name: "WARREN Creative Studio",
+        avatar: "W",
+        avatarClass: "amber",
+        belief: "Brand site enhancements and motion work are progressing steadily.",
+        sources: ["codex", "github", "deploy"],
+        latestAge: "28m ago",
+        latest: "Deployed v1.4.2 to production",
+        state: "moving",
+        stateLabel: "Moving",
+        confidence: 0.72,
+        detail: {
+          believe: "I believe this project is healthy. The latest production deploy has supporting evidence and no current blocker in this fixture.",
+          changed: ["Production deploy completed", "Motion polish merged", "No current approval is staged"],
+          next: "Continue monitoring for post-deploy regressions.",
+          evidence: 18,
+          nextConfidence: 0.68
+        }
+      },
+      {
+        id: "marcus-core",
+        name: "MARCUS Core",
+        avatar: "M",
+        avatarClass: "purple",
+        belief: "Improving planning accuracy and long-context reasoning.",
+        sources: ["codex", "github", "other"],
+        latestAge: "1h ago",
+        latest: "Merged PR #512 context window tuning",
+        state: "needs_mark",
+        stateLabel: "Needs Mark",
+        confidence: 0.6,
+        detail: {
+          believe: "I need approval before increasing the context window tier because it may affect cost. The code direction appears clear; the decision boundary is Mark's.",
+          changed: ["PR #512 merged", "Context window tuning is ready", "Cost-impact approval is not resolved"],
+          next: "Approve or reject the context window change before the next rollout.",
+          evidence: 5,
+          nextConfidence: 0.6
+        }
+      },
+      {
+        id: "scoop",
+        name: "Scoop Doggy Logs",
+        avatar: "SD",
+        avatarClass: "red",
+        belief: "Mobile app build is stable; backend schema migration is pending.",
+        sources: ["codex", "github", "deploy"],
+        latestAge: "2h ago",
+        latest: "DB migration 017 added",
+        state: "blocked",
+        stateLabel: "Blocked",
+        confidence: 0.38,
+        detail: {
+          believe: "The app looks stable, but the migration path is blocked because the backfill strategy is unresolved. I should not let Codex keep moving without that decision.",
+          changed: ["Migration 017 was added", "Backfill strategy was not decided", "Production migration remains blocked"],
+          next: "Unblock the migration decision, then ship the next build to regain momentum.",
+          evidence: 4,
+          nextConfidence: 0.71
+        }
+      },
+      {
+        id: "nexorda",
+        name: "Nexorda",
+        avatar: "N",
+        avatarClass: "",
+        belief: "Data pipeline is running; awaiting upstream API stability.",
+        sources: ["codex", "deploy"],
+        latestAge: "6h ago",
+        latest: "Ingest pipeline completed",
+        state: "quiet",
+        stateLabel: "Quiet",
+        confidence: 0.45,
+        detail: {
+          believe: "Pipeline health looks okay, but the goal is unclear. This may be waiting on an external API rather than forgotten.",
+          changed: ["Ingest pipeline completed", "No next target is attached", "External API stability is uncertain"],
+          next: "Continue monitoring and ask Mark only if the upstream stall persists.",
+          evidence: 7,
+          nextConfidence: 0.52
+        }
+      },
+      {
+        id: "masen",
+        name: "Masen Game",
+        avatar: "MG",
+        avatarClass: "purple",
+        belief: "Prototyping combat feel and enemy AI behaviors.",
+        sources: ["codex", "github", "other"],
+        latestAge: "9h ago",
+        latest: "Enemy AI state machine refactored",
+        state: "quiet",
+        stateLabel: "Quiet",
+        confidence: 0.41,
+        detail: {
+          believe: "This has gone quiet after prototype momentum. I cannot tell from evidence whether Mark paused it intentionally.",
+          changed: ["Enemy AI state machine was refactored", "No next target is attached", "No verification signal follows"],
+          next: "Ask Mark whether to recover focus, define the next prototype target, or mark it intentionally dormant.",
+          evidence: 6,
+          nextConfidence: 0.48
+        }
+      }
     ];
 
-    let selectedId = "viz";
+    const events = [
+      ["11:42:18", "PoopSites V2", "Fixed flaky test in Checkout.spec.ts", "Codex", "blue"],
+      ["11:39:07", "PoopSites V2", "Pushed 2 commits to main", "GitHub", "gray"],
+      ["11:13:55", "WARREN Creative Studio", "Deployed v1.4.2 to production", "Deploy", "green"],
+      ["10:51:22", "MARCUS Core", "PR #512 merged: context window tuning", "GitHub", "gray"],
+      ["10:32:44", "Scoop Doggy Logs", "Migration 017 added; waiting on decision", "Codex", "blue"],
+      ["09:58:31", "Nexorda", "Ingest pipeline completed successfully", "Deploy", "green"]
+    ];
 
-    function badgeClass(state) {
-      return `badge ${state}`;
+    let selectedId = "poopsites";
+
+    const byId = (id) => projects.find((project) => project.id === id) || projects[0];
+    const selected = () => byId(selectedId);
+
+    function confidenceBar(value, colorClass = "") {
+      const count = Math.round(Number(value || 0) * 7);
+      return `<span class="bar ${colorClass}">${Array.from({ length: 7 }, (_, index) => `<span class="${index < count ? "on" : ""}"></span>`).join("")}</span>`;
     }
 
-    function percent(value) {
-      return `${Math.round(Number(value || 0) * 100)}%`;
+    function sourceDots(sources) {
+      const classes = { codex: "blue", github: "gray", deploy: "green", other: "purple" };
+      return `<span class="evidence-dots">${sources.map((source) => `<span class="dot ${classes[source] || "purple"}" title="${source}"></span>`).join("")}${sources.includes("other") ? "<span class=\"source-label\">+1</span>" : ""}</span>`;
     }
 
-    function selectedProject() {
-      return awareness.projects.find((project) => project.id === selectedId) || awareness.projects[0];
+    function talkClass(project) {
+      if (project.state === "needs_mark") return "talk warn";
+      if (project.state === "blocked") return "talk danger";
+      return "talk";
     }
 
     function renderProjects() {
-      const container = document.getElementById("projectList");
-      const banner = container.querySelector(".demo-banner").outerHTML;
-      container.innerHTML = banner + awareness.projects.map((project) => `
-        <article class="project ${project.id === selectedId ? "selected" : ""}">
-          <button class="project-main" type="button" data-project="${project.id}">
-            <span class="state-bar ${project.state}" aria-hidden="true"></span>
-            <span>
-              <h3 class="project-name">${project.name}</h3>
-              <p class="belief">${project.belief}</p>
-              <span class="sources">${project.sources.map((source) => `<span class="source">${source}</span>`).join("")}</span>
-            </span>
-            <span class="latest">${project.latest}</span>
-            <span class="confidence"><strong>${project.confidenceLabel}</strong>${percent(project.confidence)} confidence</span>
-            <span class="${badgeClass(project.state)}">${project.stateLabel}</span>
-          </button>
-          <div class="project-detail">
-            <div class="detail-grid">
-              <div class="detail-block"><span>What I believe</span><p>${project.belief}</p></div>
-              <div class="detail-block"><span>What changed</span><p>${project.changed}</p></div>
-              <div class="detail-block"><span>I'm waiting on</span><p>${project.waiting}</p></div>
-              <div class="detail-block"><span>Likely next move</span><p>${project.next}</p></div>
-              <div class="detail-block"><span>Evidence</span><p>${project.evidence.join(" ")}</p></div>
-              <div class="detail-block"><span>Conflicts or uncertainty</span><p>${project.conflicts.length ? project.conflicts.join(" ") : "No conflict shown in this fixture."}</p></div>
-            </div>
-            <div class="codex-strip">
-              ${project.codex.map((item) => `<div class="codex-item"><span><strong>${item.label}</strong>: ${item.text}</span><span class="basis">${project.basis}</span></div>`).join("")}
-            </div>
-            <div class="intel-actions">
-              <button class="talk" type="button" data-talk="${project.id}">Talk to MARCUS</button>
-              <button class="ghost" type="button">Inspect evidence</button>
-            </div>
+      document.getElementById("watchCount").textContent = projects.length;
+      const list = document.getElementById("projectList");
+      const note = list.querySelector(".fixture-note").outerHTML;
+      list.innerHTML = note + projects.map((project) => `
+        <article class="project ${project.id === selectedId ? "selected" : ""}" data-project="${project.id}">
+          <div class="avatar ${project.avatarClass}">${project.avatar}</div>
+          <div>
+            <h3 class="project-title">${project.name}</h3>
+            <p class="project-copy">${project.belief}</p>
           </div>
+          ${sourceDots(project.sources)}
+          <div class="latest"><strong>${project.latestAge}</strong>${project.latest}</div>
+          <span class="state ${project.state}">${project.stateLabel}</span>
+          <div class="confidence">${Math.round(project.confidence * 100)}%${confidenceBar(project.confidence, project.state === "blocked" ? "red" : project.state === "needs_mark" ? "amber" : project.state === "quiet" ? "gray" : "blue")}</div>
+          <button class="${talkClass(project)}" type="button" data-talk="${project.id}">◉ Talk</button>
+          ${project.id === selectedId ? `
+            <div class="detail">
+              <section class="detail-card">
+                <h4>◌ What I believe</h4>
+                <p>${project.detail.believe}</p>
+                <p class="micro">Confidence <strong>${Math.round(project.confidence * 100)}%</strong>${confidenceBar(project.confidence, "blue")} Evidence <strong>${project.detail.evidence}</strong></p>
+              </section>
+              <section class="detail-card">
+                <h4>⌁ What changed</h4>
+                <ul>${project.detail.changed.map((item) => `<li>${item}</li>`).join("")}</ul>
+                <p class="micro">Evidence <strong>${Math.max(3, Math.round(project.detail.evidence / 4))}</strong></p>
+              </section>
+              <section class="detail-card">
+                <h4>→ Likely next move</h4>
+                <p>${project.detail.next}</p>
+                <p class="micro">Confidence <strong>${Math.round(project.detail.nextConfidence * 100)}%</strong>${confidenceBar(project.detail.nextConfidence, "blue")}</p>
+              </section>
+            </div>
+          ` : ""}
         </article>
       `).join("");
 
-      container.querySelectorAll("[data-project]").forEach((button) => {
-        button.addEventListener("click", () => {
-          selectedId = button.dataset.project;
+      document.querySelectorAll(".project").forEach((row) => {
+        row.addEventListener("click", (event) => {
+          if (event.target.closest("[data-talk]")) return;
+          selectedId = row.dataset.project;
           renderAll();
         });
       });
-      container.querySelectorAll("[data-talk]").forEach((button) => {
-        button.addEventListener("click", () => openTalk(button.dataset.talk));
+      document.querySelectorAll("[data-talk]").forEach((button) => {
+        button.addEventListener("click", () => {
+          selectedId = button.dataset.talk;
+          renderAll();
+          document.getElementById("talkInput").focus();
+        });
       });
     }
 
+    function renderIntel() {
+      const need = projects.filter((project) => project.state === "needs_mark" || project.state === "blocked").slice(0, 2);
+      document.getElementById("needMark").innerHTML = need.map((project, index) => `
+        <div class="decision">
+          <div class="rank">●<br>${index + 1}</div>
+          <div>
+            <strong>${project.name} - ${project.detail.next.split(",")[0]}</strong>
+            <p>${project.detail.believe}</p>
+            <p class="micro">Evidence <strong>${project.detail.evidence}</strong> Confidence <strong>${Math.round(project.confidence * 100)}%</strong></p>
+          </div>
+          <div class="side-confidence">${Math.round(project.confidence * 100)}%${confidenceBar(project.confidence, "amber")}</div>
+        </div>
+      `).join("");
+
+      const thread = projects.filter((project) => project.state === "quiet").slice(0, 2);
+      document.getElementById("threadRisk").innerHTML = thread.map((project) => `
+        <div class="thread-item">
+          <div>
+            <strong>${project.name} <span class="meta">${project.latestAge}</span></strong>
+            <p>${project.detail.believe}</p>
+          </div>
+          <div class="side-confidence">Confidence<br>${Math.round(project.confidence * 100)}%</div>
+        </div>
+      `).join("");
+
+      const rec = byId("scoop");
+      document.getElementById("recommendation").innerHTML = `
+        <div class="recommend-card">
+          <div class="check">✓</div>
+          <div>
+            <strong>Recover focus on ${rec.name}</strong>
+            <p>${rec.detail.next}</p>
+            <p class="micro">Impact <strong>High</strong> Effort <strong>Medium</strong> Confidence <strong>${Math.round(rec.detail.nextConfidence * 100)}%</strong>${confidenceBar(rec.detail.nextConfidence, "green")}</p>
+          </div>
+        </div>
+      `;
+    }
+
     function renderActivity() {
-      document.getElementById("activityList").innerHTML = awareness.events.map((event) => `
-        <div class="event">
-          <time>${event.at}</time>
-          <span><strong>${event.source}</strong>: ${event.text}</span>
-          <button type="button" title="${event.ref}">source</button>
+      document.getElementById("activityTable").innerHTML = events.map(([time, project, text, source, color]) => `
+        <div class="activity-row">
+          <time>${time}</time>
+          <strong><span class="dot ${color}"></span> ${project}</strong>
+          <span>${text}</span>
+          <span class="source-label ${color}">${source}</span>
         </div>
       `).join("");
     }
 
-    function card(project, action = "") {
-      return `
-        <div class="intel-card">
-          <strong>${project.name}</strong>
-          <p>${action || project.waiting}</p>
-          <div class="meta-row"><span class="${badgeClass(project.state)}">${project.stateLabel}</span><span class="basis">${project.basis}</span></div>
-          <div class="intel-actions"><button class="talk" type="button" data-talk="${project.id}">Talk to MARCUS</button></div>
-        </div>
-      `;
-    }
-
-    function renderRightRail() {
-      const needMark = awareness.projects.filter((project) => project.state === "waiting_mark");
-      const losing = awareness.projects.filter((project) => project.state === "losing_thread" || project.state === "dormant");
-      const recommended = selectedProject();
-      document.getElementById("rightRail").innerHTML = `
-        <section class="intel-section">
-          <h3>I Need Mark</h3>
-          ${needMark.length ? needMark.map((project) => card(project)).join("") : `<div class="intel-card"><p>I do not have a fixture item that genuinely needs Mark right now.</p></div>`}
-        </section>
-        <section class="intel-section">
-          <h3>I May Be Losing The Thread</h3>
-          ${losing.map((project) => card(project, `${project.next} My confidence is ${percent(project.confidence)} because ${project.basis}.`)).join("")}
-        </section>
-        <section class="intel-section">
-          <h3>My Recommendation</h3>
-          <div class="intel-card">
-            <strong>${recommended.name}</strong>
-            <p>${recommended.next}</p>
-            <div class="meta-row"><span class="${badgeClass(recommended.state)}">${recommended.stateLabel}</span><span class="basis">${recommended.confidenceLabel} confidence</span></div>
-          </div>
-        </section>
-      `;
-      document.querySelectorAll("#rightRail [data-talk]").forEach((button) => {
-        button.addEventListener("click", () => openTalk(button.dataset.talk));
-      });
-    }
-
-    function openTalk(id) {
-      selectedId = id;
-      const project = selectedProject();
+    function renderTalk() {
+      const project = selected();
       document.getElementById("talkTitle").textContent = `Talk to MARCUS about ${project.name}`;
-      document.getElementById("talkContext").textContent = `Scoped to demo awareness project ${project.id}. This will become a Marcus conversation, not an edit form.`;
-      document.getElementById("samplePrompts").innerHTML = prompts.map((text) => `<button class="ghost" type="button" data-prompt="${text}">${text}</button>`).join("");
-      document.getElementById("samplePrompts").querySelectorAll("[data-prompt]").forEach((button) => {
-        button.addEventListener("click", () => { document.getElementById("talkInput").value = button.dataset.prompt; });
-      });
-      document.getElementById("talkModal").classList.add("open");
-      renderAll();
-    }
-
-    function closeTalk() {
-      document.getElementById("talkModal").classList.remove("open");
-    }
-
-    function classifyDemoMessage() {
-      const text = document.getElementById("talkInput").value.toLowerCase();
-      let label = "question";
-      if (/wrong|different|remember|actually|correction/.test(text)) label = "new context or correction";
-      else if (/continue|codex|fix|build|review unfinished/.test(text)) label = "request to coordinate Codex work";
-      else if (/not important|remove|forget|dormant/.test(text)) label = "request to change Marcus attention state";
-      else if (/done|finished|verify/.test(text)) label = "completion claim requiring verification";
-      else if (/approve|deploy|send|publish|merge/.test(text)) label = "consequential action requiring approval";
-      document.getElementById("talkContext").textContent = `Demo classification: ${label}. In the real system Marcus would update his understanding or prepare a scoped Codex packet while preserving approval boundaries.`;
-    }
-
-    function tick() {
-      document.getElementById("clock").textContent = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      document.getElementById("talkRead").innerHTML = `Here's my read on ${project.name}. Ask anything, challenge me, or request a deeper dive.<time id="talkTime">${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time>`;
     }
 
     function renderAll() {
       renderProjects();
+      renderIntel();
       renderActivity();
-      renderRightRail();
-      tick();
+      renderTalk();
     }
 
-    document.getElementById("closeTalk").addEventListener("click", closeTalk);
-    document.getElementById("classifyDemo").addEventListener("click", classifyDemoMessage);
-    document.getElementById("talkModal").addEventListener("click", (event) => {
-      if (event.target.id === "talkModal") closeTalk();
-    });
-    document.addEventListener("keydown", (event) => {
-      if (event.key === "Escape") closeTalk();
+    document.querySelector(".send").addEventListener("click", () => {
+      const input = document.getElementById("talkInput");
+      if (!input.value.trim()) return;
+      document.getElementById("talkRead").innerHTML = `Demo classification: I would treat that as project-scoped context and decide whether to answer, update my understanding, prepare Codex work, or request approval.<time>${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time>`;
+      input.value = "";
     });
 
     renderAll();
-    setInterval(tick, 1000);
   </script>
 </body>
 </html>
