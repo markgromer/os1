@@ -126,6 +126,14 @@
   .acceptance-gate span { min-width: 0; font-size: 13px; overflow-wrap: anywhere; }
   .acceptance-gate strong { color: var(--muted); font-size: 12px; font-weight: 600; }
   .acceptance-gate.ok strong { color: var(--ok); }
+  .approval-queue { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+  .approval-queue-item { min-width: 0; }
+  .approval-queue-button { width: 100%; min-height: 58px; display: grid; gap: 4px; text-align: left; border-radius: 8px; }
+  .approval-queue-button strong, .approval-queue-button span { min-width: 0; overflow-wrap: anywhere; }
+  .approval-queue-button strong { font-size: 13px; }
+  .approval-queue-button span { color: var(--muted); font-size: 11px; }
+  .approval-queue-button.critical { border-color: rgba(251,113,133,0.65); }
+  .approval-queue-empty { margin: 0; color: var(--ok); font-size: 13px; }
   .acceptance-next { min-height: 44px; margin: 0; padding: 12px; color: var(--text); font-size: 13px; }
   .acceptance-privacy { margin: 0; padding: 0 12px 12px; color: var(--muted); font-size: 11px; }
   .acceptance-actions { flex-wrap: wrap; }
@@ -355,6 +363,14 @@
     </header>
     <div class="provider-body">
       <p class="acceptance-summary"><strong id="acceptanceState">Not tested</strong><br><span id="acceptanceSummary">Checking production gates.</span></p>
+      <section class="provider-section" aria-labelledby="approvalQueueTitle">
+        <div class="provider-title">
+          <h3 id="approvalQueueTitle">Required approvals</h3>
+          <span id="approvalQueueCount" class="provider-state">checking</span>
+        </div>
+        <ul id="approvalQueue" class="approval-queue"></ul>
+        <p id="approvalQueueEmpty" class="approval-queue-empty" hidden>No operation approvals pending.</p>
+      </section>
       <section class="provider-section" aria-labelledby="voiceAcceptanceTitle">
         <div class="provider-title">
           <h3 id="voiceAcceptanceTitle">Android voice</h3>
@@ -471,6 +487,9 @@
     closeAcceptance: document.getElementById('closeAcceptanceBtn'),
     acceptanceState: document.getElementById('acceptanceState'),
     acceptanceSummary: document.getElementById('acceptanceSummary'),
+    approvalQueue: document.getElementById('approvalQueue'),
+    approvalQueueCount: document.getElementById('approvalQueueCount'),
+    approvalQueueEmpty: document.getElementById('approvalQueueEmpty'),
     voiceAcceptanceCount: document.getElementById('voiceAcceptanceCount'),
     providerAcceptanceCount: document.getElementById('providerAcceptanceCount'),
     pcAcceptanceState: document.getElementById('pcAcceptanceState'),
@@ -528,6 +547,7 @@
   let acceptancePollTimer = null;
   let operationTracker = null;
   let trackedOperation = null;
+  let pendingOperationApprovals = [];
   let approvalRequestInFlight = false;
   let pendingMessageActions = [];
   let selectedMessageAction = null;
@@ -669,6 +689,37 @@
     els.approveApproval.disabled = approvalRequestInFlight || !approval?.id || !els.approvalConfirmed.checked || !criticalReady;
     els.rejectApproval.disabled = approvalRequestInFlight || !approval?.id;
   }
+  function renderApprovalQueue(operations = []) {
+    const riskOrder = { critical: 0, high: 1, medium: 2, low: 3 };
+    pendingOperationApprovals = (Array.isArray(operations) ? operations : [])
+      .filter((operation) => operation?.pendingApproval?.id)
+      .sort((left, right) => (riskOrder[left.pendingApproval.riskLevel] ?? 9) - (riskOrder[right.pendingApproval.riskLevel] ?? 9));
+    els.approvalQueue.replaceChildren();
+    els.approvalQueueCount.textContent = pendingOperationApprovals.length ? `${pendingOperationApprovals.length} pending` : 'clear';
+    els.approvalQueueCount.className = `provider-state ${pendingOperationApprovals.length ? '' : 'ok'}`.trim();
+    els.approvalQueueEmpty.hidden = pendingOperationApprovals.length > 0;
+    for (const operation of pendingOperationApprovals) {
+      const approval = operation.pendingApproval;
+      const item = document.createElement('li');
+      item.className = 'approval-queue-item';
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = `btn approval-queue-button ${approval.riskLevel === 'critical' ? 'critical' : ''}`.trim();
+      const title = document.createElement('strong');
+      title.textContent = operation.projectName || operation.title || operation.id;
+      const detail = document.createElement('span');
+      detail.textContent = `${approvalLabel(approval.riskLevel || operation.riskLevel)} | ${approvalLabel(approval.action)}`;
+      button.append(title, detail);
+      button.addEventListener('click', () => {
+        if (operationTracker) operationTracker.track(operation);
+        else renderTrackedOperation(operation);
+        if (els.acceptanceDialog.open) els.acceptanceDialog.close();
+        openApprovalReview().catch((error) => addMessage('system', error.message || String(error)));
+      });
+      item.appendChild(button);
+      els.approvalQueue.appendChild(item);
+    }
+  }
   async function openApprovalReview() {
     if (!(await ensureSession())) return;
     const approval = trackedOperation?.pendingApproval;
@@ -718,6 +769,7 @@
         ? `Approved ${approvalLabel(approval.action)} for ${operation.projectName || operation.id}. Marcus will report the verified result.`
         : `Rejected ${approvalLabel(approval.action)} for ${operation.projectName || operation.id}.`);
       await operationTracker?.refresh();
+      if (decision === 'approve') await openAcceptance().catch(() => {});
     } finally {
       approvalRequestInFlight = false;
       updateApprovalCommandState();
@@ -1035,12 +1087,14 @@
   async function refreshAcceptance() {
     if (!liveToken && !(await ensureSession())) return null;
     await drainVoiceTelemetry();
-    const [report, pcCapabilities] = await Promise.all([
+    const [report, pcCapabilities, operationPayload] = await Promise.all([
       api(`/api/marcus/acceptance?sessionId=${encodeURIComponent(telemetrySessionId)}`),
       adminApi('/api/marcus/pc/capabilities'),
+      api('/api/operations/summary?limit=50'),
     ]);
     applyAcceptanceReport(report);
     applyPcCapabilities(pcCapabilities);
+    renderApprovalQueue(operationPayload?.operations || []);
     return report;
   }
   async function preparePcAccessApproval() {
