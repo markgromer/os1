@@ -651,6 +651,370 @@
     .density-compact .codex-detail,
     .density-compact .brief-body { padding: 10px; }
 
+    /* Compact modern pass */
+    body {
+      background: #101214;
+    }
+
+    .app-shell {
+      grid-template-rows: 48px minmax(0, 1fr);
+      padding: 8px;
+      gap: 8px;
+    }
+
+    .topbar,
+    .panel {
+      border-color: rgba(255,255,255,0.06);
+      background: rgba(19, 22, 24, 0.94);
+      box-shadow: none;
+      backdrop-filter: none;
+    }
+
+    .topbar {
+      grid-template-columns: 280px minmax(0, 1fr) 190px;
+      padding: 0 12px;
+      gap: 10px;
+    }
+
+    .brand {
+      gap: 10px;
+    }
+
+    .mark {
+      width: 26px;
+      height: 26px;
+      box-shadow: none;
+    }
+
+    .brand h1 {
+      font-size: 14px;
+      font-weight: 720;
+    }
+
+    .brand p {
+      font-size: 10px;
+      color: #858d92;
+    }
+
+    .chip {
+      height: 24px;
+      padding: 0 9px;
+      border-color: rgba(255,255,255,0.07);
+      background: rgba(255,255,255,0.025);
+      font-size: 11px;
+    }
+
+    .icon-btn {
+      width: 28px;
+      height: 28px;
+      border-color: rgba(255,255,255,0.07);
+      background: rgba(255,255,255,0.025);
+      font-size: 12px;
+    }
+
+    .workspace {
+      grid-template-columns: minmax(560px, 1fr) 360px;
+      gap: 8px;
+    }
+
+    .queue-panel {
+      grid-template-rows: 38px minmax(0, 1fr) 154px;
+    }
+
+    .side-panel {
+      grid-template-rows: 38px 118px minmax(0, 1fr) 152px;
+    }
+
+    .panel-header {
+      height: 38px;
+      padding: 0 12px;
+      background: rgba(255,255,255,0.012);
+      border-bottom-color: rgba(255,255,255,0.055);
+    }
+
+    .panel-title {
+      font-size: 11px;
+      font-weight: 680;
+      letter-spacing: 0.04em;
+      color: #cfd4d2;
+    }
+
+    .panel-count {
+      font-size: 10px;
+      color: #737d83;
+    }
+
+    .project-list {
+      padding: 8px;
+    }
+
+    .project-card {
+      margin-bottom: 7px;
+      border-color: rgba(255,255,255,0.055);
+      background: rgba(255,255,255,0.018);
+    }
+
+    .project-card.selected {
+      border-color: rgba(85,215,230,0.28);
+      background: rgba(85,215,230,0.035);
+    }
+
+    .project-head {
+      min-height: 52px;
+      grid-template-columns: 10px minmax(0, 1fr) auto;
+      gap: 10px;
+      padding: 10px 12px;
+    }
+
+    .project-state {
+      width: 5px;
+      height: 32px;
+      box-shadow: none;
+    }
+
+    .project-name {
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .project-summary {
+      max-width: 760px;
+      margin-top: 3px;
+      font-size: 11px;
+      color: #a0a7a7;
+    }
+
+    .project-metrics {
+      display: flex;
+      gap: 10px;
+    }
+
+    .metric {
+      min-width: 28px;
+      border: 0;
+      background: transparent;
+      padding: 0;
+    }
+
+    .metric b {
+      font-size: 13px;
+    }
+
+    .metric span {
+      margin-top: 3px;
+      font-size: 9px;
+    }
+
+    .task-stack {
+      gap: 0;
+      padding: 0 12px 10px 27px;
+    }
+
+    .task-row-card {
+      border: 0;
+      border-top: 1px solid rgba(255,255,255,0.055);
+      border-radius: 0;
+      background: transparent;
+    }
+
+    .task-row-card:first-child {
+      border-top: 0;
+    }
+
+    .task-toggle {
+      grid-template-columns: minmax(0, 1fr) auto;
+      padding: 9px 0;
+    }
+
+    .task-name {
+      font-size: 12px;
+      font-weight: 680;
+    }
+
+    .task-now {
+      margin-top: 3px;
+      font-size: 11px;
+      color: #a5acab;
+    }
+
+    .task-meta {
+      margin-top: 5px;
+      font-size: 9px;
+      color: #6f797e;
+    }
+
+    .status-badge {
+      height: 18px;
+      padding: 0 7px;
+      border-color: currentColor;
+      font-size: 9px;
+      font-weight: 700;
+    }
+
+    .codex-detail {
+      margin: 0 0 7px;
+      padding: 8px 0 9px;
+      border-top-color: rgba(255,255,255,0.045);
+      background: transparent;
+    }
+
+    .codex-detail p,
+    .steps li,
+    .feed-item,
+    .brief-summary,
+    .plain-list li {
+      font-size: 11px;
+      line-height: 1.42;
+    }
+
+    .steps {
+      gap: 5px;
+    }
+
+    .steps li::before {
+      width: 5px;
+      height: 5px;
+      margin-top: 5px;
+    }
+
+    .work-feed {
+      grid-template-rows: 32px minmax(0, 1fr);
+      background: rgba(0,0,0,0.1);
+      border-top-color: rgba(255,255,255,0.055);
+    }
+
+    .feed-title {
+      padding: 0 10px;
+      font-size: 10px;
+      letter-spacing: 0.045em;
+      color: #c7cecb;
+    }
+
+    .feed-list {
+      padding: 0 10px 8px;
+    }
+
+    .feed-item {
+      grid-template-columns: 42px minmax(0, 1fr);
+      padding: 6px 0;
+    }
+
+    .brain-widget {
+      grid-template-columns: 72px minmax(0, 1fr);
+      gap: 12px;
+      padding: 12px;
+      background: transparent;
+      border-bottom-color: rgba(255,255,255,0.055);
+    }
+
+    .brain-shape {
+      width: 62px;
+      height: 62px;
+      border-radius: 31% 41% 35% 45%;
+      background:
+        radial-gradient(circle at 62% 32%, rgba(227,178,88,0.45), transparent 13%),
+        radial-gradient(circle at 34% 58%, rgba(85,215,230,0.42), transparent 17%),
+        linear-gradient(135deg, rgba(85,215,230,0.08), rgba(185,165,255,0.08));
+      box-shadow: none;
+    }
+
+    .brain-copy h3 {
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .brain-copy p {
+      margin-top: 5px;
+      font-size: 11px;
+      line-height: 1.36;
+      color: #a3aaa9;
+    }
+
+    .brief-body {
+      padding: 12px;
+    }
+
+    .brief-kicker {
+      margin-bottom: 10px;
+    }
+
+    .brief-title {
+      font-size: 18px;
+      font-weight: 760;
+    }
+
+    .brief-summary {
+      margin: 7px 0 12px;
+      color: #a7adac;
+    }
+
+    .brief-grid {
+      grid-template-columns: 1fr;
+      gap: 0;
+      border-top: 1px solid rgba(255,255,255,0.055);
+    }
+
+    .fact,
+    .stale-card {
+      border: 0;
+      border-bottom: 1px solid rgba(255,255,255,0.055);
+      border-radius: 0;
+      background: transparent;
+      padding: 8px 0;
+    }
+
+    .fact span,
+    .stale-card span {
+      margin-bottom: 4px;
+      font-size: 9px;
+      letter-spacing: 0.06em;
+    }
+
+    .fact strong,
+    .stale-card strong {
+      font-size: 11px;
+      font-weight: 660;
+    }
+
+    .plain-list {
+      margin-top: 9px;
+      gap: 0;
+    }
+
+    .plain-list li {
+      padding-top: 7px;
+      padding-bottom: 7px;
+      border-top-color: rgba(255,255,255,0.045);
+    }
+
+    .stale-section {
+      padding: 10px 12px;
+      background: rgba(0,0,0,0.08);
+      border-top-color: rgba(255,255,255,0.055);
+    }
+
+    .stale-section h3 {
+      margin-bottom: 7px;
+      font-size: 10px;
+      font-weight: 680;
+      letter-spacing: 0.045em;
+      color: #c7cecb;
+    }
+
+    .stale-list {
+      gap: 0;
+    }
+
+    .stale-card {
+      opacity: 0.75;
+    }
+
+    .stale-meta {
+      margin-top: 5px;
+      font-size: 9px;
+      color: #747e83;
+    }
+
     @media (max-width: 1120px) {
       body { overflow: auto; }
       .app-shell { height: auto; }
@@ -670,14 +1034,14 @@
         <div class="mark" aria-hidden="true"></div>
         <div>
           <h1>MARCUS Visualizer</h1>
-          <p>Codex work queue demo</p>
+          <p>Live Codex queue</p>
         </div>
       </div>
 
       <div class="system-strip" aria-label="System status">
-        <span class="chip"><span class="pulse-dot"></span><strong>Live</strong> 3 Codex tasks</span>
-        <span class="chip">Waiting <strong>1 approval</strong></span>
-        <span class="chip">Stale <strong>2 projects</strong></span>
+        <span class="chip"><span class="pulse-dot"></span><strong>3</strong> active</span>
+        <span class="chip"><strong>1</strong> waiting</span>
+        <span class="chip"><strong>2</strong> cooling</span>
       </div>
 
       <div class="top-actions" aria-label="Display controls">
@@ -707,7 +1071,7 @@
 
       <aside class="panel side-panel">
         <div class="panel-header">
-          <h2 class="panel-title">Glance State</h2>
+          <h2 class="panel-title">At A Glance</h2>
           <span class="panel-count" id="briefClock">00:00</span>
         </div>
 
