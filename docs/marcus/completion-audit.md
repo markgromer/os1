@@ -15,7 +15,7 @@ Last authoritative production read: 2026-08-13 UTC at `https://task-tracker-5wsa
 | From-scratch project creation | Verified | Operation `op_EejJJ-WR7eHJCw` created and attested the Marcus PC Bridge Demo workspace, opened it locally, ran Codex, created the private GitHub repository, connected origin, and pushed the implementation. |
 | GitHub | Verified | GitHub read-back reports private repository `markgromer/marcus-pc-bridge-demo`, default branch `main`. The clean local checkout and remote both resolve to commit `2f5ea63018649caa0fccdb190684cefe3675f4a3`. |
 | Cloudflare | Verified | Corrective operation `op_rh-nlu6uWEfZrA` deployed the exact registered workspace with Wrangler 4.122.0. The registered production URL is `https://marcus-pc-bridge-demo.markgromer.workers.dev/`. Independent reads of `/` and `/health` returned HTTP 200; `/health` reported the expected service, version `0.1.0`, and `production` environment. |
-| OpenAI and voice | Verified | OpenAI is configured, Realtime uses `gpt-realtime-2.1`, and the official Agents SDK WebRTC path provides speech-to-speech, semantic VAD, interruption, transcription, and the durable `marcus_operator` bridge. The selected default voice is `cedar`. |
+| OpenAI and voice | Verified | OpenAI is configured, Realtime uses `gpt-realtime-2.1`, and the official Agents SDK WebRTC path provides speech-to-speech, semantic VAD, interruption, transcription, and the durable `marcus_operator` bridge. After production replacement, operator health, the deployed bundle, and a newly minted ephemeral session all reported the selected `cedar` voice. |
 | Text and email | Verified | Quo text and SMTP email are configured, provider-verified, and each has a receipt-backed approved production send. Draft review and exact approval remain mandatory before sending. |
 | Obsidian documentation | Verified for the requested documentation scope | `docs/marcus/` is an Obsidian-compatible linked vault with system documentation, daily/project notes, typed indexes, templates, decisions, status, sources, and the manual capture workflow. The automatic writer/indexer in [[context-memory]] is a planned enhancement. |
 | Secure approvals and verification | Verified | Consequential actions use exact-target durable approvals. Repository creation, push, Cloudflare deployment, messages, provider changes, and full-PC configuration remain separately controlled. Provider and desktop completion require read-back evidence. |
@@ -37,6 +37,8 @@ Last authoritative production read: 2026-08-13 UTC at `https://task-tracker-5wsa
 The accepted installed-Android session proved Realtime signaling, speech recognition, assistant audio, interruption, durable operator completion, network recovery, background recovery, installed context, and explicit phone confirmation. Telemetry stores no transcript, request, reply, or credential content.
 
 The final local regression suite passes `147/147`; syntax lint passes for 72 JavaScript files.
+
+Post-release verification for commit `d4c539e` confirmed that the replacement Render process retained 13/13 acceptance, the completed demo operation, Android confirmation, full-PC relay connectivity, and zero operator-health blockers. Production mobile assets return HTTP 200 with cache `marcus-mobile-v22`, the `Phone confirmed` state, and the `cedar` bundle default.
 
 ## Deployment Correction
 

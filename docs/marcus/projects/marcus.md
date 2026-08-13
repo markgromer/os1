@@ -56,4 +56,4 @@ The original trusted-operator goal is accepted at 13/13 production gates. Marcus
 
 ## Next Action
 
-- Deploy the final `cedar` voice/personality release, then implement the automatic writer/indexer against the structure defined in [[context-memory]].
+- Implement the automatic writer/indexer against the structure defined in [[context-memory]], while continuing ordinary production monitoring of the accepted operator foundation.
