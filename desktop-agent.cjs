@@ -24,6 +24,16 @@ const fs = require('fs');
 const os = require('os');
 const readline = require('readline');
 const { discoverRecentCodexWorkspaces, parseGitStatus } = require('./desktop-codex-sessions.cjs');
+const {
+  createPcAccessPolicy,
+  getPcInventory,
+  launchInstalledApplication,
+  listInstalledApplications,
+  listPcDirectory,
+  openPcItem,
+  readPcTextFile,
+  searchPcFiles,
+} = require('./desktop-pc-operator.cjs');
 
 const SERVER_URL = (process.argv[2] || process.env.MARCUS_SERVER_URL || '').trim();
 const DEFAULT_ADMIN_TOKEN_FILE = path.join(
@@ -31,6 +41,36 @@ const DEFAULT_ADMIN_TOKEN_FILE = path.join(
   'M.A.R.C.U.S',
   'mobile-live-admin-token.txt',
 );
+const DEFAULT_DESKTOP_CONFIG_FILE = path.join(
+  process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'),
+  'M.A.R.C.U.S',
+  'desktop-agent.json',
+);
+
+function readDesktopAgentConfig() {
+  const configFile = String(process.env.MARCUS_DESKTOP_CONFIG_FILE || DEFAULT_DESKTOP_CONFIG_FILE).trim();
+  if (!configFile) return {};
+  try {
+    const value = JSON.parse(fs.readFileSync(configFile, 'utf8').replace(/^\uFEFF/, ''));
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  } catch {
+    return {};
+  }
+}
+
+function booleanSetting(environmentName, configValue, fallback = false) {
+  const environmentValue = String(process.env[environmentName] || '').trim().toLowerCase();
+  if (environmentValue) return environmentValue === 'true';
+  return typeof configValue === 'boolean' ? configValue : fallback;
+}
+
+function listSetting(environmentName, configValue) {
+  const environmentValue = String(process.env[environmentName] || '').trim();
+  if (environmentValue) return environmentValue.split(path.delimiter).map((value) => value.trim()).filter(Boolean);
+  return Array.isArray(configValue) ? configValue.map((value) => String(value || '').trim()).filter(Boolean) : [];
+}
+
+const DESKTOP_CONFIG = readDesktopAgentConfig();
 
 function readAdminTokenFile() {
   const tokenFile = String(process.env.MARCUS_ADMIN_TOKEN_FILE || DEFAULT_ADMIN_TOKEN_FILE).trim();
@@ -43,13 +83,20 @@ function readAdminTokenFile() {
 }
 
 const ADMIN_TOKEN = (process.argv[3] || process.env.ADMIN_TOKEN || readAdminTokenFile()).trim();
-const DESKTOP_AGENT_ID = String(process.env.MARCUS_DESKTOP_AGENT_ID || os.hostname()).trim().slice(0, 200);
-const ALLOWED_WORKSPACE_ROOT_VALUES = String(process.env.MARCUS_ALLOWED_WORKSPACE_ROOTS || '')
-  .split(path.delimiter).map((value) => value.trim()).filter(Boolean);
-const ALLOW_BROAD_WORKSPACE_ROOTS = String(process.env.MARCUS_ALLOW_BROAD_WORKSPACE_ROOTS || '').trim().toLowerCase() === 'true';
-const CODEX_MONITOR_MODE = String(process.env.MARCUS_CODEX_MONITOR_MODE || 'kiosk').trim().toLowerCase();
+const DESKTOP_AGENT_ID = String(process.env.MARCUS_DESKTOP_AGENT_ID || DESKTOP_CONFIG.agentId || os.hostname()).trim().slice(0, 200);
+const ALLOWED_WORKSPACE_ROOT_VALUES = listSetting('MARCUS_ALLOWED_WORKSPACE_ROOTS', DESKTOP_CONFIG.allowedWorkspaceRoots);
+const ALLOW_BROAD_WORKSPACE_ROOTS = booleanSetting('MARCUS_ALLOW_BROAD_WORKSPACE_ROOTS', DESKTOP_CONFIG.allowBroadWorkspaceRoots);
+const FULL_PC_ACCESS = booleanSetting('MARCUS_FULL_PC_ACCESS', DESKTOP_CONFIG.fullPcAccess);
+const PC_ACCESS_ROOT_VALUES = listSetting('MARCUS_PC_ACCESS_ROOTS', DESKTOP_CONFIG.pcAccessRoots);
+const CODEX_MONITOR_MODE = String(process.env.MARCUS_CODEX_MONITOR_MODE || DESKTOP_CONFIG.codexMonitorMode || 'kiosk').trim().toLowerCase();
 const NEW_PROJECT_ROOT = String(process.env.MARCUS_NEW_PROJECT_ROOT
+  || DESKTOP_CONFIG.newProjectRoot
   || path.join(os.homedir(), 'OneDrive', 'Documents', 'Marcus Projects')).trim();
+const PC_ACCESS_POLICY = createPcAccessPolicy({
+  fullPcAccess: FULL_PC_ACCESS,
+  pcAccessRoots: PC_ACCESS_ROOT_VALUES,
+  workspaceRoots: ALLOWED_WORKSPACE_ROOT_VALUES,
+});
 
 if (!SERVER_URL) {
   console.error('Usage: node desktop-agent.cjs <SERVER_URL> [ADMIN_TOKEN]');
@@ -1067,6 +1114,20 @@ async function checkDesktopActions() {
         outcome = await connectGithubRepository(action?.payload || {});
       } else if (type === 'deploy-cloudflare-project') {
         outcome = await deployCloudflareProject(action?.payload || {});
+      } else if (type === 'pc-inventory') {
+        outcome = getPcInventory(PC_ACCESS_POLICY);
+      } else if (type === 'pc-search-files') {
+        outcome = searchPcFiles(action?.payload || {}, PC_ACCESS_POLICY);
+      } else if (type === 'pc-list-directory') {
+        outcome = listPcDirectory(action?.payload || {}, PC_ACCESS_POLICY);
+      } else if (type === 'pc-read-text-file') {
+        outcome = readPcTextFile(action?.payload || {}, PC_ACCESS_POLICY);
+      } else if (type === 'pc-list-applications') {
+        outcome = listInstalledApplications(action?.payload || {});
+      } else if (type === 'pc-open-item') {
+        outcome = openPcItem(action?.payload || {}, PC_ACCESS_POLICY);
+      } else if (type === 'pc-launch-application') {
+        outcome = launchInstalledApplication(action?.payload || {});
       }
 
       responses.push({
@@ -1472,10 +1533,13 @@ async function tick() {
   const payload = {
     agentId: DESKTOP_AGENT_ID,
     desktopAuthorization: {
-      scope: ALLOW_BROAD_WORKSPACE_ROOTS ? 'full_pc' : 'workspace_roots',
+      scope: FULL_PC_ACCESS ? 'full_pc' : 'workspace_roots',
       broadWorkspaceRootsAllowed: ALLOW_BROAD_WORKSPACE_ROOTS,
       allowedRoots: ALLOWED_WORKSPACE_ROOT_VALUES,
       newProjectRoot: NEW_PROJECT_ROOT,
+      fullPcAccess: FULL_PC_ACCESS,
+      pcAccessRoots: PC_ACCESS_POLICY.roots,
+      capabilities: PC_ACCESS_POLICY.capabilities,
     },
     windowTitle: ctx.windowTitle,
     processName: ctx.processName,
@@ -1519,6 +1583,7 @@ console.log('  M.A.R.C.U.S. Desktop Agent');
 console.log(`  Server: ${SERVER_URL}`);
 console.log(`  Auth:   ${ADMIN_TOKEN ? 'Bearer token set' : 'no token (local mode)'}`);
 console.log(`  Poll:   every ${POLL_MS / 1000}s`);
+console.log(`  PC:     ${FULL_PC_ACCESS ? `full access (${PC_ACCESS_POLICY.roots.join(', ')})` : 'workspace roots only'}`);
 console.log('  Press Ctrl+C to stop.');
 console.log('');
 

@@ -520,8 +520,10 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     const relayResponse = await fetch(`${base}/api/desktop-context/relay`, { method: 'POST', headers: agencyHeaders, body: JSON.stringify({
       agentId: 'agent-smoke', windowTitle: 'Codex', processName: 'ChatGPT', idleSeconds: 1,
       desktopAuthorization: {
-        scope: 'full_pc', broadWorkspaceRootsAllowed: true,
+        scope: 'full_pc', broadWorkspaceRootsAllowed: true, fullPcAccess: true,
         allowedRoots: [server.workspaceRoot], newProjectRoot: server.workspaceRoot,
+        pcAccessRoots: [path.parse(server.workspaceRoot).root],
+        capabilities: ['inventory', 'search_files', 'read_text_file', 'open_file_or_folder', 'launch_installed_application'],
       },
       codexWorkspaces: [{
         sessionId: 'session-smoke', workspacePath: codexWorkspace, folderName: 'scoopFairies', projectName: 'Scoop Fairies',
@@ -536,6 +538,35 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     assert.equal(relayedContext.codexWorkspaces[0].projectName, 'Scoop Fairies');
     assert.equal(Object.hasOwn(relayedContext.codexWorkspaces[0], 'transcript'), false);
     assert.equal(relayedContext.desktopAuthorization.scope, 'full_pc');
+    assert.equal(relayedContext.desktopAuthorization.fullPcAccess, true);
+    assert.deepEqual(relayedContext.desktopAuthorization.capabilities, ['inventory', 'search_files', 'read_text_file', 'open_file_or_folder', 'launch_installed_application']);
+    const pcCapabilities = await (await fetch(`${base}/api/marcus/pc/capabilities`, { headers: agencyHeaders })).json();
+    assert.equal(pcCapabilities.relayOnline, true);
+    assert.equal(pcCapabilities.authorization.scope, 'full_pc');
+    assert.equal(pcCapabilities.authorization.fullPcAccess, true);
+
+    const pcSearchRequest = fetch(`${base}/api/marcus/pc/actions`, {
+      method: 'POST', headers: agencyHeaders, body: JSON.stringify({
+        tool: 'pc_search_files', arguments: { query: 'Scoop Fairies' }, requestMessage: 'Find Scoop Fairies on my PC.',
+      }),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const pcActions = await (await fetch(`${base}/api/desktop-context/actions?agentId=agent-smoke`, { headers: agencyHeaders })).json();
+    const pcSearchAction = pcActions.actions.find((item) => item.type === 'pc-search-files');
+    assert.ok(pcSearchAction);
+    const pcSearchRelay = await fetch(`${base}/api/desktop-context/action-results`, {
+      method: 'POST', headers: agencyHeaders, body: JSON.stringify({ agentId: 'agent-smoke', results: [{
+        id: pcSearchAction.id, type: pcSearchAction.type, ok: true, details: {
+          query: 'scoop fairies', results: [{ name: 'Scoop Fairies', path: codexWorkspace, type: 'directory' }],
+        },
+      }] }),
+    });
+    assert.equal(pcSearchRelay.status, 200);
+    const pcSearchResponse = await pcSearchRequest;
+    const pcSearch = await pcSearchResponse.json();
+    assert.equal(pcSearchResponse.status, 200);
+    assert.equal(pcSearch.ok, true);
+    assert.equal(pcSearch.details.results[0].name, 'Scoop Fairies');
     const bootstrapResponse = await fetch(`${base}/api/marcus/live/chat`, { method: 'POST', headers: agencyHeaders, body: JSON.stringify({
       message: 'Create a new project called Smoke Forge from scratch and publish it through GitHub and Cloudflare.',
     }) });
