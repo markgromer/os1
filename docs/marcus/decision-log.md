@@ -329,3 +329,11 @@ Context: External-action routes were classified as Live-session routes. A short-
 Decision: Remove every external-action route from Live-token authorization and require durable admin authentication before conversational approval can execute. Add an exact-draft review dialog to the paired mobile `Verify` workflow showing recipient, subject, project, reason, body, and draft id. Keep approve-and-send disabled until Mark authorizes the displayed draft; preserve separate approve and provider-send requests behind that one explicit command.
 
 Consequence: A copied ephemeral token cannot inspect or authorize messages. The production service worker returned 401 for direct Live-token draft access and `reauthenticationRequired` for a Live-token-only send phrase. The paired 390x844 dialog rendered draft `V8uMUUZjiRz1` with zero browser errors or warnings before its later explicit approval.
+
+## 2026-08-13: Whole-PC Scope Is A Durable Critical Grant, Not A Startup Flag
+
+Context: Mark wants Marcus to discover and switch among projects anywhere on his PC, create new workspaces, open local tools, and operate from phone instructions. The scheduled relay was limited to three workspace roots, while silently changing an environment flag would provide no exact-target review, durable authorization record, or persisted-policy verification.
+
+Decision: Model whole-PC scope as a two-step critical operation bound to one desktop agent and explicit fixed-drive roots. The first step persists the local policy only after a checkbox plus typed `I understand`; the second reads back runtime and disk state and must match the immutable operation target. Keep credential contents, arbitrary shell execution, and consequential external actions outside this grant.
+
+Consequence: Render serves `marcus-mobile-v20`, and operation `op_1HYqnishgglGZQ` is prepared for `Marks_PC: C:\`. It remains `waiting_for_approval` with zero attempts, so no wider access exists until Mark confirms it. After approval, production must prove the `full_pc` manifest, persisted-policy verification, and representative inventory/search/read behavior before this capability is accepted.

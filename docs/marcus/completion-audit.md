@@ -1,6 +1,6 @@
 # Marcus Completion Audit
 
-Status: the trusted operator, desktop Codex, messaging, provider, and durable-hosting paths are implemented and verified. The persistent goal remains open for physical Android voice acceptance and the approval-gated publication of the new from-scratch demo.
+Status: the trusted operator, desktop Codex, messaging, provider, and durable-hosting paths are implemented and verified. The persistent goal remains open for the prepared whole-PC grant, physical Android voice acceptance, and approval-gated publication of the new from-scratch demo.
 
 Last authoritative production read: 2026-08-13 UTC at `https://task-tracker-5wsa.onrender.com`.
 
@@ -21,7 +21,7 @@ Last authoritative production read: 2026-08-13 UTC at `https://task-tracker-5wsa
 | Email messaging | Verified and accepted | SMTP through Resend is configured and verified for `Marcus <marcus@gromore.media>`. Combined production acceptance contains a receipt-backed approved SMTP send after current verification. | None. |
 | Obsidian-compatible documentation | Verified and maintained | `docs/marcus/` contains and cross-links product vision, execution loop, access model, system map, roadmap, decision log, voice selection, and this current audit. | Keep notes aligned when the demo URL and phone acceptance arrive. |
 | Secure approvals | Verified | Consequential actions use exact-target durable approvals. The paired admin context is required; Live-token-only mutation attempts fail closed. Repository creation, push, and Cloudflare deployment remain separate actions. | Exercise the remaining three exact demo approvals. |
-| Full-PC project use | General tools deployed; exact drive-root approval prepared | The scheduled relay declares exact roots plus eight typed capabilities. The new critical operation is exact-agent bound, queues nothing before strong confirmation, persists the local policy, and requires matching runtime/disk read-back. The 144-test suite passes. | Deploy the approval UI, then Mark must review and strongly confirm the exact drive roots. Production inventory/search/read acceptance follows; arbitrary shell, credentials, deletion, installs, and external mutations retain separate controls. |
+| Full-PC project use | Approval UI deployed; exact drive-root operation waiting | Render serves mobile cache `marcus-mobile-v20`. Production operation `op_1HYqnishgglGZQ` targets only desktop agent `Marks_PC` and `C:\`, is `critical`, and remains `waiting_for_approval` with zero attempts. The scheduled relay declares eight typed capabilities; the operation persists the local policy and requires matching runtime/disk read-back. The 144-test suite passes. | Mark must strongly confirm the prepared operation. Production inventory/search/read acceptance follows; arbitrary shell, credentials, deletion, installs, and external mutations retain separate controls. |
 | Android/mobile access | Installed PWA verified; physical acceptance incomplete | The latest physical installed-Android session proves installed context, Realtime signaling, speech recognition, operator completion, and spoken audio. Pairing, operation tracking, project requests, and provider approvals work in production. | The same fresh session must prove interruption, network recovery, lock/background recovery, then be confirmed on the phone. |
 | Durable production hosting | Verified | Render process replacements preserved mission memory, operations, pairing, provider configuration, desktop jobs, and approvals. Production health and the desktop relay are currently online. | None. |
 | Best maintained prebuilt voice interface | Selected and integrated; physical acceptance incomplete | Marcus uses the official OpenAI Agents SDK Realtime WebRTC path with ephemeral credentials, semantic VAD, speech-to-speech, interruption events, and the durable `marcus_operator` bridge. Current official guidance continues to recommend browser WebRTC for this topology; ElevenLabs and LiveKit remain documented alternatives. | Complete the three missing physical lifecycle gates and phone confirmation. |
@@ -29,7 +29,7 @@ Last authoritative production read: 2026-08-13 UTC at `https://task-tracker-5wsa
 
 ## Current Acceptance
 
-`GET /api/marcus/acceptance` passes 11/12 production gates. The only missing combined gate is `physicalAndroidVoiceAccepted`.
+`GET /api/marcus/acceptance` passes 11/13 production gates. The missing combined gates are `fullPcAccessReady` and `physicalAndroidVoiceAccepted`.
 
 Current local regression passes `144/144`; syntax lint passes for 71 JavaScript files.
 
@@ -42,7 +42,7 @@ The new demo operation has completed 3/8 durable steps and is waiting at one exa
 
 ## Required Operator Actions
 
-1. After the new mobile build is live, open `Verify` -> `PC operator` and prepare the exact drive-root approval. Review the target and boundaries, then strongly confirm only if they are correct.
+1. In `Active work`, review operation `op_1HYqnishgglGZQ`. Confirm the exact target is `Marks_PC: C:\`, check the authorization box, enter `I understand`, and select `Approve and run` only if those details are correct.
 2. In the installed Marcus app, run `Verify` -> `New test` -> `Start voice test`; complete interruption, network recovery, lock/background recovery, then select `Confirm on this phone`.
 3. In `Active work`, review and approve only `create_repository:markgromer/marcus-pc-bridge-demo (private)`.
 4. Review the later commit/push approval when Marcus presents its exact branch and repository.
