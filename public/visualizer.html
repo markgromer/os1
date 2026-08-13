@@ -1,0 +1,1089 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#111214">
+  <title>MARCUS Visualizer Demo</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #111214;
+      --bg-deep: #0b0c0d;
+      --panel: #17191b;
+      --panel-soft: #1d2023;
+      --line: #30353a;
+      --line-strong: #47515a;
+      --text: #f0eee7;
+      --muted: #a7aaa7;
+      --faint: #737a7d;
+      --cyan: #54d8e8;
+      --green: #68d391;
+      --amber: #e5b45b;
+      --red: #ef7770;
+      --violet: #b7a4ff;
+      --blue: #7cb7ff;
+      --shadow: 0 20px 80px rgba(0, 0, 0, 0.45);
+      --radius: 8px;
+      --mono: "SFMono-Regular", "Cascadia Code", "Roboto Mono", Consolas, monospace;
+      --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      height: 100%;
+    }
+
+    body {
+      margin: 0;
+      min-width: 1040px;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at 16% 8%, rgba(84, 216, 232, 0.08), transparent 26%),
+        radial-gradient(circle at 82% 12%, rgba(229, 180, 91, 0.07), transparent 24%),
+        linear-gradient(135deg, #101112 0%, #161616 42%, #101314 100%);
+      color: var(--text);
+      font-family: var(--sans);
+      letter-spacing: 0;
+    }
+
+    button {
+      font: inherit;
+    }
+
+    .app-shell {
+      display: grid;
+      grid-template-rows: 58px 1fr;
+      height: 100vh;
+      padding: 10px;
+      gap: 10px;
+    }
+
+    .topbar {
+      display: grid;
+      grid-template-columns: 290px 1fr 360px;
+      align-items: center;
+      border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(17, 18, 20, 0.78);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(18px);
+      border-radius: var(--radius);
+      padding: 0 14px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+    }
+
+    .mark {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      border: 1px solid rgba(84,216,232,0.7);
+      background:
+        linear-gradient(90deg, transparent 47%, rgba(84,216,232,0.9) 48%, rgba(84,216,232,0.9) 52%, transparent 53%),
+        linear-gradient(0deg, transparent 47%, rgba(84,216,232,0.5) 48%, rgba(84,216,232,0.5) 52%, transparent 53%),
+        radial-gradient(circle, rgba(84,216,232,0.2), rgba(84,216,232,0.03));
+      box-shadow: 0 0 24px rgba(84,216,232,0.22);
+    }
+
+    .brand h1 {
+      margin: 0;
+      font-size: 15px;
+      line-height: 1.1;
+      font-weight: 700;
+    }
+
+    .brand p {
+      margin: 2px 0 0;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .system-strip {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      height: 28px;
+      padding: 0 10px;
+      border: 1px solid rgba(255,255,255,0.09);
+      border-radius: 999px;
+      color: var(--muted);
+      background: rgba(255,255,255,0.035);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .chip strong {
+      color: var(--text);
+      font-weight: 600;
+    }
+
+    .pulse-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 0 0 rgba(104,211,145,0.55);
+      animation: beat 2.4s infinite;
+    }
+
+    @keyframes beat {
+      0% { box-shadow: 0 0 0 0 rgba(104,211,145,0.45); }
+      70% { box-shadow: 0 0 0 9px rgba(104,211,145,0); }
+      100% { box-shadow: 0 0 0 0 rgba(104,211,145,0); }
+    }
+
+    .top-actions {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+
+    .icon-btn {
+      width: 32px;
+      height: 32px;
+      display: inline-grid;
+      place-items: center;
+      border: 1px solid rgba(255,255,255,0.09);
+      border-radius: 8px;
+      color: var(--muted);
+      background: rgba(255,255,255,0.035);
+      cursor: pointer;
+    }
+
+    .icon-btn:hover,
+    .icon-btn.active {
+      color: var(--text);
+      border-color: rgba(84,216,232,0.45);
+      background: rgba(84,216,232,0.09);
+    }
+
+    .workspace {
+      display: grid;
+      grid-template-columns: 292px minmax(480px, 1fr) 380px;
+      min-height: 0;
+      gap: 10px;
+    }
+
+    .panel {
+      min-height: 0;
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: var(--radius);
+      background: rgba(23, 25, 27, 0.82);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(18px);
+      overflow: hidden;
+    }
+
+    .panel-header {
+      height: 45px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 14px;
+      border-bottom: 1px solid rgba(255,255,255,0.075);
+      background: rgba(255,255,255,0.025);
+    }
+
+    .panel-title {
+      margin: 0;
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #d8d7d1;
+    }
+
+    .panel-count {
+      color: var(--faint);
+      font-family: var(--mono);
+      font-size: 11px;
+    }
+
+    .left-panel {
+      display: grid;
+      grid-template-rows: 45px auto 1fr auto;
+    }
+
+    .status-stack {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      padding: 12px;
+      border-bottom: 1px solid rgba(255,255,255,0.07);
+    }
+
+    .metric {
+      min-width: 0;
+      border: 1px solid rgba(255,255,255,0.075);
+      border-radius: 8px;
+      background: rgba(255,255,255,0.035);
+      padding: 10px 8px;
+    }
+
+    .metric b {
+      display: block;
+      font-family: var(--mono);
+      font-size: 19px;
+      line-height: 1;
+      font-weight: 700;
+    }
+
+    .metric span {
+      display: block;
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 10px;
+      white-space: nowrap;
+    }
+
+    .task-list {
+      overflow: auto;
+      padding: 10px;
+    }
+
+    .task-card {
+      width: 100%;
+      display: grid;
+      gap: 8px;
+      border: 1px solid rgba(255,255,255,0.075);
+      border-radius: 8px;
+      background: rgba(255,255,255,0.03);
+      color: inherit;
+      text-align: left;
+      padding: 11px;
+      margin-bottom: 8px;
+      cursor: pointer;
+    }
+
+    .task-card:hover,
+    .task-card.active {
+      border-color: rgba(84,216,232,0.45);
+      background: rgba(84,216,232,0.075);
+    }
+
+    .task-row {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .task-name {
+      margin: 0;
+      font-size: 13px;
+      line-height: 1.25;
+      font-weight: 700;
+    }
+
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      height: 20px;
+      border-radius: 999px;
+      padding: 0 7px;
+      border: 1px solid currentColor;
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+
+    .badge-active { color: var(--cyan); }
+    .badge-waiting { color: var(--amber); }
+    .badge-blocked { color: var(--red); }
+    .badge-done { color: var(--green); }
+
+    .task-card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .task-meta {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      color: var(--faint);
+      font-family: var(--mono);
+      font-size: 10px;
+    }
+
+    .operator-footer {
+      border-top: 1px solid rgba(255,255,255,0.07);
+      padding: 12px;
+    }
+
+    .attention {
+      border: 1px solid rgba(229,180,91,0.25);
+      border-radius: 8px;
+      background: rgba(229,180,91,0.06);
+      padding: 11px;
+    }
+
+    .attention strong {
+      display: block;
+      color: var(--amber);
+      font-size: 12px;
+      margin-bottom: 5px;
+    }
+
+    .attention p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .graph-panel {
+      position: relative;
+      display: grid;
+      grid-template-rows: 45px 1fr 138px;
+    }
+
+    .graph-wrap {
+      position: relative;
+      overflow: hidden;
+      min-height: 0;
+      background:
+        linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px);
+      background-size: 34px 34px;
+    }
+
+    .graph-canvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+    }
+
+    .edge {
+      stroke: rgba(150, 160, 164, 0.38);
+      stroke-width: 1;
+    }
+
+    .edge.hot {
+      stroke: rgba(84, 216, 232, 0.75);
+      stroke-width: 1.4;
+      stroke-dasharray: 8 10;
+      animation: trace 3.5s linear infinite;
+    }
+
+    @keyframes trace {
+      to { stroke-dashoffset: -72; }
+    }
+
+    .node {
+      position: absolute;
+      transform: translate(-50%, -50%);
+      border: 1px solid rgba(255,255,255,0.15);
+      background: rgba(21, 23, 25, 0.92);
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      color: var(--text);
+      cursor: pointer;
+      transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+      user-select: none;
+    }
+
+    .node:hover,
+    .node.selected {
+      transform: translate(-50%, -50%) scale(1.08);
+      border-color: rgba(84,216,232,0.75);
+      background: rgba(30, 39, 42, 0.96);
+    }
+
+    .node.project {
+      width: 92px;
+      height: 92px;
+      font-size: 12px;
+      font-weight: 800;
+      box-shadow: inset 0 0 22px rgba(84,216,232,0.08), 0 0 35px rgba(0,0,0,0.3);
+    }
+
+    .node.task {
+      width: 62px;
+      height: 62px;
+      font-size: 10px;
+      font-weight: 800;
+      text-align: center;
+      line-height: 1.1;
+    }
+
+    .node.tool {
+      width: 42px;
+      height: 42px;
+      font-family: var(--mono);
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .node.doc {
+      width: 36px;
+      height: 36px;
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--violet);
+    }
+
+    .node.live {
+      box-shadow: 0 0 0 0 rgba(84,216,232,0.4), 0 0 30px rgba(84,216,232,0.18);
+      animation: liveNode 2.8s infinite;
+    }
+
+    @keyframes liveNode {
+      0% { box-shadow: 0 0 0 0 rgba(84,216,232,0.35), 0 0 30px rgba(84,216,232,0.18); }
+      70% { box-shadow: 0 0 0 16px rgba(84,216,232,0), 0 0 30px rgba(84,216,232,0.18); }
+      100% { box-shadow: 0 0 0 0 rgba(84,216,232,0), 0 0 30px rgba(84,216,232,0.18); }
+    }
+
+    .node.waiting { border-color: rgba(229,180,91,0.45); }
+    .node.blocked { border-color: rgba(239,119,112,0.55); }
+    .node.done { border-color: rgba(104,211,145,0.45); opacity: 0.72; }
+
+    .node-label {
+      position: absolute;
+      top: calc(100% + 8px);
+      left: 50%;
+      transform: translateX(-50%);
+      width: 116px;
+      color: var(--muted);
+      text-align: center;
+      font-size: 11px;
+      font-weight: 600;
+      pointer-events: none;
+    }
+
+    .legend {
+      position: absolute;
+      left: 14px;
+      bottom: 14px;
+      display: flex;
+      gap: 7px;
+      flex-wrap: wrap;
+      max-width: 70%;
+    }
+
+    .legend .chip {
+      height: 24px;
+      font-size: 11px;
+      background: rgba(11,12,13,0.52);
+    }
+
+    .mini-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+
+    .now-ribbon {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+      padding: 12px;
+      border-top: 1px solid rgba(255,255,255,0.07);
+      background: rgba(11,12,13,0.32);
+    }
+
+    .ribbon-card {
+      min-width: 0;
+      border: 1px solid rgba(255,255,255,0.075);
+      border-radius: 8px;
+      background: rgba(255,255,255,0.028);
+      padding: 10px;
+    }
+
+    .ribbon-card span {
+      display: block;
+      color: var(--faint);
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      margin-bottom: 6px;
+    }
+
+    .ribbon-card strong {
+      display: block;
+      color: var(--text);
+      font-size: 12px;
+      line-height: 1.3;
+      font-weight: 650;
+    }
+
+    .brief-panel {
+      display: grid;
+      grid-template-rows: 45px auto 1fr auto;
+    }
+
+    .brief-body {
+      overflow: auto;
+      padding: 16px;
+    }
+
+    .brief-kicker {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 11px;
+    }
+
+    .brief-title {
+      margin: 0;
+      font-size: 21px;
+      line-height: 1.12;
+      font-weight: 800;
+    }
+
+    .brief-summary {
+      margin: 9px 0 18px;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .brief-section {
+      border-top: 1px solid rgba(255,255,255,0.075);
+      padding-top: 13px;
+      margin-top: 13px;
+    }
+
+    .brief-section h3 {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 0 0 8px;
+      color: #d8d7d1;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .brief-section p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .brief-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 9px;
+    }
+
+    .fact {
+      border: 1px solid rgba(255,255,255,0.075);
+      border-radius: 8px;
+      background: rgba(255,255,255,0.03);
+      padding: 10px;
+      min-width: 0;
+    }
+
+    .fact span {
+      display: block;
+      color: var(--faint);
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      margin-bottom: 6px;
+    }
+
+    .fact strong {
+      display: block;
+      color: var(--text);
+      font-size: 12px;
+      line-height: 1.3;
+      font-weight: 650;
+    }
+
+    .timeline {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .timeline li {
+      display: grid;
+      grid-template-columns: 54px 1fr;
+      gap: 10px;
+      padding: 9px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.055);
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .timeline time {
+      color: var(--faint);
+      font-family: var(--mono);
+      font-size: 10px;
+      padding-top: 2px;
+    }
+
+    .brief-actions {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+      padding: 12px;
+      border-top: 1px solid rgba(255,255,255,0.075);
+      background: rgba(11,12,13,0.28);
+    }
+
+    .control {
+      height: 36px;
+      border: 1px solid rgba(255,255,255,0.09);
+      border-radius: 8px;
+      color: var(--muted);
+      background: rgba(255,255,255,0.035);
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .control:hover {
+      color: var(--text);
+      border-color: rgba(255,255,255,0.18);
+      background: rgba(255,255,255,0.06);
+    }
+
+    .control.primary {
+      color: #061113;
+      border-color: rgba(84,216,232,0.75);
+      background: var(--cyan);
+    }
+
+    .source-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+    }
+
+    .source-pill {
+      max-width: 100%;
+      height: 26px;
+      display: inline-flex;
+      align-items: center;
+      border: 1px solid rgba(183,164,255,0.28);
+      border-radius: 999px;
+      padding: 0 9px;
+      color: #d8ceff;
+      background: rgba(183,164,255,0.06);
+      font-family: var(--mono);
+      font-size: 10px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .density-compact .task-card { padding: 9px; }
+    .density-compact .brief-body { padding: 13px; }
+    .density-compact .now-ribbon { padding: 10px; }
+    .density-compact .ribbon-card { padding: 8px; }
+
+    @media (max-width: 1180px) {
+      body { min-width: 0; overflow: auto; }
+      .app-shell { height: auto; min-height: 100vh; }
+      .topbar { grid-template-columns: 1fr; height: auto; gap: 10px; padding: 12px; }
+      .system-strip { justify-content: flex-start; flex-wrap: wrap; }
+      .top-actions { justify-content: flex-start; }
+      .workspace { grid-template-columns: 1fr; }
+      .panel { min-height: 440px; }
+      .graph-panel { min-height: 620px; }
+      .brief-panel { min-height: 640px; }
+      .now-ribbon { grid-template-columns: 1fr 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main class="app-shell">
+    <header class="topbar">
+      <div class="brand" aria-label="MARCUS Visualizer">
+        <div class="mark" aria-hidden="true"></div>
+        <div>
+          <h1>MARCUS Visualizer</h1>
+          <p>Desktop operations map demo</p>
+        </div>
+      </div>
+
+      <div class="system-strip" aria-label="System status">
+        <span class="chip"><span class="pulse-dot"></span><strong>Live</strong> observer mode</span>
+        <span class="chip">Codex <strong>active</strong></span>
+        <span class="chip">Desktop queue <strong>3</strong></span>
+        <span class="chip">Attention <strong>1</strong></span>
+      </div>
+
+      <div class="top-actions" aria-label="Display controls">
+        <button class="icon-btn active" type="button" title="Graph view" aria-label="Graph view">G</button>
+        <button class="icon-btn" type="button" title="Timeline view" aria-label="Timeline view">T</button>
+        <button class="icon-btn" type="button" title="Focus mode" aria-label="Focus mode" id="focusToggle">F</button>
+        <button class="icon-btn" type="button" title="Compact density" aria-label="Compact density" id="densityToggle">C</button>
+      </div>
+    </header>
+
+    <section class="workspace" aria-label="MARCUS operator console">
+      <aside class="panel left-panel">
+        <div class="panel-header">
+          <h2 class="panel-title">Work Queue</h2>
+          <span class="panel-count">04 tasks</span>
+        </div>
+
+        <div class="status-stack">
+          <div class="metric"><b style="color: var(--cyan)">2</b><span>Active</span></div>
+          <div class="metric"><b style="color: var(--amber)">1</b><span>Waiting</span></div>
+          <div class="metric"><b style="color: var(--red)">1</b><span>Blocked</span></div>
+        </div>
+
+        <div class="task-list" id="taskList" aria-label="Tasks"></div>
+
+        <div class="operator-footer">
+          <div class="attention">
+            <strong>Needs Mark</strong>
+            <p>One deployment approval is waiting before MARCUS can publish the quote flow changes.</p>
+          </div>
+        </div>
+      </aside>
+
+      <section class="panel graph-panel">
+        <div class="panel-header">
+          <h2 class="panel-title">Live Work Graph</h2>
+          <span class="panel-count" id="graphMode">clustered by project</span>
+        </div>
+
+        <div class="graph-wrap" id="graphWrap">
+          <svg class="graph-canvas" id="edgeLayer" viewBox="0 0 1000 680" preserveAspectRatio="none" aria-hidden="true"></svg>
+          <div class="legend" aria-label="Graph legend">
+            <span class="chip" style="color: var(--cyan)"><span class="mini-dot"></span>active</span>
+            <span class="chip" style="color: var(--amber)"><span class="mini-dot"></span>waiting</span>
+            <span class="chip" style="color: var(--red)"><span class="mini-dot"></span>blocked</span>
+            <span class="chip" style="color: var(--violet)"><span class="mini-dot"></span>docs</span>
+            <span class="chip" style="color: var(--blue)"><span class="mini-dot"></span>code</span>
+          </div>
+        </div>
+
+        <div class="now-ribbon" aria-label="Current action summary">
+          <div class="ribbon-card"><span>Current action</span><strong id="ribbonAction">Checking mobile OCR results</strong></div>
+          <div class="ribbon-card"><span>Tool</span><strong id="ribbonTool">Codex</strong></div>
+          <div class="ribbon-card"><span>Next</span><strong id="ribbonNext">Adjust spacing and rerun audit</strong></div>
+          <div class="ribbon-card"><span>Risk</span><strong id="ribbonRisk">Medium layout risk</strong></div>
+        </div>
+      </section>
+
+      <aside class="panel brief-panel">
+        <div class="panel-header">
+          <h2 class="panel-title">Human Brief</h2>
+          <span class="panel-count" id="briefClock">00:00</span>
+        </div>
+
+        <div class="brief-body" id="briefBody" aria-live="polite"></div>
+
+        <div class="brief-actions">
+          <button class="control primary" type="button" id="actionAdvance">Advance</button>
+          <button class="control" type="button" id="actionWaiting">Wait</button>
+          <button class="control" type="button" id="actionBlocked">Block</button>
+          <button class="control" type="button" id="actionDone">Done</button>
+        </div>
+      </aside>
+    </section>
+  </main>
+
+  <script>
+    const tasks = [
+      {
+        id: "quote",
+        name: "Freedom Scoopers quote flow",
+        project: "Freedom Scoopers",
+        status: "active",
+        tool: "Codex",
+        action: "Checking mobile OCR results",
+        summary: "MARCUS is reviewing the mobile quote path after copy and layout changes, with special attention on small-phone readability.",
+        why: "The quote flow needs to stay readable before the next deployment. The current risk is crowded text near the arrival CTA.",
+        next: "Adjust spacing and rerun the OCR audit.",
+        risk: "Medium layout risk",
+        confidence: "78%",
+        sources: ["public/mobile.html", "client/mobile-operation-tracker.js", "scripts/mobile-ocr-audit.mjs"],
+        timeline: [
+          ["10:42", "Updated arrival CTA copy for the quote path."],
+          ["10:45", "Ran mobile OCR audit against the arrival screen."],
+          ["10:47", "Found crowded text near the primary action."],
+          ["10:49", "Preparing spacing adjustment before verification."]
+        ]
+      },
+      {
+        id: "desktop",
+        name: "Desktop action queue",
+        project: "MARCUS Core",
+        status: "active",
+        tool: "Desktop agent",
+        action: "Summarizing available operator actions",
+        summary: "MARCUS is turning low-level desktop actions into a short operator queue that can be approved, paused, or dismissed.",
+        why: "The visualizer should show what needs attention without exposing raw command noise first.",
+        next: "Group pending actions by project and urgency.",
+        risk: "Low execution risk",
+        confidence: "86%",
+        sources: ["desktop-agent.cjs", "marcus/operations/desktop_action_queue.js", "test/desktop-action-queue.test.js"],
+        timeline: [
+          ["10:31", "Read desktop action queue state."],
+          ["10:36", "Collapsed duplicate browser actions into one brief."],
+          ["10:39", "Marked one item as waiting on approval."]
+        ]
+      },
+      {
+        id: "docs",
+        name: "MARCUS system map",
+        project: "Knowledge Base",
+        status: "waiting",
+        tool: "Obsidian docs",
+        action: "Waiting for product direction",
+        summary: "MARCUS has enough implementation context to update the system map, but the desktop visualizer direction should be locked first.",
+        why: "The docs should describe the actual operator experience, not an older generic dashboard model.",
+        next: "Update the current-system map after visual direction is accepted.",
+        risk: "Direction drift",
+        confidence: "64%",
+        sources: ["docs/marcus/current-system-map.md", "docs/marcus/product-vision.md", "docs/marcus/decision-log.md"],
+        timeline: [
+          ["09:58", "Reviewed current MARCUS architecture notes."],
+          ["10:12", "Identified visualizer as a new operator surface."],
+          ["10:21", "Waiting for look-and-feel decision."]
+        ]
+      },
+      {
+        id: "publish",
+        name: "Deployment safeguard",
+        project: "MARCUS Core",
+        status: "blocked",
+        tool: "Approval service",
+        action: "Blocked by publish approval",
+        summary: "MARCUS is holding a publish-capable action until Mark confirms the exact deployment target and scope.",
+        why: "Publishing should stay explicit when production behavior can change.",
+        next: "Ask for approval with target, branch, and expected result.",
+        risk: "Production change",
+        confidence: "91%",
+        sources: ["marcus/approvals/publish_safeguard.js", "marcus/approvals/approval_service.js"],
+        timeline: [
+          ["10:05", "Detected publish-capable command."],
+          ["10:06", "Checked approval policy."],
+          ["10:06", "Paused action and queued approval request."]
+        ]
+      }
+    ];
+
+    const nodes = [
+      { id: "core", label: "MARCUS", type: "project", x: 50, y: 45 },
+      { id: "quote", label: "Quote Flow", type: "task", x: 28, y: 32 },
+      { id: "desktop", label: "Desktop Queue", type: "task", x: 70, y: 34 },
+      { id: "docs", label: "System Map", type: "task", x: 36, y: 66 },
+      { id: "publish", label: "Publish Guard", type: "task", x: 68, y: 67 },
+      { id: "codex", label: "Cx", type: "tool", x: 17, y: 50 },
+      { id: "agent", label: "Pc", type: "tool", x: 83, y: 50 },
+      { id: "doc1", label: "md", type: "doc", x: 49, y: 78 },
+      { id: "code1", label: "js", type: "doc", x: 49, y: 20 }
+    ];
+
+    const edges = [
+      ["core", "quote", true],
+      ["core", "desktop", true],
+      ["core", "docs", false],
+      ["core", "publish", false],
+      ["quote", "codex", true],
+      ["desktop", "agent", true],
+      ["docs", "doc1", false],
+      ["publish", "code1", false],
+      ["quote", "code1", true],
+      ["desktop", "code1", false]
+    ];
+
+    let selectedId = "quote";
+    let focusMode = false;
+
+    const taskList = document.getElementById("taskList");
+    const briefBody = document.getElementById("briefBody");
+    const edgeLayer = document.getElementById("edgeLayer");
+    const graphWrap = document.getElementById("graphWrap");
+
+    function statusClass(status) {
+      return {
+        active: "badge-active",
+        waiting: "badge-waiting",
+        blocked: "badge-blocked",
+        done: "badge-done"
+      }[status] || "badge-active";
+    }
+
+    function renderTaskList() {
+      taskList.innerHTML = tasks.map(task => `
+        <button class="task-card ${task.id === selectedId ? "active" : ""}" type="button" data-task="${task.id}">
+          <div class="task-row">
+            <h3 class="task-name">${task.name}</h3>
+            <span class="status-badge ${statusClass(task.status)}">${task.status}</span>
+          </div>
+          <p>${task.action}</p>
+          <div class="task-meta">
+            <span>${task.tool}</span>
+            <span>${task.confidence}</span>
+          </div>
+        </button>
+      `).join("");
+
+      taskList.querySelectorAll("[data-task]").forEach(button => {
+        button.addEventListener("click", () => selectTask(button.dataset.task));
+      });
+    }
+
+    function renderEdges() {
+      const byId = Object.fromEntries(nodes.map(node => [node.id, node]));
+      edgeLayer.innerHTML = edges.map(([from, to, hot]) => {
+        const a = byId[from];
+        const b = byId[to];
+        const selectedHot = from === selectedId || to === selectedId || hot;
+        return `<line class="edge ${selectedHot ? "hot" : ""}" x1="${a.x * 10}" y1="${a.y * 6.8}" x2="${b.x * 10}" y2="${b.y * 6.8}"></line>`;
+      }).join("");
+    }
+
+    function renderNodes() {
+      graphWrap.querySelectorAll(".node").forEach(node => node.remove());
+      nodes.forEach(node => {
+        const task = tasks.find(item => item.id === node.id);
+        const div = document.createElement("button");
+        div.type = "button";
+        div.className = `node ${node.type} ${task ? task.status : ""} ${node.id === selectedId ? "selected live" : ""}`;
+        if (node.id === "core") div.classList.add("live");
+        div.style.left = `${node.x}%`;
+        div.style.top = `${node.y}%`;
+        div.setAttribute("aria-label", node.label);
+        div.dataset.node = node.id;
+        div.innerHTML = `<span>${node.label}</span><span class="node-label">${node.label}</span>`;
+        div.addEventListener("click", () => {
+          if (tasks.some(item => item.id === node.id)) selectTask(node.id);
+        });
+        graphWrap.appendChild(div);
+      });
+    }
+
+    function renderBrief() {
+      const task = tasks.find(item => item.id === selectedId);
+      briefBody.innerHTML = `
+        <div class="brief-kicker">
+          <span class="status-badge ${statusClass(task.status)}">${task.status}</span>
+          <span class="chip">${task.project}</span>
+        </div>
+        <h2 class="brief-title">${task.name}</h2>
+        <p class="brief-summary">${task.summary}</p>
+
+        <div class="brief-grid">
+          <div class="fact"><span>Current action</span><strong>${task.action}</strong></div>
+          <div class="fact"><span>Tool</span><strong>${task.tool}</strong></div>
+          <div class="fact"><span>Next</span><strong>${task.next}</strong></div>
+          <div class="fact"><span>Confidence</span><strong>${task.confidence}</strong></div>
+        </div>
+
+        <section class="brief-section">
+          <h3><span class="mini-dot" style="color: var(--amber)"></span>Why it matters</h3>
+          <p>${task.why}</p>
+        </section>
+
+        <section class="brief-section">
+          <h3><span class="mini-dot" style="color: var(--red)"></span>Risk</h3>
+          <p>${task.risk}</p>
+        </section>
+
+        <section class="brief-section">
+          <h3><span class="mini-dot" style="color: var(--violet)"></span>Sources</h3>
+          <div class="source-list">
+            ${task.sources.map(source => `<span class="source-pill">${source}</span>`).join("")}
+          </div>
+        </section>
+
+        <section class="brief-section">
+          <h3><span class="mini-dot" style="color: var(--cyan)"></span>Recent activity</h3>
+          <ol class="timeline">
+            ${task.timeline.map(([time, text]) => `<li><time>${time}</time><span>${text}</span></li>`).join("")}
+          </ol>
+        </section>
+      `;
+
+      document.getElementById("ribbonAction").textContent = task.action;
+      document.getElementById("ribbonTool").textContent = task.tool;
+      document.getElementById("ribbonNext").textContent = task.next;
+      document.getElementById("ribbonRisk").textContent = task.risk;
+    }
+
+    function selectTask(id) {
+      selectedId = id;
+      renderTaskList();
+      renderEdges();
+      renderNodes();
+      renderBrief();
+    }
+
+    function updateSelectedStatus(status) {
+      const task = tasks.find(item => item.id === selectedId);
+      task.status = status;
+      const now = new Date();
+      const time = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      const labels = {
+        active: "MARCUS advanced this work item and refreshed the brief.",
+        waiting: "MARCUS marked this item as waiting on outside input.",
+        blocked: "MARCUS marked this item blocked and raised attention.",
+        done: "MARCUS marked this item complete for the demo."
+      };
+      task.timeline.unshift([time, labels[status]]);
+      if (status === "waiting") task.action = "Waiting on operator input";
+      if (status === "blocked") task.action = "Blocked until attention clears";
+      if (status === "done") task.action = "Completed and ready to archive";
+      if (status === "active") task.action = "Refreshing task context";
+      selectTask(selectedId);
+    }
+
+    document.getElementById("actionAdvance").addEventListener("click", () => updateSelectedStatus("active"));
+    document.getElementById("actionWaiting").addEventListener("click", () => updateSelectedStatus("waiting"));
+    document.getElementById("actionBlocked").addEventListener("click", () => updateSelectedStatus("blocked"));
+    document.getElementById("actionDone").addEventListener("click", () => updateSelectedStatus("done"));
+
+    document.getElementById("densityToggle").addEventListener("click", event => {
+      document.body.classList.toggle("density-compact");
+      event.currentTarget.classList.toggle("active");
+    });
+
+    document.getElementById("focusToggle").addEventListener("click", event => {
+      focusMode = !focusMode;
+      event.currentTarget.classList.toggle("active", focusMode);
+      document.querySelector(".left-panel").style.display = focusMode ? "none" : "";
+      document.querySelector(".workspace").style.gridTemplateColumns = focusMode ? "minmax(560px, 1fr) 380px" : "";
+      document.getElementById("graphMode").textContent = focusMode ? "focus mode" : "clustered by project";
+    });
+
+    function tickClock() {
+      document.getElementById("briefClock").textContent = new Date().toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit"
+      });
+    }
+
+    renderTaskList();
+    renderEdges();
+    renderNodes();
+    renderBrief();
+    tickClock();
+    setInterval(tickClock, 1000);
+  </script>
+</body>
+</html>
