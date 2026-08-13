@@ -4,6 +4,9 @@ services:
     env: node
     plan: starter
     autoDeploy: true
+    buildFilter:
+      ignoredPaths:
+        - docs/**
     buildCommand: npm install
     startCommand: npm start
     healthCheckPath: /api/health
