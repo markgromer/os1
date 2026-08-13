@@ -56,7 +56,7 @@
 
     .topbar {
       display: grid;
-      grid-template-columns: 288px minmax(0, 1fr) 360px 190px;
+      grid-template-columns: 288px minmax(0, 1fr) 390px 250px;
       align-items: center;
       gap: 16px;
       min-width: 0;
@@ -154,6 +154,42 @@
       overflow: hidden;
     }
 
+    .domains {
+      position: absolute;
+      left: 0;
+      top: 7px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      max-width: 276px;
+    }
+
+    .domain {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      height: 22px;
+      border: 1px solid rgba(86,215,231,0.18);
+      border-radius: 999px;
+      background: rgba(5,12,17,0.72);
+      color: var(--muted);
+      padding: 0 9px;
+      font-size: 10px;
+      white-space: nowrap;
+    }
+
+    .domain::before {
+      content: "";
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+
+    .domain.live { color: var(--cyan); }
+    .domain.ready { color: var(--green); }
+    .domain.planned { color: var(--amber); }
+
     .brain {
       position: absolute;
       right: 74px;
@@ -213,11 +249,47 @@
     .online strong { color: var(--cyan); }
     .online .ok { color: var(--green); }
 
+    .top-actions {
+      display: flex;
+      justify-content: end;
+      gap: 8px;
+    }
+
+    .action-button,
+    .chip-button {
+      border: 1px solid rgba(86,215,231,0.28);
+      border-radius: 5px;
+      background: rgba(86,215,231,0.045);
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 12px;
+    }
+
+    .action-button {
+      height: 30px;
+      min-width: 34px;
+      padding: 0 10px;
+    }
+
+    .action-button:hover,
+    .action-button:focus-visible,
+    .chip-button:hover,
+    .chip-button:focus-visible,
+    .project:focus-visible,
+    .decision:focus-visible,
+    .thread-item:focus-visible,
+    .recommend-card:focus-visible,
+    .activity-row:focus-visible {
+      outline: 2px solid rgba(86,215,231,0.68);
+      outline-offset: 2px;
+      color: var(--cyan);
+    }
+
     .grid {
       min-height: 0;
       display: grid;
       grid-template-columns: minmax(680px, 1fr) 540px;
-      grid-template-rows: minmax(0, 1fr) 220px;
+      grid-template-rows: minmax(0, 1fr) 250px;
       gap: 10px;
     }
 
@@ -347,6 +419,25 @@
       border-bottom: 1px solid rgba(255,255,255,0.06);
       padding: 11px 10px 11px 16px;
       cursor: pointer;
+    }
+
+    body.compact .project {
+      min-height: 60px;
+      grid-template-columns: 54px minmax(210px, 1fr) 90px 110px 82px 78px 82px;
+      gap: 12px;
+      padding-top: 7px;
+      padding-bottom: 7px;
+    }
+
+    body.compact .avatar {
+      width: 42px;
+      height: 42px;
+      font-size: 16px;
+    }
+
+    body.compact .project-copy,
+    body.compact .detail {
+      display: none;
     }
 
     .project.selected {
@@ -576,6 +667,7 @@
       border-radius: 6px;
       background: rgba(240,185,65,0.045);
       padding: 12px;
+      cursor: pointer;
     }
 
     .thread-item,
@@ -584,6 +676,7 @@
       border-radius: 6px;
       background: rgba(179,140,255,0.04);
       padding: 12px;
+      cursor: pointer;
     }
 
     .recommend-card {
@@ -633,12 +726,22 @@
 
     .thread-item {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) 84px;
-      gap: 12px;
+      grid-template-columns: minmax(0, 1fr) 74px;
+      gap: 10px;
+      padding: 9px 10px;
     }
 
     .thread-item .side-confidence {
       color: var(--violet);
+    }
+
+    .thread-item strong {
+      margin-bottom: 3px;
+    }
+
+    .thread-item p {
+      font-size: 11px;
+      line-height: 1.28;
     }
 
     .check {
@@ -671,6 +774,7 @@
       border-top: 1px solid rgba(255,255,255,0.06);
       color: var(--muted);
       font-size: 12px;
+      cursor: pointer;
     }
 
     .activity-row time {
@@ -707,6 +811,33 @@
     .conversation {
       overflow: auto;
       padding: 14px;
+    }
+
+    .scope-row,
+    .prompt-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      margin: 0 0 10px 50px;
+    }
+
+    .scope-pill {
+      display: inline-flex;
+      align-items: center;
+      height: 22px;
+      border: 1px solid rgba(255,255,255,0.11);
+      border-radius: 999px;
+      color: var(--muted);
+      padding: 0 9px;
+      font-size: 10px;
+    }
+
+    .scope-pill.live { color: var(--cyan); border-color: rgba(86,215,231,0.35); }
+    .scope-pill.planned { color: var(--amber); border-color: rgba(240,185,65,0.34); }
+
+    .chip-button {
+      min-height: 26px;
+      padding: 0 9px;
     }
 
     .message {
@@ -842,13 +973,26 @@
         <div class="telemetry-item">Confidence <strong>78%</strong><span class="confidence-ring" aria-hidden="true"></span></div>
       </section>
 
-      <section class="brain-band" aria-hidden="true">
-        <div class="brain"></div>
+      <section class="brain-band" aria-label="Marcus operating domains">
+        <div class="domains">
+          <span class="domain live">Projects</span>
+          <span class="domain live">Codex</span>
+          <span class="domain planned">Calendar</span>
+          <span class="domain planned">Comms</span>
+          <span class="domain ready">Approvals</span>
+          <span class="domain ready">Memory</span>
+        </div>
+        <div class="brain" aria-hidden="true"></div>
       </section>
 
       <section class="online">
         <span><strong>MARCUS</strong> is online</span>
         <span><span class="dot green"></span> All systems nominal</span>
+        <div class="top-actions" aria-label="Dashboard actions">
+          <button class="action-button" type="button" data-action="evidence">Evidence</button>
+          <button class="action-button" type="button" data-action="compact">Compact</button>
+          <button class="action-button" type="button" data-action="refresh">Refresh</button>
+        </div>
       </section>
     </header>
 
@@ -876,7 +1020,7 @@
         <section class="intel-panel need">
           <header class="panel-head">
             <div class="head-title"><span class="head-icon">♙</span><h3>I Need Mark</h3></div>
-            <span class="count">2 items</span>
+            <span class="count" id="needCount">0 items</span>
           </header>
           <div class="intel-body" id="needMark"></div>
         </section>
@@ -884,7 +1028,7 @@
         <section class="intel-panel thread">
           <header class="panel-head">
             <div class="head-title"><span class="head-icon">◎</span><h3>I May Be Losing The Thread</h3></div>
-            <span class="count">2 cooling projects</span>
+            <span class="count" id="threadCount">0 cooling projects</span>
           </header>
           <div class="intel-body" id="threadRisk"></div>
         </section>
@@ -916,9 +1060,21 @@
           <button class="close" type="button" aria-label="Close talk panel">×</button>
         </header>
         <div class="conversation">
+          <div class="scope-row" aria-label="Marcus execution scopes">
+            <span class="scope-pill live">Project command</span>
+            <span class="scope-pill live">Codex work</span>
+            <span class="scope-pill planned">Calendar intent</span>
+            <span class="scope-pill planned">Cross-project planning</span>
+          </div>
           <div class="message">
             <div class="mini-brain" aria-hidden="true"></div>
             <div class="bubble" id="talkRead">Here's my read. Ask anything, challenge me, or request a deeper dive.<time id="talkTime">--:--</time></div>
+          </div>
+          <div class="prompt-row" aria-label="Suggested commands">
+            <button class="chip-button" type="button" data-prompt="What is happening right now?">What is happening?</button>
+            <button class="chip-button" type="button" data-prompt="Prepare the next Codex task packet.">Prepare Codex work</button>
+            <button class="chip-button" type="button" data-prompt="Add a calendar follow-up for this.">Calendar follow-up</button>
+            <button class="chip-button" type="button" data-prompt="Verify what is complete and what is still risky.">Verify completion</button>
           </div>
           <span class="demo-pill">demo conversation</span>
         </div>
@@ -949,7 +1105,8 @@
           changed: ["Fixed flaky test in Checkout.spec.ts", "Tightened promo code validation", "Adjusted tax calculation for EU regions"],
           next: "Harden promo code edge cases, rerun E2E suite, then cut RC build and prep release notes.",
           evidence: 23,
-          nextConfidence: 0.76
+          nextConfidence: 0.76,
+          refs: ["Codex task: checkout reliability pass", "GitHub: two commits pushed to main", "Deploy: release candidate still pending"]
         }
       },
       {
@@ -969,7 +1126,8 @@
           changed: ["Production deploy completed", "Motion polish merged", "No current approval is staged"],
           next: "Continue monitoring for post-deploy regressions.",
           evidence: 18,
-          nextConfidence: 0.68
+          nextConfidence: 0.68,
+          refs: ["Deploy: v1.4.2 reached production", "GitHub: motion polish merged", "Codex: no active blocker detected"]
         }
       },
       {
@@ -989,7 +1147,8 @@
           changed: ["PR #512 merged", "Context window tuning is ready", "Cost-impact approval is not resolved"],
           next: "Approve or reject the context window change before the next rollout.",
           evidence: 5,
-          nextConfidence: 0.6
+          nextConfidence: 0.6,
+          refs: ["GitHub: PR #512 merged", "Codex: rollout waiting on approval", "Other: cost impact still unconfirmed"]
         }
       },
       {
@@ -1009,7 +1168,8 @@
           changed: ["Migration 017 was added", "Backfill strategy was not decided", "Production migration remains blocked"],
           next: "Unblock the migration decision, then ship the next build to regain momentum.",
           evidence: 4,
-          nextConfidence: 0.71
+          nextConfidence: 0.71,
+          refs: ["Codex: migration 017 added", "GitHub: backend schema change staged", "Deploy: production migration blocked"]
         }
       },
       {
@@ -1029,7 +1189,8 @@
           changed: ["Ingest pipeline completed", "No next target is attached", "External API stability is uncertain"],
           next: "Continue monitoring and ask Mark only if the upstream stall persists.",
           evidence: 7,
-          nextConfidence: 0.52
+          nextConfidence: 0.52,
+          refs: ["Deploy: ingest pipeline completed", "Codex: no next target attached", "Other: upstream API remains uncertain"]
         }
       },
       {
@@ -1049,24 +1210,27 @@
           changed: ["Enemy AI state machine was refactored", "No next target is attached", "No verification signal follows"],
           next: "Ask Mark whether to recover focus, define the next prototype target, or mark it intentionally dormant.",
           evidence: 6,
-          nextConfidence: 0.48
+          nextConfidence: 0.48,
+          refs: ["Codex: AI state machine refactor", "GitHub: no follow-up verification", "Other: goal needs clarification"]
         }
       }
     ];
 
     const events = [
-      ["11:42:18", "PoopSites V2", "Fixed flaky test in Checkout.spec.ts", "Codex", "blue"],
-      ["11:39:07", "PoopSites V2", "Pushed 2 commits to main", "GitHub", "gray"],
-      ["11:13:55", "WARREN Creative Studio", "Deployed v1.4.2 to production", "Deploy", "green"],
-      ["10:51:22", "MARCUS Core", "PR #512 merged: context window tuning", "GitHub", "gray"],
-      ["10:32:44", "Scoop Doggy Logs", "Migration 017 added; waiting on decision", "Codex", "blue"],
-      ["09:58:31", "Nexorda", "Ingest pipeline completed successfully", "Deploy", "green"]
+      { time: "11:42:18", projectId: "poopsites", project: "PoopSites V2", text: "Fixed flaky test in Checkout.spec.ts", source: "Codex", color: "blue" },
+      { time: "11:39:07", projectId: "poopsites", project: "PoopSites V2", text: "Pushed 2 commits to main", source: "GitHub", color: "gray" },
+      { time: "11:13:55", projectId: "warren", project: "WARREN Creative Studio", text: "Deployed v1.4.2 to production", source: "Deploy", color: "green" },
+      { time: "10:51:22", projectId: "marcus-core", project: "MARCUS Core", text: "PR #512 merged: context window tuning", source: "GitHub", color: "gray" },
+      { time: "10:32:44", projectId: "scoop", project: "Scoop Doggy Logs", text: "Migration 017 added; waiting on decision", source: "Codex", color: "blue" },
+      { time: "09:58:31", projectId: "nexorda", project: "Nexorda", text: "Ingest pipeline completed successfully", source: "Deploy", color: "green" }
     ];
 
     let selectedId = "poopsites";
+    let talkMode = "read";
 
     const byId = (id) => projects.find((project) => project.id === id) || projects[0];
     const selected = () => byId(selectedId);
+    const stamp = () => new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
     function confidenceBar(value, colorClass = "") {
       const count = Math.round(Number(value || 0) * 7);
@@ -1084,12 +1248,40 @@
       return "talk";
     }
 
+    function setSelected(id, mode = "read") {
+      selectedId = id;
+      talkMode = mode;
+      renderAll();
+    }
+
+    function setTalk(html) {
+      document.getElementById("talkRead").innerHTML = `${html}<time>${stamp()}</time>`;
+    }
+
+    function evidenceRead(project) {
+      return `Evidence I am using for ${project.name}: ${project.detail.refs.join("; ")}. My current confidence is ${Math.round(project.confidence * 100)}%. The next-action confidence is ${Math.round(project.detail.nextConfidence * 100)}%.`;
+    }
+
+    function classifyPrompt(value, project) {
+      const text = value.toLowerCase();
+      if (text.includes("calendar") || text.includes("schedule") || text.includes("meeting") || text.includes("tomorrow")) {
+        return `Calendar intent detected for ${project.name}. In the live build I would draft the follow-up, check conflicts, and ask for confirmation before changing your calendar.`;
+      }
+      if (text.includes("codex") || text.includes("build") || text.includes("fix") || text.includes("ship")) {
+        return `Codex execution intent detected for ${project.name}. I would create a task packet with goal, repo context, acceptance checks, and the exact approval boundary before starting work.`;
+      }
+      if (text.includes("approve") || text.includes("approval") || text.includes("block")) {
+        return `Approval or blocker intent detected for ${project.name}. I would surface the decision, affected work, confidence, and recommended action before continuing.`;
+      }
+      return `Project context detected for ${project.name}. I would answer directly, update my understanding if you correct me, or turn the prompt into executable Marcus work if you ask me to move.`;
+    }
+
     function renderProjects() {
       document.getElementById("watchCount").textContent = projects.length;
       const list = document.getElementById("projectList");
       const note = list.querySelector(".fixture-note").outerHTML;
       list.innerHTML = note + projects.map((project) => `
-        <article class="project ${project.id === selectedId ? "selected" : ""}" data-project="${project.id}">
+        <article class="project ${project.id === selectedId ? "selected" : ""}" data-project="${project.id}" role="button" tabindex="0" aria-expanded="${project.id === selectedId ? "true" : "false"}">
           <div class="avatar ${project.avatarClass}">${project.avatar}</div>
           <div>
             <h3 class="project-title">${project.name}</h3>
@@ -1125,14 +1317,17 @@
       document.querySelectorAll(".project").forEach((row) => {
         row.addEventListener("click", (event) => {
           if (event.target.closest("[data-talk]")) return;
-          selectedId = row.dataset.project;
-          renderAll();
+          setSelected(row.dataset.project);
+        });
+        row.addEventListener("keydown", (event) => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          event.preventDefault();
+          setSelected(row.dataset.project);
         });
       });
       document.querySelectorAll("[data-talk]").forEach((button) => {
         button.addEventListener("click", () => {
-          selectedId = button.dataset.talk;
-          renderAll();
+          setSelected(button.dataset.talk);
           document.getElementById("talkInput").focus();
         });
       });
@@ -1140,8 +1335,9 @@
 
     function renderIntel() {
       const need = projects.filter((project) => project.state === "needs_mark" || project.state === "blocked").slice(0, 2);
+      document.getElementById("needCount").textContent = `${need.length} ${need.length === 1 ? "item" : "items"}`;
       document.getElementById("needMark").innerHTML = need.map((project, index) => `
-        <div class="decision">
+        <div class="decision" data-focus="${project.id}" role="button" tabindex="0" aria-label="Inspect ${project.name}">
           <div class="rank">●<br>${index + 1}</div>
           <div>
             <strong>${project.name} - ${project.detail.next.split(",")[0]}</strong>
@@ -1152,9 +1348,10 @@
         </div>
       `).join("");
 
-      const thread = projects.filter((project) => project.state === "quiet").slice(0, 2);
+      const thread = projects.filter((project) => project.state === "quiet").slice(0, 1);
+      document.getElementById("threadCount").textContent = `${thread.length} cooling ${thread.length === 1 ? "project" : "projects"}`;
       document.getElementById("threadRisk").innerHTML = thread.map((project) => `
-        <div class="thread-item">
+        <div class="thread-item" data-focus="${project.id}" role="button" tabindex="0" aria-label="Inspect ${project.name}">
           <div>
             <strong>${project.name} <span class="meta">${project.latestAge}</span></strong>
             <p>${project.detail.believe}</p>
@@ -1165,7 +1362,7 @@
 
       const rec = byId("scoop");
       document.getElementById("recommendation").innerHTML = `
-        <div class="recommend-card">
+        <div class="recommend-card" data-focus="${rec.id}" role="button" tabindex="0" aria-label="Inspect ${rec.name}">
           <div class="check">✓</div>
           <div>
             <strong>Recover focus on ${rec.name}</strong>
@@ -1174,23 +1371,49 @@
           </div>
         </div>
       `;
+
+      document.querySelectorAll("[data-focus]").forEach((item) => {
+        item.addEventListener("click", () => setSelected(item.dataset.focus, "evidence"));
+        item.addEventListener("keydown", (event) => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          event.preventDefault();
+          setSelected(item.dataset.focus, "evidence");
+        });
+      });
     }
 
     function renderActivity() {
-      document.getElementById("activityTable").innerHTML = events.map(([time, project, text, source, color]) => `
-        <div class="activity-row">
-          <time>${time}</time>
-          <strong><span class="dot ${color}"></span> ${project}</strong>
-          <span>${text}</span>
-          <span class="source-label ${color}">${source}</span>
+      document.getElementById("activityTable").innerHTML = events.map((event, index) => `
+        <div class="activity-row" data-event="${index}" role="button" tabindex="0" aria-label="Inspect ${event.source} event for ${event.project}">
+          <time>${event.time}</time>
+          <strong><span class="dot ${event.color}"></span> ${event.project}</strong>
+          <span>${event.text}</span>
+          <span class="source-label ${event.color}">${event.source}</span>
         </div>
       `).join("");
+
+      document.querySelectorAll("[data-event]").forEach((row) => {
+        const event = events[Number(row.dataset.event)];
+        row.addEventListener("click", () => {
+          setSelected(event.projectId, "event");
+          setTalk(`${event.source} signal for ${event.project}: ${event.text}. I would attach this to the project timeline and use it to update confidence, status, and the recommended next move.`);
+        });
+        row.addEventListener("keydown", (keyboardEvent) => {
+          if (keyboardEvent.key !== "Enter" && keyboardEvent.key !== " ") return;
+          keyboardEvent.preventDefault();
+          row.click();
+        });
+      });
     }
 
     function renderTalk() {
       const project = selected();
       document.getElementById("talkTitle").textContent = `Talk to MARCUS about ${project.name}`;
-      document.getElementById("talkRead").innerHTML = `Here's my read on ${project.name}. Ask anything, challenge me, or request a deeper dive.<time id="talkTime">${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time>`;
+      if (talkMode === "evidence") {
+        setTalk(evidenceRead(project));
+        return;
+      }
+      document.getElementById("talkRead").innerHTML = `Here's my read on ${project.name}. Ask anything, challenge me, or request a deeper dive. I can answer, correct my memory, prepare Codex work, stage an approval, or translate this into a calendar follow-up when that connector is live.<time id="talkTime">${stamp()}</time>`;
     }
 
     function renderAll() {
@@ -1200,11 +1423,47 @@
       renderTalk();
     }
 
-    document.querySelector(".send").addEventListener("click", () => {
+    function submitPrompt() {
       const input = document.getElementById("talkInput");
       if (!input.value.trim()) return;
-      document.getElementById("talkRead").innerHTML = `Demo classification: I would treat that as project-scoped context and decide whether to answer, update my understanding, prepare Codex work, or request approval.<time>${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time>`;
+      setTalk(classifyPrompt(input.value, selected()));
       input.value = "";
+    }
+
+    document.querySelector(".send").addEventListener("click", submitPrompt);
+    document.getElementById("talkInput").addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      submitPrompt();
+    });
+
+    document.querySelectorAll("[data-prompt]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const input = document.getElementById("talkInput");
+        input.value = button.dataset.prompt;
+        input.focus();
+      });
+    });
+
+    document.querySelector("[data-action='evidence']").addEventListener("click", () => {
+      talkMode = "evidence";
+      renderTalk();
+      document.getElementById("talkInput").focus();
+    });
+
+    document.querySelector("[data-action='compact']").addEventListener("click", (event) => {
+      document.body.classList.toggle("compact");
+      event.currentTarget.textContent = document.body.classList.contains("compact") ? "Expanded" : "Compact";
+    });
+
+    document.querySelector("[data-action='refresh']").addEventListener("click", () => {
+      talkMode = "read";
+      setTalk(`Demo refresh complete. I would now reconcile Codex sessions, GitHub events, deployments, calendar holds, approvals, and memory deltas before changing any project status.`);
+    });
+
+    document.querySelector(".close").addEventListener("click", () => {
+      talkMode = "read";
+      setTalk(`Global Marcus command surface reset. Select a project, inspect evidence, or send a prompt that can become Codex work, an approval, a memory correction, or a calendar action.`);
     });
 
     renderAll();
