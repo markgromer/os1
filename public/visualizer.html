@@ -411,6 +411,23 @@
 
     .fixture-note strong { color: var(--amber); }
 
+    .empty-state {
+      margin: 14px 10px 10px;
+      padding: 18px;
+      border: 1px solid rgba(86,215,231,0.28);
+      border-radius: 8px;
+      background: rgba(86,215,231,0.045);
+      color: var(--muted);
+      line-height: 1.45;
+    }
+
+    .empty-state strong {
+      display: block;
+      margin-bottom: 6px;
+      color: var(--text);
+      font-size: 15px;
+    }
+
     .project {
       position: relative;
       display: grid;
@@ -1078,7 +1095,7 @@
           </div>
         </header>
         <div class="project-list" id="projectList">
-          <p class="fixture-note"><strong>Live-first:</strong> this view syncs from Marcus ActiveBrief when available. Demo data remains as the offline fallback.</p>
+          <p class="fixture-note"><strong>Live Codex:</strong> open workspaces come from `/api/desktop-context`; Marcus-started task status comes from `/api/codex/jobs`. ActiveBrief is context only.</p>
         </div>
       </section>
 
@@ -1304,16 +1321,19 @@
       { time: "09:58:31", projectId: "nexorda", project: "Nexorda", text: "Ingest pipeline completed successfully", source: "Deploy", color: "green" }
     ];
 
-    let selectedId = "poopsites";
+    projects = [];
+    events = [];
+
+    let selectedId = "";
     let talkMode = "read";
     let liveBrief = null;
     let realtimeVoice = null;
     let voiceHeld = false;
     let threadContextId = "";
     let threadMessages = [];
-    let baseStatus = { label: "Loading live awareness", tone: "ok" };
+    let baseStatus = { label: "Loading live Codex queue", tone: "ok" };
 
-    const byId = (id) => projects.find((project) => project.id === id) || projects[0];
+    const byId = (id) => projects.find((project) => project.id === id) || projects[0] || null;
     const selected = () => byId(selectedId);
     const stamp = () => new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     const plain = (value, fallback = "") => String(value ?? fallback).replace(/[<>]/g, "").replace(/\s+/g, " ").trim();
@@ -1369,22 +1389,24 @@
     }
 
     function evidenceRead(project) {
+      if (!project) return "There is no selected live Codex job yet.";
       const decision = project.detail.decision ? ` Decision needed: ${project.detail.decision.question} Marcus recommends: ${project.detail.decision.recommendation}` : "";
       return `Evidence I am using for ${project.name}: ${project.detail.refs.join("; ")}. My current confidence is ${Math.round(project.confidence * 100)}%. The next-action confidence is ${Math.round(project.detail.nextConfidence * 100)}%.${decision}`;
     }
 
     function classifyPrompt(value, project) {
       const text = value.toLowerCase();
+      const name = project?.name || "the live Codex queue";
       if (text.includes("calendar") || text.includes("schedule") || text.includes("meeting") || text.includes("tomorrow")) {
-        return `Calendar intent detected for ${project.name}. In the live build I would draft the follow-up, check conflicts, and ask for confirmation before changing your calendar.`;
+        return `Calendar intent detected for ${name}. In the live build I would draft the follow-up, check conflicts, and ask for confirmation before changing your calendar.`;
       }
       if (text.includes("codex") || text.includes("build") || text.includes("fix") || text.includes("ship")) {
-        return `Codex execution intent detected for ${project.name}. I would create a task packet with goal, repo context, acceptance checks, and the exact approval boundary before starting work.`;
+        return `Codex execution intent detected for ${name}. I would create a task packet with goal, repo context, acceptance checks, and the exact approval boundary before starting work.`;
       }
       if (text.includes("approve") || text.includes("approval") || text.includes("block")) {
-        return `Approval or blocker intent detected for ${project.name}. I would surface the decision, affected work, confidence, and recommended action before continuing.`;
+        return `Approval or blocker intent detected for ${name}. I would surface the decision, affected work, confidence, and recommended action before continuing.`;
       }
-      return `Project context detected for ${project.name}. I would answer directly, update my understanding if you correct me, or turn the prompt into executable Marcus work if you ask me to move.`;
+      return `Project context detected for ${name}. I would answer directly, update my understanding if you correct me, or turn the prompt into executable Marcus work if you ask me to move.`;
     }
 
     function updateStatus(label, tone = "ok", remember = true) {
@@ -1409,6 +1431,152 @@
 
     function initials(name) {
       return plain(name || "M").split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase() || "M";
+    }
+
+    function ageFromIso(value) {
+      const time = Date.parse(value || "");
+      if (!Number.isFinite(time)) return "live";
+      const minutes = Math.max(0, Math.round((Date.now() - time) / 60000));
+      if (minutes < 1) return "now";
+      if (minutes < 60) return `${minutes}m ago`;
+      const hours = Math.round(minutes / 60);
+      if (hours < 24) return `${hours}h ago`;
+      return `${Math.round(hours / 24)}d ago`;
+    }
+
+    function codexState(job) {
+      const status = plain(job?.status || "unknown").toLowerCase();
+      if (status === "failed" || status === "paused" || status === "unknown") return ["blocked", status === "paused" ? "Paused" : status === "failed" ? "Failed" : "Unknown"];
+      if (status === "queued") return ["needs_mark", "Queued"];
+      if (status === "completed") return ["verified", "Complete"];
+      if (status === "cancelled") return ["quiet", "Cancelled"];
+      return ["moving", status === "started" ? "Started" : "Running"];
+    }
+
+    function codexJobToProject(job, index) {
+      const name = plain(job?.projectName || job?.repository || job?.workspacePath || job?.jobId || `Codex job ${index + 1}`);
+      const [state, stateLabel] = codexState(job);
+      const status = plain(job?.status || "unknown");
+      const changed = Array.isArray(job?.changedFiles) ? job.changedFiles.map((file) => plain(file)).filter(Boolean).slice(0, 5) : [];
+      const eventCount = Math.max(0, Number(job?.eventCount || 0));
+      const evidence = Math.max(1, eventCount + changed.length);
+      const latest = plain(job?.finalOutput || job?.diffSummary || job?.error || (changed.length ? `Changed ${changed.length} files` : `${status} desktop Codex job`));
+      const workspace = plain(job?.workspacePath || job?.repository || "No workspace path reported.");
+      const id = plain(job?.jobId || job?.operationId || job?.projectRegistryId || name).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || `codex-${index}`;
+      const confidence = state === "blocked" ? 0.42 : state === "verified" ? 0.9 : state === "needs_mark" ? 0.68 : 0.78;
+      const next = state === "blocked"
+        ? plain(job?.error || "Inspect the desktop Codex job; Marcus does not have a reliable running signal for this item.")
+        : state === "verified"
+          ? "Review the result, changed files, and final output before treating this as fully done."
+          : state === "needs_mark"
+            ? "Waiting in the desktop Codex queue. Confirm the agent/workspace is available if this does not start soon."
+            : "Codex is actively working. Watch event count, changed files, and the latest output for drift.";
+      return {
+        id,
+        name,
+        avatar: initials(name),
+        avatarClass: state === "blocked" ? "red" : state === "needs_mark" ? "amber" : "",
+        belief: `${stateLabel} Codex job in ${workspace}`,
+        sources: ["codex"],
+        latestAge: ageFromIso(job?.updatedAt || job?.startedAt),
+        latest,
+        state,
+        stateLabel,
+        confidence,
+        detail: {
+          believe: `This row comes from the authoritative desktop Codex job queue. Status is ${status}; workspace is ${workspace}.`,
+          changed: [
+            `Status: ${status}`,
+            `Events reported: ${eventCount}`,
+            changed.length ? `Changed files: ${changed.join(", ")}` : "No changed files reported yet"
+          ],
+          next,
+          evidence,
+          nextConfidence: confidence,
+          refs: [
+            plain(job?.jobId ? `Job ${job.jobId}` : ""),
+            plain(job?.operationId ? `Operation ${job.operationId}` : ""),
+            workspace
+          ].filter(Boolean),
+          decision: state === "blocked" || state === "needs_mark" ? {
+            question: state === "blocked" ? "What should Marcus do with this Codex job?" : "Should Marcus wait, inspect, or intervene?",
+            options: [
+              "Ask Marcus to explain the current job state.",
+              "Open or inspect the workspace tied to this job.",
+              "Park it if it is no longer active work."
+            ],
+            recommendation: next,
+            why: "Marcus should not invent project status when the live Codex feed is incomplete or waiting."
+          } : null
+        }
+      };
+    }
+
+    function workspaceKey(value) {
+      return plain(value).toLowerCase().replace(/\\/g, "/").replace(/\/+$/, "");
+    }
+
+    function codexWorkspaceToProject(workspace, jobs, index) {
+      const name = plain(workspace?.projectName || workspace?.folderName || workspace?.workspacePath || `Codex workspace ${index + 1}`);
+      const path = plain(workspace?.workspacePath || "");
+      const key = workspaceKey(path);
+      const job = jobs.find((candidate) => workspaceKey(candidate?.workspacePath) === key) || null;
+      const status = plain(job?.status || (Number(workspace?.gitStatusCount || 0) ? "working" : "open"));
+      const [state, stateLabel] = job ? codexState(job) : Number(workspace?.gitStatusCount || 0) ? ["moving", "Open"] : ["quiet", "Open"];
+      const changed = Array.isArray(workspace?.gitStatus) ? workspace.gitStatus.map((entry) => `${plain(entry?.status)} ${plain(entry?.file)}`.trim()).filter(Boolean).slice(0, 5) : [];
+      const commits = Array.isArray(workspace?.gitRecentCommits) ? workspace.gitRecentCommits.map((entry) => plain(entry)).filter(Boolean).slice(0, 3) : [];
+      const dirtyCount = Number(workspace?.gitStatusCount || changed.length || 0);
+      const eventCount = Math.max(0, Number(job?.eventCount || 0));
+      const confidence = job ? (state === "blocked" ? 0.5 : 0.82) : 0.7;
+      const id = plain(workspace?.sessionId || path || name).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || `workspace-${index}`;
+      const branch = plain(workspace?.gitBranch || "branch not reported");
+      const latest = job
+        ? plain(job.finalOutput || job.diffSummary || job.error || `${status} Codex job`)
+        : dirtyCount
+          ? `${dirtyCount} local changes on ${branch}`
+          : `Open on ${branch}`;
+      const next = job
+        ? codexJobToProject(job, index).detail.next
+        : dirtyCount
+          ? "Codex has an open workspace with local changes. Marcus should inspect the diff or attach this to a durable task before you rely on the status."
+          : "Workspace is open, but the relay reports no local changes or Marcus-started job yet.";
+      return {
+        id,
+        name,
+        avatar: initials(name),
+        avatarClass: state === "blocked" ? "red" : state === "needs_mark" ? "amber" : state === "quiet" ? "purple" : "",
+        belief: `${stateLabel} Codex workspace at ${path || "unknown path"}`,
+        sources: ["codex", ...(workspace?.gitRemote ? ["github"] : [])],
+        latestAge: ageFromIso(workspace?.modifiedAt || job?.updatedAt || job?.startedAt),
+        latest,
+        state,
+        stateLabel,
+        confidence,
+        detail: {
+          believe: `This row comes from the desktop relay's open Codex workspace list${job ? " with a matching Marcus Codex job" : ""}. Branch is ${branch}; workspace is ${path || "not reported"}.`,
+          changed: [
+            `Workspace status: ${status}`,
+            dirtyCount ? `Local changes: ${dirtyCount}` : "No local changes reported",
+            eventCount ? `Codex job events: ${eventCount}` : "No Marcus-started job events reported",
+            ...changed,
+            ...commits.map((commit) => `Recent commit: ${commit}`)
+          ].slice(0, 8),
+          next,
+          evidence: Math.max(1, dirtyCount + eventCount + commits.length),
+          nextConfidence: confidence,
+          refs: [path, plain(workspace?.gitRemote || ""), plain(job?.jobId ? `Job ${job.jobId}` : "")].filter(Boolean),
+          decision: state === "blocked" || (!job && dirtyCount > 0) ? {
+            question: "What should Marcus do with this open Codex workspace?",
+            options: [
+              "Inspect the diff and summarize exactly what changed.",
+              "Attach this workspace to a durable Marcus task.",
+              "Park it if this is not active work."
+            ],
+            recommendation: next,
+            why: "An open Codex workspace is real activity, but Marcus needs a job, diff, or user decision before claiming it is progressing."
+          } : null
+        }
+      };
     }
 
     function decisionForProject(projectName, brief) {
@@ -1500,17 +1668,56 @@
     }
 
     async function loadLiveBrief() {
-      updateStatus("Syncing live awareness");
+      updateStatus("Syncing live Codex queue");
       try {
-        const response = await fetch("/api/marcus/active-brief", { credentials: "include" });
+        const [jobsResult, desktopResult] = await Promise.allSettled([
+          fetch("/api/codex/jobs", { credentials: "include" }),
+          fetch("/api/desktop-context", { credentials: "include" })
+        ]);
+        if (jobsResult.status !== "fulfilled") throw jobsResult.reason;
+        const response = jobsResult.value;
         const data = await response.json().catch(() => ({}));
-        if (!response.ok || data?.ok === false) throw new Error(data?.error || `ActiveBrief failed (${response.status})`);
-        liveBrief = data;
-        hydrateFromBrief(data);
+        if (!response.ok || data?.ok === false) throw new Error(data?.error || `Codex queue failed (${response.status})`);
+        let desktop = {};
+        if (desktopResult.status === "fulfilled") {
+          desktop = await desktopResult.value.json().catch(() => ({}));
+        }
+        const jobs = Array.isArray(data?.jobs) ? data.jobs : [];
+        const activeJobs = jobs.filter((job) => !["completed", "cancelled"].includes(plain(job?.status).toLowerCase()));
+        const workspaces = Array.isArray(desktop?.codexWorkspaces) ? desktop.codexWorkspaces : [];
+        const workspaceProjects = workspaces.map((workspace, index) => codexWorkspaceToProject(workspace, activeJobs, index));
+        const workspacePaths = new Set(workspaces.map((workspace) => workspaceKey(workspace?.workspacePath)).filter(Boolean));
+        const jobProjects = activeJobs
+          .filter((job) => !workspacePaths.has(workspaceKey(job?.workspacePath)))
+          .map((job, index) => codexJobToProject(job, index));
+        projects = [...workspaceProjects, ...jobProjects].slice(0, 12);
+        if (!projects.some((project) => project.id === selectedId)) selectedId = projects[0]?.id || "";
+        events = jobs.slice(0, 12).map((job, index) => {
+          const project = projects.find((row) => row.id === codexJobToProject(job, index).id);
+          const name = plain(job?.projectName || job?.repository || job?.workspacePath || "Codex job");
+          const status = plain(job?.status || "unknown");
+          return {
+            time: plain(job?.updatedAt || job?.startedAt || "").slice(11, 19) || stamp(),
+            projectId: project?.id || selectedId,
+            project: project?.name || name,
+            text: `${status}: ${plain(job?.finalOutput || job?.diffSummary || job?.error || `${Number(job?.eventCount || 0)} events reported`)}`,
+            source: "Codex",
+            color: status === "failed" ? "red" : status === "completed" ? "green" : "blue"
+          };
+        });
         renderAll();
-        updateStatus("Live awareness connected");
+        const sourceLabel = workspaces.length ? `${workspaces.length} open workspaces` : `${projects.length} active jobs`;
+        updateStatus(projects.length ? `Live Codex: ${sourceLabel}` : "Live Codex: no open workspaces or active jobs reported", projects.length ? "ok" : "warn");
+        fetch("/api/marcus/active-brief", { credentials: "include" })
+          .then((briefResponse) => briefResponse.json())
+          .then((brief) => { liveBrief = brief; })
+          .catch(() => {});
       } catch (error) {
-        updateStatus("Demo fallback; live awareness unavailable", "warn");
+        projects = [];
+        events = [];
+        selectedId = "";
+        renderAll();
+        updateStatus(`Codex queue unavailable: ${plain(error?.message || "unknown error")}`, "error");
       }
     }
 
@@ -1518,6 +1725,14 @@
       document.getElementById("watchCount").textContent = projects.length;
       const list = document.getElementById("projectList");
       const note = list.querySelector(".fixture-note").outerHTML;
+      if (!projects.length) {
+        list.innerHTML = `${note}
+          <div class="empty-state">
+            <strong>No open Codex workspaces or active Codex jobs reported</strong>
+            Marcus is connected to the live desktop/Codex endpoints, but they did not return open workspaces or running jobs. I am leaving the queue empty instead of showing stale demo work.
+          </div>`;
+        return;
+      }
       list.innerHTML = note + projects.map((project) => `
         <article class="project ${project.id === selectedId ? "selected" : ""}" data-project="${project.id}" role="button" tabindex="0" aria-expanded="${project.id === selectedId ? "true" : "false"}">
           <div class="avatar ${project.avatarClass}">${project.avatar}</div>
@@ -1603,8 +1818,8 @@
         </div>
       `).join("");
 
-      const rec = byId("scoop");
-      document.getElementById("recommendation").innerHTML = `
+      const rec = need[0] || projects.find((project) => project.state === "moving") || projects[0];
+      document.getElementById("recommendation").innerHTML = rec ? `
         <div class="recommend-card" data-focus="${rec.id}" role="button" tabindex="0" aria-label="Inspect ${rec.name}">
           <div class="check">✓</div>
           <div>
@@ -1612,6 +1827,11 @@
             <p>${rec.detail.decision?.recommendation || rec.detail.next}</p>
             <p class="micro">Impact <strong>High</strong> Effort <strong>Medium</strong> Confidence <strong>${Math.round(rec.detail.nextConfidence * 100)}%</strong>${confidenceBar(rec.detail.nextConfidence, "green")}</p>
           </div>
+        </div>
+      ` : `
+        <div class="empty-state">
+          <strong>No recommendation yet</strong>
+          Marcus needs an open Codex workspace or live Codex job before it can make a grounded recommendation here.
         </div>
       `;
 
@@ -1626,7 +1846,16 @@
     }
 
     function renderActivity() {
-      document.getElementById("activityTable").innerHTML = events.map((event, index) => `
+      const table = document.getElementById("activityTable");
+      if (!events.length) {
+        table.innerHTML = `
+          <div class="empty-state">
+            <strong>No Codex activity in the feed</strong>
+            The job queue did not report recent job updates.
+          </div>`;
+        return;
+      }
+      table.innerHTML = events.map((event, index) => `
         <div class="activity-row" data-event="${index}" role="button" tabindex="0" aria-label="Inspect ${event.source} event for ${event.project}">
           <time>${event.time}</time>
           <strong><span class="dot ${event.color}"></span> ${event.project}</strong>
@@ -1651,6 +1880,13 @@
 
     function renderTalk() {
       const project = selected();
+      if (!project) {
+        document.getElementById("talkTitle").textContent = "Talk to MARCUS";
+        if (!threadMessages.length) {
+          setTalk("I do not have an active Codex job to anchor this thread yet. Ask me what is connected, refresh the queue, or start a Codex task through Marcus.");
+        }
+        return;
+      }
       document.getElementById("talkTitle").textContent = `Talk to MARCUS about ${project.name}`;
       if (talkMode === "evidence") {
         threadContextId = project.id;
