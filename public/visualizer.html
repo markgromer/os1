@@ -291,7 +291,7 @@
       min-height: 0;
       display: grid;
       grid-template-columns: minmax(680px, 1fr) 540px;
-      grid-template-rows: minmax(0, 1fr) 250px;
+      grid-template-rows: minmax(0, 1fr) 330px;
       gap: 10px;
     }
 
@@ -333,7 +333,7 @@
       grid-column: 2 / 3;
       min-height: 0;
       display: grid;
-      grid-template-rows: 44px minmax(0, 1fr) 58px;
+      grid-template-rows: 44px minmax(0, 1fr) auto 58px;
     }
 
     .panel-head {
@@ -841,15 +841,30 @@
 
     .conversation {
       overflow: auto;
-      padding: 14px;
+      padding: 14px 14px 8px;
     }
 
-    .scope-row,
     .prompt-row {
       display: flex;
       flex-wrap: wrap;
       gap: 7px;
-      margin: 0 0 10px 50px;
+      margin: 0;
+    }
+
+    .action-strip {
+      display: grid;
+      gap: 8px;
+      padding: 8px 14px;
+      border-top: 1px solid var(--line-soft);
+      background: rgba(255,255,255,0.012);
+    }
+
+    .thread-state {
+      color: var(--faint);
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
     }
 
     .scope-pill {
@@ -876,7 +891,27 @@
       grid-template-columns: 38px minmax(0, 1fr);
       gap: 12px;
       align-items: start;
-      margin-bottom: 10px;
+      margin-bottom: 12px;
+    }
+
+    .message.user {
+      grid-template-columns: minmax(0, 1fr) 34px;
+    }
+
+    .message.user .mini-avatar {
+      grid-column: 2;
+      grid-row: 1;
+      display: grid;
+      place-items: center;
+      color: var(--text);
+      font-size: 11px;
+      font-weight: 760;
+    }
+
+    .message.user .bubble {
+      justify-self: end;
+      background: rgba(86,215,231,0.08);
+      color: var(--text);
     }
 
     .message .mini-brain,
@@ -896,7 +931,7 @@
     }
 
     .bubble {
-      max-width: 390px;
+      max-width: min(100%, 540px);
       border-radius: 8px;
       background: rgba(255,255,255,0.045);
       padding: 11px 13px;
@@ -940,19 +975,6 @@
       color: var(--cyan);
       cursor: pointer;
       font-size: 20px;
-    }
-
-    .demo-pill {
-      display: inline-flex;
-      height: 22px;
-      align-items: center;
-      border: 1px solid rgba(240,185,65,0.36);
-      border-radius: 999px;
-      color: var(--amber);
-      padding: 0 9px;
-      font-size: 10px;
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
     }
 
     .voice-button {
@@ -1103,24 +1125,16 @@
           <h2 id="talkTitle">Talk to MARCUS</h2>
           <button class="close" type="button" aria-label="Close talk panel">×</button>
         </header>
-        <div class="conversation">
-          <div class="scope-row" aria-label="Marcus execution scopes">
-            <span class="scope-pill live">Project command</span>
-            <span class="scope-pill live">Codex work</span>
-            <span class="scope-pill planned">Calendar intent</span>
-            <span class="scope-pill planned">Cross-project planning</span>
-          </div>
-          <div class="message">
-            <div class="mini-brain" aria-hidden="true"></div>
-            <div class="bubble" id="talkRead">Here's my read. Ask anything, challenge me, or request a deeper dive.<time id="talkTime">--:--</time></div>
-          </div>
+        <div class="conversation" id="conversation" aria-live="polite">
+        </div>
+        <div class="action-strip">
+          <span class="thread-state" id="threadState">Live command thread</span>
           <div class="prompt-row" aria-label="Suggested commands">
+            <button class="chip-button" type="button" data-prompt="Explain the decision Marcus needs from me.">Explain decision</button>
             <button class="chip-button" type="button" data-prompt="What is happening right now?">What is happening?</button>
             <button class="chip-button" type="button" data-prompt="Prepare the next Codex task packet.">Prepare Codex work</button>
-            <button class="chip-button" type="button" data-prompt="Add a calendar follow-up for this.">Calendar follow-up</button>
             <button class="chip-button" type="button" data-prompt="Verify what is complete and what is still risky.">Verify completion</button>
           </div>
-          <span class="demo-pill">demo conversation</span>
         </div>
         <div class="composer">
           <input id="talkInput" type="text" placeholder="Ask, correct me, recommend something, or request help...">
@@ -1295,6 +1309,8 @@
     let liveBrief = null;
     let realtimeVoice = null;
     let voiceHeld = false;
+    let threadContextId = "";
+    let threadMessages = [];
 
     const byId = (id) => projects.find((project) => project.id === id) || projects[0];
     const selected = () => byId(selectedId);
@@ -1323,8 +1339,32 @@
       renderAll();
     }
 
+    function setThreadState(label) {
+      const state = document.getElementById("threadState");
+      if (state) state.textContent = label;
+    }
+
+    function renderThread() {
+      const conversation = document.getElementById("conversation");
+      if (!conversation) return;
+      conversation.innerHTML = threadMessages.map((message) => `
+        <div class="message ${message.role === "user" ? "user" : "marcus"}">
+          ${message.role === "user"
+            ? `<div class="bubble">${message.html}<time>${message.time}</time></div><div class="mini-avatar" aria-hidden="true">M</div>`
+            : `<div class="mini-brain" aria-hidden="true"></div><div class="bubble">${message.html}<time>${message.time}</time></div>`}
+        </div>
+      `).join("");
+      conversation.scrollTop = conversation.scrollHeight;
+    }
+
+    function appendThread(role, html) {
+      threadMessages.push({ role, html, time: stamp() });
+      threadMessages = threadMessages.slice(-24);
+      renderThread();
+    }
+
     function setTalk(html) {
-      document.getElementById("talkRead").innerHTML = `${html}<time>${stamp()}</time>`;
+      appendThread("marcus", html);
     }
 
     function evidenceRead(project) {
@@ -1607,10 +1647,15 @@
       const project = selected();
       document.getElementById("talkTitle").textContent = `Talk to MARCUS about ${project.name}`;
       if (talkMode === "evidence") {
+        threadContextId = project.id;
         setTalk(evidenceRead(project));
+        talkMode = "read";
         return;
       }
-      document.getElementById("talkRead").innerHTML = `Here's my read on ${project.name}. Ask anything, challenge me, or request a deeper dive. I can answer, correct my memory, prepare Codex work, stage an approval, or translate this into a calendar follow-up when that connector is live.<time id="talkTime">${stamp()}</time>`;
+      if (threadContextId !== project.id || !threadMessages.length) {
+        threadContextId = project.id;
+        setTalk(`Here's my read on ${project.name}. Ask anything, challenge me, or request a deeper dive. I can answer, correct my memory, prepare Codex work, stage an approval, or translate this into a calendar follow-up when that connector is live.`);
+      }
     }
 
     function renderAll() {
@@ -1636,7 +1681,9 @@
       const input = document.getElementById("talkInput");
       const value = input.value.trim();
       if (!value) return;
-      setTalk("Marcus is reading the live brief and routing this through the command layer.");
+      input.value = "";
+      appendThread("user", plain(value));
+      setThreadState("Marcus is reading the live brief");
       try {
         const response = await fetch("/api/marcus/command", {
           method: "POST",
@@ -1647,10 +1694,11 @@
         const data = await response.json().catch(() => ({}));
         if (!response.ok || data?.ok === false) throw new Error(data?.error || `Marcus command failed (${response.status})`);
         setTalk(summarizeCommandResponse(data));
+        setThreadState("Live command thread");
       } catch (error) {
         setTalk(`${classifyPrompt(value, selected())} Live command fallback: ${plain(error?.message || "command endpoint unavailable")}.`);
+        setThreadState("Command fallback used");
       }
-      input.value = "";
     }
 
     document.querySelector(".send").addEventListener("click", submitPrompt);
@@ -1664,7 +1712,7 @@
       button.addEventListener("click", () => {
         const input = document.getElementById("talkInput");
         input.value = button.dataset.prompt;
-        input.focus();
+        submitPrompt();
       });
     });
 
@@ -1687,6 +1735,8 @@
 
     document.querySelector(".close").addEventListener("click", () => {
       talkMode = "read";
+      threadContextId = "";
+      threadMessages = [];
       setTalk(`Global Marcus command surface reset. Select a project, inspect evidence, or send a prompt that can become Codex work, an approval, a memory correction, or a calendar action.`);
     });
 
@@ -1703,7 +1753,8 @@
     async function invokeMarcusVoice(message) {
       const text = plain(message).slice(0, 12000);
       if (!text) return { ok: false, error: "No voice message was captured." };
-      setTalk(`You said: ${text}<br><br>Marcus is routing that through the live operator.`);
+      appendThread("user", text);
+      setThreadState("Voice routed through live operator");
       const response = await fetch("/api/marcus/live/chat", {
         method: "POST",
         credentials: "include",
@@ -1713,6 +1764,7 @@
       const data = await response.json().catch(() => ({}));
       const reply = plain(data?.reply || data?.message || data?.error || "Marcus responded without text.");
       setTalk(reply);
+      setThreadState("Live command thread");
       await loadLiveBrief();
       return {
         ok: data?.ok !== false && response.ok,
