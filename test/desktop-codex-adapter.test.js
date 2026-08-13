@@ -5,6 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { DesktopCodexAdapter } from '../marcus/providers/desktop_codex_adapter.js';
+import { RoutedCodexAdapter } from '../marcus/providers/routed_codex_adapter.js';
 
 test('desktop Codex adapter durably queues one local job and exposes token-scoped monitor events', async () => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'marcus-desktop-codex-'));
@@ -99,4 +100,19 @@ test('desktop Codex adapter rejects updates from a different machine', async () 
   } finally {
     await fs.rm(dataDir, { recursive: true, force: true });
   }
+});
+
+test('routed Codex adapter selects desktop only for an exact local workspace', async () => {
+  const calls = [];
+  const adapter = (provider) => ({
+    providerName: provider,
+    startJob: async (job) => { calls.push({ provider, job }); return { provider, jobId: `${provider}-1`, status: 'queued' }; },
+  });
+  const routed = new RoutedCodexAdapter({
+    desktopAdapter: adapter('desktop_codex'),
+    fallbackAdapter: adapter('github_actions_codex'),
+  });
+  assert.equal((await routed.startJob({ workspacePath: 'C:\\work\\local', desktopAgentId: 'desktop-1' })).provider, 'desktop_codex');
+  assert.equal((await routed.startJob({ repository: 'owner/remote' })).provider, 'github_actions_codex');
+  assert.deepEqual(calls.map((call) => call.provider), ['desktop_codex', 'github_actions_codex']);
 });

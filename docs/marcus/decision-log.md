@@ -6,7 +6,7 @@ Context: Mark wants Marcus to use everything available on his PC, switch project
 
 Decision: Let the desktop relay explicitly declare broad-root authorization and a dedicated new-project root. Attest each exact workspace before execution, launch Codex locally with `workspace-write` scope, stream bounded events to a per-job capability monitor, and open that monitor in Chrome kiosk mode. Add deterministic project switching and a durable blank-project workflow. Keep destructive filesystem actions, credential changes/disclosure, messages, repository creation/publication, deployments, DNS, and production mutations behind typed exact-action approvals.
 
-Consequence: Marcus can inspect Mark's authorized Windows files and perform ordinary project work without repeated folder approvals, while consequential actions remain reviewable and recoverable. Local code and the `137/137` suite are complete; Render enablement, relay restart, and phone-to-PC production acceptance remain open.
+Consequence: Marcus can inspect Mark's authorized Windows files and perform ordinary project work without repeated folder approvals, while consequential actions remain reviewable and recoverable. Hosted Marcus enables the desktop route by default but uses it only for an exact attested local workspace; remote-only work retains its configured Codex fallback. Local code and the `138/138` suite are complete; deployment, relay restart, and phone-to-PC production acceptance remain open.
 
 ## 2026-08-12: Voice Acceptance Survives Reload But Cannot Cross Install Contexts
 

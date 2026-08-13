@@ -171,6 +171,7 @@ export class CodexProvider {
       branch,
       workspacePath: registryRecord?.localWorkspace?.canonicalPath || registryRecord?.localWorkspace?.path || '',
       desktopAgentId: registryRecord?.localWorkspace?.desktopAgentId || '',
+      providerMode: safeString(step?.input?.providerMode, 100),
       prompt,
       status: this.mode === 'direct' ? 'queued' : 'waiting_external',
       startedAt: nowIso(),

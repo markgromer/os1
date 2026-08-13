@@ -38,6 +38,7 @@ import { extractExplicitGitHubRepositories, ProjectOperatorService } from './mar
 import { DesktopCodexAdapter } from './marcus/providers/desktop_codex_adapter.js';
 import { createGitHubActionsCodexAdapterFromEnv } from './marcus/providers/github_actions_codex_adapter.js';
 import { createHttpCodexAdapterFromEnv } from './marcus/providers/http_codex_adapter.js';
+import { RoutedCodexAdapter } from './marcus/providers/routed_codex_adapter.js';
 import {
   buildMarcusRealtimeClientSecretRequest,
   DEFAULT_MARCUS_REALTIME_MODEL,
@@ -251,15 +252,18 @@ const desktopActionQueue = new DesktopActionQueue({
   dataDir: DATA_DIR,
   leaseMs: process.env.MARCUS_DESKTOP_ACTION_LEASE_MS,
 });
-const desktopCodexEnabled = String(process.env.MARCUS_DESKTOP_CODEX_ENABLED || '').trim().toLowerCase() === 'true';
+const desktopCodexFlag = String(process.env.MARCUS_DESKTOP_CODEX_ENABLED || '').trim().toLowerCase();
+const desktopCodexEnabled = desktopCodexFlag === 'true' || (IS_HOSTED_RUNTIME && desktopCodexFlag !== 'false');
 const desktopCodexAdapter = desktopCodexEnabled ? new DesktopCodexAdapter({
   dataDir: DATA_DIR,
   queueAction: async (action) => queueDesktopAction(action),
   monitorBaseUrl: process.env.RENDER_EXTERNAL_URL || process.env.MARCUS_PUBLIC_URL || '',
 }) : null;
-const directCodexAdapter = desktopCodexAdapter
-  || createHttpCodexAdapterFromEnv(process.env)
+const fallbackCodexAdapter = createHttpCodexAdapterFromEnv(process.env)
   || createGitHubActionsCodexAdapterFromEnv(process.env);
+const directCodexAdapter = desktopCodexAdapter || fallbackCodexAdapter
+  ? new RoutedCodexAdapter({ desktopAdapter: desktopCodexAdapter, fallbackAdapter: fallbackCodexAdapter })
+  : null;
 
 const operationsEngine = createOperationsEngine({
   dataDir: DATA_DIR,

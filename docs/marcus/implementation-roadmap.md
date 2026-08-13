@@ -76,13 +76,13 @@ Status: handoff mode and direct launch are implemented. Production uses the Regg
 
 Local desktop adapter environment:
 
-- `MARCUS_DESKTOP_CODEX_ENABLED=true` on the server
+- Hosted runtime default: enabled; `MARCUS_DESKTOP_CODEX_ENABLED=false` disables the desktop path
 - `MARCUS_ALLOW_BROAD_WORKSPACE_ROOTS=true` on the desktop relay
 - `MARCUS_ALLOWED_WORKSPACE_ROOTS` with explicit Windows roots
 - `MARCUS_NEW_PROJECT_ROOT` for blank-project creation
 - `MARCUS_CODEX_MONITOR_MODE=kiosk` or `app`
 
-Status: implementation and local acceptance pass. The adapter queues each launch once, survives restart, validates the exact desktop agent, streams redacted Codex JSONL events, records final output and Git evidence, supports follow-up and cancellation, and serves a token-scoped real-time monitor. A real disposable Codex run created the requested file exactly. The complete local suite passes `137/137`. Render configuration, desktop scheduled-task restart, and installed-phone acceptance are still pending.
+Status: implementation and local acceptance pass. The adapter queues each launch once, survives restart, validates the exact desktop agent, streams redacted Codex JSONL events, records final output and Git evidence, supports follow-up and cancellation, and serves a token-scoped real-time monitor. A routing adapter sends only exact attested local workspaces to desktop Codex and preserves the configured HTTP or GitHub Actions adapter for repository-only work. A real disposable Codex run created the requested file exactly. The complete local suite passes `138/138`. Deployment, desktop scheduled-task restart, and installed-phone acceptance are still pending.
 
 ## Phase 3A: From-Scratch Project Operator
 
