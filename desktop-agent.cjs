@@ -24,6 +24,7 @@ const fs = require('fs');
 const os = require('os');
 const readline = require('readline');
 const { discoverRecentCodexWorkspaces, parseGitStatus } = require('./desktop-codex-sessions.cjs');
+const { localPackageBinInvocation, npmCliInvocation } = require('./desktop-node-cli.cjs');
 const {
   createPcAccessPolicy,
   getPcInventory,
@@ -491,7 +492,9 @@ async function runNpmScript(cwd, scriptName) {
   if (!ALLOWED_NPM_SCRIPTS.has(clean)) return { ok: false, stderr: `npm script "${clean}" is not allowlisted` };
   const scripts = readPackageScripts(cwd);
   if (!scripts[clean]) return { ok: false, stderr: `package.json has no "${clean}" script` };
-  return await runLocalCommand(cwd, 'npm.cmd', ['run', clean], 120_000);
+  const invocation = npmCliInvocation(['run', clean]);
+  if (!invocation.ok) return { ok: false, stderr: invocation.error };
+  return await runLocalCommand(cwd, invocation.command, invocation.args, 120_000);
 }
 
 async function publishProjectChanges(payload) {
@@ -981,7 +984,9 @@ async function deployCloudflareProject(payload) {
   if (!configNames.some((name) => fs.existsSync(path.join(valid.path, name)))) {
     return { ok: false, error: 'The project has no Wrangler configuration. Codex must prepare a Cloudflare Worker or Pages project first.' };
   }
-  const result = await runLocalCommand(valid.path, 'npx.cmd', ['wrangler', 'deploy'], 240_000);
+  const invocation = localPackageBinInvocation(valid.path, 'wrangler', 'wrangler', ['deploy']);
+  if (!invocation.ok) return { ok: false, error: invocation.error, details: { path: valid.path } };
+  const result = await runLocalCommand(valid.path, invocation.command, invocation.args, 240_000);
   const deploymentUrl = cloudflareDeploymentUrl(`${result.stdout}\n${result.stderr}`);
   return {
     ok: result.ok && Boolean(deploymentUrl),

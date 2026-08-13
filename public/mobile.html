@@ -1056,7 +1056,9 @@
     const providerPassed = Number(textVerified) + Number(emailVerified) + Number(textSendAccepted) + Number(emailSendAccepted);
     els.providerAcceptanceCount.textContent = `${providerPassed}/4`;
     els.providerAcceptanceCount.className = `provider-state ${providerPassed === 4 ? 'ok' : ''}`.trim();
-    els.confirmPhone.disabled = session?.readyForPhysicalReview !== true || session?.physicalReviewConfirmed === true;
+    const phoneConfirmed = session?.physicalReviewConfirmed === true;
+    els.confirmPhone.disabled = session?.readyForPhysicalReview !== true || phoneConfirmed;
+    els.confirmPhone.textContent = phoneConfirmed ? 'Phone confirmed' : 'Confirm on this phone';
     els.acceptanceInstall.hidden = gates.installedAndroidContext === true;
     els.acceptanceVoice.disabled = !realtimeVoice;
     els.acceptanceVoice.textContent = realtimeVoice?.isActive() ? 'Stop voice test' : 'Start voice test';
