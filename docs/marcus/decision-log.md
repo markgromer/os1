@@ -337,3 +337,11 @@ Context: Mark wants Marcus to discover and switch among projects anywhere on his
 Decision: Model whole-PC scope as a two-step critical operation bound to one desktop agent and explicit fixed-drive roots. The first step persists the local policy only after a checkbox plus typed `I understand`; the second reads back runtime and disk state and must match the immutable operation target. Keep credential contents, arbitrary shell execution, and consequential external actions outside this grant.
 
 Consequence: Render serves `marcus-mobile-v20`, and operation `op_1HYqnishgglGZQ` is prepared for `Marks_PC: C:\`. It remains `waiting_for_approval` with zero attempts, so no wider access exists until Mark confirms it. After approval, production must prove the `full_pc` manifest, persisted-policy verification, and representative inventory/search/read behavior before this capability is accepted.
+
+## 2026-08-13: Documentation-Only Changes Do Not Recycle Production
+
+Context: Obsidian evidence updates triggered full Render replacements because every commit to `main` autodeployed `task-tracker`. Marcus briefly returned Render `502` pages during those replacements even though no runtime file changed.
+
+Decision: Keep automatic runtime deployment enabled, but add `buildFilter.ignoredPaths: [docs/**]` to the Blueprint-managed service. Application code, tests, configuration, and mobile assets still trigger deployment; only `docs/` changes are excluded.
+
+Consequence: Blueprint commit `d318950` deployed successfully, and the Render settings dashboard shows `docs/**` as the sole ignored path. A docs-only follow-up push must now be skipped while the current production process remains healthy.
