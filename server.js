@@ -14335,6 +14335,7 @@ app.post('/api/desktop-context/action-results', async (req, res) => {
     const result = {
       id,
       type,
+      jobId: typeof raw.jobId === 'string' ? raw.jobId.trim().slice(0, 300) : '',
       businessKey,
       operationId: typeof raw.operationId === 'string' ? raw.operationId.trim().slice(0, 120) : '',
       stepId: typeof raw.stepId === 'string' ? raw.stepId.trim().slice(0, 120) : '',
@@ -14365,7 +14366,7 @@ app.post('/api/desktop-context/action-results', async (req, res) => {
           accepted = true;
           if (!result.ok && desktopCodexAdapter) {
             await desktopCodexAdapter.ingestUpdate({
-              jobId: typeof details?.jobId === 'string' ? details.jobId : id,
+              jobId: result.jobId || (typeof details?.jobId === 'string' ? details.jobId : id),
               desktopAgentId: result.desktopAgentId,
               status: 'failed',
               error: result.error || `Desktop action ${type} failed.`,

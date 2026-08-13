@@ -76,6 +76,11 @@ test('desktop Codex adapter durably queues one local job and exposes token-scope
     assert.equal(followedUp.status, 'queued');
     assert.equal(actions.length, 2);
     assert.equal(actions[1].type, 'followup-local-codex-job');
+    assert.equal(actions[1].payload.operationId, input.operationId);
+    assert.equal(actions[1].payload.stepId, input.stepId);
+    assert.equal(actions[1].payload.businessKey, input.businessKey);
+    assert.equal(actions[1].payload.projectRegistryId, input.projectRegistryId);
+    assert.equal(actions[1].payload.desktopAgentId, input.desktopAgentId);
     assert.equal(actions[1].payload.threadId, 'thread-1');
     assert.equal(actions[1].payload.message, 'Fix the independently verified typecheck failures.');
 

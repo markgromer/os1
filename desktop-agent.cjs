@@ -1020,7 +1020,7 @@ async function checkDesktopActions() {
           outcome = valid;
           if (type === 'validate-workspace') outcome.details = { registeredPath: String(action?.payload?.registeredPath || ''), canonicalPath: '' };
           responses.push({
-            id, type, businessKey: String(action?.payload?.businessKey || ''), operationId: String(action?.payload?.operationId || ''),
+            id, type, jobId: String(action?.payload?.jobId || ''), businessKey: String(action?.payload?.businessKey || ''), operationId: String(action?.payload?.operationId || ''),
             stepId: String(action?.payload?.stepId || ''), projectRegistryId: String(action?.payload?.projectRegistryId || ''),
             desktopAgentId: DESKTOP_AGENT_ID, idempotencyKey: String(action?.payload?.idempotencyKey || ''),
             attemptNumber: Number(action?.payload?.attemptNumber ?? 0), ...outcome,
@@ -1068,7 +1068,7 @@ async function checkDesktopActions() {
       }
 
       responses.push({
-        id, type, businessKey: String(action?.payload?.businessKey || ''), operationId: String(action?.payload?.operationId || ''),
+        id, type, jobId: String(action?.payload?.jobId || ''), businessKey: String(action?.payload?.businessKey || ''), operationId: String(action?.payload?.operationId || ''),
         stepId: String(action?.payload?.stepId || ''), projectRegistryId: String(action?.payload?.projectRegistryId || ''),
         desktopAgentId: DESKTOP_AGENT_ID, idempotencyKey: String(action?.payload?.idempotencyKey || ''),
         attemptNumber: Number(action?.payload?.attemptNumber ?? 0), ...outcome,

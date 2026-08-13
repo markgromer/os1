@@ -271,6 +271,10 @@ export class DesktopCodexAdapter {
       requestedBy: `operation:${record.operationId}`,
       payload: {
         jobId: record.jobId,
+        operationId: record.operationId,
+        stepId: record.stepId,
+        businessKey: record.businessKey,
+        projectRegistryId: record.projectRegistryId,
         threadId: record.threadId,
         path: record.workspacePath,
         message: safeString(message, 8_000),
