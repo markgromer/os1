@@ -118,9 +118,11 @@ export function createMarcusRealtimeVoice(options = {}) {
   let reconnectAttempt = 0;
   let reconnectTimer = null;
   let refreshTimer = null;
+  let mutedIdleTimer = null;
   let setupAbort = null;
   let connectPromise = null;
   let connectionVersion = 0;
+  let inputMuted = false;
 
   function emitEvent(type, metadata = {}) {
     try {
@@ -144,11 +146,21 @@ export function createMarcusRealtimeVoice(options = {}) {
     refreshTimer = null;
   }
 
+  function clearMutedIdleTimer() {
+    if (mutedIdleTimer !== null) clearTimer(mutedIdleTimer);
+    mutedIdleTimer = null;
+  }
+
+  function setReadyState(detail = '') {
+    setState(inputMuted ? 'idle' : 'listening', detail || (inputMuted ? 'Hold Space to talk' : 'Listening'));
+  }
+
   function closeCurrentSession() {
     connectionVersion += 1;
     setupAbort?.abort();
     setupAbort = null;
     clearRefreshTimer();
+    clearMutedIdleTimer();
     const current = session;
     session = null;
     try { current?.close(); } catch {}
@@ -194,19 +206,19 @@ export function createMarcusRealtimeVoice(options = {}) {
       if (!isCurrent()) return;
       if (assistantAudioActive) emitEvent('audio_stopped');
       assistantAudioActive = false;
-      setState('listening', 'Listening');
+      setReadyState();
     };
     const markAssistantAudioInterrupted = () => {
       if (!isCurrent()) return;
       if (assistantAudioActive) emitEvent('audio_interrupted');
       assistantAudioActive = false;
-      setState('listening', 'Interrupted; listening');
+      setReadyState(inputMuted ? 'Hold Space to talk' : 'Interrupted; listening');
     };
     current.transport.on('connection_change', (status) => {
       if (!isCurrent()) return;
       if (status === 'connected') {
         reconnectAttempt = 0;
-        setState('listening', 'Listening');
+        setReadyState();
       } else if (status === 'disconnected') {
         session = null;
         clearRefreshTimer();
@@ -221,14 +233,14 @@ export function createMarcusRealtimeVoice(options = {}) {
     current.on('audio_stopped', markAssistantAudioStopped);
     current.on('audio_interrupted', markAssistantAudioInterrupted);
     current.on('agent_end', () => {
-      if (isCurrent() && state !== 'speaking') setState('listening', 'Listening');
+      if (isCurrent() && state !== 'speaking') setReadyState();
     });
     current.on('transport_event', (event) => {
       if (!isCurrent()) return;
       if (event?.type === 'input_audio_buffer.speech_started') {
         emitEvent('speech_started');
         if (assistantAudioActive) markAssistantAudioInterrupted();
-        else setState('listening', 'Listening');
+        else setReadyState('Listening');
       }
       if (event?.type === 'input_audio_buffer.speech_stopped') {
         emitEvent('speech_stopped');
@@ -308,7 +320,8 @@ export function createMarcusRealtimeVoice(options = {}) {
     }
 
     reconnectAttempt = 0;
-    setState('listening', 'Listening');
+    try { current.mute(inputMuted); } catch {}
+    setReadyState();
     clearRefreshTimer();
     refreshTimer = setTimer(() => {
       if (!desiredActive || suspended || session !== current) return;
@@ -357,20 +370,42 @@ export function createMarcusRealtimeVoice(options = {}) {
   async function start() {
     desiredActive = true;
     suspended = false;
+    inputMuted = false;
+    clearMutedIdleTimer();
     reconnectAttempt = 0;
     emitEvent('session_started');
-    return connectNow({ automatic: false });
+    const connected = await connectNow({ automatic: false });
+    try { session?.mute(false); } catch {}
+    return connected;
   }
 
   function stop() {
     if (desiredActive) emitEvent('session_stopped');
     desiredActive = false;
     suspended = false;
+    inputMuted = false;
     reconnectAttempt = 0;
     clearReconnectTimer();
+    clearMutedIdleTimer();
     closeCurrentSession();
     connectPromise = null;
     setState('offline', 'Voice off');
+  }
+
+  function mute(muted) {
+    inputMuted = Boolean(muted);
+    if (!desiredActive) return false;
+    clearMutedIdleTimer();
+    try { session?.mute(inputMuted); } catch {}
+    if (inputMuted) {
+      setState('thinking', 'Processing voice');
+      mutedIdleTimer = setTimer(() => {
+        if (desiredActive && inputMuted && state === 'thinking') setReadyState();
+      }, 12_000);
+    } else {
+      setReadyState('Listening');
+    }
+    return true;
   }
 
   function suspend(detail = 'Voice paused while the app is in the background') {
@@ -428,6 +463,7 @@ export function createMarcusRealtimeVoice(options = {}) {
     networkChanged,
     interrupt,
     announce,
+    mute,
     getState: () => state,
     isActive: () => desiredActive,
   };

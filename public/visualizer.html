@@ -1813,6 +1813,7 @@
         const voice = await ensureRealtimeVoice();
         if (!voice) throw new Error("Realtime voice client is unavailable.");
         if (!voice.isActive()) await voice.start();
+        else voice.mute?.(false);
         updateVoiceButton("listening", "Listening while Space is held");
       } catch (error) {
         voiceHeld = false;
@@ -1823,8 +1824,8 @@
     function stopHoldToTalk() {
       if (!voiceHeld) return;
       voiceHeld = false;
-      try { realtimeVoice?.stop(); } catch {}
-      updateVoiceButton("idle", "Voice off");
+      try { realtimeVoice?.mute?.(true); } catch {}
+      updateVoiceButton("thinking", "Processing voice");
     }
 
     document.querySelector("[data-action='voice']").addEventListener("pointerdown", (event) => {
