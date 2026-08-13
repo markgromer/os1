@@ -65,6 +65,12 @@ The phone does not tick operations or read full operation records. Closing or lo
 
 Startup recovery preserves the workflow's next real boundary. A completed Codex step does not trigger final-verification blocking while repository creation, publication, deployment, or another non-verification step remains unfinished. A pending exact approval restores `waiting_for_approval`; stale verification classification is resolved without executing the action.
 
+Persistent PC scope changes follow:
+
+`paired mobile Verify -> inspect live desktop manifest -> derive every fixed-drive root -> create critical durable operation -> typed strong confirmation -> queue exact-agent policy update -> persist local config -> same-agent read-back -> required verification -> completed`
+
+Preparing this operation does not change local access. The desktop agent rejects an unbound policy action, and Marcus completes the operation only when runtime scope, persisted scope, exact roots, and credential-content blocking all match. Shell execution, installs, deletion, publishing, messages, and account changes remain outside this grant.
+
 Voice transport recovery follows:
 
 `background, network loss, connection loss, or 55-minute refresh -> close stale WebRTC session -> mint a new ephemeral credential -> reconnect -> resume listening`

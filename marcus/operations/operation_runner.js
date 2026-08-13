@@ -197,10 +197,12 @@ export class OperationRunner {
         }
         if (step.type === 'desktop' && !draft.desktopCorrelations.some((item) => item.idempotencyKey === step.idempotencyKey)) {
           const actionId = makeOperationId('desktop');
+          const desktopAgentId = safeString(registryRecord?.localWorkspace?.desktopAgentId, 200)
+            || safeString(draft.metadata?.extra?.pcAccessTarget?.desktopAgentId, 200);
           draft.desktopCorrelations.push(normalizeDesktopCorrelation({
             actionId, operationId, stepId: step.id, businessKey: draft.businessKey,
             actionType: step.toolName || step.type, projectRegistryId: draft.projectRegistryId,
-            desktopAgentId: registryRecord?.localWorkspace?.desktopAgentId,
+            desktopAgentId,
             idempotencyKey: step.idempotencyKey, attemptNumber: step.attemptCount,
             queuedAt: nowIso(), updatedAt: nowIso(), status: 'queued',
           }));

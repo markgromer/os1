@@ -1,12 +1,20 @@
 # Decision Log
 
+## 2026-08-13: Persistent Drive Access Is A Critical Durable Operation
+
+Context: Mark wants Marcus to use the whole PC, but the prior safe installation covered only Documents, OneDrive Documents, and Downloads. A command-line `C:\` grant was rejected because a broad statement was not an exact informed authorization for persistent drive scope and hosted metadata/content relay.
+
+Decision: Put drive-scope preparation in the paired mobile `Verify` view. Derive every fixed-drive root from the exact online relay, create one critical durable operation, require typed strong confirmation, and bind both policy mutation and verification to the same desktop-agent id and idempotent operation attempt. The relay persists only its non-secret policy, rejects unbound access actions, and reports runtime plus persisted read-back. Keep credential content, arbitrary shell execution, installs, deletion, publishing, messages, and account changes outside this grant.
+
+Consequence: Marcus can ask for the exact authority it needs without treating conversation as a hidden permanent setting. Local acceptance proves no queueing before approval and completion only after matching policy evidence; actual drive-root scope remains inactive until Mark approves it in the paired app.
+
 ## 2026-08-12: Full PC Use Is A Capability Grant, Not Arbitrary Remote Shell
 
 Context: Mark explicitly wants Marcus to use his PC and everything on it. The existing desktop bridge could operate registered projects and visible Codex jobs, but it could not truthfully search the wider PC, inspect ordinary files, or launch installed applications. Treating that request as an unrestricted persistent shell would also expose credentials, destructive commands, and third-party prompt injection to the same conversational surface.
 
 Decision: Add a typed PC-operator layer with a live root/capability manifest, bounded filename search, directory and application inventory, non-secret text reads, and direct-request-only open/launch actions. Persist non-secret relay policy outside Task Scheduler arguments. Refuse credential-bearing files and keep shell execution, deletion, installs, access/credential changes, publishing, external communication, and irreversible actions behind exact approval paths. Do not enable whole-drive `C:\` persistence until Mark approves that exact scope and understands that selected metadata/content transits the hosted Render service.
 
-Consequence: Marcus now has real general-PC assistance over Documents, OneDrive Documents, and Downloads instead of merely claiming it. The live server reports eight capabilities and the 143-test suite passes. Whole-drive access remains a visible unresolved authorization decision rather than a hidden configuration change.
+Consequence: Marcus now has real general-PC assistance over Documents, OneDrive Documents, and Downloads instead of merely claiming it. The live server reports eight capabilities. Whole-drive access remains a visible unresolved authorization decision rather than a hidden configuration change.
 
 ## 2026-08-12: Post-Codex Approval Work Precedes Final Verification
 

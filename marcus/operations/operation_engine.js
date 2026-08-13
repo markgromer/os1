@@ -408,6 +408,92 @@ export function createOperationsEngine({
       return { operation, resolution, reused: false };
     },
 
+    async createPcAccessOperation(businessKey, input = {}) {
+      const key = safeBusinessKey(businessKey);
+      const raw = safeObject(input);
+      const desktopContext = await getDesktopContext().catch(() => ({}));
+      const desktopAuthorization = safeObject(desktopContext.desktopAuthorization);
+      const desktopAgentId = safeString(desktopAuthorization.agentId, 200);
+      if (!desktopAgentId) {
+        throw Object.assign(new Error('The local Marcus desktop relay must be online before preparing a PC access change.'), { code: 'DESKTOP_AGENT_REQUIRED' });
+      }
+
+      const requestedRoots = (Array.isArray(raw.pcAccessRoots) ? raw.pcAccessRoots : [])
+        .map((value) => safeString(value, 1_000))
+        .filter(Boolean);
+      const inferredDrive = [...(Array.isArray(desktopAuthorization.allowedRoots) ? desktopAuthorization.allowedRoots : []), desktopAuthorization.newProjectRoot]
+        .map((value) => safeString(value, 1_000).match(/^([A-Za-z]):[\\/]/)?.[1]?.toUpperCase())
+        .find(Boolean);
+      const pcAccessRoots = [...new Set((requestedRoots.length ? requestedRoots : (inferredDrive ? [`${inferredDrive}:\\`] : []))
+        .map((value) => {
+          const match = value.match(/^([A-Za-z]):[\\/]?$/);
+          return match ? `${match[1].toUpperCase()}:\\` : '';
+        })
+        .filter(Boolean))].sort();
+      if (!pcAccessRoots.length) {
+        throw Object.assign(new Error('Marcus could not derive an exact Windows drive root from the connected desktop relay.'), { code: 'PC_ACCESS_TARGET_REQUIRED' });
+      }
+      if (desktopAuthorization.fullPcAccess === true
+        && JSON.stringify([...(desktopAuthorization.pcAccessRoots || [])].sort()) === JSON.stringify(pcAccessRoots)) {
+        return { operation: null, reused: true, alreadyConfigured: true, desktopAgentId, pcAccessRoots };
+      }
+
+      const fingerprint = crypto.createHash('sha256').update(JSON.stringify({ key, desktopAgentId, pcAccessRoots, policyVersion: 1 })).digest('hex');
+      const duplicate = (await store.listAll(key, { nonterminal: true }))
+        .find((candidate) => candidate.metadata?.extra?.pcAccessFingerprint === fingerprint);
+      if (duplicate) return { operation: duplicate, reused: true, alreadyConfigured: false, desktopAgentId, pcAccessRoots };
+
+      const originalRequest = safeString(raw.originalRequest, 12_000)
+        || `Grant Marcus persistent bounded PC operator access to ${pcAccessRoots.join(', ')} on desktop agent ${desktopAgentId}. Relay selected filesystem metadata and bounded non-secret text through the Marcus service. Keep credential content, arbitrary shell execution, installs, deletion, publishing, external messages, and account changes outside this grant.`;
+      const authorizationProvenance = {
+        source: 'authenticated_request', businessKey: key, projectRegistryId: '', environment: 'local_pc',
+        providers: ['desktop'], actionClasses: ['configure-pc-access', 'verify-pc-access'],
+        requestDigest: crypto.createHash('sha256').update(originalRequest).digest('hex'), createdAt: nowIso(), revoked: false,
+      };
+      const targetLabel = `${desktopAgentId}: ${pcAccessRoots.join(', ')}`;
+      let operation = await service.createOperation(key, {
+        projectName: 'Marcus PC',
+        title: `Grant bounded full-PC access to ${targetLabel}`,
+        objective: `Persist and verify bounded Marcus PC operator access to ${pcAccessRoots.join(', ')} on the exact connected desktop agent.`,
+        originalRequest,
+        requestedBy: safeString(raw.requestedBy, 200) || 'mark-mobile',
+        source: safeString(raw.source, 100) || 'pc_access_api',
+        acceptanceCriteria: [
+          `Desktop agent ${desktopAgentId} persists full-PC scope for exactly ${pcAccessRoots.join(', ')}.`,
+          'The relay reports the same scope and roots after the approved change.',
+          'Credential content, arbitrary shell execution, installs, deletion, publishing, messaging, and account changes remain outside this grant.',
+        ],
+        metadata: {
+          pcAccessFingerprint: fingerprint,
+          projectResolution: { resolved: true, confidence: 'high', score: 100, reason: 'Exact connected desktop agent selected by authenticated operator request.', alternatives: [], confirmed: true },
+          pcAccessTarget: {
+            desktopAgentId, pcAccessRoots, fullPcAccess: true, policyVersion: 1,
+            relaySelectedMetadata: true, relayBoundedText: true, credentialContentBlocked: true,
+          },
+        },
+      }, { authorizationProvenance });
+      const accessInput = {
+        environment: 'local_pc', approvalTarget: targetLabel, fullPcAccess: true, pcAccessRoots,
+        relaySelectedMetadata: true, relayBoundedText: true, credentialContentBlocked: true,
+      };
+      operation = await service.planOperation(key, operation.id, {
+        steps: [
+          {
+            id: 'configure-access', title: `Grant bounded access to ${pcAccessRoots.join(', ')}`,
+            description: 'Persist the exact local PC access policy only after strong confirmation.',
+            type: 'desktop', provider: 'desktop', toolName: 'configure-pc-access', maxAttempts: 1, input: accessInput,
+          },
+          {
+            id: 'verify-access', title: 'Verify the persisted PC access policy',
+            description: 'Read back both runtime and persisted policy from the exact desktop agent.',
+            type: 'desktop', provider: 'desktop', toolName: 'verify-pc-access', dependsOn: ['configure-access'], maxAttempts: 2, input: accessInput,
+          },
+        ],
+      });
+      operation = await service.startOperation(key, operation.id, { actor: safeString(raw.requestedBy, 100) || 'mark-mobile', runCycle: true });
+      return { operation, reused: false, alreadyConfigured: false, desktopAgentId, pcAccessRoots };
+    },
+
     async listOperations(businessKey, filters = {}) {
       const operations = await store.list(businessKey, filters);
       return operations.map((operation) => ({ ...operation, progress: summarizeOperationProgress(operation) }));

@@ -47,8 +47,12 @@ const DEFAULT_DESKTOP_CONFIG_FILE = path.join(
   'desktop-agent.json',
 );
 
+function desktopAgentConfigFile() {
+  return String(process.env.MARCUS_DESKTOP_CONFIG_FILE || DEFAULT_DESKTOP_CONFIG_FILE).trim();
+}
+
 function readDesktopAgentConfig() {
-  const configFile = String(process.env.MARCUS_DESKTOP_CONFIG_FILE || DEFAULT_DESKTOP_CONFIG_FILE).trim();
+  const configFile = desktopAgentConfigFile();
   if (!configFile) return {};
   try {
     const value = JSON.parse(fs.readFileSync(configFile, 'utf8').replace(/^\uFEFF/, ''));
@@ -86,17 +90,129 @@ const ADMIN_TOKEN = (process.argv[3] || process.env.ADMIN_TOKEN || readAdminToke
 const DESKTOP_AGENT_ID = String(process.env.MARCUS_DESKTOP_AGENT_ID || DESKTOP_CONFIG.agentId || os.hostname()).trim().slice(0, 200);
 const ALLOWED_WORKSPACE_ROOT_VALUES = listSetting('MARCUS_ALLOWED_WORKSPACE_ROOTS', DESKTOP_CONFIG.allowedWorkspaceRoots);
 const ALLOW_BROAD_WORKSPACE_ROOTS = booleanSetting('MARCUS_ALLOW_BROAD_WORKSPACE_ROOTS', DESKTOP_CONFIG.allowBroadWorkspaceRoots);
-const FULL_PC_ACCESS = booleanSetting('MARCUS_FULL_PC_ACCESS', DESKTOP_CONFIG.fullPcAccess);
-const PC_ACCESS_ROOT_VALUES = listSetting('MARCUS_PC_ACCESS_ROOTS', DESKTOP_CONFIG.pcAccessRoots);
+let FULL_PC_ACCESS = booleanSetting('MARCUS_FULL_PC_ACCESS', DESKTOP_CONFIG.fullPcAccess);
+let PC_ACCESS_ROOT_VALUES = listSetting('MARCUS_PC_ACCESS_ROOTS', DESKTOP_CONFIG.pcAccessRoots);
 const CODEX_MONITOR_MODE = String(process.env.MARCUS_CODEX_MONITOR_MODE || DESKTOP_CONFIG.codexMonitorMode || 'kiosk').trim().toLowerCase();
 const NEW_PROJECT_ROOT = String(process.env.MARCUS_NEW_PROJECT_ROOT
   || DESKTOP_CONFIG.newProjectRoot
   || path.join(os.homedir(), 'OneDrive', 'Documents', 'Marcus Projects')).trim();
-const PC_ACCESS_POLICY = createPcAccessPolicy({
+let PC_ACCESS_POLICY = createPcAccessPolicy({
   fullPcAccess: FULL_PC_ACCESS,
   pcAccessRoots: PC_ACCESS_ROOT_VALUES,
   workspaceRoots: ALLOWED_WORKSPACE_ROOT_VALUES,
 });
+
+function normalizedRootKey(value) {
+  const resolved = path.resolve(String(value || ''));
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+function sameRoots(left, right) {
+  const normalize = (values) => (Array.isArray(values) ? values : []).map(normalizedRootKey).sort();
+  return JSON.stringify(normalize(left)) === JSON.stringify(normalize(right));
+}
+
+function persistDesktopAgentConfig(patch = {}) {
+  const configFile = desktopAgentConfigFile();
+  if (!configFile) throw new Error('The desktop agent config path is unavailable.');
+  const current = readDesktopAgentConfig();
+  const next = { ...current, ...patch, version: 1, updatedAt: new Date().toISOString() };
+  const directory = path.dirname(configFile);
+  const temporary = `${configFile}.${process.pid}.${Date.now()}.tmp`;
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(temporary, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
+  try {
+    fs.renameSync(temporary, configFile);
+  } catch (error) {
+    try { fs.unlinkSync(temporary); } catch {}
+    throw error;
+  }
+  return next;
+}
+
+function validatePcAccessRootShape(value) {
+  const candidate = String(value || '').trim();
+  if (process.platform === 'win32') return /^[A-Za-z]:[\\/]?$/.test(candidate);
+  return candidate === '/';
+}
+
+function configurePcAccess(payload = {}) {
+  if (Object.prototype.hasOwnProperty.call(process.env, 'MARCUS_FULL_PC_ACCESS')
+    || Object.prototype.hasOwnProperty.call(process.env, 'MARCUS_PC_ACCESS_ROOTS')) {
+    return { ok: false, error: 'PC access is overridden by environment variables and cannot be changed durably by an approved operation.' };
+  }
+  const requestedRoots = Array.isArray(payload.pcAccessRoots)
+    ? [...new Set(payload.pcAccessRoots.map((value) => String(value || '').trim()).filter(Boolean))]
+    : [];
+  if (!requestedRoots.length || !requestedRoots.every(validatePcAccessRootShape)) {
+    return { ok: false, error: 'The approved PC access target must contain exact local drive roots.' };
+  }
+  const fullPcAccess = payload.fullPcAccess === true;
+  if (!fullPcAccess) return { ok: false, error: 'This action only supports the exact approved full-PC grant.' };
+  const nextPolicy = createPcAccessPolicy({ fullPcAccess, pcAccessRoots: requestedRoots, workspaceRoots: ALLOWED_WORKSPACE_ROOT_VALUES });
+  if (!nextPolicy.roots.length || nextPolicy.roots.length !== requestedRoots.length) {
+    return { ok: false, error: 'One or more approved PC access roots do not exist or are unavailable.' };
+  }
+  try {
+    persistDesktopAgentConfig({ fullPcAccess, pcAccessRoots: nextPolicy.roots });
+  } catch (error) {
+    return { ok: false, error: `The desktop access policy could not be persisted: ${String(error?.message || error)}` };
+  }
+  FULL_PC_ACCESS = true;
+  PC_ACCESS_ROOT_VALUES = [...nextPolicy.roots];
+  PC_ACCESS_POLICY = nextPolicy;
+  return {
+    ok: true,
+    details: {
+      scope: 'full_pc', fullPcAccess: true, pcAccessRoots: [...nextPolicy.roots],
+      capabilities: [...nextPolicy.capabilities], policyVersion: Number(payload.policyVersion) || 1,
+      persisted: true, runtimeApplied: true, credentialContentBlocked: true,
+      arbitraryShellExecutionAllowed: false, consequentialActionsRemainApprovalGated: true,
+    },
+  };
+}
+
+function verifyPcAccess(payload = {}) {
+  const expectedRoots = Array.isArray(payload.pcAccessRoots)
+    ? payload.pcAccessRoots.map((value) => String(value || '').trim()).filter(Boolean)
+    : [];
+  const persisted = readDesktopAgentConfig();
+  const persistedPolicy = createPcAccessPolicy({
+    fullPcAccess: persisted.fullPcAccess === true,
+    pcAccessRoots: Array.isArray(persisted.pcAccessRoots) ? persisted.pcAccessRoots : [],
+    workspaceRoots: ALLOWED_WORKSPACE_ROOT_VALUES,
+  });
+  const verified = payload.fullPcAccess === true
+    && FULL_PC_ACCESS === true
+    && PC_ACCESS_POLICY.fullPcAccess === true
+    && persisted.fullPcAccess === true
+    && sameRoots(expectedRoots, PC_ACCESS_POLICY.roots)
+    && sameRoots(expectedRoots, persistedPolicy.roots);
+  return verified
+    ? {
+        ok: true,
+        details: {
+          verified: true, scope: 'full_pc', fullPcAccess: true, pcAccessRoots: [...PC_ACCESS_POLICY.roots],
+          capabilities: [...PC_ACCESS_POLICY.capabilities], persisted: true, runtimeApplied: true,
+          credentialContentBlocked: true, arbitraryShellExecutionAllowed: false,
+          consequentialActionsRemainApprovalGated: true,
+        },
+      }
+    : { ok: false, error: 'The runtime and persisted PC access policies do not match the exact approved target.' };
+}
+
+function validateBoundPcAccessAction(action = {}) {
+  const payload = action?.payload && typeof action.payload === 'object' ? action.payload : {};
+  const operationId = String(payload.operationId || '').trim();
+  return Boolean(
+    operationId
+    && String(action.requestedBy || '').trim() === `operation:${operationId}`
+    && String(payload.businessKey || '').trim()
+    && String(payload.stepId || '').trim()
+    && String(payload.idempotencyKey || '').trim()
+    && String(payload.desktopAgentId || '').trim() === DESKTOP_AGENT_ID
+  );
+}
 
 if (!SERVER_URL) {
   console.error('Usage: node desktop-agent.cjs <SERVER_URL> [ADMIN_TOKEN]');
@@ -1114,6 +1230,14 @@ async function checkDesktopActions() {
         outcome = await connectGithubRepository(action?.payload || {});
       } else if (type === 'deploy-cloudflare-project') {
         outcome = await deployCloudflareProject(action?.payload || {});
+      } else if (type === 'configure-pc-access') {
+        outcome = validateBoundPcAccessAction(action)
+          ? configurePcAccess(action?.payload || {})
+          : { ok: false, error: 'PC access changes require an exact durable operation binding for this desktop agent.' };
+      } else if (type === 'verify-pc-access') {
+        outcome = validateBoundPcAccessAction(action)
+          ? verifyPcAccess(action?.payload || {})
+          : { ok: false, error: 'PC access verification requires an exact durable operation binding for this desktop agent.' };
       } else if (type === 'pc-inventory') {
         outcome = getPcInventory(PC_ACCESS_POLICY);
       } else if (type === 'pc-search-files') {

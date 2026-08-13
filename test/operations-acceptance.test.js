@@ -16,11 +16,12 @@ async function withApi(callback, options = {}) {
   const workspaceRoot = path.join(dataDir, 'workspaces');
   const warrenWorkspace = path.join(workspaceRoot, 'warren');
   await fs.mkdir(warrenWorkspace, { recursive: true });
-  const createEngine = () => createOperationsEngine({
+  const createEngine = (overrides = {}) => createOperationsEngine({
     dataDir,
     getLegacyProjects: async (businessKey) => options.legacyByBusiness?.[businessKey] || [],
     queueDesktopAction: options.queueDesktopAction || null,
     allowedWorkspaceRoots: [workspaceRoot],
+    ...overrides,
   });
   const startApi = async (engine = createEngine()) => {
     const app = express();
@@ -216,12 +217,70 @@ test('approval policy resists high and critical action bypass variations', () =>
     assert.equal(decision.riskLevel, 'high', action);
     assert.equal(decision.approvalRequired, true, action);
   }
-  for (const action of ['production data deletion', 'delete production data', 'billing change', 'credential rotation', 'rotate credential']) {
+  for (const action of ['production data deletion', 'delete production data', 'billing change', 'credential rotation', 'rotate credential', 'configure-pc-access:C:\\']) {
     const decision = policy.classify({ business: 'agency', projectRegistryId: 'registry_1', provider: 'internal', action, riskLevel: 'low', approvalRequired: false });
     assert.equal(decision.riskLevel, 'critical', action);
     assert.equal(decision.approvalRequired, true, action);
     assert.equal(decision.approvalRequirement, 'explicit_strong_confirmation', action);
   }
+});
+
+test('full-PC access is an exact critical operation with persisted desktop read-back', async () => {
+  await withApi(async ({ createEngine }) => {
+    const queued = [];
+    const engine = createEngine({
+      getDesktopContext: async () => ({
+        desktopAuthorization: {
+          agentId: 'mark-desktop', scope: 'workspace_roots', fullPcAccess: false,
+          allowedRoots: ['C:\\Users\\markg\\Documents'], newProjectRoot: 'C:\\Users\\markg\\Documents\\Marcus Projects',
+          pcAccessRoots: ['C:\\Users\\markg\\Documents'],
+        },
+      }),
+      queueDesktopAction: async (action) => {
+        queued.push(structuredClone(action));
+        return action;
+      },
+    });
+    const created = await engine.createPcAccessOperation('agency', { requestedBy: 'mark-mobile' });
+    let operation = created.operation;
+    assert.equal(created.reused, false);
+    assert.deepEqual(created.pcAccessRoots, ['C:\\']);
+    assert.equal(operation.status, 'waiting_for_approval');
+    assert.equal(operation.riskLevel, 'critical');
+    assert.equal(queued.length, 0);
+    const approval = operation.approvals.find((item) => item.status === 'pending');
+    assert.equal(approval.riskLevel, 'critical');
+    assert.match(approval.action, /configure-pc-access/i);
+
+    operation = await engine.approveOperationStep('agency', operation.id, approval.id, {
+      approvedBy: 'mark-mobile', message: 'I understand and approve this critical PC access action.', runCycle: true,
+    });
+    assert.equal(operation.status, 'blocked', JSON.stringify(operation, null, 2));
+    assert.equal(queued.length, 1);
+    assert.equal(queued[0].type, 'configure-pc-access');
+    assert.equal(queued[0].payload.desktopAgentId, 'mark-desktop');
+    assert.deepEqual(queued[0].payload.pcAccessRoots, ['C:\\']);
+
+    const desktopResult = (action, details) => ({
+      id: action.id, type: action.type, businessKey: action.payload.businessKey,
+      operationId: action.payload.operationId, stepId: action.payload.stepId,
+      projectRegistryId: action.payload.projectRegistryId, desktopAgentId: action.payload.desktopAgentId,
+      idempotencyKey: action.payload.idempotencyKey, attemptNumber: action.payload.attemptNumber,
+      ok: true, details,
+    });
+    let reconciled = await engine.reconcileDesktopResult(desktopResult(queued[0], {
+      persisted: true, runtimeApplied: true, fullPcAccess: true, pcAccessRoots: ['C:\\'], credentialContentBlocked: true,
+    }), { runCycle: true });
+    operation = reconciled.operation;
+    assert.equal(queued.length, 2);
+    assert.equal(queued[1].type, 'verify-pc-access');
+    reconciled = await engine.reconcileDesktopResult(desktopResult(queued[1], {
+      verified: true, persisted: true, runtimeApplied: true, fullPcAccess: true, pcAccessRoots: ['C:\\'], credentialContentBlocked: true,
+    }), { runCycle: true });
+    operation = reconciled.operation;
+    assert.equal(operation.status, 'completed', JSON.stringify(operation, null, 2));
+    assert.ok(operation.steps.every((step) => step.status === 'completed'));
+  });
 });
 
 test('operation completion refuses incomplete steps, pending approvals, active blockers, and manual review', async () => {

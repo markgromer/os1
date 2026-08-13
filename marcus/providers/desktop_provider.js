@@ -3,7 +3,10 @@ import { safeString } from '../operations/operation_types.js';
 const ALLOWED_DESKTOP_ACTIONS = new Set([
   'run-project-script', 'prepare-publish', 'publish-project-changes', 'open-vscode',
   'create-project-workspace', 'connect-github-repository', 'deploy-cloudflare-project',
+  'configure-pc-access', 'verify-pc-access',
 ]);
+
+const PC_ACCESS_ACTIONS = new Set(['configure-pc-access', 'verify-pc-access']);
 
 export class DesktopProvider {
   constructor({ queueAction = null } = {}) {
@@ -14,10 +17,11 @@ export class DesktopProvider {
     if (!this.queueAction) return { status: 'failed', error: 'Desktop agent execution is not available.' };
     const toolName = safeString(step.toolName, 100);
     if (!ALLOWED_DESKTOP_ACTIONS.has(toolName)) return { status: 'failed', error: `Desktop action is not allowlisted: ${toolName || '(missing)'}` };
+    const pcAccessAction = PC_ACCESS_ACTIONS.has(toolName);
     const workspacePath = safeString(registryRecord?.localWorkspace?.path, 2_000);
-    if (!workspacePath) return { status: 'failed', error: 'The project registry has no local workspace path.' };
+    if (!pcAccessAction && !workspacePath) return { status: 'failed', error: 'The project registry has no local workspace path.' };
     const createsWorkspace = toolName === 'create-project-workspace';
-    if ((!createsWorkspace && registryRecord?.localWorkspace?.trustStatus !== 'approved') || !registryRecord?.localWorkspace?.desktopAgentId) {
+    if (!pcAccessAction && ((!createsWorkspace && registryRecord?.localWorkspace?.trustStatus !== 'approved') || !registryRecord?.localWorkspace?.desktopAgentId)) {
       return { status: 'failed', error: 'The project workspace has not been explicitly approved and bound to a desktop agent.' };
     }
     const input = step.input && typeof step.input === 'object' ? step.input : {};
@@ -25,13 +29,20 @@ export class DesktopProvider {
     if (!correlation?.actionId || correlation.attemptNumber !== step.attemptCount) {
       return { status: 'failed', error: 'The desktop action has no durable correlation for this exact attempt.' };
     }
+    const pcAccessTarget = operation.metadata?.extra?.pcAccessTarget && typeof operation.metadata.extra.pcAccessTarget === 'object'
+      ? operation.metadata.extra.pcAccessTarget
+      : {};
+    const desktopAgentId = pcAccessAction
+      ? safeString(pcAccessTarget.desktopAgentId, 200)
+      : safeString(registryRecord?.localWorkspace?.desktopAgentId, 200);
+    if (!desktopAgentId) return { status: 'failed', error: 'The desktop action is not bound to an exact desktop agent.' };
     const payload = {
-      path: workspacePath,
+      ...(workspacePath ? { path: workspacePath } : {}),
       businessKey: operation.businessKey,
       operationId: operation.id,
       stepId: step.id,
-      projectRegistryId: registryRecord.id,
-      desktopAgentId: registryRecord.localWorkspace.desktopAgentId,
+      projectRegistryId: registryRecord?.id || '',
+      desktopAgentId,
       idempotencyKey,
       attemptNumber: step.attemptCount,
     };
@@ -57,6 +68,22 @@ export class DesktopProvider {
       payload.buildScript = safeString(input.buildScript, 100);
     } else if (toolName === 'deploy-cloudflare-project') {
       payload.environment = safeString(input.environment, 100) || 'production';
+    } else if (pcAccessAction) {
+      const targetRoots = Array.isArray(pcAccessTarget.pcAccessRoots)
+        ? pcAccessTarget.pcAccessRoots.map((value) => safeString(value, 1_000)).filter(Boolean)
+        : [];
+      const inputRoots = Array.isArray(input.pcAccessRoots)
+        ? input.pcAccessRoots.map((value) => safeString(value, 1_000)).filter(Boolean)
+        : [];
+      if (!targetRoots.length || JSON.stringify(targetRoots) !== JSON.stringify(inputRoots)) {
+        return { status: 'failed', error: 'The PC access roots do not match the immutable operation target.' };
+      }
+      payload.fullPcAccess = input.fullPcAccess === true;
+      payload.pcAccessRoots = targetRoots;
+      payload.policyVersion = Number(pcAccessTarget.policyVersion) || 1;
+      payload.credentialContentBlocked = true;
+      payload.relaySelectedMetadata = input.relaySelectedMetadata === true;
+      payload.relayBoundedText = input.relayBoundedText === true;
     }
     const action = await this.queueAction({ id: correlation.actionId, type: toolName, payload, idempotencyKey, requestedBy: `operation:${operation.id}` });
     if (action?.id !== correlation.actionId) return { status: 'failed', error: 'Desktop agent returned an action id that did not match the durable correlation.' };

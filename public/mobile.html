@@ -386,6 +386,18 @@
         </ul>
         <div class="message-review"><button id="reviewMessageBtn" class="btn" type="button" hidden>Review pending message</button></div>
       </section>
+      <section class="provider-section" aria-labelledby="pcAcceptanceTitle">
+        <div class="provider-title">
+          <h3 id="pcAcceptanceTitle">PC operator</h3>
+          <span id="pcAcceptanceState" class="provider-state">checking</span>
+        </div>
+        <ul class="acceptance-gates">
+          <li id="gateDesktopRelay" class="acceptance-gate"><span>Local desktop relay</span><strong>pending</strong></li>
+          <li id="gateFullPcAccess" class="acceptance-gate"><span>Bounded full-PC scope</span><strong>pending</strong></li>
+          <li id="gatePcBoundaries" class="acceptance-gate"><span>Protected action boundaries</span><strong>pending</strong></li>
+        </ul>
+        <div class="message-review"><button id="preparePcAccessBtn" class="btn" type="button">Prepare access approval</button></div>
+      </section>
       <p id="acceptanceResult" class="provider-result" aria-live="polite"></p>
     </div>
     <footer class="provider-actions acceptance-actions">
@@ -461,6 +473,7 @@
     acceptanceSummary: document.getElementById('acceptanceSummary'),
     voiceAcceptanceCount: document.getElementById('voiceAcceptanceCount'),
     providerAcceptanceCount: document.getElementById('providerAcceptanceCount'),
+    pcAcceptanceState: document.getElementById('pcAcceptanceState'),
     acceptanceNext: document.getElementById('acceptanceNext'),
     acceptanceResult: document.getElementById('acceptanceResult'),
     beginAcceptance: document.getElementById('beginAcceptanceBtn'),
@@ -471,6 +484,10 @@
     gateEmailProvider: document.getElementById('gateEmailProvider'),
     gateTextSend: document.getElementById('gateTextSend'),
     gateEmailSend: document.getElementById('gateEmailSend'),
+    gateDesktopRelay: document.getElementById('gateDesktopRelay'),
+    gateFullPcAccess: document.getElementById('gateFullPcAccess'),
+    gatePcBoundaries: document.getElementById('gatePcBoundaries'),
+    preparePcAccess: document.getElementById('preparePcAccessBtn'),
     providerDialog: document.getElementById('providerDialog'),
     providerForm: document.getElementById('providerForm'),
     closeProviders: document.getElementById('closeProvidersBtn'),
@@ -515,6 +532,7 @@
   let pendingMessageActions = [];
   let selectedMessageAction = null;
   let messageRequestInFlight = false;
+  let pcAccessRequestInFlight = false;
 
   function restoredAcceptanceSessionId() {
     try {
@@ -994,14 +1012,64 @@
     els.acceptanceState.textContent = report?.ready ? 'All production gates passed' : `${report?.missing?.length || 0} production gates remain`;
     els.acceptanceSummary.textContent = session?.acceptedOnPhysicalDevice
       ? 'This phone has durable physical voice evidence.'
-      : 'Complete the highlighted Android steps and verify both message providers.';
+      : 'Complete the highlighted Android, messaging, and PC operator gates.';
+  }
+  function applyPcCapabilities(data) {
+    const authorization = data?.authorization || {};
+    const relayOnline = data?.relayOnline === true;
+    const fullPcAccess = relayOnline && authorization.fullPcAccess === true && authorization.scope === 'full_pc';
+    const boundaries = data?.boundaries || {};
+    const protectedBoundaries = boundaries.credentialContentBlocked === true
+      && boundaries.arbitraryShellExecutionAllowed === false
+      && boundaries.consequentialActionsRemainApprovalGated === true;
+    applyAcceptanceGate(els.gateDesktopRelay, relayOnline, 'online');
+    applyAcceptanceGate(els.gateFullPcAccess, fullPcAccess, 'active');
+    applyAcceptanceGate(els.gatePcBoundaries, protectedBoundaries, 'enforced');
+    els.pcAcceptanceState.className = `provider-state ${fullPcAccess ? 'ok' : ''}`.trim();
+    els.pcAcceptanceState.textContent = fullPcAccess ? 'full PC' : relayOnline ? 'approval required' : 'offline';
+    const roots = Array.isArray(data?.recommendedFullPcRoots) ? data.recommendedFullPcRoots : [];
+    els.preparePcAccess.hidden = fullPcAccess;
+    els.preparePcAccess.disabled = pcAccessRequestInFlight || !relayOnline || roots.length === 0;
+    els.preparePcAccess.textContent = roots.length ? `Prepare ${roots.join(', ')} approval` : 'Prepare access approval';
   }
   async function refreshAcceptance() {
     if (!liveToken && !(await ensureSession())) return null;
     await drainVoiceTelemetry();
-    const report = await api(`/api/marcus/acceptance?sessionId=${encodeURIComponent(telemetrySessionId)}`);
+    const [report, pcCapabilities] = await Promise.all([
+      api(`/api/marcus/acceptance?sessionId=${encodeURIComponent(telemetrySessionId)}`),
+      adminApi('/api/marcus/pc/capabilities'),
+    ]);
     applyAcceptanceReport(report);
+    applyPcCapabilities(pcCapabilities);
     return report;
+  }
+  async function preparePcAccessApproval() {
+    if (pcAccessRequestInFlight) return;
+    if (!(await ensureSession())) return;
+    pcAccessRequestInFlight = true;
+    els.preparePcAccess.disabled = true;
+    els.acceptanceResult.classList.remove('error');
+    els.acceptanceResult.textContent = 'Preparing exact PC access approval...';
+    try {
+      const data = await adminApi('/api/marcus/pc/access-request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scope: 'full_pc' }),
+      });
+      if (data.alreadyConfigured) {
+        els.acceptanceResult.textContent = 'Bounded full-PC access is already active.';
+        await refreshAcceptance();
+        return;
+      }
+      if (!data.operation?.id) throw new Error('Marcus did not return a durable PC access operation.');
+      operationTracker?.track(data.operation);
+      els.acceptanceDialog.close();
+      addMessage('marcus', `Prepared exact bounded PC access for ${(data.pcAccessRoots || []).join(', ')}. Review the critical approval before Marcus changes the local relay.`);
+      await openApprovalReview();
+    } finally {
+      pcAccessRequestInFlight = false;
+      els.preparePcAccess.disabled = false;
+    }
   }
   function scheduleAcceptancePoll() {
     if (acceptancePollTimer !== null || !els.acceptanceDialog.open) return;
@@ -1232,6 +1300,12 @@
     els.approvalResult.textContent = err.message || String(err);
   }));
   els.reviewMessage.addEventListener('click', () => openMessageApproval().catch((err) => {
+    els.acceptanceResult.classList.add('error');
+    els.acceptanceResult.textContent = err.message || String(err);
+  }));
+  els.preparePcAccess.addEventListener('click', () => preparePcAccessApproval().catch((err) => {
+    pcAccessRequestInFlight = false;
+    els.preparePcAccess.disabled = false;
     els.acceptanceResult.classList.add('error');
     els.acceptanceResult.textContent = err.message || String(err);
   }));

@@ -23,7 +23,7 @@ Marcus may prepare but should require approval for:
 
 ## Mark's Full-PC Authorization
 
-Status: deployed for the configured work roots with an explicit PC-operator capability manifest. Whole-drive `C:\` scope is not enabled because that persistent grant still requires Mark to approve the exact root and data-relay risk. Physical Android voice acceptance remains pending, but it is not the authority source for desktop execution.
+Status: deployed for the configured work roots with an explicit PC-operator capability manifest. A critical durable approval flow for every detected fixed-drive root is implemented and locally verified. Whole-drive `C:\` scope is not enabled until Mark reviews and strongly confirms that exact operation; physical Android voice acceptance is not an authority source for desktop execution.
 
 Mark explicitly authorizes Marcus to use his PC and the files available to his Windows account for project discovery, context gathering, local application work, and launching visible Codex jobs. The desktop relay advertises that authorization explicitly; the server does not infer it from a broad filesystem path.
 
@@ -37,6 +37,8 @@ The grant is configured with:
 - `MARCUS_CODEX_MONITOR_MODE=kiosk` for visible local execution
 
 The installed policy currently covers `C:\Users\markg\OneDrive\Documents`, `C:\Users\markg\Documents`, and `C:\Users\markg\Downloads`. The relay declares eight capabilities: inventory, filename search, bounded text-file read, directory listing, file/folder opening, HTTP(S) URL opening, installed-application listing, and installed-application launch. `GET /api/marcus/pc/capabilities` reports the live declaration. `POST /api/marcus/pc/actions` provides an authenticated deterministic acceptance path, and the same tools are available to main chat and Marcus Live.
+
+`POST /api/marcus/pc/access-request` prepares, but cannot approve, one critical operation bound to the exact online desktop agent and every fixed drive reported by Windows. Marcus Mobile exposes that preparation under `Verify` -> `PC operator`. The existing approval dialog requires the exact checkbox plus typed strong confirmation. After approval, `configure-pc-access` persists `%APPDATA%/M.A.R.C.U.S/desktop-agent.json`; `verify-pc-access` reads runtime and disk state back from the same agent. A required `pc_access_policy` verification must pass before the operation can complete.
 
 Broad discovery does not make every command or external mutation implicit. Secret-bearing files such as credential stores, tokens, private keys, browser credentials, and `.env` files are not relayed to hosted Marcus. Local Codex is still launched in `workspace-write` mode against one exact project path. The desktop action allowlist, project binding, durable operation state, and provider approval policy remain authoritative. Arbitrary shell execution, deleting data, installing software, exposing or changing credentials, sending messages, publishing Git changes, creating external repositories, deploying Cloudflare resources, changing DNS, and other consequential external actions require an exact reviewed action or a separately recorded standing policy.
 
@@ -170,6 +172,6 @@ Implemented policy:
 - Broad PC access: accepted only when the desktop relay sends an explicit authorization declaration; exact discovered workspaces are challenged and attested before use.
 - PC operator reads: bounded to the roots and capability list declared by the live relay; credential-bearing paths are refused rather than exported.
 - PC operator opens/launches: permitted only when Mark's current authenticated request directly asks to open the exact item or installed application. Third-party content never supplies authority.
-- Whole-drive scope: not active. Enabling persistent `C:\` access requires an exact informed grant because file metadata and bounded content may transit the hosted Render service.
+- Whole-drive scope: not active. The paired mobile app can prepare the exact critical operation, but enabling persistent drive-root access still requires Mark's strong confirmation because selected metadata and bounded non-secret text may transit the hosted Render service.
 - New local projects: an exact folder is created below `MARCUS_NEW_PROJECT_ROOT`, initialized as Git, opened in VS Code, and then used by the local Codex bridge.
 - Local Codex: the prompt is sent to the desktop relay, which runs `codex exec --json --sandbox workspace-write` in the bound workspace and streams bounded, redacted events to a token-scoped monitor.

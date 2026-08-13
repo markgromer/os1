@@ -3,6 +3,7 @@ import { safeObject, safeString } from '../operations/operation_types.js';
 const RISK_RANK = Object.freeze({ low: 0, medium: 1, high: 2, critical: 3 });
 
 const CRITICAL_ACTIONS = [
+  /configure[-_ ](?:full[-_ ])?pc[-_ ]access|grant.*full.*pc.*access|whole.*drive.*access/i,
   /delete.*production|production.*delete|production.*data.*delet|delet.*production.*data|drop.*database|truncate.*database/i,
   /destroy.*infrastructure|irreversible.*account|close.*account/i,
   /billing.*change|change.*billing|legal.*commit/i,

@@ -232,7 +232,7 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     const serviceWorker = await fetch(`${base}/sw.js`);
     assert.equal(serviceWorker.status, 200);
     const serviceWorkerText = await serviceWorker.text();
-    assert.match(serviceWorkerText, /marcus-mobile-v19/);
+    assert.match(serviceWorkerText, /marcus-mobile-v20/);
     assert.match(serviceWorkerText, /marcus-maskable-512\.png/);
     const mobileIcon = await fetch(`${base}/icons/marcus.svg`);
     assert.equal(mobileIcon.status, 200);
@@ -544,6 +544,15 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     assert.equal(pcCapabilities.relayOnline, true);
     assert.equal(pcCapabilities.authorization.scope, 'full_pc');
     assert.equal(pcCapabilities.authorization.fullPcAccess, true);
+    assert.equal(pcCapabilities.boundaries.credentialContentBlocked, true);
+    assert.deepEqual(pcCapabilities.recommendedFullPcRoots, [path.parse(server.workspaceRoot).root]);
+    const existingPcAccess = await fetch(`${base}/api/marcus/pc/access-request`, {
+      method: 'POST', headers: agencyHeaders, body: JSON.stringify({ scope: 'full_pc' }),
+    });
+    const existingPcAccessBody = await existingPcAccess.json();
+    assert.equal(existingPcAccess.status, 200);
+    assert.equal(existingPcAccessBody.alreadyConfigured, true);
+    assert.equal(existingPcAccessBody.operation, null);
 
     const pcSearchRequest = fetch(`${base}/api/marcus/pc/actions`, {
       method: 'POST', headers: agencyHeaders, body: JSON.stringify({

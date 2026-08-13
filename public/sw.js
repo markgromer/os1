@@ -1,4 +1,4 @@
-const CACHE_NAME = 'marcus-mobile-v19';
+const CACHE_NAME = 'marcus-mobile-v20';
 const SHELL_ASSETS = [
   '/mobile.html',
   '/marcus-realtime.js',

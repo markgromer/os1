@@ -1,5 +1,6 @@
 import {
   nowIso,
+  normalizeVerificationResult,
   redactSecrets,
   safeBusinessKey,
   safeObject,
@@ -72,10 +73,22 @@ export class OperationReconciliation {
     }).filter(([, valid]) => !valid).map(([binding]) => binding);
     if (attemptBindings.length) throw mismatch(attemptBindings);
 
-    const ok = raw.ok === true;
     const details = sanitizeStructured(raw.details ?? {}, 20_000);
+    const pcAccessTarget = safeObject(snapshot.metadata?.extra?.pcAccessTarget);
+    const expectedPcRoots = Array.isArray(pcAccessTarget.pcAccessRoots) ? pcAccessTarget.pcAccessRoots : [];
+    const returnedPcRoots = Array.isArray(details?.pcAccessRoots) ? details.pcAccessRoots : [];
+    const pcAccessEvidenceValid = !['configure-pc-access', 'verify-pc-access'].includes(actionType) || (
+      details?.fullPcAccess === true
+      && details?.persisted === true
+      && details?.runtimeApplied === true
+      && details?.credentialContentBlocked === true
+      && JSON.stringify(returnedPcRoots) === JSON.stringify(expectedPcRoots)
+      && (actionType !== 'verify-pc-access' || details?.verified === true)
+    );
+    const ok = raw.ok === true && pcAccessEvidenceValid;
     const outputText = redactSecrets(details, 20_000);
-    const errorText = redactSecrets(raw.error ?? '', 4_000);
+    const errorText = redactSecrets(raw.error ?? '', 4_000)
+      || (!pcAccessEvidenceValid ? 'Desktop PC access evidence did not match the exact durable operation target.' : '');
     const updated = await this.store.update(businessKey, snapshot.id, (operation) => {
       const targetCorrelation = operation.desktopCorrelations.find((item) => item.actionId === actionId);
       const targetStep = operation.steps.find((item) => item.id === targetCorrelation?.stepId);
@@ -153,6 +166,23 @@ export class OperationReconciliation {
             blocker.status = 'resolved'; blocker.resolvedAt = timestamp; blocker.resolution = 'Desktop provider result reconciled.';
           }
         }
+      }
+
+      if (actionType === 'verify-pc-access') {
+        const existingPcVerification = operation.verification.find((item) => item.type === 'pc_access_policy');
+        const pcVerification = normalizeVerificationResult({
+          id: existingPcVerification?.id,
+          type: 'pc_access_policy', required: true, status: ok ? 'passed' : 'failed',
+          startedAt: targetStep.startedAt || timestamp, completedAt: timestamp,
+          target: expectedPcRoots.join(', '), output: ok ? outputText : '',
+          error: ok ? '' : (errorText || 'PC access policy verification failed.'),
+          evidence: {
+            actionId, actionType, desktopAgentId: targetCorrelation.desktopAgentId,
+            idempotencyKey: targetCorrelation.idempotencyKey, result: details,
+          },
+        }, { operationId: operation.id, stepId: targetCorrelation.stepId });
+        if (existingPcVerification) Object.assign(existingPcVerification, pcVerification);
+        else operation.verification.push(pcVerification);
       }
 
       if (operation.status !== 'paused') {

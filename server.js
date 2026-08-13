@@ -2792,6 +2792,11 @@ async function buildMarcusAcceptanceReport({ sessionId = '' } = {}) {
   };
   const textSend = acceptedSend('text', communication.textProviderVerifiedAt);
   const emailSend = acceptedSend('email', communication.emailProviderVerifiedAt);
+  const desktopAuthorization = desktopRelayCache?.data?.desktopAuthorization || {};
+  const expectedPcRoots = recommendedFullPcRoots(desktopAuthorization, desktopRelayCache?.data?.systemHealth || {});
+  const activePcRoots = Array.isArray(health.capabilities?.desktopAgent?.pcAccessRoots)
+    ? health.capabilities.desktopAgent.pcAccessRoots.map((root) => String(root || '').toLowerCase())
+    : [];
   const gates = {
     missionMemoryReady: health.capabilities?.missionMemory?.available === true,
     projectOperatorReady: health.capabilities?.projectOperator?.canStartCodexDirectly === true,
@@ -2800,6 +2805,10 @@ async function buildMarcusAcceptanceReport({ sessionId = '' } = {}) {
     cloudflareReady: health.capabilities?.cloudflare?.backendTokenConfigured === true,
     openaiReady: health.capabilities?.openai?.configured === true,
     desktopRelayReady: health.capabilities?.desktopAgent?.relayOnline === true,
+    fullPcAccessReady: health.capabilities?.desktopAgent?.relayOnline === true
+      && health.capabilities?.desktopAgent?.fullPcAccess === true
+      && expectedPcRoots.length > 0
+      && expectedPcRoots.every((root) => activePcRoots.includes(root.toLowerCase())),
     textProviderVerified: communication.textSendConfigured === true && communication.textProviderVerified === true,
     emailProviderVerified: communication.emailSendConfigured === true && communication.emailProviderVerified === true,
     approvedTextSendAccepted: Boolean(textSend),
@@ -2814,6 +2823,7 @@ async function buildMarcusAcceptanceReport({ sessionId = '' } = {}) {
     cloudflareReady: 'Cloudflare',
     openaiReady: 'OpenAI',
     desktopRelayReady: 'Desktop relay',
+    fullPcAccessReady: 'Bounded full-PC operator access',
     textProviderVerified: 'Quo text provider',
     emailProviderVerified: 'SMTP email provider',
     approvedTextSendAccepted: 'Approved Quo test send',
@@ -14323,6 +14333,7 @@ const DESKTOP_ACTION_RESULT_TTL_MS = 10 * 60_000;
 const LOCAL_CODEX_DESKTOP_ACTIONS = new Set([
   'start-local-codex-job', 'followup-local-codex-job', 'cancel-local-codex-job',
 ]);
+const SYSTEM_DESKTOP_ACTIONS = new Set(['configure-pc-access', 'verify-pc-access']);
 
 function pruneDesktopActionResults() {
   const cutoff = Date.now() - DESKTOP_ACTION_RESULT_TTL_MS;
@@ -14505,9 +14516,15 @@ app.post('/api/desktop-context/action-results', async (req, res) => {
     };
     desktopActionResults.push(result);
     let accepted = false;
-    if (businessKey && result.projectRegistryId) {
+    const systemOperationResult = SYSTEM_DESKTOP_ACTIONS.has(type) && Boolean(result.operationId);
+    if (businessKey && (result.projectRegistryId || systemOperationResult)) {
       try {
-        if (type === 'validate-workspace') {
+        if (systemOperationResult) {
+          const reconciled = await operationsEngine.reconcileDesktopResult(result, { runCycle: false });
+          count++;
+          accepted = true;
+          if (reconciled.operation?.status === 'queued') setImmediate(() => operationsEngine.tick(businessKey, reconciled.operation.id).catch(() => {}));
+        } else if (type === 'validate-workspace') {
           await operationsEngine.attestProjectWorkspace(businessKey, result.projectRegistryId, {
             ...result,
             challengeId: id,
@@ -17217,15 +17234,56 @@ app.get('/api/marcus/operator-health', async (req, res) => {
   }
 });
 
+function recommendedFullPcRoots(authorization = {}, systemHealth = {}) {
+  const diskRoots = (Array.isArray(systemHealth.disks) ? systemHealth.disks : [])
+    .map((disk) => typeof disk?.drive === 'string' ? disk.drive.trim() : '')
+    .map((value) => value.match(/^([A-Za-z]):$/)?.[1]?.toUpperCase())
+    .filter(Boolean)
+    .map((drive) => `${drive}:\\`);
+  const candidates = [...(Array.isArray(authorization.allowedRoots) ? authorization.allowedRoots : []), authorization.newProjectRoot]
+    .map((value) => typeof value === 'string' ? value.trim() : '')
+    .filter(Boolean);
+  const drive = candidates.map((value) => value.match(/^([A-Za-z]):[\\/]/)?.[1]?.toUpperCase()).find(Boolean);
+  return [...new Set(diskRoots.length ? diskRoots : (drive ? [`${drive}:\\`] : []))].sort();
+}
+
 app.get('/api/marcus/pc/capabilities', (req, res) => {
   const relayAgeMs = desktopRelayCache?.at ? Date.now() - desktopRelayCache.at : null;
   const relayOnline = Number.isFinite(relayAgeMs) && relayAgeMs <= DESKTOP_RELAY_TTL_MS;
+  const authorization = desktopRelayCache?.data?.desktopAuthorization || null;
   res.json({
     ok: true,
     relayOnline,
     relayAgeMs,
-    authorization: desktopRelayCache?.data?.desktopAuthorization || null,
+    authorization,
+    recommendedFullPcRoots: recommendedFullPcRoots(authorization || {}, desktopRelayCache?.data?.systemHealth || {}),
+    boundaries: {
+      credentialContentBlocked: true,
+      arbitraryShellExecutionAllowed: false,
+      consequentialActionsRemainApprovalGated: true,
+    },
   });
+});
+
+app.post('/api/marcus/pc/access-request', async (req, res) => {
+  if (req.body?.scope !== 'full_pc') {
+    return res.status(400).json({ ok: false, error: 'The exact full_pc scope is required.' });
+  }
+  try {
+    const result = await operationsEngine.createPcAccessOperation(getBusinessKeyFromContext(), {
+      requestedBy: 'mark-mobile',
+      source: 'pc_access_api',
+      pcAccessRoots: recommendedFullPcRoots(
+        desktopRelayCache?.data?.desktopAuthorization || {},
+        desktopRelayCache?.data?.systemHealth || {},
+      ),
+    });
+    res.status(result.reused ? 200 : 201).json({ ok: true, ...result });
+  } catch (error) {
+    res.status(error?.code === 'DESKTOP_AGENT_REQUIRED' ? 503 : 400).json({
+      ok: false, error: String(error?.message || error), code: error?.code || 'PC_ACCESS_REQUEST_FAILED',
+    });
+  }
 });
 
 app.post('/api/marcus/pc/actions', async (req, res) => {
