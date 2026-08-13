@@ -65,6 +65,30 @@ Acceptance:
 - Ask about a person/client and retrieve relationship history and open obligations.
 - Confirm note writes are concise, tagged, wiki-linked, and free of secrets.
 
+## Phase 1C: Visualizer Operational Awareness
+
+Status: architecture documented; fixture-only prototype exists at `public/visualizer.html`. See [[visualizer-operational-awareness]].
+
+Goal: Marcus should maintain a compact desktop view of his own operational awareness: what he believes is active, what Codex is doing, what changed, what needs Mark, what is blocked or external, what has gone quiet, and what he recommends recovering next. Mark should steer this conversationally through project-scoped `Talk to MARCUS` interactions, not by administering tracker fields.
+
+Planned implementation:
+
+- Durable awareness project store separate from the project registry.
+- Evidence-to-project reconciliation that can merge overlapping signals and split multiple initiatives inside one repository.
+- Confidence, uncertainty, conflict, lifecycle, and decay-recovery models.
+- Project-scoped conversation classification and correction handling.
+- Scoped Codex work packet preparation with existing approval boundaries preserved.
+- Incremental live adapters starting from existing operation, evidence, project-activity, registry, and Codex-job routes.
+
+Acceptance:
+
+- The visualizer clearly distinguishes fixture data, live evidence, and inference.
+- Quiet projects are evaluated with explanation and confidence rather than faded away.
+- Every project row has a `Talk to MARCUS` path scoped to that project.
+- Marcus can preserve intentional dormancy without deleting project context.
+- Completion claims trigger verification against objective and evidence.
+- Consequential actions remain approval-gated.
+
 ## Phase 2: Context Gathering
 
 Add a reusable context gatherer that can pull:

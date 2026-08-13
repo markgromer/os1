@@ -3,27 +3,24 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#101214">
+  <meta name="theme-color" content="#0f1113">
   <title>MARCUS Visualizer Demo</title>
   <style>
     :root {
       color-scheme: dark;
-      --bg: #101214;
-      --panel: #171a1d;
-      --panel-soft: #1d2226;
-      --line: #30363d;
-      --line-soft: rgba(255,255,255,0.075);
-      --text: #f3f0e9;
-      --muted: #a9ada9;
-      --faint: #737b80;
-      --cyan: #55d7e6;
-      --green: #6bd391;
-      --amber: #e3b258;
-      --red: #ee756e;
-      --violet: #b9a5ff;
-      --blue: #80b9ff;
-      --shadow: 0 20px 70px rgba(0, 0, 0, 0.42);
-      --radius: 8px;
+      --bg: #0f1113;
+      --panel: #15181b;
+      --panel-2: #191d20;
+      --line: rgba(255,255,255,0.075);
+      --soft-line: rgba(255,255,255,0.048);
+      --text: #f2f0e9;
+      --muted: #a9b0ad;
+      --faint: #727d82;
+      --cyan: #56d7e7;
+      --green: #70d597;
+      --amber: #e4b659;
+      --red: #ef7770;
+      --violet: #b7a6ff;
       --mono: "SFMono-Regular", "Cascadia Code", "Roboto Mono", Consolas, monospace;
       --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
@@ -31,1364 +28,921 @@
     * { box-sizing: border-box; }
 
     html,
-    body {
-      min-height: 100%;
-    }
+    body { min-height: 100%; }
 
     body {
       margin: 0;
-      background:
-        linear-gradient(rgba(255,255,255,0.018) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(255,255,255,0.018) 1px, transparent 1px),
-        linear-gradient(135deg, #101214 0%, #17191a 48%, #111518 100%);
-      background-size: 36px 36px, 36px 36px, auto;
+      background: var(--bg);
       color: var(--text);
       font-family: var(--sans);
       letter-spacing: 0;
     }
 
-    button {
-      font: inherit;
-    }
+    button,
+    textarea { font: inherit; }
 
-    .app-shell {
-      display: grid;
-      grid-template-rows: 58px minmax(0, 1fr);
+    .shell {
       min-height: 100vh;
-      padding: 10px;
-      gap: 10px;
+      display: grid;
+      grid-template-rows: 50px minmax(0, 1fr);
+      gap: 8px;
+      padding: 8px;
     }
 
     .topbar,
     .panel {
-      border: 1px solid var(--line-soft);
-      border-radius: var(--radius);
-      background: rgba(23, 26, 29, 0.86);
-      box-shadow: var(--shadow);
-      backdrop-filter: blur(18px);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      overflow: hidden;
     }
 
     .topbar {
       display: grid;
-      grid-template-columns: 320px minmax(0, 1fr) 330px;
+      grid-template-columns: 260px minmax(0, 1fr) 360px;
       align-items: center;
-      padding: 0 14px;
-      gap: 14px;
+      gap: 12px;
+      padding: 0 12px;
     }
 
     .brand {
       display: flex;
       align-items: center;
-      gap: 12px;
+      gap: 10px;
       min-width: 0;
     }
 
-    .mark {
-      width: 32px;
-      height: 32px;
+    .glyph {
+      position: relative;
+      width: 30px;
+      height: 30px;
+      border: 1px solid rgba(86,215,231,0.72);
       border-radius: 50%;
-      border: 1px solid rgba(85,215,230,0.72);
       background:
-        linear-gradient(90deg, transparent 47%, rgba(85,215,230,0.9) 48%, rgba(85,215,230,0.9) 52%, transparent 53%),
-        linear-gradient(0deg, transparent 47%, rgba(85,215,230,0.5) 48%, rgba(85,215,230,0.5) 52%, transparent 53%),
-        radial-gradient(circle, rgba(85,215,230,0.22), rgba(85,215,230,0.04));
-      box-shadow: 0 0 24px rgba(85,215,230,0.2);
+        linear-gradient(90deg, transparent 47%, rgba(86,215,231,0.9) 48%, rgba(86,215,231,0.9) 52%, transparent 53%),
+        linear-gradient(0deg, transparent 47%, rgba(86,215,231,0.45) 48%, rgba(86,215,231,0.45) 52%, transparent 53%);
+    }
+
+    .glyph::after {
+      content: "";
+      position: absolute;
+      inset: 6px;
+      border-radius: 38% 46% 35% 43%;
+      background: rgba(86,215,231,0.12);
+      animation: think 3.6s ease-in-out infinite;
+    }
+
+    @keyframes think {
+      0%, 100% { transform: rotate(-4deg) scale(0.94); }
+      50% { transform: rotate(3deg) scale(1.06); }
     }
 
     .brand h1 {
       margin: 0;
-      font-size: 15px;
+      font-size: 14px;
       line-height: 1.1;
-      font-weight: 750;
+      font-weight: 760;
     }
 
     .brand p {
       margin: 2px 0 0;
       color: var(--muted);
-      font-size: 11px;
+      font-size: 10px;
     }
 
-    .system-strip,
-    .top-actions,
-    .task-meta,
-    .feed-meta,
-    .stale-meta {
+    .status-strip,
+    .actions,
+    .sources,
+    .meta-row {
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 7px;
       min-width: 0;
-    }
-
-    .system-strip {
-      justify-content: center;
       flex-wrap: wrap;
     }
 
-    .top-actions {
-      justify-content: flex-end;
-    }
+    .status-strip { justify-content: center; }
+    .actions { justify-content: flex-end; }
 
     .chip,
-    .pill {
+    .source,
+    .badge,
+    .talk,
+    .ghost {
       display: inline-flex;
       align-items: center;
-      gap: 7px;
-      height: 28px;
-      padding: 0 10px;
-      border: 1px solid rgba(255,255,255,0.09);
       border-radius: 999px;
-      color: var(--muted);
-      background: rgba(255,255,255,0.035);
-      font-size: 12px;
       white-space: nowrap;
-    }
-
-    .chip strong,
-    .pill strong {
-      color: var(--text);
-      font-weight: 650;
-    }
-
-    .pulse-dot,
-    .mini-dot {
-      width: 7px;
-      height: 7px;
-      border-radius: 50%;
-      background: currentColor;
-    }
-
-    .pulse-dot {
-      color: var(--green);
-      box-shadow: 0 0 0 0 rgba(107,211,145,0.48);
-      animation: beat 2.2s infinite;
-    }
-
-    @keyframes beat {
-      0% { box-shadow: 0 0 0 0 rgba(107,211,145,0.45); }
-      70% { box-shadow: 0 0 0 9px rgba(107,211,145,0); }
-      100% { box-shadow: 0 0 0 0 rgba(107,211,145,0); }
-    }
-
-    .icon-btn {
-      width: 32px;
-      height: 32px;
-      display: inline-grid;
-      place-items: center;
-      border: 1px solid rgba(255,255,255,0.09);
-      border-radius: 8px;
-      color: var(--muted);
-      background: rgba(255,255,255,0.035);
-      cursor: pointer;
-    }
-
-    .icon-btn:hover,
-    .icon-btn.active {
-      color: var(--text);
-      border-color: rgba(85,215,230,0.48);
-      background: rgba(85,215,230,0.09);
-    }
-
-    .workspace {
-      display: grid;
-      grid-template-columns: minmax(540px, 1fr) 410px;
-      gap: 10px;
-      min-height: 0;
-    }
-
-    .panel {
-      min-height: 0;
-      overflow: hidden;
-    }
-
-    .panel-header {
-      height: 45px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      padding: 0 14px;
-      border-bottom: 1px solid rgba(255,255,255,0.075);
-      background: rgba(255,255,255,0.025);
-    }
-
-    .panel-title {
-      margin: 0;
-      font-size: 12px;
-      font-weight: 750;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      color: #ddd9cf;
-    }
-
-    .panel-count {
-      color: var(--faint);
-      font-family: var(--mono);
-      font-size: 11px;
-    }
-
-    .queue-panel {
-      display: grid;
-      grid-template-rows: 45px minmax(0, 1fr) 180px;
-    }
-
-    .project-list {
-      overflow: auto;
-      padding: 12px;
-    }
-
-    .project-card {
-      border: 1px solid rgba(255,255,255,0.085);
-      border-radius: 8px;
-      background: rgba(255,255,255,0.035);
-      margin-bottom: 10px;
-      overflow: hidden;
-    }
-
-    .project-card.selected {
-      border-color: rgba(85,215,230,0.42);
-      background: rgba(85,215,230,0.055);
-    }
-
-    .project-head {
-      width: 100%;
-      min-height: 70px;
-      display: grid;
-      grid-template-columns: 18px minmax(0, 1fr) auto;
-      align-items: center;
-      gap: 11px;
-      border: 0;
-      color: inherit;
-      background: transparent;
-      text-align: left;
-      padding: 12px;
-      cursor: pointer;
-    }
-
-    .project-state {
-      width: 12px;
-      height: 42px;
-      border-radius: 999px;
-      background: var(--green);
-      box-shadow: 0 0 22px rgba(107,211,145,0.24);
-    }
-
-    .project-state.active { background: var(--cyan); animation: workPulse 2.4s infinite; }
-    .project-state.waiting { background: var(--amber); box-shadow: 0 0 22px rgba(227,178,88,0.24); }
-    .project-state.blocked { background: var(--red); box-shadow: 0 0 22px rgba(238,117,110,0.26); }
-    .project-state.stale { background: var(--faint); box-shadow: none; opacity: 0.75; }
-
-    @keyframes workPulse {
-      0%, 100% { transform: scaleY(0.82); opacity: 0.85; }
-      50% { transform: scaleY(1); opacity: 1; }
-    }
-
-    .project-name {
-      margin: 0;
-      font-size: 16px;
-      line-height: 1.16;
-      font-weight: 780;
-    }
-
-    .project-summary {
-      margin: 5px 0 0;
-      color: var(--muted);
-      font-size: 12px;
-      line-height: 1.35;
-    }
-
-    .project-metrics {
-      display: grid;
-      grid-template-columns: repeat(3, 58px);
-      gap: 7px;
-    }
-
-    .metric {
-      border: 1px solid rgba(255,255,255,0.075);
-      border-radius: 8px;
-      background: rgba(0,0,0,0.14);
-      padding: 8px 6px;
-      text-align: center;
-    }
-
-    .metric b {
-      display: block;
-      font-family: var(--mono);
-      font-size: 17px;
-      line-height: 1;
-    }
-
-    .metric span {
-      display: block;
-      margin-top: 5px;
-      color: var(--faint);
-      font-size: 10px;
-    }
-
-    .task-stack {
-      display: grid;
-      gap: 8px;
-      padding: 0 12px 12px 42px;
-    }
-
-    .task-row-card {
-      border: 1px solid rgba(255,255,255,0.075);
-      border-radius: 8px;
-      background: rgba(0,0,0,0.16);
-      overflow: hidden;
-    }
-
-    .task-toggle {
-      width: 100%;
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
-      align-items: start;
-      gap: 12px;
-      border: 0;
-      color: inherit;
-      background: transparent;
-      text-align: left;
-      padding: 11px;
-      cursor: pointer;
-    }
-
-    .task-name {
-      margin: 0;
-      font-size: 13px;
-      line-height: 1.22;
-      font-weight: 720;
-    }
-
-    .task-now {
-      margin: 5px 0 0;
-      color: var(--muted);
-      font-size: 12px;
-      line-height: 1.35;
-    }
-
-    .task-meta {
-      margin-top: 8px;
-      color: var(--faint);
-      font-family: var(--mono);
-      font-size: 10px;
-      flex-wrap: wrap;
-    }
-
-    .status-badge {
-      display: inline-flex;
-      align-items: center;
-      height: 21px;
-      border-radius: 999px;
-      padding: 0 8px;
-      border: 1px solid currentColor;
-      font-size: 10px;
-      font-weight: 760;
-      text-transform: uppercase;
-      white-space: nowrap;
-    }
-
-    .badge-active { color: var(--cyan); }
-    .badge-waiting { color: var(--amber); }
-    .badge-blocked { color: var(--red); }
-    .badge-review { color: var(--violet); }
-    .badge-done { color: var(--green); }
-    .badge-stale { color: var(--faint); }
-
-    .codex-detail {
-      display: none;
-      border-top: 1px solid rgba(255,255,255,0.065);
-      padding: 11px;
-      background: rgba(255,255,255,0.025);
-    }
-
-    .task-row-card.open .codex-detail {
-      display: block;
-    }
-
-    .codex-detail p {
-      margin: 0 0 9px;
-      color: var(--muted);
-      font-size: 12px;
-      line-height: 1.45;
-    }
-
-    .steps {
-      display: grid;
-      gap: 7px;
-      margin: 0;
-      padding: 0;
-      list-style: none;
-    }
-
-    .steps li {
-      display: grid;
-      grid-template-columns: 9px minmax(0, 1fr);
-      gap: 9px;
-      color: var(--muted);
-      font-size: 12px;
-      line-height: 1.35;
-    }
-
-    .steps li::before {
-      content: "";
-      width: 7px;
-      height: 7px;
-      margin-top: 5px;
-      border-radius: 50%;
-      background: var(--cyan);
-    }
-
-    .work-feed {
-      border-top: 1px solid rgba(255,255,255,0.075);
-      background: rgba(0,0,0,0.18);
-      overflow: hidden;
-      display: grid;
-      grid-template-rows: 38px minmax(0, 1fr);
-    }
-
-    .feed-title {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 0 12px;
-      color: #ddd9cf;
-      font-size: 11px;
-      font-weight: 750;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-    }
-
-    .feed-list {
-      overflow: auto;
-      padding: 0 12px 12px;
-    }
-
-    .feed-item {
-      display: grid;
-      grid-template-columns: 54px minmax(0, 1fr);
-      gap: 10px;
-      padding: 8px 0;
-      border-top: 1px solid rgba(255,255,255,0.052);
-      color: var(--muted);
-      font-size: 12px;
-      line-height: 1.35;
-    }
-
-    .feed-item time {
-      color: var(--faint);
-      font-family: var(--mono);
-      font-size: 10px;
-      padding-top: 2px;
-    }
-
-    .side-panel {
-      display: grid;
-      grid-template-rows: 45px 168px minmax(0, 1fr) 178px;
-    }
-
-    .brain-widget {
-      display: grid;
-      grid-template-columns: 96px minmax(0, 1fr);
-      gap: 14px;
-      align-items: center;
-      padding: 14px;
-      border-bottom: 1px solid rgba(255,255,255,0.075);
-      background: rgba(0,0,0,0.12);
-    }
-
-    .brain-shape {
-      width: 86px;
-      height: 86px;
-      border: 1px solid rgba(85,215,230,0.34);
-      border-radius: 28% 42% 33% 45%;
-      background:
-        radial-gradient(circle at 62% 32%, rgba(227,178,88,0.55), transparent 14%),
-        radial-gradient(circle at 34% 58%, rgba(85,215,230,0.5), transparent 17%),
-        linear-gradient(135deg, rgba(85,215,230,0.12), rgba(185,165,255,0.12));
-      box-shadow: inset 0 0 26px rgba(85,215,230,0.12), 0 0 28px rgba(85,215,230,0.16);
-      animation: brainIdle 4.2s ease-in-out infinite;
-    }
-
-    .brain-shape.active { border-color: rgba(85,215,230,0.72); animation-duration: 2.1s; }
-    .brain-shape.waiting { border-color: rgba(227,178,88,0.75); filter: saturate(0.95); animation-duration: 3.7s; }
-    .brain-shape.blocked { border-color: rgba(238,117,110,0.85); animation: brainAlert 1.4s ease-in-out infinite; }
-
-    @keyframes brainIdle {
-      0%, 100% { border-radius: 28% 42% 33% 45%; transform: rotate(-2deg) scale(0.98); }
-      50% { border-radius: 41% 30% 45% 31%; transform: rotate(2deg) scale(1.02); }
-    }
-
-    @keyframes brainAlert {
-      0%, 100% { transform: scale(0.98); box-shadow: inset 0 0 26px rgba(238,117,110,0.12), 0 0 18px rgba(238,117,110,0.12); }
-      50% { transform: scale(1.03); box-shadow: inset 0 0 28px rgba(238,117,110,0.18), 0 0 34px rgba(238,117,110,0.24); }
-    }
-
-    .brain-copy h3 {
-      margin: 0;
-      font-size: 15px;
-      line-height: 1.2;
-    }
-
-    .brain-copy p {
-      margin: 7px 0 0;
-      color: var(--muted);
-      font-size: 12px;
-      line-height: 1.42;
-    }
-
-    .brief-body {
-      overflow: auto;
-      padding: 14px;
-    }
-
-    .brief-kicker {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-      margin-bottom: 11px;
-    }
-
-    .brief-title {
-      margin: 0;
-      font-size: 22px;
-      line-height: 1.12;
-      font-weight: 820;
-    }
-
-    .brief-summary {
-      margin: 9px 0 15px;
-      color: var(--muted);
-      font-size: 13px;
-      line-height: 1.48;
-    }
-
-    .brief-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 9px;
-    }
-
-    .fact,
-    .stale-card {
-      border: 1px solid rgba(255,255,255,0.075);
-      border-radius: 8px;
-      background: rgba(255,255,255,0.03);
-      padding: 10px;
-      min-width: 0;
-    }
-
-    .fact span,
-    .stale-card span {
-      display: block;
-      color: var(--faint);
-      font-size: 10px;
-      text-transform: uppercase;
-      letter-spacing: 0.07em;
-      margin-bottom: 6px;
-    }
-
-    .fact strong,
-    .stale-card strong {
-      display: block;
-      color: var(--text);
-      font-size: 12px;
-      line-height: 1.3;
-      font-weight: 650;
-    }
-
-    .plain-list {
-      margin: 13px 0 0;
-      padding: 0;
-      list-style: none;
-      display: grid;
-      gap: 8px;
-    }
-
-    .plain-list li {
-      border-top: 1px solid rgba(255,255,255,0.06);
-      padding-top: 8px;
-      color: var(--muted);
-      font-size: 12px;
-      line-height: 1.42;
-    }
-
-    .stale-section {
-      border-top: 1px solid rgba(255,255,255,0.075);
-      padding: 12px;
-      background: rgba(0,0,0,0.14);
-      overflow: auto;
-    }
-
-    .stale-section h3 {
-      margin: 0 0 10px;
-      color: #ddd9cf;
-      font-size: 11px;
-      font-weight: 750;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-    }
-
-    .stale-list {
-      display: grid;
-      gap: 8px;
-    }
-
-    .stale-card {
-      opacity: 0.82;
-    }
-
-    .stale-meta {
-      margin-top: 8px;
-      color: var(--faint);
-      font-family: var(--mono);
-      font-size: 10px;
-      flex-wrap: wrap;
-    }
-
-    .density-compact .project-head { min-height: 58px; padding: 10px; }
-    .density-compact .task-stack { gap: 6px; }
-    .density-compact .task-toggle,
-    .density-compact .codex-detail,
-    .density-compact .brief-body { padding: 10px; }
-
-    /* Compact modern pass */
-    body {
-      background: #101214;
-    }
-
-    .app-shell {
-      grid-template-rows: 48px minmax(0, 1fr);
-      padding: 8px;
-      gap: 8px;
-    }
-
-    .topbar,
-    .panel {
-      border-color: rgba(255,255,255,0.06);
-      background: rgba(19, 22, 24, 0.94);
-      box-shadow: none;
-      backdrop-filter: none;
-    }
-
-    .topbar {
-      grid-template-columns: 280px minmax(0, 1fr) 190px;
-      padding: 0 12px;
-      gap: 10px;
-    }
-
-    .brand {
-      gap: 10px;
-    }
-
-    .mark {
-      width: 26px;
-      height: 26px;
-      box-shadow: none;
-    }
-
-    .brand h1 {
-      font-size: 14px;
-      font-weight: 720;
-    }
-
-    .brand p {
-      font-size: 10px;
-      color: #858d92;
     }
 
     .chip {
       height: 24px;
+      gap: 7px;
       padding: 0 9px;
-      border-color: rgba(255,255,255,0.07);
+      border: 1px solid var(--line);
       background: rgba(255,255,255,0.025);
+      color: var(--muted);
       font-size: 11px;
     }
 
-    .icon-btn {
-      width: 28px;
-      height: 28px;
-      border-color: rgba(255,255,255,0.07);
+    .chip strong { color: var(--text); }
+
+    .pulse {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--green);
+      animation: pulse 2.2s infinite;
+    }
+
+    @keyframes pulse {
+      0% { box-shadow: 0 0 0 0 rgba(112,213,151,0.42); }
+      72% { box-shadow: 0 0 0 8px rgba(112,213,151,0); }
+      100% { box-shadow: 0 0 0 0 rgba(112,213,151,0); }
+    }
+
+    .ghost,
+    .talk {
+      height: 26px;
+      border: 1px solid var(--line);
       background: rgba(255,255,255,0.025);
-      font-size: 12px;
+      color: var(--muted);
+      padding: 0 10px;
+      font-size: 11px;
+      cursor: pointer;
+    }
+
+    .talk {
+      color: var(--cyan);
+      border-color: rgba(86,215,231,0.38);
+      background: rgba(86,215,231,0.055);
+      font-weight: 700;
+    }
+
+    .ghost:hover,
+    .talk:hover {
+      color: var(--text);
+      border-color: rgba(255,255,255,0.16);
     }
 
     .workspace {
-      grid-template-columns: minmax(560px, 1fr) 360px;
+      min-height: 0;
+      display: grid;
+      grid-template-columns: minmax(620px, 1fr) 390px;
       gap: 8px;
     }
 
-    .queue-panel {
-      grid-template-rows: 38px minmax(0, 1fr) 154px;
+    .tracking-panel {
+      display: grid;
+      grid-template-rows: 38px minmax(0, 1fr) 150px;
     }
 
-    .side-panel {
-      grid-template-rows: 38px 118px minmax(0, 1fr) 152px;
+    .right-panel {
+      display: grid;
+      grid-template-rows: 38px minmax(0, 1fr);
     }
 
     .panel-header {
       height: 38px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
       padding: 0 12px;
+      border-bottom: 1px solid var(--soft-line);
       background: rgba(255,255,255,0.012);
-      border-bottom-color: rgba(255,255,255,0.055);
     }
 
     .panel-title {
+      margin: 0;
+      color: #d2d6d3;
       font-size: 11px;
-      font-weight: 680;
-      letter-spacing: 0.04em;
-      color: #cfd4d2;
+      font-weight: 720;
+      letter-spacing: 0.055em;
+      text-transform: uppercase;
     }
 
-    .panel-count {
+    .panel-note {
+      color: var(--faint);
+      font-family: var(--mono);
       font-size: 10px;
-      color: #737d83;
     }
+
+    .demo-banner {
+      border-bottom: 1px solid var(--soft-line);
+      padding: 9px 12px;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.35;
+      background: rgba(228,182,89,0.055);
+    }
+
+    .demo-banner strong { color: var(--amber); }
 
     .project-list {
-      padding: 8px;
+      overflow: auto;
     }
 
-    .project-card {
-      margin-bottom: 7px;
-      border-color: rgba(255,255,255,0.055);
-      background: rgba(255,255,255,0.018);
+    .project {
+      border-bottom: 1px solid var(--soft-line);
+      background: transparent;
     }
 
-    .project-card.selected {
-      border-color: rgba(85,215,230,0.28);
-      background: rgba(85,215,230,0.035);
+    .project.selected {
+      background: rgba(86,215,231,0.035);
     }
 
-    .project-head {
-      min-height: 52px;
-      grid-template-columns: 10px minmax(0, 1fr) auto;
-      gap: 10px;
-      padding: 10px 12px;
+    .project-main {
+      width: 100%;
+      display: grid;
+      grid-template-columns: 5px minmax(0, 1fr) 132px 86px 124px;
+      align-items: center;
+      gap: 12px;
+      border: 0;
+      background: transparent;
+      color: inherit;
+      padding: 11px 12px;
+      text-align: left;
+      cursor: pointer;
     }
 
-    .project-state {
+    .state-bar {
       width: 5px;
-      height: 32px;
-      box-shadow: none;
+      height: 38px;
+      border-radius: 999px;
+      background: var(--cyan);
     }
+
+    .state-bar.waiting_mark { background: var(--amber); }
+    .state-bar.losing_thread { background: var(--red); }
+    .state-bar.dormant { background: var(--faint); opacity: 0.8; }
+    .state-bar.verified { background: var(--green); }
 
     .project-name {
+      margin: 0;
       font-size: 14px;
-      font-weight: 700;
+      line-height: 1.18;
+      font-weight: 740;
     }
 
-    .project-summary {
-      max-width: 760px;
-      margin-top: 3px;
+    .belief {
+      margin: 4px 0 0;
+      color: var(--muted);
       font-size: 11px;
-      color: #a0a7a7;
+      line-height: 1.35;
     }
 
-    .project-metrics {
-      display: flex;
+    .source {
+      height: 18px;
+      padding: 0 6px;
+      border: 1px solid rgba(255,255,255,0.07);
+      color: var(--faint);
+      font-family: var(--mono);
+      font-size: 9px;
+      text-transform: uppercase;
+    }
+
+    .badge {
+      height: 20px;
+      justify-content: center;
+      border: 1px solid currentColor;
+      padding: 0 7px;
+      max-width: 124px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      font-size: 9px;
+      font-weight: 760;
+      text-transform: uppercase;
+    }
+
+    .badge.moving { color: var(--cyan); }
+    .badge.waiting_mark { color: var(--amber); }
+    .badge.losing_thread { color: var(--red); }
+    .badge.dormant { color: var(--faint); }
+    .badge.verified { color: var(--green); }
+    .badge.inferred { color: var(--violet); }
+
+    .latest,
+    .confidence {
+      min-width: 0;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.3;
+    }
+
+    .confidence strong {
+      display: block;
+      color: var(--text);
+      font-size: 12px;
+    }
+
+    .project-detail {
+      display: none;
+      margin: 0 12px 11px 29px;
+      padding-top: 10px;
+      border-top: 1px solid var(--soft-line);
+    }
+
+    .project.selected .project-detail { display: block; }
+
+    .detail-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
       gap: 10px;
     }
 
-    .metric {
-      min-width: 28px;
-      border: 0;
-      background: transparent;
-      padding: 0;
+    .detail-block {
+      min-width: 0;
     }
 
-    .metric b {
-      font-size: 13px;
-    }
-
-    .metric span {
-      margin-top: 3px;
+    .detail-block span {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--faint);
       font-size: 9px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
     }
 
-    .task-stack {
-      gap: 0;
-      padding: 0 12px 10px 27px;
-    }
-
-    .task-row-card {
-      border: 0;
-      border-top: 1px solid rgba(255,255,255,0.055);
-      border-radius: 0;
-      background: transparent;
-    }
-
-    .task-row-card:first-child {
-      border-top: 0;
-    }
-
-    .task-toggle {
-      grid-template-columns: minmax(0, 1fr) auto;
-      padding: 9px 0;
-    }
-
-    .task-name {
-      font-size: 12px;
-      font-weight: 680;
-    }
-
-    .task-now {
-      margin-top: 3px;
+    .detail-block p {
+      margin: 0;
+      color: var(--muted);
       font-size: 11px;
-      color: #a5acab;
+      line-height: 1.4;
     }
 
-    .task-meta {
-      margin-top: 5px;
-      font-size: 9px;
-      color: #6f797e;
+    .codex-strip {
+      margin-top: 10px;
+      display: grid;
+      gap: 6px;
     }
 
-    .status-badge {
-      height: 18px;
-      padding: 0 7px;
-      border-color: currentColor;
-      font-size: 9px;
-      font-weight: 700;
+    .codex-item {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      border-top: 1px solid var(--soft-line);
+      padding-top: 7px;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.35;
     }
 
-    .codex-detail {
-      margin: 0 0 7px;
-      padding: 8px 0 9px;
-      border-top-color: rgba(255,255,255,0.045);
+    .activity-panel {
+      border-top: 1px solid var(--soft-line);
+      display: grid;
+      grid-template-rows: 32px minmax(0, 1fr);
+      background: rgba(0,0,0,0.1);
+    }
+
+    .activity-list {
+      overflow: auto;
+      padding: 0 12px 9px;
+    }
+
+    .event {
+      display: grid;
+      grid-template-columns: 64px minmax(0, 1fr) auto;
+      gap: 10px;
+      padding: 7px 0;
+      border-top: 1px solid var(--soft-line);
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.35;
+    }
+
+    .event time {
+      color: var(--faint);
+      font-family: var(--mono);
+      font-size: 10px;
+    }
+
+    .event button {
+      border: 0;
       background: transparent;
+      color: var(--cyan);
+      font-size: 10px;
+      cursor: pointer;
     }
 
-    .codex-detail p,
-    .steps li,
-    .feed-item,
-    .brief-summary,
-    .plain-list li {
+    .right-scroll {
+      overflow: auto;
+      padding: 0 12px 12px;
+    }
+
+    .intel-section {
+      padding: 12px 0;
+      border-bottom: 1px solid var(--soft-line);
+    }
+
+    .intel-section h3 {
+      margin: 0 0 8px;
+      color: #d2d6d3;
+      font-size: 11px;
+      font-weight: 720;
+      letter-spacing: 0.055em;
+      text-transform: uppercase;
+    }
+
+    .intel-card {
+      margin-top: 7px;
+      padding: 9px 0 0;
+      border-top: 1px solid var(--soft-line);
+    }
+
+    .intel-card:first-of-type {
+      border-top: 0;
+      padding-top: 0;
+    }
+
+    .intel-card strong {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--text);
+      font-size: 12px;
+      line-height: 1.25;
+    }
+
+    .intel-card p {
+      margin: 0;
+      color: var(--muted);
       font-size: 11px;
       line-height: 1.42;
     }
 
-    .steps {
-      gap: 5px;
+    .intel-actions {
+      display: flex;
+      gap: 7px;
+      margin-top: 8px;
+      flex-wrap: wrap;
     }
 
-    .steps li::before {
-      width: 5px;
-      height: 5px;
-      margin-top: 5px;
+    .basis {
+      color: var(--faint);
+      font-family: var(--mono);
+      font-size: 9px;
+      text-transform: uppercase;
     }
 
-    .work-feed {
-      grid-template-rows: 32px minmax(0, 1fr);
-      background: rgba(0,0,0,0.1);
-      border-top-color: rgba(255,255,255,0.055);
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      background: rgba(0,0,0,0.62);
     }
 
-    .feed-title {
-      padding: 0 10px;
-      font-size: 10px;
-      letter-spacing: 0.045em;
-      color: #c7cecb;
+    .modal-backdrop.open { display: flex; }
+
+    .modal {
+      width: min(620px, 100%);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #15181b;
+      overflow: hidden;
     }
 
-    .feed-list {
-      padding: 0 10px 8px;
-    }
-
-    .feed-item {
-      grid-template-columns: 42px minmax(0, 1fr);
-      padding: 6px 0;
-    }
-
-    .brain-widget {
-      grid-template-columns: 72px minmax(0, 1fr);
+    .modal-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
       gap: 12px;
       padding: 12px;
-      background: transparent;
-      border-bottom-color: rgba(255,255,255,0.055);
+      border-bottom: 1px solid var(--soft-line);
     }
 
-    .brain-shape {
-      width: 62px;
-      height: 62px;
-      border-radius: 31% 41% 35% 45%;
-      background:
-        radial-gradient(circle at 62% 32%, rgba(227,178,88,0.45), transparent 13%),
-        radial-gradient(circle at 34% 58%, rgba(85,215,230,0.42), transparent 17%),
-        linear-gradient(135deg, rgba(85,215,230,0.08), rgba(185,165,255,0.08));
-      box-shadow: none;
+    .modal-head h2 {
+      margin: 0;
+      font-size: 14px;
     }
 
-    .brain-copy h3 {
-      font-size: 13px;
-      font-weight: 700;
+    .modal-body { padding: 12px; }
+
+    .sample-prompts {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      margin: 10px 0;
     }
 
-    .brain-copy p {
-      margin-top: 5px;
-      font-size: 11px;
-      line-height: 1.36;
-      color: #a3aaa9;
+    textarea {
+      width: 100%;
+      min-height: 94px;
+      resize: vertical;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #101214;
+      color: var(--text);
+      padding: 10px;
+      font-size: 12px;
     }
 
-    .brief-body {
+    .modal-foot {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
       padding: 12px;
+      border-top: 1px solid var(--soft-line);
     }
 
-    .brief-kicker {
-      margin-bottom: 10px;
-    }
-
-    .brief-title {
-      font-size: 18px;
-      font-weight: 760;
-    }
-
-    .brief-summary {
-      margin: 7px 0 12px;
-      color: #a7adac;
-    }
-
-    .brief-grid {
-      grid-template-columns: 1fr;
-      gap: 0;
-      border-top: 1px solid rgba(255,255,255,0.055);
-    }
-
-    .fact,
-    .stale-card {
-      border: 0;
-      border-bottom: 1px solid rgba(255,255,255,0.055);
-      border-radius: 0;
-      background: transparent;
-      padding: 8px 0;
-    }
-
-    .fact span,
-    .stale-card span {
-      margin-bottom: 4px;
-      font-size: 9px;
-      letter-spacing: 0.06em;
-    }
-
-    .fact strong,
-    .stale-card strong {
-      font-size: 11px;
-      font-weight: 660;
-    }
-
-    .plain-list {
-      margin-top: 9px;
-      gap: 0;
-    }
-
-    .plain-list li {
-      padding-top: 7px;
-      padding-bottom: 7px;
-      border-top-color: rgba(255,255,255,0.045);
-    }
-
-    .stale-section {
-      padding: 10px 12px;
-      background: rgba(0,0,0,0.08);
-      border-top-color: rgba(255,255,255,0.055);
-    }
-
-    .stale-section h3 {
-      margin-bottom: 7px;
-      font-size: 10px;
-      font-weight: 680;
-      letter-spacing: 0.045em;
-      color: #c7cecb;
-    }
-
-    .stale-list {
-      gap: 0;
-    }
-
-    .stale-card {
-      opacity: 0.75;
-    }
-
-    .stale-meta {
-      margin-top: 5px;
-      font-size: 9px;
-      color: #747e83;
+    @media (prefers-reduced-motion: reduce) {
+      *,
+      *::before,
+      *::after {
+        animation-duration: 0.001ms !important;
+        animation-iteration-count: 1 !important;
+        scroll-behavior: auto !important;
+      }
     }
 
     @media (max-width: 1120px) {
-      body { overflow: auto; }
-      .app-shell { height: auto; }
-      .topbar { grid-template-columns: 1fr; height: auto; padding: 12px; }
-      .system-strip,
-      .top-actions { justify-content: flex-start; }
+      .shell { height: auto; }
+      .topbar { grid-template-columns: 1fr; height: auto; padding: 10px 12px; }
+      .status-strip,
+      .actions { justify-content: flex-start; }
       .workspace { grid-template-columns: 1fr; }
-      .queue-panel { min-height: 760px; }
-      .side-panel { min-height: 760px; }
+      .project-main { grid-template-columns: 5px minmax(0, 1fr); }
+      .latest,
+      .confidence,
+      .project-main > .badge,
+      .project-main > .talk { margin-left: 17px; }
+      .detail-grid { grid-template-columns: 1fr; }
     }
   </style>
 </head>
 <body>
-  <main class="app-shell">
+  <main class="shell">
     <header class="topbar">
-      <div class="brand" aria-label="MARCUS Visualizer">
-        <div class="mark" aria-hidden="true"></div>
+      <div class="brand">
+        <div class="glyph" aria-hidden="true"></div>
         <div>
-          <h1>MARCUS Visualizer</h1>
-          <p>Live Codex queue</p>
+          <h1>MARCUS</h1>
+          <p>Operational Awareness</p>
         </div>
       </div>
-
-      <div class="system-strip" aria-label="System status">
-        <span class="chip"><span class="pulse-dot"></span><strong>3</strong> active</span>
-        <span class="chip"><strong>1</strong> waiting</span>
-        <span class="chip"><strong>2</strong> cooling</span>
+      <div class="status-strip" aria-label="Overall system state">
+        <span class="chip"><span class="pulse"></span><strong>4</strong> watched</span>
+        <span class="chip"><strong>sync</strong> demo fixture</span>
+        <span class="chip"><strong>confidence</strong> mixed</span>
       </div>
-
-      <div class="top-actions" aria-label="Display controls">
-        <button class="icon-btn active" type="button" title="Queue view" aria-label="Queue view">Q</button>
-        <button class="icon-btn" type="button" title="Feed view" aria-label="Feed view">F</button>
-        <button class="icon-btn" type="button" title="Compact density" aria-label="Compact density" id="densityToggle">C</button>
+      <div class="actions">
+        <button class="ghost" type="button">Evidence</button>
+        <button class="ghost" type="button">Compact</button>
+        <button class="ghost" type="button">Refresh</button>
       </div>
     </header>
 
-    <section class="workspace" aria-label="MARCUS operator console">
-      <section class="panel queue-panel">
+    <section class="workspace">
+      <section class="panel tracking-panel">
         <div class="panel-header">
-          <h2 class="panel-title">Project Queue</h2>
-          <span class="panel-count" id="queueCount">00 projects</span>
+          <h2 class="panel-title">What I'm Tracking</h2>
+          <span class="panel-note">demonstration data</span>
         </div>
-
-        <div class="project-list" id="projectList" aria-label="Tracked Codex projects"></div>
-
-        <section class="work-feed" aria-label="Active work feed">
-          <div class="feed-title">
-            <span>Active Work Feed</span>
-            <span class="panel-count" id="feedClock">00:00</span>
+        <div class="project-list" id="projectList">
+          <div class="demo-banner">
+            <strong>Prototype:</strong> this screen is fixture data showing the intended Marcus-owned awareness model. It is not live project truth yet.
           </div>
-          <div class="feed-list" id="feedList"></div>
+        </div>
+        <section class="activity-panel">
+          <div class="panel-header">
+            <h2 class="panel-title">What I've Seen Changing</h2>
+            <span class="panel-note" id="clock">00:00</span>
+          </div>
+          <div class="activity-list" id="activityList"></div>
         </section>
       </section>
 
-      <aside class="panel side-panel">
+      <aside class="panel right-panel">
         <div class="panel-header">
-          <h2 class="panel-title">At A Glance</h2>
-          <span class="panel-count" id="briefClock">00:00</span>
+          <h2 class="panel-title">Marcus Intelligence</h2>
+          <span class="panel-note">read-only</span>
         </div>
-
-        <section class="brain-widget" aria-label="Obsidian memory state">
-          <div class="brain-shape active" id="brainShape" aria-hidden="true"></div>
-          <div class="brain-copy">
-            <h3 id="brainTitle">Memory is warm</h3>
-            <p id="brainCopy">Small, active, and current. The shape is moving because Marcus has recent project context attached to live Codex work.</p>
-          </div>
-        </section>
-
-        <div class="brief-body" id="briefBody" aria-live="polite"></div>
-
-        <section class="stale-section" aria-label="Decaying projects">
-          <h3>Cooling Down</h3>
-          <div class="stale-list" id="staleList"></div>
-        </section>
+        <div class="right-scroll" id="rightRail"></div>
       </aside>
     </section>
   </main>
 
+  <div class="modal-backdrop" id="talkModal" role="dialog" aria-modal="true" aria-labelledby="talkTitle">
+    <div class="modal">
+      <div class="modal-head">
+        <h2 id="talkTitle">Talk to MARCUS</h2>
+        <button class="ghost" type="button" id="closeTalk">Close</button>
+      </div>
+      <div class="modal-body">
+        <p class="belief" id="talkContext"></p>
+        <div class="sample-prompts" id="samplePrompts"></div>
+        <textarea id="talkInput" placeholder="Ask Marcus what is happening, correct his understanding, or ask him to coordinate Codex work."></textarea>
+      </div>
+      <div class="modal-foot">
+        <button class="ghost" type="button" id="classifyDemo">Classify demo message</button>
+        <button class="talk" type="button">Send to MARCUS later</button>
+      </div>
+    </div>
+  </div>
+
   <script>
-    const projects = [
-      {
-        id: "freedom",
-        name: "Freedom Scoopers",
-        state: "active",
-        summary: "Quote flow polish and deployment safety are active in Codex.",
-        updated: "2 min ago",
-        health: "Working",
-        memory: "warm",
-        tasks: [
-          {
-            id: "arrival-copy",
-            name: "Mobile quote arrival screen",
-            status: "active",
-            owner: "Codex",
-            elapsed: "14m",
-            now: "Codex is checking the small-phone layout after tightening the arrival copy.",
-            detail: "The useful translation is simple: it is reading the page like a customer would, looking for text crowding, missed buttons, and copy that sounds awkward before anything ships.",
-            steps: [
-              "Reviewed the mobile screenshot and OCR output for the arrival step.",
-              "Found that the primary action is readable, but the supporting line is too dense.",
-              "Preparing a spacing change and then rerunning the mobile audit."
-            ]
-          },
-          {
-            id: "deployment-guard",
-            name: "Quote deployment guard",
-            status: "waiting",
-            owner: "Marcus",
-            elapsed: "31m",
-            now: "Waiting for exact production approval before publishing quote-flow changes.",
-            detail: "No deploy is happening in the background. Marcus has the target and expected result staged, but the production action is parked until Mark approves that exact change.",
-            steps: [
-              "Confirmed this is a production-impacting action.",
-              "Separated code review from deploy approval.",
-              "Holding the publish step outside Codex until explicitly authorized."
-            ]
-          }
-        ]
-      },
-      {
-        id: "marcus-core",
-        name: "Marcus Core",
-        state: "active",
-        summary: "Desktop Codex monitoring and operator language are being shaped into a readable control surface.",
-        updated: "5 min ago",
-        health: "Working",
-        memory: "warm",
-        tasks: [
-          {
-            id: "visualizer-demo",
-            name: "Visualizer demo direction",
-            status: "active",
-            owner: "Codex",
-            elapsed: "8m",
-            now: "Codex is converting the graph concept into a project-and-task queue.",
-            detail: "This is the current design pass. The goal is not a technical topology; it is a control board that tells Mark what is being worked, what is waiting, what is blocked, and what Codex is actually doing in normal language.",
-            steps: [
-              "Removed the large system graph as the main mental model.",
-              "Moved tracked projects to the top-level queue.",
-              "Added expandable task rows with human-readable Codex activity."
-            ]
-          },
-          {
-            id: "pc-bridge",
-            name: "Desktop PC bridge follow-up",
-            status: "review",
-            owner: "Marcus",
-            elapsed: "1h 2m",
-            now: "Reviewing completed bridge evidence before the next real integration step.",
-            detail: "The bridge is not the thing being built here; it is context. Marcus is keeping the proof close so future Codex work does not drift from the accepted PC control boundaries.",
-            steps: [
-              "Loaded the latest accepted PC bridge evidence.",
-              "Checked that deploy, repo creation, and desktop access still require explicit approval.",
-              "Ready to turn this into live visualizer data once the demo locks."
-            ]
-          }
-        ]
-      },
-      {
-        id: "reggie",
-        name: "Reggie",
-        state: "blocked",
-        summary: "A runner-side PR exists, but attention is needed before more automation piles on.",
-        updated: "18 min ago",
-        health: "Needs Mark",
-        memory: "hot",
-        tasks: [
-          {
-            id: "runner-pr",
-            name: "Runner PR follow-through",
-            status: "blocked",
-            owner: "GitHub Actions",
-            elapsed: "42m",
-            now: "Blocked on review direction for the open runner PR.",
-            detail: "Codex has a branch and PR trail. The next useful move is a human decision: keep the branch direction, revise it, or close it before Marcus launches more runner work.",
-            steps: [
-              "Captured the open PR and branch context.",
-              "Stopped short of treating open PR state as completed work.",
-              "Waiting for Mark's direction before the next action."
-            ]
-          }
-        ]
-      }
+    const awareness = {
+      projects: [
+        {
+          id: "viz",
+          name: "MARCUS Visualizer",
+          state: "moving",
+          stateLabel: "Moving",
+          basis: "observed + inferred",
+          belief: "I believe Mark wants a second-monitor view of my operational awareness, not another tracker he has to maintain.",
+          sources: ["Codex", "Docs", "Conversation"],
+          latest: "Direction changed from visual graph to Marcus-owned awareness model.",
+          confidence: 0.82,
+          confidenceLabel: "High",
+          changed: "The product model was corrected: I own discovery, state, decay, and recommendations.",
+          waiting: "I am waiting for Mark to react to the awareness-oriented prototype.",
+          next: "Lock the information hierarchy, then build the real awareness service behind it.",
+          evidence: [
+            "Attached request explicitly rejects tracker-admin behavior.",
+            "docs/marcus/visualizer-operational-awareness.md now records the model.",
+            "public/visualizer.html is still fixture-only."
+          ],
+          conflicts: ["The live data service does not exist yet, so this screen cannot claim real awareness."],
+          codex: [
+            { label: "Prepared", text: "Prototype refactor is scoped to fixture UI and docs." },
+            { label: "Next packet", text: "Build awareness_store and evidence_reconciler after demo direction is accepted." }
+          ]
+        },
+        {
+          id: "freedom",
+          name: "Freedom Scoopers Quote Flow",
+          state: "waiting_mark",
+          stateLabel: "Waiting on Mark",
+          basis: "observed",
+          belief: "I believe the quote flow has implementation work ready, but production publishing remains approval-gated.",
+          sources: ["Operations", "Codex", "Approval"],
+          latest: "A deployment-capable step is staged but not approved.",
+          confidence: 0.74,
+          confidenceLabel: "Medium",
+          changed: "Codex-side layout work is separate from the production deploy boundary.",
+          waiting: "I need Mark to approve or reject the exact production target before anything publishes.",
+          next: "Ask for approval with target, branch, and expected result.",
+          evidence: [
+            "Operation summary includes pending approval metadata.",
+            "Approval policy requires exact authorization for production actions."
+          ],
+          conflicts: ["Fixture does not include the live operation id."],
+          codex: [
+            { label: "Completed but unverified", text: "Layout changes can be reviewed before deployment." },
+            { label: "Approval", text: "Production publish is waiting outside Codex." }
+          ]
+        },
+        {
+          id: "reggie",
+          name: "Reggie Runner Follow-through",
+          state: "losing_thread",
+          stateLabel: "Thread risk",
+          basis: "inferred",
+          belief: "I think a runner-side PR may be unresolved, but I need stronger evidence before deciding whether it is active, blocked, or intentionally quiet.",
+          sources: ["GitHub", "Codex", "Inference"],
+          latest: "Open PR context exists, but the intended next move is ambiguous.",
+          confidence: 0.49,
+          confidenceLabel: "Low",
+          changed: "The signal is old enough that I should surface it before it disappears from working attention.",
+          waiting: "I need Mark to clarify whether to continue, revise, or let it cool.",
+          next: "Ask Mark for clarification, then either recover the thread or mark it intentionally dormant.",
+          evidence: [
+            "Recent docs mention an open Reggie PR.",
+            "No verified completion evidence is attached in this fixture."
+          ],
+          conflicts: ["An open PR can mean active review, abandoned work, or intentionally parked work."],
+          codex: [
+            { label: "Not dispatched", text: "I should not launch more runner work until the objective is clear." }
+          ]
+        },
+        {
+          id: "demo-worker",
+          name: "Marcus Operator Demo Worker",
+          state: "verified",
+          stateLabel: "Verified",
+          basis: "observed",
+          belief: "I believe the demo worker objective is complete enough to preserve context and monitor lightly.",
+          sources: ["Cloudflare", "GitHub", "Verification"],
+          latest: "Root and health checks passed after deployment.",
+          confidence: 0.91,
+          confidenceLabel: "High",
+          changed: "Completion evidence exists and no active Codex job is attached.",
+          waiting: "I am not waiting on Mark unless the demo needs a new objective.",
+          next: "Archive active attention while preserving deployment and verification evidence.",
+          evidence: [
+            "Deployment URL returned HTTP 200.",
+            "Health route returned HTTP 200.",
+            "Regression checks passed in the recorded acceptance run."
+          ],
+          conflicts: [],
+          codex: [
+            { label: "Verified", text: "No new Codex work recommended from this fixture." }
+          ]
+        },
+        {
+          id: "kb",
+          name: "Knowledge Base Cleanup",
+          state: "dormant",
+          stateLabel: "Dormant?",
+          basis: "inferred",
+          belief: "I think this is context work, not active implementation, but I do not yet know whether Mark intentionally paused it.",
+          sources: ["Docs", "Memory", "Inference"],
+          latest: "Obsidian note topology changed, then went quiet.",
+          confidence: 0.58,
+          confidenceLabel: "Medium",
+          changed: "The vault structure exists, but automatic note capture is still planned work.",
+          waiting: "I may need Mark to say whether this should stay in active attention.",
+          next: "Continue monitoring unless Mark asks me not to let it drop.",
+          evidence: [
+            "docs/marcus/context-memory.md describes planned automatic capture.",
+            "No live writer/indexer is implemented yet."
+          ],
+          conflicts: ["Quiet docs work may be fine; lack of commits alone is not decay proof."],
+          codex: [
+            { label: "Monitoring", text: "No Codex dispatch should happen without a clearer objective." }
+          ]
+        }
+      ],
+      events: [
+        { at: "now", source: "Docs", text: "Recorded the visualizer awareness architecture and boundaries.", ref: "visualizer-operational-awareness.md" },
+        { at: "2m", source: "Codex", text: "Refactored the fixture toward Marcus-owned conclusions and Talk buttons.", ref: "public/visualizer.html" },
+        { at: "8m", source: "Conversation", text: "Mark rejected the tracker-admin model and clarified that Marcus owns accuracy.", ref: "attached request" },
+        { at: "18m", source: "Inference", text: "Reggie appears at risk of thread loss, but evidence is not strong enough for a firm conclusion.", ref: "fixture" },
+        { at: "yesterday", source: "Verification", text: "Demo worker deployment and health checks were recorded as accepted.", ref: "current-system-map.md" }
+      ]
+    };
+
+    const prompts = [
+      "What's happening here?",
+      "Where did Codex leave off?",
+      "I think Codex is going in the wrong direction.",
+      "Have Codex continue this.",
+      "This isn't important right now.",
+      "This is finished - verify it.",
+      "What do you recommend?"
     ];
 
-    const staleProjects = [
-      {
-        name: "Marcus Operator Demo Worker",
-        last: "Yesterday",
-        reason: "Accepted and quiet after deploy verification.",
-        decay: "cool"
-      },
-      {
-        name: "Knowledge Base cleanup",
-        last: "2 days ago",
-        reason: "Useful context, but no active Codex job attached.",
-        decay: "cold"
-      }
-    ];
+    let selectedId = "viz";
 
-    const feed = [
-      ["now", "Visualizer demo changed from graph-first to queue-first."],
-      ["2m", "Codex activity text was rewritten into plain operational language."],
-      ["5m", "Marcus Core stayed active because the demo direction is still being shaped."],
-      ["14m", "Freedom Scoopers quote task continued mobile layout review."],
-      ["18m", "Reggie moved to blocked until the open PR direction is decided."]
-    ];
-
-    let selectedProjectId = "marcus-core";
-    let selectedTaskId = "visualizer-demo";
-
-    const projectList = document.getElementById("projectList");
-    const briefBody = document.getElementById("briefBody");
-    const brainShape = document.getElementById("brainShape");
-    const brainTitle = document.getElementById("brainTitle");
-    const brainCopy = document.getElementById("brainCopy");
-
-    function statusClass(status) {
-      return {
-        active: "badge-active",
-        waiting: "badge-waiting",
-        blocked: "badge-blocked",
-        review: "badge-review",
-        done: "badge-done",
-        stale: "badge-stale"
-      }[status] || "badge-active";
+    function badgeClass(state) {
+      return `badge ${state}`;
     }
 
-    function getSelectedProject() {
-      return projects.find(project => project.id === selectedProjectId) || projects[0];
+    function percent(value) {
+      return `${Math.round(Number(value || 0) * 100)}%`;
     }
 
-    function getSelectedTask() {
-      const project = getSelectedProject();
-      return project.tasks.find(task => task.id === selectedTaskId) || project.tasks[0];
+    function selectedProject() {
+      return awareness.projects.find((project) => project.id === selectedId) || awareness.projects[0];
     }
 
     function renderProjects() {
-      document.getElementById("queueCount").textContent = `${projects.length.toString().padStart(2, "0")} projects`;
-      projectList.innerHTML = projects.map(project => {
-        const isSelected = project.id === selectedProjectId;
-        const activeCount = project.tasks.filter(task => task.status === "active").length;
-        const waitingCount = project.tasks.filter(task => task.status === "waiting").length;
-        const blockedCount = project.tasks.filter(task => task.status === "blocked").length;
-        return `
-          <article class="project-card ${isSelected ? "selected" : ""}">
-            <button class="project-head" type="button" data-project="${project.id}">
-              <span class="project-state ${project.state}" aria-hidden="true"></span>
-              <span>
-                <h3 class="project-name">${project.name}</h3>
-                <p class="project-summary">${project.summary}</p>
-              </span>
-              <span class="project-metrics">
-                <span class="metric"><b style="color: var(--cyan)">${activeCount}</b><span>Active</span></span>
-                <span class="metric"><b style="color: var(--amber)">${waitingCount}</b><span>Wait</span></span>
-                <span class="metric"><b style="color: var(--red)">${blockedCount}</b><span>Block</span></span>
-              </span>
-            </button>
-            <div class="task-stack">
-              ${project.tasks.map(task => `
-                <article class="task-row-card ${task.id === selectedTaskId ? "open" : ""}">
-                  <button class="task-toggle" type="button" data-project="${project.id}" data-task="${task.id}">
-                    <span>
-                      <h4 class="task-name">${task.name}</h4>
-                      <p class="task-now">${task.now}</p>
-                      <span class="task-meta">
-                        <span>${task.owner}</span>
-                        <span>${task.elapsed}</span>
-                      </span>
-                    </span>
-                    <span class="status-badge ${statusClass(task.status)}">${task.status}</span>
-                  </button>
-                  <div class="codex-detail">
-                    <p>${task.detail}</p>
-                    <ol class="steps">
-                      ${task.steps.map(step => `<li>${step}</li>`).join("")}
-                    </ol>
-                  </div>
-                </article>
-              `).join("")}
+      const container = document.getElementById("projectList");
+      const banner = container.querySelector(".demo-banner").outerHTML;
+      container.innerHTML = banner + awareness.projects.map((project) => `
+        <article class="project ${project.id === selectedId ? "selected" : ""}">
+          <button class="project-main" type="button" data-project="${project.id}">
+            <span class="state-bar ${project.state}" aria-hidden="true"></span>
+            <span>
+              <h3 class="project-name">${project.name}</h3>
+              <p class="belief">${project.belief}</p>
+              <span class="sources">${project.sources.map((source) => `<span class="source">${source}</span>`).join("")}</span>
+            </span>
+            <span class="latest">${project.latest}</span>
+            <span class="confidence"><strong>${project.confidenceLabel}</strong>${percent(project.confidence)} confidence</span>
+            <span class="${badgeClass(project.state)}">${project.stateLabel}</span>
+          </button>
+          <div class="project-detail">
+            <div class="detail-grid">
+              <div class="detail-block"><span>What I believe</span><p>${project.belief}</p></div>
+              <div class="detail-block"><span>What changed</span><p>${project.changed}</p></div>
+              <div class="detail-block"><span>I'm waiting on</span><p>${project.waiting}</p></div>
+              <div class="detail-block"><span>Likely next move</span><p>${project.next}</p></div>
+              <div class="detail-block"><span>Evidence</span><p>${project.evidence.join(" ")}</p></div>
+              <div class="detail-block"><span>Conflicts or uncertainty</span><p>${project.conflicts.length ? project.conflicts.join(" ") : "No conflict shown in this fixture."}</p></div>
             </div>
-          </article>
-        `;
-      }).join("");
-
-      projectList.querySelectorAll("[data-project]").forEach(button => {
-        button.addEventListener("click", () => {
-          selectedProjectId = button.dataset.project;
-          if (button.dataset.task) selectedTaskId = button.dataset.task;
-          else selectedTaskId = getSelectedProject().tasks[0].id;
-          renderAll();
-        });
-      });
-    }
-
-    function renderBrief() {
-      const project = getSelectedProject();
-      const task = getSelectedTask();
-      briefBody.innerHTML = `
-        <div class="brief-kicker">
-          <span class="status-badge ${statusClass(task.status)}">${task.status}</span>
-          <span class="pill">${project.health}</span>
-        </div>
-        <h2 class="brief-title">${task.name}</h2>
-        <p class="brief-summary">${task.detail}</p>
-        <div class="brief-grid">
-          <div class="fact"><span>Project</span><strong>${project.name}</strong></div>
-          <div class="fact"><span>Current</span><strong>${task.now}</strong></div>
-          <div class="fact"><span>Worker</span><strong>${task.owner}</strong></div>
-          <div class="fact"><span>Age</span><strong>${task.elapsed}</strong></div>
-        </div>
-        <ol class="plain-list">
-          ${task.steps.map(step => `<li>${step}</li>`).join("")}
-        </ol>
-      `;
-    }
-
-    function renderBrain() {
-      const project = getSelectedProject();
-      const state = project.state === "blocked" ? "blocked" : project.state === "waiting" ? "waiting" : "active";
-      brainShape.className = `brain-shape ${state}`;
-      if (state === "blocked") {
-        brainTitle.textContent = "Memory is hot";
-        brainCopy.textContent = "Angular shape, red edge, faster pulse. Marcus has context, but a human decision is holding the useful next move.";
-      } else if (state === "waiting") {
-        brainTitle.textContent = "Memory is waiting";
-        brainCopy.textContent = "Amber edge and slower motion. Context is present, but the work is paused on an outside input.";
-      } else {
-        brainTitle.textContent = "Memory is warm";
-        brainCopy.textContent = "Soft shape, blue edge, steady motion. Marcus has recent context attached to active Codex work.";
-      }
-    }
-
-    function renderFeed() {
-      document.getElementById("feedList").innerHTML = feed.map(([time, text]) => `
-        <div class="feed-item"><time>${time}</time><span>${text}</span></div>
-      `).join("");
-    }
-
-    function renderStale() {
-      document.getElementById("staleList").innerHTML = staleProjects.map(project => `
-        <article class="stale-card">
-          <span>${project.last}</span>
-          <strong>${project.name}</strong>
-          <div class="stale-meta">
-            <span>${project.decay}</span>
-            <span>${project.reason}</span>
+            <div class="codex-strip">
+              ${project.codex.map((item) => `<div class="codex-item"><span><strong>${item.label}</strong>: ${item.text}</span><span class="basis">${project.basis}</span></div>`).join("")}
+            </div>
+            <div class="intel-actions">
+              <button class="talk" type="button" data-talk="${project.id}">Talk to MARCUS</button>
+              <button class="ghost" type="button">Inspect evidence</button>
+            </div>
           </div>
         </article>
       `).join("");
+
+      container.querySelectorAll("[data-project]").forEach((button) => {
+        button.addEventListener("click", () => {
+          selectedId = button.dataset.project;
+          renderAll();
+        });
+      });
+      container.querySelectorAll("[data-talk]").forEach((button) => {
+        button.addEventListener("click", () => openTalk(button.dataset.talk));
+      });
     }
 
-    function tickClock() {
-      const time = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-      document.getElementById("briefClock").textContent = time;
-      document.getElementById("feedClock").textContent = time;
+    function renderActivity() {
+      document.getElementById("activityList").innerHTML = awareness.events.map((event) => `
+        <div class="event">
+          <time>${event.at}</time>
+          <span><strong>${event.source}</strong>: ${event.text}</span>
+          <button type="button" title="${event.ref}">source</button>
+        </div>
+      `).join("");
+    }
+
+    function card(project, action = "") {
+      return `
+        <div class="intel-card">
+          <strong>${project.name}</strong>
+          <p>${action || project.waiting}</p>
+          <div class="meta-row"><span class="${badgeClass(project.state)}">${project.stateLabel}</span><span class="basis">${project.basis}</span></div>
+          <div class="intel-actions"><button class="talk" type="button" data-talk="${project.id}">Talk to MARCUS</button></div>
+        </div>
+      `;
+    }
+
+    function renderRightRail() {
+      const needMark = awareness.projects.filter((project) => project.state === "waiting_mark");
+      const losing = awareness.projects.filter((project) => project.state === "losing_thread" || project.state === "dormant");
+      const recommended = selectedProject();
+      document.getElementById("rightRail").innerHTML = `
+        <section class="intel-section">
+          <h3>I Need Mark</h3>
+          ${needMark.length ? needMark.map((project) => card(project)).join("") : `<div class="intel-card"><p>I do not have a fixture item that genuinely needs Mark right now.</p></div>`}
+        </section>
+        <section class="intel-section">
+          <h3>I May Be Losing The Thread</h3>
+          ${losing.map((project) => card(project, `${project.next} My confidence is ${percent(project.confidence)} because ${project.basis}.`)).join("")}
+        </section>
+        <section class="intel-section">
+          <h3>My Recommendation</h3>
+          <div class="intel-card">
+            <strong>${recommended.name}</strong>
+            <p>${recommended.next}</p>
+            <div class="meta-row"><span class="${badgeClass(recommended.state)}">${recommended.stateLabel}</span><span class="basis">${recommended.confidenceLabel} confidence</span></div>
+          </div>
+        </section>
+      `;
+      document.querySelectorAll("#rightRail [data-talk]").forEach((button) => {
+        button.addEventListener("click", () => openTalk(button.dataset.talk));
+      });
+    }
+
+    function openTalk(id) {
+      selectedId = id;
+      const project = selectedProject();
+      document.getElementById("talkTitle").textContent = `Talk to MARCUS about ${project.name}`;
+      document.getElementById("talkContext").textContent = `Scoped to demo awareness project ${project.id}. This will become a Marcus conversation, not an edit form.`;
+      document.getElementById("samplePrompts").innerHTML = prompts.map((text) => `<button class="ghost" type="button" data-prompt="${text}">${text}</button>`).join("");
+      document.getElementById("samplePrompts").querySelectorAll("[data-prompt]").forEach((button) => {
+        button.addEventListener("click", () => { document.getElementById("talkInput").value = button.dataset.prompt; });
+      });
+      document.getElementById("talkModal").classList.add("open");
+      renderAll();
+    }
+
+    function closeTalk() {
+      document.getElementById("talkModal").classList.remove("open");
+    }
+
+    function classifyDemoMessage() {
+      const text = document.getElementById("talkInput").value.toLowerCase();
+      let label = "question";
+      if (/wrong|different|remember|actually|correction/.test(text)) label = "new context or correction";
+      else if (/continue|codex|fix|build|review unfinished/.test(text)) label = "request to coordinate Codex work";
+      else if (/not important|remove|forget|dormant/.test(text)) label = "request to change Marcus attention state";
+      else if (/done|finished|verify/.test(text)) label = "completion claim requiring verification";
+      else if (/approve|deploy|send|publish|merge/.test(text)) label = "consequential action requiring approval";
+      document.getElementById("talkContext").textContent = `Demo classification: ${label}. In the real system Marcus would update his understanding or prepare a scoped Codex packet while preserving approval boundaries.`;
+    }
+
+    function tick() {
+      document.getElementById("clock").textContent = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     }
 
     function renderAll() {
       renderProjects();
-      renderBrief();
-      renderBrain();
-      renderFeed();
-      renderStale();
+      renderActivity();
+      renderRightRail();
+      tick();
     }
 
-    document.getElementById("densityToggle").addEventListener("click", event => {
-      document.body.classList.toggle("density-compact");
-      event.currentTarget.classList.toggle("active");
+    document.getElementById("closeTalk").addEventListener("click", closeTalk);
+    document.getElementById("classifyDemo").addEventListener("click", classifyDemoMessage);
+    document.getElementById("talkModal").addEventListener("click", (event) => {
+      if (event.target.id === "talkModal") closeTalk();
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") closeTalk();
     });
 
     renderAll();
-    tickClock();
-    setInterval(tickClock, 1000);
+    setInterval(tick, 1000);
   </script>
 </body>
 </html>

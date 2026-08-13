@@ -202,6 +202,12 @@ It uses:
 
 The existing Live voice path is a chained fallback: browser or recorded speech input, OpenAI transcription, Marcus text chat, and ElevenLabs or browser speech output.
 
+## Visualizer UI
+
+`public/visualizer.html` is a fixture-only prototype for the MARCUS Visualizer. It is public at `/visualizer.html`, but it is not yet connected to live Marcus awareness data. The intended product model is documented in [[visualizer-operational-awareness]]: Marcus owns project discovery, reconciliation, lifecycle conclusions, decay recovery, and Codex coordination; Mark steers the system conversationally instead of maintaining tracker fields.
+
+The prototype should stay labeled as demonstration data until a real awareness service is implemented. Existing live sources that can feed that service incrementally include `GET /api/project-activity`, `GET /api/project-evidence`, `GET /api/operations/summary`, `GET /api/codex/jobs`, `GET /api/project-registry`, and `POST /api/marcus/live/chat`.
+
 ## Mobile UI
 
 `public/mobile.html` is the Android-friendly Marcus mobile shell.
