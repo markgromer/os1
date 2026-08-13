@@ -701,7 +701,13 @@ function openVsCode(projectPath) {
       }
     };
 
-    tryLaunch(['code', 'code.cmd']);
+    tryLaunch([
+      path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Microsoft VS Code', 'Code.exe'),
+      path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Microsoft VS Code', 'bin', 'code.cmd'),
+      path.join(process.env.ProgramFiles || '', 'Microsoft VS Code', 'Code.exe'),
+      'code',
+      'code.cmd',
+    ].filter(Boolean));
   });
 }
 
