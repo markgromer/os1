@@ -853,6 +853,30 @@ function codexEventDetails(event, state) {
   if (type === 'error') state.error = String(event.message || event.error?.message || event.error || 'Codex reported an error').slice(0, 8_000);
 }
 
+function codexExecutable() {
+  const configured = String(process.env.CODEX_CLI_PATH || '').trim();
+  if (configured && fs.existsSync(configured)) return configured;
+  const candidates = [
+    path.join(process.env.APPDATA || '', 'npm', 'codex.cmd'),
+    path.join(process.env.APPDATA || '', 'npm', 'codex.exe'),
+  ];
+  for (const extensionRoot of [
+    path.join(os.homedir(), '.vscode', 'extensions'),
+    path.join(os.homedir(), '.vscode-insiders', 'extensions'),
+  ]) {
+    try {
+      const extensions = fs.readdirSync(extensionRoot, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory() && /^openai\.chatgpt-/i.test(entry.name))
+        .map((entry) => entry.name)
+        .sort((left, right) => right.localeCompare(left, undefined, { numeric: true }));
+      for (const extension of extensions) {
+        candidates.push(path.join(extensionRoot, extension, 'bin', 'windows-x86_64', 'codex.exe'));
+      }
+    } catch {}
+  }
+  return candidates.find((candidate) => candidate && fs.existsSync(candidate)) || 'codex';
+}
+
 async function collectLocalCodexGitEvidence(cwd) {
   const [statusRaw, diffStat, branch] = await Promise.all([
     gitCmd(cwd, ['status', '--porcelain', '--untracked-files=normal']),
@@ -911,7 +935,7 @@ function startCodexProcess(payload, { resume = false } = {}) {
     : ['exec', '--json', '--sandbox', 'workspace-write', '--cd', cwd, '--skip-git-repo-check', '-'];
   let child;
   try {
-    child = spawn('codex', args, { cwd, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    child = spawn(codexExecutable(), args, { cwd, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
   } catch (error) {
     return { ok: false, error: `Codex could not start: ${String(error?.message || error)}` };
   }
