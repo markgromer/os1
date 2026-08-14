@@ -25,6 +25,18 @@ Thumbs.db
 # Optional local notes
 notes/
 
+# Codex / local workspace artifacts
+.codex-remote-attachments/
+.obsidian/
+Untitled.base
+output-mobile-*.png
+
 # Local browser-validation artifacts
 .playwright-cli/
 output/playwright/
+
+# External demo checkouts
+demos/marcus-operator-demo-worker/
+
+# Nested demo dependencies
+demos/**/node_modules/
