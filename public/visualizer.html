@@ -858,20 +858,27 @@
       return raw.replace(/^refs\/heads\//, "");
     }
 
+    function commitTitle(commit) {
+      return text(commit).replace(/^[a-f0-9]{7,40}\s+/i, "");
+    }
+
     function signalSummaryFromWorkspace(item) {
       const fileCount = Number(item?.gitStatusCount || arr(item?.gitStatus).length || 0);
       const branch = branchLabel(item?.gitBranch);
       const firstFile = text(arr(item?.gitStatus)[0]?.file);
       const recentCommit = text(arr(item?.gitRecentCommits)[0]);
       const recency = recencyBucket(item?.modifiedAt);
+      const reviewReady = /^main$|^master$/i.test(branch) && fileCount === 0 && Boolean(recentCommit);
       const facts = [
         { label: "Freshness", value: recency.label },
         { label: "Branch", value: branch || "not reported" },
         { label: "Files", value: fileCount ? `${fileCount} changed` : "no file changes" },
       ];
       const signal = firstFile ? `Latest file signal: ${firstFile}` : recentCommit ? `Latest commit: ${recentCommit}` : "Workspace is visible, but no file/event detail is attached yet.";
-      const stuck = !recency.fresh ? "This may be stale; ask Marcus to verify whether Codex is still active here." : fileCount === 0 ? "No file movement yet; useful to ask what Codex is reading or waiting on." : "";
-      return { facts, signal, stuck, tone: recency.tone };
+      const stuck = reviewReady
+        ? "Commit is clean on the main branch. This looks ready for your eyes, not like Codex is still typing."
+        : !recency.fresh ? "This may be stale; ask Marcus to verify whether Codex is still active here." : fileCount === 0 ? "No file movement yet; useful to ask what Codex is reading or waiting on." : "";
+      return { facts, signal, stuck, tone: reviewReady ? "live" : recency.tone, reviewReady };
     }
 
     function signalSummaryFromJob(job) {
@@ -913,7 +920,7 @@
       const haystack = [branch, ...commits, ...changed, text(item?.folderName), text(item?.projectName)].join(" ");
       if (/sng|price|sync/i.test(haystack)) return "Diagnose SNG price sync";
       if (branch && !/^main$|^master$/i.test(branch)) return branch.replace(/^codex[/-]/i, "").replace(/[-_]+/g, " ");
-      if (commits[0]) return commits[0].replace(/^[a-f0-9]{7,}\s+/i, "");
+      if (commits[0]) return commitTitle(commits[0]);
       if (changed[0]) return `Review ${changed[0]}`;
       return "Active Codex session";
     }
@@ -1014,6 +1021,7 @@
       const name = text(item?.projectName || item?.folderName || item?.workspacePath || `Codex workspace ${index + 1}`);
       const task = inferCodexWorkspaceTask(item);
       const liveSignal = signalSummaryFromWorkspace(item);
+      const reviewReady = Boolean(liveSignal.reviewReady);
       const changed = [
         text(item?.gitBranch) ? `Branch: ${text(item.gitBranch)}` : "",
         Number(item?.gitStatusCount || 0) ? `${Number(item.gitStatusCount)} changed file${Number(item.gitStatusCount) === 1 ? "" : "s"}` : "",
@@ -1022,27 +1030,28 @@
       ].filter(Boolean);
       return {
         id: idFrom(name, `codex-workspace-${index}`),
-        isLiveCodex: true,
+        isLiveCodex: !reviewReady,
+        workspaceReviewReady: reviewReady,
         sourceId: text(item?.sessionId),
         codexSessionId: text(item?.sessionId),
         name,
-        state: "moving",
-        stateLabel: liveSignal.tone === "live" && !liveSignal.stuck ? "Live Codex" : "Check status",
-        basis: "live Codex workspace",
-        sentence: task || "Active Codex session detected.",
+        state: reviewReady ? "complete" : "moving",
+        stateLabel: reviewReady ? "Ready to review" : liveSignal.tone === "live" && !liveSignal.stuck ? "Live Codex" : "Check status",
+        basis: reviewReady ? "workspace commit signal" : "live Codex workspace",
+        sentence: reviewReady ? `Latest commit is ready for review: ${commitTitle(arr(item?.gitRecentCommits)[0]) || task}.` : task || "Active Codex session detected.",
         liveSignal,
-        livePhase: phaseFor({ state: "moving", currentStep: task, objective: task, lastChange: liveSignal.signal }),
+        livePhase: reviewReady ? "Complete" : phaseFor({ state: "moving", currentStep: task, objective: task, lastChange: liveSignal.signal }),
         last: age(item?.modifiedAt),
         lastChange: task,
-        next: "Codex",
+        next: reviewReady ? "Mark review" : "Codex",
         counts: `${Number(item?.gitStatusCount || arr(item?.gitStatus).length || 0)} file signal${Number(item?.gitStatusCount || arr(item?.gitStatus).length || 0) === 1 ? "" : "s"}`,
-        confidence: 88,
+        confidence: reviewReady ? 82 : 88,
         objective: task,
         currentStep: task,
         changed: changed.length ? changed : ["Recent Codex session metadata observed"],
         tasks: [
-          { id: `${idFrom(name)}-codex-active`, title: task, status: liveSignal.tone === "live" ? "visible now" : "needs status check", worker: "Codex" },
-          { id: `${idFrom(name)}-marcus-watch`, title: "Summarize current Codex progress", status: "watching", worker: "MARCUS" },
+          { id: `${idFrom(name)}-codex-active`, title: task, status: reviewReady ? "commit observed" : liveSignal.tone === "live" ? "visible now" : "needs status check", worker: reviewReady ? "Git" : "Codex" },
+          { id: `${idFrom(name)}-mark-review`, title: "Review latest commit", status: reviewReady ? "ready" : "waiting", worker: "Mark" },
         ],
         evidence: [
           "Desktop relay codexWorkspaces",
