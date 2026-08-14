@@ -437,6 +437,50 @@
       color: var(--muted);
       line-height: 1.45;
     }
+    .settings-console {
+      display: none;
+      gap: 14px;
+      margin-bottom: 18px;
+    }
+    .settings-console.visible { display: grid; }
+    .settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    .field { display: grid; gap: 6px; }
+    .field label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; }
+    .field input {
+      width: 100%;
+      min-height: 40px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(5, 8, 13, 0.56);
+      color: var(--text);
+      padding: 8px 10px;
+      outline: 0;
+    }
+    .field small { color: var(--faint); line-height: 1.35; }
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      width: fit-content;
+      min-height: 28px;
+      padding: 4px 9px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--muted);
+      background: rgba(255, 255, 255, 0.035);
+    }
+    .status-pill.ok { color: var(--green); border-color: rgba(103, 211, 111, 0.44); }
+    .status-pill.warn { color: var(--amber); border-color: rgba(244, 181, 68, 0.48); }
+    .settings-output {
+      display: none;
+      max-height: 220px;
+      overflow: auto;
+      white-space: pre-wrap;
+      font-family: var(--mono);
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .settings-output.visible { display: block; }
 
     @media (max-width: 1220px) {
       body { overflow: auto; }
@@ -451,6 +495,7 @@
       .needs-grid { grid-template-columns: 1fr; }
       .mode-body { grid-template-columns: 1fr; }
       .mode-nav, .mode-aside { border: 0; }
+      .settings-grid { grid-template-columns: 1fr; }
     }
 
     @media (prefers-reduced-motion: reduce) {
@@ -521,6 +566,7 @@
           <div class="sort-label">Marcus priority</div>
         </section>
 
+        <section class="settings-console" id="settingsConsole" aria-label="Dashboard settings"></section>
         <section class="ledger" id="ledger" aria-label="Live project tracker"></section>
       </div>
 
@@ -587,6 +633,7 @@
       doingList: document.getElementById("doingList"),
       handledList: document.getElementById("handledList"),
       nextList: document.getElementById("nextList"),
+      settingsConsole: document.getElementById("settingsConsole"),
       composer: document.getElementById("composer"),
       composerInput: document.getElementById("composerInput"),
       captureButton: document.getElementById("captureButton"),
@@ -616,7 +663,7 @@
       unknown: "?",
     };
 
-    let snapshot = { projects: [], decisions: [], events: [], brief: null, operations: [], desktop: null, jobs: [], registry: [] };
+    let snapshot = { projects: [], decisions: [], events: [], brief: null, operations: [], desktop: null, jobs: [], registry: [], settings: {}, googleStatus: null };
     let expandedId = "";
     let query = "";
     let viewMode = "projects";
@@ -660,8 +707,9 @@
           response = await fetch(url, { ...options, headers, credentials: "include" });
         }
       }
-      if (!response.ok) throw new Error(`${url} returned ${response.status}`);
-      return response.json();
+      const data = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(text(data?.error || data?.message || `${url} returned ${response.status}`));
+      return data;
     }
 
     function age(value) {
@@ -1037,12 +1085,14 @@
     async function load() {
       setStatus("Syncing live sources", "quiet");
       try {
-        const [operations, jobs, desktop, brief, registry] = await Promise.all([
+        const [operations, jobs, desktop, brief, registry, settings, googleStatus] = await Promise.all([
           api("/api/operations/summary?limit=50").catch((error) => ({ ok: false, error: error.message, operations: [] })),
           api("/api/codex/jobs").catch((error) => ({ ok: false, error: error.message, jobs: [] })),
           api("/api/desktop-context").catch((error) => ({ ok: false, error: error.message })),
           api("/api/marcus/active-brief").catch((error) => ({ ok: false, error: error.message })),
           api("/api/project-registry").catch((error) => ({ ok: false, error: error.message, projects: [] })),
+          api("/api/settings").catch((error) => ({ ok: false, error: error.message })),
+          api("/api/integrations/google/status").catch((error) => ({ ok: false, error: error.message })),
         ]);
         const operationProjects = arr(operations.operations).map(makeProjectFromOperation);
         const jobProjects = arr(jobs.jobs).filter((job) => !["completed", "cancelled"].includes(text(job?.status).toLowerCase())).map(makeProjectFromJob);
@@ -1063,13 +1113,15 @@
           desktop,
           jobs: arr(jobs.jobs),
           registry: arr(registry.projects),
+          settings,
+          googleStatus,
           sourceState: { operations, jobs, desktop, brief, registry },
         };
         setStatus(statusSentence(), activityTone());
         applyRoute();
         render();
       } catch (error) {
-        snapshot = { projects: [], decisions: [], events: [], error };
+        snapshot = { projects: [], decisions: [], events: [], settings: {}, googleStatus: null, error };
         setStatus(`Unable to sync: ${error.message}`, "blocked");
         render();
       }
@@ -1158,6 +1210,7 @@
       els.chiefBrief.textContent = chiefBrief(filtered);
       els.sourceNote.innerHTML = sourceNoteHtml();
       els.needsSection.classList.toggle("visible", needs.length > 0);
+      renderSettingsConsole();
       els.needsGrid.innerHTML = needs.map((decision) => `
         <button class="needs-card" type="button" data-decision="${esc(decision.id)}">
           <strong>${esc(decision.project)}: ${esc(decision.title)}</strong>
@@ -1203,6 +1256,146 @@
       if (viewMode === "activity") return `<div class="empty"><strong>No active Codex or operation movement is visible.</strong><br>If Codex is working, the bridge is not relaying that workspace/job into this page yet.</div>`;
       if (viewMode === "settings") return `<div class="empty"><strong>No source-backed system items are visible.</strong><br>Check desktop relay auth, Codex job provider status, and the active bridge connection.</div>`;
       return `<div class="empty"><strong>No projects discovered for this filter.</strong><br>MARCUS is not filling the screen with stale sample data. Clear search or refresh live sources.</div>`;
+    }
+
+    function renderSettingsConsole() {
+      const visible = viewMode === "settings";
+      els.settingsConsole.classList.toggle("visible", visible);
+      if (!visible) {
+        els.settingsConsole.innerHTML = "";
+        return;
+      }
+      const settings = snapshot.settings || {};
+      const google = snapshot.googleStatus || {};
+      const connected = Boolean(settings.googleConnected || google.connected);
+      const configured = Boolean(settings.googleConfigured || google.configured);
+      const statusClass = connected ? "ok" : configured ? "warn" : "warn";
+      const statusText = connected ? "Google connected" : configured ? "OAuth configured; account not connected" : "OAuth client missing";
+      els.settingsConsole.innerHTML = `
+        <section class="mode-panel">
+          <div class="mode-kicker"><span>Settings console</span><span>Google OAuth</span></div>
+          <h2>Google Calendar, Drive, and Analytics</h2>
+          <p>This is the live setup path Marcus is asking for. Save the OAuth client, connect the Google account, then refresh the dashboard signal.</p>
+          <div style="margin-top:10px"><span class="status-pill ${statusClass}">${esc(statusText)}</span></div>
+          <div class="settings-grid" style="margin-top:14px">
+            <div class="field">
+              <label for="googleClientId">Client ID</label>
+              <input id="googleClientId" type="text" autocomplete="off" value="${esc(settings.googleClientId || "")}" placeholder="123...apps.googleusercontent.com">
+              <small>${configured && !settings.googleClientId ? "Configured from server environment. Paste here only if you want to override saved settings." : "Must end with .apps.googleusercontent.com."}</small>
+            </div>
+            <div class="field">
+              <label for="googleClientSecret">Client Secret</label>
+              <input id="googleClientSecret" type="password" autocomplete="off" placeholder="Leave blank to keep existing or use PKCE">
+              <small>Optional. If blank, Marcus uses PKCE when the OAuth client allows it.</small>
+            </div>
+            <div class="field">
+              <label for="googleReadCalendarId">Read calendar</label>
+              <input id="googleReadCalendarId" type="text" autocomplete="off" value="${esc(settings.googleReadCalendarId || google.calendarId || "")}" placeholder="primary">
+              <small>Use primary unless you want Marcus reading a specific calendar ID.</small>
+            </div>
+            <div class="field">
+              <label>Connection state</label>
+              <div class="status-pill ${configured ? "ok" : "warn"}">OAuth client: ${configured ? "configured" : "missing"}</div>
+              <div class="status-pill ${connected ? "ok" : "warn"}">Account token: ${connected ? "connected" : "not connected"}</div>
+            </div>
+          </div>
+          <div class="row-actions" style="justify-content:start;flex-wrap:wrap;margin-top:14px">
+            <button class="btn primary" type="button" data-google-save>Save Google settings</button>
+            <button class="btn" type="button" data-google-connect>${connected ? "Reconnect Google" : "Connect Google"}</button>
+            <button class="btn" type="button" data-google-status>Refresh status</button>
+            <button class="btn" type="button" data-google-upcoming>Show next 7 days</button>
+            <button class="btn" type="button" data-google-sync>Sync projects</button>
+            <button class="btn warn" type="button" data-google-disconnect>Disconnect stale token</button>
+          </div>
+        </section>
+        <section class="mode-panel settings-output" id="settingsOutput" aria-live="polite"></section>
+      `;
+      bindSettingsConsole();
+    }
+
+    function settingsOutput(message, data = null) {
+      const output = document.getElementById("settingsOutput");
+      if (!output) return;
+      output.classList.add("visible");
+      output.textContent = data ? `${message}\n${JSON.stringify(data, null, 2)}` : message;
+    }
+
+    function readGoogleFields() {
+      return {
+        googleClientId: text(document.getElementById("googleClientId")?.value),
+        googleClientSecret: text(document.getElementById("googleClientSecret")?.value),
+        googleReadCalendarId: text(document.getElementById("googleReadCalendarId")?.value),
+      };
+    }
+
+    function bindSettingsConsole() {
+      document.querySelectorAll("[data-google-save]").forEach((button) => button.addEventListener("click", saveGoogleSettings));
+      document.querySelectorAll("[data-google-connect]").forEach((button) => button.addEventListener("click", connectGoogle));
+      document.querySelectorAll("[data-google-status]").forEach((button) => button.addEventListener("click", refreshGoogleStatus));
+      document.querySelectorAll("[data-google-upcoming]").forEach((button) => button.addEventListener("click", showGoogleUpcoming));
+      document.querySelectorAll("[data-google-sync]").forEach((button) => button.addEventListener("click", syncGoogleProjects));
+      document.querySelectorAll("[data-google-disconnect]").forEach((button) => button.addEventListener("click", disconnectGoogle));
+    }
+
+    async function saveGoogleSettings() {
+      const fields = readGoogleFields();
+      const patch = {
+        googleClientId: fields.googleClientId,
+        googleReadCalendarId: fields.googleReadCalendarId,
+      };
+      if (fields.googleClientSecret) patch.googleClientSecret = fields.googleClientSecret;
+      await api("/api/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      settingsOutput("Saved Google settings. Next step: Connect Google.");
+      await refreshGoogleStatus();
+    }
+
+    async function connectGoogle() {
+      const fields = readGoogleFields();
+      if (fields.googleClientId || fields.googleReadCalendarId || fields.googleClientSecret) await saveGoogleSettings();
+      const data = await api("/api/integrations/google/auth-url");
+      const popup = window.open(data.url, "_blank", "noopener,noreferrer");
+      if (!popup) {
+        window.location.href = data.url;
+        return;
+      }
+      settingsOutput("Google OAuth opened in a new tab. Finish the Google consent flow, return here, then click Refresh status.");
+    }
+
+    async function refreshGoogleStatus() {
+      const [settings, googleStatus] = await Promise.all([
+        api("/api/settings"),
+        api("/api/integrations/google/status"),
+      ]);
+      snapshot.settings = settings;
+      snapshot.googleStatus = googleStatus;
+      renderSettingsConsole();
+      settingsOutput("Google status refreshed.", googleStatus);
+    }
+
+    async function showGoogleUpcoming() {
+      const data = await api("/api/integrations/google/upcoming?days=7&max=20");
+      settingsOutput("Upcoming Google events:", data);
+    }
+
+    async function syncGoogleProjects() {
+      const data = await api("/api/integrations/google/sync", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+      settingsOutput("Google project sync finished.", data);
+      await load();
+    }
+
+    async function disconnectGoogle() {
+      if (!window.confirm("Disconnect the saved Google account token? OAuth client settings will remain.")) return;
+      await api("/api/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ googleTokens: null, googleCalendarId: "", googleProjectEventIds: {} }),
+      });
+      settingsOutput("Disconnected Google account token. Click Connect Google to create a fresh connection.");
+      await refreshGoogleStatus();
     }
 
     function chiefBrief(projects) {
