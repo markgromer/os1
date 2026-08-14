@@ -15,6 +15,10 @@ export const DEFAULT_ACTIVITY_RULES = Object.freeze({
   codexDriftWindowDays: 14,
   verificationWindowDays: 30,
   commitWithoutTestCount: 3,
+  quietHealthyDays: 14,
+  attentionSlippingDays: 21,
+  atRiskDays: 35,
+  decayingDays: 45,
 });
 
 export const DEFAULT_SIGNAL_WEIGHTS = Object.freeze({
@@ -117,6 +121,34 @@ function isSuccessfulRun(item) {
     && !/queued|running|started|unknown/.test(eventStatus(item));
 }
 
+function isMeaningfulMovement(item) {
+  if (!item) return false;
+  if (item.type === 'codex_handoff_created' || item.type === 'repository_read') return false;
+  if (item.type === 'commit') return !/format|formatting|whitespace|dependency|deps|chore|bump|lockfile/i.test(`${item.summary || ''} ${item.metadata?.message || ''}`);
+  if (['pull_request_opened', 'pull_request_merged', 'deployment_completed', 'production_published', 'browser_verified', 'operation_completed'].includes(item.type)) return !isFailure(item);
+  if (['test_run', 'build_run', 'lint_run', 'typecheck_run'].includes(item.type)) return isSuccessfulRun(item);
+  if (item.type === 'codex_job_completed') return Boolean(item.commitSha || item.branch || item.metadata?.hasDiff === true || item.metadata?.hasCommit === true || item.metadata?.status === 'verified');
+  if (item.type === 'codex_job_updated') return Boolean(item.commitSha || item.metadata?.hasDiff === true || item.metadata?.hasCommit === true || item.event === 'result_verified');
+  if (item.type === 'task_updated') return /done|complete|blocked|unblocked|approved|decided|verified|deployed|launched|accepted|closed/i.test(`${item.summary || ''} ${JSON.stringify(item.metadata || {})}`);
+  return false;
+}
+
+function isVerifiedEvidence(item) {
+  return ['browser_verified', 'test_run', 'build_run', 'lint_run', 'typecheck_run', 'deployment_completed', 'production_published', 'operation_completed'].includes(item?.type)
+    && !isFailure(item);
+}
+
+function cadenceDays(project, fallback) {
+  const raw = safeString(project?.currentObjective?.cadence || project?.metadata?.expectedCadence || project?.metadata?.cadence, 100).toLowerCase();
+  if (/daily/.test(raw)) return 1;
+  if (/weekly/.test(raw)) return 7;
+  if (/biweekly|fortnight/.test(raw)) return 14;
+  if (/monthly/.test(raw)) return 30;
+  const days = raw.match(/(\d+)\s*(day|days|d)\b/);
+  if (days) return Math.max(1, Math.min(365, Number(days[1]) || fallback));
+  return fallback;
+}
+
 function evidenceRef(item) {
   return {
     id: item.id,
@@ -141,6 +173,72 @@ function confidenceFor(items, project, nowMs) {
   if (timeMs(project?.createdAt) && daysBetween(nowMs, project.createdAt) >= 21) score += 0.15;
   score = Math.round(Math.min(1, score) * 100) / 100;
   return { score, level: score >= 0.75 ? 'high' : score >= 0.45 ? 'medium' : 'low', sources: [...sources].sort() };
+}
+
+function healthFor({ project, items, risks, operations, nowMs, rules }) {
+  const objective = safeObject(project?.currentObjective);
+  const hasObjective = Boolean(safeString(objective.desiredOutcome, 1_000));
+  const hasDone = Boolean(safeString(objective.definitionOfDone || project?.definitionOfDone, 1_000));
+  const lastMovement = newest(items, isMeaningfulMovement);
+  const lastVerified = newest(items, isVerifiedEvidence);
+  const movementAge = daysBetween(nowMs, lastMovement?.timestamp);
+  const failedVerification = risks.some((item) => item.code === 'verification_gap' || item.code === 'repeated_failed_verification');
+  const blocked = operations.some((item) => ['blocked', 'recovery_required', 'waiting_for_approval'].includes(item.status));
+  let score = 100;
+  if (!hasObjective) score -= 25;
+  if (!hasDone) score -= 15;
+  if (!lastMovement) score -= 20;
+  else if (movementAge >= rules.attentionSlippingDays) score -= 15;
+  if (risks.length) score -= Math.min(35, risks.length * 12);
+  if (failedVerification) score -= 20;
+  if (blocked) score -= 15;
+  score = Math.max(0, Math.min(100, Math.round(score)));
+  return {
+    score,
+    level: score >= 80 ? 'healthy' : score >= 60 ? 'watch' : score >= 40 ? 'at_risk' : 'decaying',
+    reasons: [
+      hasObjective ? 'Objective is recorded.' : 'Current objective is missing or implicit.',
+      hasDone ? 'Definition of done is recorded.' : 'Definition of done is missing or implicit.',
+      lastMovement ? `Last meaningful movement was ${Math.floor(movementAge)} day(s) ago.` : 'No meaningful movement evidence has been recorded.',
+      risks.length ? `${risks.length} evidence-backed risk(s) are active.` : 'No deterministic risk rule is active.',
+    ],
+  };
+}
+
+function momentumFor({ items, nowMs }) {
+  const movement = items.filter(isMeaningfulMovement);
+  const recent = movement.filter((item) => daysBetween(nowMs, item.timestamp) <= 14);
+  const last = newest(movement);
+  const score = Math.min(100, Math.round(recent.reduce((sum, item) => sum + decayForEvidence(item, { nowMs }).contribution, 0)));
+  return {
+    score,
+    level: score >= 70 ? 'strong' : score >= 35 ? 'moving' : score > 0 ? 'weak' : 'none',
+    meaningfulEvents14d: recent.length,
+    lastMeaningfulMovementAt: last?.timestamp || '',
+    evidence: recent.slice(-10).map(evidenceRef),
+  };
+}
+
+function decayStageFor({ project, items, operations, risks, nowMs, rules }) {
+  const status = safeString(project?.status, 100).toLowerCase();
+  const paused = /paused|on hold|seasonal|intentionally dormant/.test(`${status} ${project?.metadata?.pauseReason || ''}`);
+  const activeOperation = operations.some((item) => ['draft', 'planned', 'queued', 'running', 'verifying', 'awaiting_provider'].includes(item.status));
+  const blockingOperation = operations.some((item) => ['blocked', 'recovery_required', 'waiting_for_approval'].includes(item.status));
+  const lastMovement = newest(items, isMeaningfulMovement);
+  const lastEvidence = newest(items);
+  const age = lastMovement ? daysBetween(nowMs, lastMovement.timestamp) : daysBetween(nowMs, project?.createdAt);
+  const expectedCadenceDays = cadenceDays(project, rules.attentionSlippingDays);
+  if (paused) return { stage: 'quiet_but_healthy', severity: 0, expectedCadenceDays, reason: 'Project is explicitly paused or intentionally dormant.', lastMeaningfulMovementAt: lastMovement?.timestamp || '', lastEvidenceAt: lastEvidence?.timestamp || '' };
+  if (blockingOperation || risks.some((item) => ['repeated_failed_builds', 'repeated_failed_verification', 'codex_only_drift'].includes(item.code))) {
+    return { stage: 'at_risk', severity: 2, expectedCadenceDays, reason: 'Blocked work, failed verification, or Codex drift is present.', lastMeaningfulMovementAt: lastMovement?.timestamp || '', lastEvidenceAt: lastEvidence?.timestamp || '' };
+  }
+  if (activeOperation && age <= expectedCadenceDays * 2) return { stage: 'quiet_but_healthy', severity: 0, expectedCadenceDays, reason: 'An active operation is expected to continue.', lastMeaningfulMovementAt: lastMovement?.timestamp || '', lastEvidenceAt: lastEvidence?.timestamp || '' };
+  if (!Number.isFinite(age)) return { stage: 'dormant_candidate', severity: 4, expectedCadenceDays, reason: 'No credible movement evidence exists.', lastMeaningfulMovementAt: '', lastEvidenceAt: lastEvidence?.timestamp || '' };
+  if (age <= expectedCadenceDays) return { stage: 'quiet_but_healthy', severity: 0, expectedCadenceDays, reason: 'No recent activity is expected yet for this cadence.', lastMeaningfulMovementAt: lastMovement?.timestamp || '', lastEvidenceAt: lastEvidence?.timestamp || '' };
+  if (age >= rules.abandonedDays) return { stage: 'dormant_candidate', severity: 4, expectedCadenceDays, reason: 'No credible next movement has appeared inside the abandonment window.', lastMeaningfulMovementAt: lastMovement?.timestamp || '', lastEvidenceAt: lastEvidence?.timestamp || '' };
+  if (age >= rules.decayingDays) return { stage: 'decaying', severity: 3, expectedCadenceDays, reason: 'Active ownership appears to have broken down.', lastMeaningfulMovementAt: lastMovement?.timestamp || '', lastEvidenceAt: lastEvidence?.timestamp || '' };
+  if (age >= rules.atRiskDays || risks.length) return { stage: 'at_risk', severity: 2, expectedCadenceDays, reason: risks[0]?.summary || 'Expected progress is materially drifting.', lastMeaningfulMovementAt: lastMovement?.timestamp || '', lastEvidenceAt: lastEvidence?.timestamp || '' };
+  return { stage: 'attention_slipping', severity: 1, expectedCadenceDays, reason: 'Expected progress or follow-up has not occurred.', lastMeaningfulMovementAt: lastMovement?.timestamp || '', lastEvidenceAt: lastEvidence?.timestamp || '' };
 }
 
 function deriveRisks({ items, project, operationRows, nowMs, rules }) {
@@ -258,7 +356,11 @@ export function calculateProjectActivitySnapshot({
   const weightedTotal = weightedContributions.reduce((sum, item) => sum + item.decayedContribution, 0);
   const activityScore = Math.round(Math.min(100, 100 * (1 - Math.exp(-weightedTotal / 300))) * 10) / 10;
   const risks = deriveRisks({ items, project, operationRows, nowMs, rules: { ...DEFAULT_ACTIVITY_RULES, ...rules } });
-  const derived = deriveState({ items, project, operations: operationRows, risks, nowMs, rules: { ...DEFAULT_ACTIVITY_RULES, ...rules } });
+  const normalizedRules = { ...DEFAULT_ACTIVITY_RULES, ...rules };
+  const derived = deriveState({ items, project, operations: operationRows, risks, nowMs, rules: normalizedRules });
+  const health = healthFor({ project, items, risks, operations: operationRows, nowMs, rules: normalizedRules });
+  const momentum = momentumFor({ items, nowMs });
+  const decay = decayStageFor({ project, items, operations: operationRows, risks, nowMs, rules: normalizedRules });
   const confidence = confidenceFor(items, project, nowMs);
   const last = (predicate) => newest(items, predicate)?.timestamp || '';
   const latestPullRequests = new Map();
@@ -327,6 +429,25 @@ export function calculateProjectActivitySnapshot({
     confidenceLevel: confidence.level,
     confidenceSources: confidence.sources,
     state: derived.state,
+    operationalState: derived.state === 'blocked' ? 'at_risk'
+      : derived.state === 'verifying' ? 'verifying'
+        : derived.state === 'abandoned_candidate' ? 'dormant'
+          : derived.state === 'stale' ? 'decaying'
+            : derived.state === 'dormant' ? 'dormant'
+              : /paused|on hold/.test(safeString(project?.status, 100).toLowerCase()) ? 'dormant'
+                : 'active',
+    health,
+    momentum,
+    decay,
+    currentObjective: safeObject(project?.currentObjective),
+    definitionOfDone: safeString(project?.definitionOfDone || project?.currentObjective?.definitionOfDone, 4_000),
+    lastMeaningfulMovementAt: momentum.lastMeaningfulMovementAt,
+    lastVerifiedEvidenceAt: newest(items, isVerifiedEvidence)?.timestamp || '',
+    nextExpectedEvent: decay.stage === 'attention_slipping' ? 'Recovery check or follow-up should be prepared.'
+      : decay.stage === 'at_risk' ? 'Resolve blocker, verification failure, or Codex drift.'
+        : decay.stage === 'decaying' ? 'Marcus should propose resume, pause, archive, or reassignment.'
+          : decay.stage === 'dormant_candidate' ? 'Archive, restore, or define a credible next action.'
+            : 'Continue observing until the next expected cadence point.',
     reasons,
     risks,
     missingExpectedSignals,

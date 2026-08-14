@@ -134,6 +134,44 @@ function normalizeReferences(value = {}) {
   return output;
 }
 
+function normalizeTextList(value, limit = 20, max = 1_000) {
+  return stringArray(value, limit, max);
+}
+
+function normalizeObjective(value = {}) {
+  const raw = safeObject(value);
+  const desiredOutcome = safeString(raw.desiredOutcome || raw.outcome || raw.objective || raw.title, 2_000);
+  const definitionOfDone = safeString(raw.definitionOfDone || raw.doneDefinition || raw.acceptanceCriteria, 4_000);
+  if (!desiredOutcome && !definitionOfDone) return {};
+  return {
+    desiredOutcome,
+    whyItMatters: safeString(raw.whyItMatters || raw.why || raw.businessReason, 2_000),
+    definitionOfDone,
+    successEvidence: normalizeTextList(raw.successEvidence || raw.evidence || raw.verification, 20, 1_000),
+    owner: safeString(raw.owner, 300),
+    cadence: safeString(raw.cadence || raw.expectedCadence || raw.targetCadence, 300),
+    risks: normalizeTextList(raw.risks, 20, 1_000),
+    dependencies: normalizeTextList(raw.dependencies, 20, 1_000),
+    status: safeString(raw.status, 100) || 'active',
+    confidence: Math.max(0, Math.min(1, Number(raw.confidence) || 0.5)),
+    updatedAt: safeIso(raw.updatedAt),
+  };
+}
+
+function normalizeProjectMemory(value = {}) {
+  const raw = safeObject(value);
+  return {
+    facts: normalizeTextList(raw.facts, 50, 1_000),
+    preferences: normalizeTextList(raw.preferences, 50, 1_000),
+    constraints: normalizeTextList(raw.constraints, 50, 1_000),
+    decisions: normalizeTextList(raw.decisions, 50, 1_000),
+    rejectedApproaches: normalizeTextList(raw.rejectedApproaches, 50, 1_000),
+    lessons: normalizeTextList(raw.lessons, 50, 1_000),
+    openQuestions: normalizeTextList(raw.openQuestions, 50, 1_000),
+    followUps: normalizeTextList(raw.followUps, 50, 1_000),
+  };
+}
+
 function normalizeCommands(value = {}) {
   const raw = safeObject(value);
   const allowed = ['install', 'dev', 'build', 'test', 'lint', 'typecheck'];
@@ -174,6 +212,20 @@ export function normalizeProjectRegistryRecord(input = {}, options = {}) {
     canonicalName,
     aliases,
     description: safeString(raw.description, 8_000),
+    businessArea: safeString(raw.businessArea || raw.productArea || raw.area, 300),
+    currentObjective: normalizeObjective(raw.currentObjective || {
+      desiredOutcome: raw.objective || raw.currentObjectiveText,
+      whyItMatters: raw.whyItMatters,
+      definitionOfDone: raw.definitionOfDone,
+      successEvidence: raw.successEvidence,
+      owner: raw.objectiveOwner || raw.owner,
+      cadence: raw.expectedCadence || raw.cadence,
+      risks: raw.risks,
+      dependencies: raw.dependencies,
+      status: raw.objectiveStatus,
+      confidence: raw.objectiveConfidence,
+    }),
+    definitionOfDone: safeString(raw.definitionOfDone || raw.currentObjective?.definitionOfDone, 4_000),
     status: safeString(raw.status, 100) || 'active',
     owner: safeString(raw.owner, 300),
     teamMembers: stringArray(raw.teamMembers, 100, 300),
@@ -193,6 +245,8 @@ export function normalizeProjectRegistryRecord(input = {}, options = {}) {
     stack: stringArray(raw.stack, 50, 200),
     commands: normalizeCommands(raw.commands || raw.scripts),
     permissions: sanitizeStructured(raw.permissions ?? {}, 10_000),
+    durableMemory: normalizeProjectMemory(raw.durableMemory || raw.memory),
+    archiveHistory: Array.isArray(raw.archiveHistory) ? raw.archiveHistory.slice(-50).map((item) => sanitizeStructured(item, 5_000)) : [],
     metadata: sanitizeStructured(raw.metadata ?? {}, 20_000),
     createdAt,
     updatedAt: safeIso(raw.updatedAt) || createdAt,

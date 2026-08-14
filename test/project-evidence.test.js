@@ -19,6 +19,7 @@ import {
 import { ProjectEvidenceService } from '../marcus/evidence/project_evidence_service.js';
 import { BrowserVerificationProvider } from '../marcus/providers/browser_verification_provider.js';
 import { CodexProvider } from '../marcus/providers/codex_provider.js';
+import { ProjectRegistry } from '../marcus/projects/project_registry.js';
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
 const NOW = Date.parse('2026-08-05T20:00:00.000Z');
@@ -39,6 +40,9 @@ function project(id, name, options = {}) {
     repo: { provider: 'github', fullName: options.repository || `markgromer/${id}`, defaultBranch: 'main' },
     localWorkspace: options.localWorkspace || {},
     deployments: options.deployments || {},
+    currentObjective: options.currentObjective || {},
+    definitionOfDone: options.definitionOfDone || options.currentObjective?.definitionOfDone || '',
+    metadata: options.metadata || {},
   };
 }
 
@@ -156,7 +160,14 @@ test('GitHub ingestion collects repositories, commits, branches, pull requests, 
 });
 
 test('decay, focus shift, stale states, bottlenecks, and Airtable contradictions are deterministic and evidence-backed', () => {
-  const marcus = project('os1', 'M.A.R.C.U.S.');
+  const marcus = project('os1', 'M.A.R.C.U.S.', {
+    currentObjective: {
+      desiredOutcome: 'Make Marcus maintain project truth from evidence.',
+      definitionOfDone: 'Project state changes only after verified evidence.',
+      cadence: 'weekly',
+      confidence: 0.8,
+    },
+  });
   const warren = project('warren', 'WARREN');
   const stale = project('stale', 'FlowKey', { createdAt: new Date(NOW - 42 * DAY_MS).toISOString() });
   const abandoned = project('abandoned', 'Old Build', { createdAt: new Date(NOW - 61 * DAY_MS).toISOString() });
@@ -197,6 +208,20 @@ test('decay, focus shift, stale states, bottlenecks, and Airtable contradictions
   const activity = calculateBusinessActivity({ businessKey: 'personal', projects, evidence: records, operations: [], nowMs: NOW });
   assert.equal(activity.snapshots.find((item) => item.projectRegistryId === 'stale').state, 'stale');
   assert.equal(activity.snapshots.find((item) => item.projectRegistryId === 'abandoned').state, 'abandoned_candidate');
+  const marcusSnapshot = activity.snapshots.find((item) => item.projectRegistryId === 'os1');
+  assert.equal(marcusSnapshot.operationalState, 'active');
+  assert.equal(marcusSnapshot.decay.stage, 'quiet_but_healthy');
+  assert.equal(marcusSnapshot.health.level, 'watch');
+  assert.equal(marcusSnapshot.currentObjective.desiredOutcome, 'Make Marcus maintain project truth from evidence.');
+  assert.ok(marcusSnapshot.momentum.meaningfulEvents14d >= 1);
+  assert.ok(marcusSnapshot.lastMeaningfulMovementAt);
+  assert.ok(marcusSnapshot.nextExpectedEvent);
+  const staleSnapshot = activity.snapshots.find((item) => item.projectRegistryId === 'stale');
+  assert.equal(staleSnapshot.decay.stage, 'at_risk');
+  assert.equal(staleSnapshot.operationalState, 'decaying');
+  const abandonedSnapshot = activity.snapshots.find((item) => item.projectRegistryId === 'abandoned');
+  assert.equal(abandonedSnapshot.decay.stage, 'dormant_candidate');
+  assert.equal(abandonedSnapshot.operationalState, 'dormant');
   assert.ok(activity.snapshots.find((item) => item.projectRegistryId === 'bottleneck').risks.some((item) => item.code === 'deployment_bottleneck'));
   assert.ok(activity.snapshots.find((item) => item.projectRegistryId === 'verify-gap').risks.some((item) => item.code === 'verification_gap'));
   assert.ok(activity.snapshots.find((item) => item.projectRegistryId === 'drift').risks.some((item) => item.code === 'codex_only_drift'));
@@ -206,6 +231,38 @@ test('decay, focus shift, stale states, bottlenecks, and Airtable contradictions
   assert.ok(bottleneckSnapshot.risks.find((item) => item.code === 'deployment_bottleneck').threshold.commitCount);
   assert.ok(bottleneckSnapshot.weightedContributions.length);
   assert.ok(bottleneckSnapshot.missingExpectedSignals.includes('deployment_completed'));
+});
+
+test('project registry preserves canonical objective, definition of done, durable memory, and archive history', async () => {
+  const root = await temporaryDataDir();
+  try {
+    const registry = new ProjectRegistry({ dataDir: root });
+    const created = await registry.create('personal', {
+      canonicalName: 'PoopSites V2',
+      businessArea: 'SaaS websites',
+      objective: 'Launch the rebuild with evidence-backed operating state.',
+      whyItMatters: 'This is Mark-facing operating infrastructure.',
+      definitionOfDone: 'Production deploy, smoke test, and verified brief are recorded.',
+      expectedCadence: 'weekly',
+      successEvidence: ['deployment_completed', 'browser_verified'],
+      durableMemory: {
+        constraints: ['Do not treat mocked UI as operational truth.'],
+        rejectedApproaches: ['Manual tracker maintenance as the primary source of truth.'],
+      },
+      archiveHistory: [{ archivedAt: '2026-08-01T00:00:00Z', reason: 'superseded test record' }],
+    });
+    assert.equal(created.businessArea, 'SaaS websites');
+    assert.equal(created.currentObjective.desiredOutcome, 'Launch the rebuild with evidence-backed operating state.');
+    assert.equal(created.currentObjective.definitionOfDone, 'Production deploy, smoke test, and verified brief are recorded.');
+    assert.deepEqual(created.currentObjective.successEvidence, ['deployment_completed', 'browser_verified']);
+    assert.deepEqual(created.durableMemory.constraints, ['Do not treat mocked UI as operational truth.']);
+    assert.equal(created.archiveHistory[0].reason, 'superseded test record');
+
+    const reloaded = await registry.list('personal');
+    assert.equal(reloaded[0].currentObjective.desiredOutcome, created.currentObjective.desiredOutcome);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });
 
 test('Codex lifecycle is reconstructed without counting a handoff as implementation or mutating terminal operations', async () => {
