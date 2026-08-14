@@ -266,7 +266,7 @@
 
     .ledger-row {
       display: grid;
-      grid-template-columns: 210px minmax(250px, 1.1fr) minmax(290px, 0.95fr) 155px 190px;
+      grid-template-columns: 210px minmax(250px, 1fr) minmax(360px, 1.25fr) 145px 170px;
       align-items: center;
       gap: 16px;
       min-height: 76px;
@@ -309,6 +309,58 @@
     .meta { color: var(--muted); font-size: 12px; line-height: 1.35; }
 
     .movement { min-width: 0; display: grid; gap: 7px; }
+    .live-signal {
+      display: grid;
+      gap: 7px;
+      min-width: 0;
+    }
+    .live-signal-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      min-width: 0;
+      color: var(--text);
+      font-size: 12px;
+    }
+    .live-signal-head strong {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .pulse {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--cyan);
+      box-shadow: 0 0 14px rgba(70, 200, 255, 0.55);
+      flex: 0 0 auto;
+    }
+    .pulse.live { animation: breathe 1.8s ease-in-out infinite; }
+    .pulse.warn { background: var(--amber); box-shadow: 0 0 14px rgba(244, 181, 68, 0.45); }
+    .pulse.blocked { background: var(--red); box-shadow: 0 0 14px rgba(255, 107, 107, 0.38); }
+    .signal-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+    .signal-chip {
+      min-width: 0;
+      display: grid;
+      gap: 2px;
+      padding: 6px 7px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: rgba(255, 255, 255, 0.025);
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.25;
+    }
+    .signal-chip strong {
+      color: var(--text);
+      font-size: 12px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .signal-note { color: var(--faint); font-size: 11px; line-height: 1.35; overflow-wrap: anywhere; }
     .rail { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 5px; align-items: center; }
     .rail-item { min-width: 0; display: grid; gap: 5px; color: var(--faint); font-size: 10px; text-align: center; }
     .rail-dot {
@@ -687,6 +739,8 @@
     let activeProjectId = "";
     let activeTaskId = "";
     let voiceHeld = false;
+    let isLoading = false;
+    const autoRefreshMs = 12000;
 
     const text = (value, fallback = "") => String(value ?? fallback ?? "").replace(/\s+/g, " ").trim();
     const esc = (value) => text(value)
@@ -702,6 +756,10 @@
     const nowLabel = () => new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     const adminToken = () => { try { return text(localStorage.getItem("opsAdminToken")); } catch { return ""; } };
     const businessKey = () => { try { return text(localStorage.getItem("opsBusinessKey"), "personal"); } catch { return "personal"; } };
+    const activeTextInput = () => {
+      const active = document.activeElement;
+      return active && ["INPUT", "TEXTAREA", "SELECT"].includes(active.tagName);
+    };
 
     async function api(url, options = {}) {
       const headers = new Headers(options.headers || {});
@@ -763,9 +821,67 @@
       if (project.state === "complete") return "Complete";
       if (project.state === "needs_mark") return "Approval";
       if (project.state === "verifying") return "Verifying";
-      if (project.state === "blocked") return project.currentStep?.toLowerCase().includes("codex") ? "Building" : "Planned";
-      if (project.state === "moving") return "Building";
+      if (project.state === "blocked") return project.isLiveCodex ? "Verifying" : "Planned";
+      if (project.livePhase) return project.livePhase;
+      if (project.state === "moving") {
+        const current = `${project.currentStep} ${project.objective} ${project.lastChange}`.toLowerCase();
+        if (/test|verify|check|review|audit|qa|diagnos|debug|fix failing/.test(current)) return "Verifying";
+        if (/plan|setup|design|scope|research|wizard/.test(current)) return "Planned";
+        return "Building";
+      }
       return "Understood";
+    }
+
+    function minutesSince(value) {
+      const time = Date.parse(value || "");
+      if (!Number.isFinite(time)) return null;
+      return Math.max(0, Math.round((Date.now() - time) / 60000));
+    }
+
+    function recencyBucket(value) {
+      const minutes = minutesSince(value);
+      if (minutes === null) return { label: "unknown", tone: "warn", fresh: false };
+      if (minutes < 2) return { label: "just now", tone: "live", fresh: true };
+      if (minutes < 15) return { label: `${minutes}m ago`, tone: "live", fresh: true };
+      if (minutes < 90) return { label: `${minutes}m ago`, tone: "warn", fresh: false };
+      const hours = Math.round(minutes / 60);
+      return { label: `${hours}h ago`, tone: "blocked", fresh: false };
+    }
+
+    function branchLabel(branch) {
+      const raw = text(branch);
+      if (!raw) return "";
+      return raw.replace(/^refs\/heads\//, "");
+    }
+
+    function signalSummaryFromWorkspace(item) {
+      const fileCount = Number(item?.gitStatusCount || arr(item?.gitStatus).length || 0);
+      const branch = branchLabel(item?.gitBranch);
+      const firstFile = text(arr(item?.gitStatus)[0]?.file);
+      const recentCommit = text(arr(item?.gitRecentCommits)[0]);
+      const recency = recencyBucket(item?.modifiedAt);
+      const facts = [
+        { label: "Freshness", value: recency.label },
+        { label: "Branch", value: branch || "not reported" },
+        { label: "Files", value: fileCount ? `${fileCount} changed` : "no file changes" },
+      ];
+      const signal = firstFile ? `Latest file signal: ${firstFile}` : recentCommit ? `Latest commit: ${recentCommit}` : "Workspace is visible, but no file/event detail is attached yet.";
+      const stuck = !recency.fresh ? "This may be stale; ask Marcus to verify whether Codex is still active here." : fileCount === 0 ? "No file movement yet; useful to ask what Codex is reading or waiting on." : "";
+      return { facts, signal, stuck, tone: recency.tone };
+    }
+
+    function signalSummaryFromJob(job) {
+      const raw = text(job?.status, "unknown").toLowerCase();
+      const recency = recencyBucket(job?.updatedAt || job?.startedAt);
+      const files = arr(job?.changedFiles).length;
+      const facts = [
+        { label: "Job", value: raw || "unknown" },
+        { label: "Freshness", value: recency.label },
+        { label: "Events", value: `${Number(job?.eventCount || 0)}` },
+      ];
+      const signal = text(job?.diffSummary || job?.finalOutput || job?.error || arr(job?.changedFiles)[0] || "Codex job is visible, but no detailed event text is attached.");
+      const stuck = raw === "failed" ? text(job?.error || "Codex job failed; inspect or reroute.") : !recency.fresh ? "The job has not reported recently; verify whether it is still moving." : files ? `${files} changed file${files === 1 ? "" : "s"} reported by the job.` : "";
+      return { facts, signal, stuck, tone: raw === "failed" ? "blocked" : recency.tone };
     }
 
     function inferCodexWorkspaceTask(item) {
@@ -842,6 +958,7 @@
       const raw = text(job?.status, "unknown").toLowerCase();
       const state = raw === "completed" ? "complete" : raw === "failed" ? "blocked" : raw === "queued" ? "monitoring" : "moving";
       const name = text(job?.projectName || job?.repository || job?.workspacePath || `Codex job ${index + 1}`);
+      const liveSignal = signalSummaryFromJob(job);
       return {
         id: idFrom(job?.jobId || name, `job-${index}`),
         isLiveCodex: !["completed", "cancelled", "failed"].includes(raw),
@@ -852,6 +969,8 @@
         stateLabel: labelForState(state),
         basis: "observed Codex job",
         sentence: raw === "completed" ? "Ready for Marcus verification." : `${text(job?.objective || job?.title || "Codex work")} is ${raw}.`,
+        liveSignal,
+        livePhase: phaseFor({ state, currentStep: text(job?.status, "Codex status"), objective: text(job?.objective || job?.title || name), lastChange: liveSignal.signal }),
         last: age(job?.updatedAt || job?.startedAt),
         lastChange: text(job?.finalOutput || job?.diffSummary || job?.error || `${Number(job?.eventCount || 0)} events reported`),
         next: raw === "completed" ? "Verification" : raw === "failed" ? "MARCUS" : "Codex",
@@ -859,7 +978,7 @@
         confidence: raw === "failed" ? 48 : 74,
         objective: text(job?.objective || job?.title || name),
         currentStep: text(job?.status, "Codex status"),
-        changed: [text(job?.diffSummary || job?.finalOutput || job?.error || "No detailed output returned")],
+        changed: [liveSignal.signal, liveSignal.stuck, ...arr(job?.changedFiles).slice(0, 5).map((file) => `Changed file: ${file}`)].filter(Boolean),
         tasks: [
           { id: `${idFrom(job?.jobId || name)}-run`, title: "Codex run", status: raw, worker: "Codex" },
           { id: `${idFrom(job?.jobId || name)}-verify`, title: "Marcus verification", status: raw === "completed" ? "queued" : "waiting", worker: "MARCUS" },
@@ -871,6 +990,7 @@
     function makeProjectFromCodexWorkspace(item, index) {
       const name = text(item?.projectName || item?.folderName || item?.workspacePath || `Codex workspace ${index + 1}`);
       const task = inferCodexWorkspaceTask(item);
+      const liveSignal = signalSummaryFromWorkspace(item);
       const changed = [
         text(item?.gitBranch) ? `Branch: ${text(item.gitBranch)}` : "",
         Number(item?.gitStatusCount || 0) ? `${Number(item.gitStatusCount)} changed file${Number(item.gitStatusCount) === 1 ? "" : "s"}` : "",
@@ -886,7 +1006,9 @@
         state: "moving",
         stateLabel: labelForState("moving"),
         basis: "live Codex workspace",
-        sentence: task ? `Working on ${task}.` : "Active Codex session detected.",
+        sentence: task || "Active Codex session detected.",
+        liveSignal,
+        livePhase: phaseFor({ state: "moving", currentStep: task, objective: task, lastChange: liveSignal.signal }),
         last: age(item?.modifiedAt),
         lastChange: task,
         next: "Codex",
@@ -1075,6 +1197,8 @@
           existing.next = project.next;
           existing.currentStep = project.currentStep;
           existing.objective = project.objective;
+          existing.liveSignal = project.liveSignal || existing.liveSignal;
+          existing.livePhase = project.livePhase || existing.livePhase;
           existing.codexJobId = project.codexJobId || existing.codexJobId;
           existing.codexSessionId = project.codexSessionId || existing.codexSessionId;
           existing.confidence = Math.max(Number(existing.confidence || 0), Number(project.confidence || 0));
@@ -1104,6 +1228,8 @@
     }
 
     async function load() {
+      if (isLoading) return;
+      isLoading = true;
       setStatus("Syncing live sources", "quiet");
       try {
         const [operations, jobs, desktop, brief, registry, settings, googleStatus] = await Promise.all([
@@ -1145,6 +1271,8 @@
         snapshot = { projects: [], decisions: [], events: [], settings: {}, googleStatus: null, error };
         setStatus(`Unable to sync: ${error.message}`, "blocked");
         render();
+      } finally {
+        isLoading = false;
       }
     }
 
@@ -1217,7 +1345,7 @@
         : liveCodex.length ? `${liveCodex[0].name}: ${liveCodex[0].currentStep}.`
           : moving ? `${moving} project${moving === 1 ? "" : "s"} moving; no exact approval is first in line.` : "No live blocker is first in line.";
       els.reviewPrimary.textContent = needs ? "Review decision" : "Ask Marcus";
-      els.doingList.innerHTML = snapshot.projects.filter((p) => (p.isLiveCodex || ["observed operation", "observed Codex job"].includes(p.basis)) && p.state !== "complete").slice(0, 4).map((p) => `<li><span>${esc(stateIcons[p.state])}</span><span><strong>${esc(p.name)}</strong><br>${esc(p.currentStep)}</span></li>`).join("") || `<li><span>-</span><span>No active operation or Codex run is reporting movement.</span></li>`;
+      els.doingList.innerHTML = snapshot.projects.filter((p) => (p.isLiveCodex || ["observed operation", "observed Codex job"].includes(p.basis)) && p.state !== "complete").slice(0, 4).map((p) => `<li><span>${esc(stateIcons[p.state])}</span><span><strong>${esc(p.name)}</strong><br>${esc(p.liveSignal?.signal || p.currentStep)}</span></li>`).join("") || `<li><span>-</span><span>No active operation or Codex run is reporting movement.</span></li>`;
       els.handledList.innerHTML = snapshot.projects.filter((p) => p.state === "complete").slice(0, 3).map((p) => `<li><span>+</span><span>${esc(p.name)}</span></li>`).join("") || `<li><span>-</span><span>No recently completed work in this snapshot.</span></li>`;
       els.nextList.innerHTML = snapshot.projects.slice(0, 3).map((p) => `<li><span>${esc(stateIcons[p.state])}</span><span>${esc(p.name)}: next is ${esc(p.next)}</span></li>`).join("") || `<li><span>-</span><span>Refresh after live sources reconnect.</span></li>`;
     }
@@ -1316,8 +1444,8 @@
           <section class="mode-panel">
             <div class="mode-kicker"><span>Activity</span><span>live work</span></div>
             <h2>What is moving right now</h2>
-            <p>This is the live work lens: Codex sessions, operations, and desktop evidence with direct routes to steer or inspect.</p>
-            <ul class="task-list" style="margin-top:12px">${active.map((project) => `<li><button type="button" data-activity-project="${esc(project.id)}"><span>${esc(project.name)} - ${esc(project.currentStep)}</span><span>${esc(project.last)}</span></button></li>`).join("") || `<li><button type="button" disabled><span>No active work is reporting movement.</span><span>quiet</span></button></li>`}</ul>
+            <p>This is the live work lens: exact visible Codex signals first, then operations and desktop evidence.</p>
+            <ul class="task-list" style="margin-top:12px">${active.map((project) => `<li><button type="button" data-activity-project="${esc(project.id)}"><span>${esc(project.name)} - ${esc(project.liveSignal?.signal || project.currentStep)}</span><span>${esc(project.last)} - ${esc(project.codexJobId ? "direct job" : project.isLiveCodex ? "workspace relay" : project.basis)}</span></button></li>`).join("") || `<li><button type="button" disabled><span>No active work is reporting movement.</span><span>quiet</span></button></li>`}</ul>
           </section>
           <section class="mode-panel">
             <h2>Recent evidence</h2>
@@ -1479,7 +1607,7 @@
       const workspaces = arr(snapshot.desktop?.codexWorkspaces).length;
       const codex = snapshot.sourceState?.jobs?.enabled === false ? "Codex job provider reports disabled/empty" : `${snapshot.jobs.length} Codex jobs`;
       const desktop = snapshot.desktop?.windowTitle ? "desktop focus observed" : "desktop context partial";
-      return `<strong>Live:</strong> ${snapshot.operations.length} operations, ${codex}, ${workspaces} Codex workspace${workspaces === 1 ? "" : "s"}, ${desktop}. <strong>Fallback:</strong> registry and ActiveBrief inferences are labeled as such.`;
+      return `<strong>Auto-refresh:</strong> every ${Math.round(autoRefreshMs / 1000)}s while you are not typing. <strong>Live:</strong> ${snapshot.operations.length} operations, ${codex}, ${workspaces} Codex workspace${workspaces === 1 ? "" : "s"}, ${desktop}. <strong>Fallback:</strong> registry and ActiveBrief inferences are labeled as such.`;
     }
 
     function rowHtml(project) {
@@ -1495,8 +1623,7 @@
         </div>
         <div class="activity-copy">${esc(project.sentence)}</div>
         <div class="movement">
-          ${movementRail(project)}
-          <div class="meta">${esc(project.counts)} - basis: ${esc(project.basis)}</div>
+          ${liveSignalHtml(project)}
         </div>
         <div class="meta"><strong>${esc(project.last)}</strong><br>${esc(project.lastChange)}</div>
         <div class="row-actions">
@@ -1518,6 +1645,24 @@
       </div>`;
     }
 
+    function liveSignalHtml(project) {
+      const signal = project.liveSignal || {
+        facts: [
+          { label: "State", value: project.stateLabel },
+          { label: "Source", value: project.basis },
+          { label: "Signal", value: project.counts || "partial" },
+        ],
+        signal: project.lastChange || project.sentence,
+        stuck: project.state === "blocked" ? "Blocked source is visible; ask Marcus to verify whether this is stale." : "",
+        tone: project.state === "blocked" ? "blocked" : project.state === "needs_mark" ? "warn" : "warn",
+      };
+      return `<div class="live-signal">
+        <div class="live-signal-head"><strong>${esc(signal.signal)}</strong><span class="pulse ${esc(signal.tone || "warn")}" aria-hidden="true"></span></div>
+        <div class="signal-grid">${arr(signal.facts).slice(0, 3).map((fact) => `<span class="signal-chip"><span>${esc(fact.label)}</span><strong>${esc(fact.value)}</strong></span>`).join("")}</div>
+        <div class="signal-note">${esc(signal.stuck || `${project.counts || "Partial signal"} from ${project.basis}.`)}</div>
+      </div>`;
+    }
+
     function drawerHtml(project) {
       const promptId = `prompt-${project.id}`;
       return `<section class="drawer">
@@ -1534,6 +1679,10 @@
         <div class="drawer-card">
           <h3>Next useful actions</h3>
           <ul class="task-list">${nextMoveButtons(project).map((item) => `<li><button type="button" data-project-prompt="${esc(project.id)}" data-prompt="${esc(item.prompt)}"><span>${esc(item.label)}</span><span>${esc(item.tag)}</span></button></li>`).join("")}</ul>
+        </div>
+        <div class="drawer-card full">
+          <h3>Live evidence</h3>
+          <ul class="task-list">${liveEvidenceItems(project).map((item) => `<li><button type="button" data-project-prompt="${esc(project.id)}" data-prompt="${esc(item.prompt)}"><span>${esc(item.label)}</span><span>${esc(item.tag)}</span></button></li>`).join("")}</ul>
         </div>
         <div class="drawer-card full">
           <h3>Work in flight</h3>
@@ -1553,7 +1702,11 @@
     }
 
     function projectRead(project) {
-      if (project.isLiveCodex) return `${project.currentStep || "Codex work"} is moving. Marcus should watch the whole project outcome, not only this session.`;
+      if (project.isLiveCodex) {
+        const signal = project.liveSignal?.signal || project.lastChange || "Live Codex workspace is visible.";
+        const stuck = project.liveSignal?.stuck ? ` Watch point: ${project.liveSignal.stuck}` : "";
+        return `${project.currentStep || "Codex work"} is the current visible Codex focus. ${signal}.${stuck} Marcus should compare this to the whole project outcome before steering.`;
+      }
       if (project.state === "needs_mark") return `Marcus needs a decision from Mark before the next step can move. The decision cards above should state the exact ask.`;
       if (project.state === "blocked") return `Marcus has an operation record marked blocked. This may be stale if a newer Codex workspace appears for the same project.`;
       return project.objective || project.sentence;
@@ -1563,9 +1716,35 @@
       const source = project.isLiveCodex ? (project.codexJobId ? "Tracked Codex job" : "Desktop workspace signal") : project.basis;
       return [
         { label: "Project outcome", value: project.objective || project.currentStep || "No outcome text returned yet." },
-        { label: "Current pressure", value: project.state === "blocked" ? "Blocked or stale; needs recovery." : project.state === "needs_mark" ? "Waiting on your decision." : project.isLiveCodex ? "Implementation is moving; verification is the next risk." : project.stateLabel },
+        { label: "Current pressure", value: project.liveSignal?.stuck || (project.state === "blocked" ? "Blocked or stale; needs recovery." : project.state === "needs_mark" ? "Waiting on your decision." : project.isLiveCodex ? "Implementation is moving; verification is the next risk." : project.stateLabel) },
         { label: "Source quality", value: `${source}. ${project.counts || "No count returned"}.` },
       ];
+    }
+
+    function liveEvidenceItems(project) {
+      const items = [];
+      if (project.liveSignal?.signal) {
+        items.push({
+          label: project.liveSignal.signal,
+          tag: project.liveSignal.tone === "live" ? "live" : "check",
+          prompt: `Explain this live signal for ${project.name}: ${project.liveSignal.signal}. Tell me what it means and whether it is enough evidence to keep moving.`,
+        });
+      }
+      for (const item of arr(project.changed).slice(0, 6)) {
+        items.push({
+          label: item,
+          tag: /branch|file|commit|changed|event|status/i.test(item) ? "evidence" : "read",
+          prompt: `Use this evidence for ${project.name}: ${item}. Explain what it implies, whether it is stale, and what action I should take.`,
+        });
+      }
+      if (project.liveSignal?.stuck) {
+        items.unshift({
+          label: project.liveSignal.stuck,
+          tag: "watch point",
+          prompt: `This looks like a possible struggle point for ${project.name}: ${project.liveSignal.stuck}. Diagnose whether Codex is stuck, waiting, or just not relaying enough detail.`,
+        });
+      }
+      return items.slice(0, 7);
     }
 
     function nextMoveButtons(project) {
@@ -1725,13 +1904,14 @@
           ${["Overview", "Work / Tasks", "Codex", "Decisions", "Evidence", "Timeline", "Memory"].map((label, index) => `<button class="nav-link ${index === 0 ? "active" : ""}" type="button"><span class="nav-icon">${String(index + 1).padStart(2, "0")}</span><span>${esc(label)}</span></button>`).join("")}
         </nav>
         <section class="mode-stage">
-          <section class="mode-panel"><h2>Currently happening</h2><p>${esc(currentSummary)} Marcus classifies this as ${esc(project.stateLabel)} from ${esc(project.basis)}.</p></section>
+          <section class="mode-panel"><h2>Live now</h2><p>${esc(project.liveSignal?.signal || currentSummary)} Marcus classifies this as ${esc(project.stateLabel)} from ${esc(project.basis)}.</p></section>
+          <section class="mode-panel"><h2>Watch point</h2><p>${esc(project.liveSignal?.stuck || "No struggle point is visible from the current relay snapshot. Ask Marcus to compare this with the project goal before assuming it is fine.")}</p></section>
           <section class="mode-panel"><h2>Work hierarchy</h2><ul class="task-list">${arr(project.tasks).map((task) => `<li><button type="button" data-task="${esc(task.id)}" data-task-project="${esc(project.id)}"><span>${esc(task.title)}</span><span>${esc(task.status)} - ${esc(task.worker)}</span></button></li>`).join("")}</ul></section>
           <section class="mode-panel"><h2>Project command</h2><p>Use this when the current path needs steering, a deeper plan, or a verification pass.</p><textarea data-codex-input="${esc(project.id)}" placeholder="Prompt Marcus or Codex about the whole project."></textarea><div class="row-actions" style="justify-content:start;flex-wrap:wrap;margin-top:10px"><button class="btn primary" type="button" data-codex-send="${esc(project.id)}" data-mode="steer">Steer Codex</button><button class="btn" type="button" data-codex-send="${esc(project.id)}" data-mode="append">Append context</button><button class="btn" type="button" data-project-plan="${esc(project.id)}">Plan deeper</button><button class="btn" type="button" data-project-reroute="${esc(project.id)}">Check direction</button></div></section>
         </section>
         <aside class="mode-aside">
           <section class="mode-panel"><h2>Marcus recommendation</h2><p>${esc(project.decision?.recommendation || project.currentStep || "Continue monitoring until stronger evidence appears.")}</p></section>
-          <section class="mode-panel"><h2>Evidence</h2><p>${esc(arr(project.evidence).join("; ") || "No evidence references returned.")}</p></section>
+          <section class="mode-panel"><h2>Live evidence</h2><ul class="insight-list">${liveEvidenceItems(project).slice(0, 5).map((item) => `<li><strong>${esc(item.tag)}</strong><span>${esc(item.label)}</span></li>`).join("") || `<li><strong>none</strong><span>No evidence references returned.</span></li>`}</ul></section>
         </aside>
       </section>`;
       bindModeButtons();
@@ -1904,6 +2084,10 @@
       if (event.code === "Space") window.dispatchEvent(new MouseEvent("mouseup"));
     });
     window.addEventListener("popstate", () => { applyRoute(); render(); });
+    window.setInterval(() => {
+      if (document.visibilityState !== "visible" || activeTextInput() || voiceHeld) return;
+      load();
+    }, autoRefreshMs);
     document.querySelectorAll("[data-nav]").forEach((button) => {
       button.addEventListener("click", () => {
         const nextMode = button.dataset.nav === "tracker" ? "projects" : button.dataset.nav;
