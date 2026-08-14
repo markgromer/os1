@@ -1,6 +1,57 @@
 import { isStrongConfirmation } from './approval_policy.js';
 import { createActivityEvent, createApproval, createBlocker, normalizeApproval, nowIso, safeString } from '../operations/operation_types.js';
 
+function actionLabel(value) {
+  return safeString(value, 300) || 'execute the next step';
+}
+
+function buildDecisionPackage({ operation, step, classification }) {
+  const action = actionLabel(classification.action);
+  const project = safeString(operation.projectName, 300) || safeString(operation.projectId, 160) || safeString(operation.projectRegistryId, 160);
+  const target = safeString(step?.input?.approvalTarget, 300);
+  const exactTarget = target ? `${action} on ${target}` : action;
+  const highImpact = ['high', 'critical'].includes(classification.riskLevel);
+  return {
+    statement: `Decide whether Marcus should ${exactTarget}.`,
+    project,
+    objective: safeString(operation.objective, 2_000),
+    whyNeeded: classification.reason || `Marcus needs authority before ${exactTarget}.`,
+    recommendation: highImpact
+      ? 'Approve only if the exact target, rollback path, and current evidence match Mark\'s intent.'
+      : 'Approve if this remains the intended next step and no constraints have changed.',
+    supportingEvidence: [
+      { type: 'operation', id: operation.id, title: operation.title, status: operation.status },
+      { type: 'step', id: step?.id || '', title: step?.title || '', provider: step?.provider || '', toolName: step?.toolName || step?.type || '' },
+      { type: 'policy', riskLevel: classification.riskLevel, approvalRequirement: classification.approvalRequirement, reason: classification.reason },
+    ],
+    alternativesConsidered: [
+      'Approve the exact action.',
+      'Defer until more evidence is collected.',
+      'Decline and keep the operation blocked.',
+      'Modify the instructions and re-plan the operation.',
+    ],
+    benefit: 'Allows Marcus to continue the durable operation instead of leaving valuable work blocked.',
+    cost: highImpact ? 'Consumes authority for a consequential action and may require rollback work if the target is wrong.' : 'Consumes time and execution attention.',
+    risk: classification.reason || `${classification.riskLevel} risk action.`,
+    consequenceOfWaiting: 'The operation remains waiting for approval and Marcus will not execute this step.',
+    reversibility: classification.reversibility,
+    rollbackMethod: highImpact
+      ? 'Use provider read-back, retained operation artifacts, and the previous known target state to prepare a separate rollback operation if needed.'
+      : 'Cancel or retry the operation step; retained activity and artifacts remain auditable.',
+    authorityLevel: classification.approvalRequirement,
+    actions: [
+      'Approve',
+      'Approve with conditions',
+      'Modify instructions',
+      'Ask Marcus to decide',
+      'Discuss',
+      'Defer',
+      'Decline',
+      'Cancel underlying work',
+    ],
+  };
+}
+
 export class ApprovalService {
   constructor({ store }) {
     this.store = store;
@@ -20,10 +71,11 @@ export class ApprovalService {
       riskLevel: classification.riskLevel,
       reason: classification.reason,
       status: 'pending',
+      decision: buildDecisionPackage({ operation, step, classification }),
     });
   }
 
-  async approve(businessKey, operationId, approvalId, { approvedBy = 'mark', message = '' } = {}) {
+  async approve(businessKey, operationId, approvalId, { approvedBy = 'mark', message = '', conditions = [] } = {}) {
     const snapshot = await this.store.get(businessKey, operationId);
     const expiring = snapshot?.approvals?.find((approval) => approval.id === approvalId);
     if (expiring?.status === 'pending' && expiring.expiresAt && Date.parse(expiring.expiresAt) <= Date.now()) {
@@ -57,6 +109,14 @@ export class ApprovalService {
         approvedBy: safeString(approvedBy, 200) || 'mark',
         approvalMessage: safeString(message, 2_000),
         strongConfirmation: confirmed,
+        decision: {
+          ...current.decision,
+          outcome: Array.isArray(conditions) && conditions.length ? 'approved_with_conditions' : 'approved',
+          decidedAt: nowIso(),
+          decidedBy: safeString(approvedBy, 200) || 'mark',
+          decisionReasoning: safeString(message, 2_000),
+          conditions,
+        },
       });
       const step = operation.steps.find((item) => item.id === current.stepId);
       if (step && step.status === 'waiting_for_approval') {
@@ -65,7 +125,7 @@ export class ApprovalService {
       }
       operation.activityLog.push({
         ...createActivityEvent({ operationId, stepId: current.stepId, type: 'approval_approved', actor: approvedBy,
-        message: `Approval granted for ${current.action}.`, data: { approvalId, riskLevel: current.riskLevel }, timestamp: nowIso(),
+        message: `Approval granted for ${current.action}.`, data: { approvalId, riskLevel: current.riskLevel, decisionOutcome: operation.approvals[index].decision.outcome }, timestamp: nowIso(),
       }) });
       if (operation.status === 'waiting_for_approval') operation.status = 'queued';
       return operation;
@@ -84,6 +144,13 @@ export class ApprovalService {
         rejectedAt: nowIso(),
         approvedBy: safeString(rejectedBy, 200) || 'mark',
         approvalMessage: safeString(message, 2_000),
+        decision: {
+          ...current.decision,
+          outcome: 'declined',
+          decidedAt: nowIso(),
+          decidedBy: safeString(rejectedBy, 200) || 'mark',
+          decisionReasoning: safeString(message, 2_000),
+        },
       });
       const step = operation.steps.find((item) => item.id === current.stepId);
       if (step) {

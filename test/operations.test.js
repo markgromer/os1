@@ -221,6 +221,60 @@ test('runtime policy overrides model risk and always gates high and critical act
   assert.equal(checkpoint.approvalRequired, true);
 });
 
+test('approval requests prepare auditable Marcus decision packages and persist outcomes', async () => {
+  await withEngine(async (engine) => {
+    let operation = await engine.createOperation('personal', {
+      title: 'Deploy exact target',
+      objective: 'Deploy the reviewed Worker version only after Mark approves the exact target.',
+      projectName: 'Marcus Demo',
+    });
+    operation = await engine.planOperation('personal', operation.id, {
+      steps: [{
+        title: 'Deploy Worker version',
+        type: 'internal',
+        provider: 'internal',
+        toolName: 'deploy_worker_version',
+        sequence: 1,
+        input: { environment: 'production', approvalTarget: 'worker-version-123' },
+      }],
+    });
+    operation = await engine.startOperation('personal', operation.id, { runCycle: true });
+    const approval = operation.approvals[0];
+    assert.equal(approval.status, 'pending');
+    assert.equal(approval.decision.statement, 'Decide whether Marcus should deploy_worker_version:worker-version-123 on worker-version-123.');
+    assert.equal(approval.decision.project, 'Marcus Demo');
+    assert.match(approval.decision.objective, /Deploy the reviewed Worker version/);
+    assert.match(approval.decision.whyNeeded, /requires explicit/i);
+    assert.match(approval.decision.recommendation, /exact target/i);
+    assert.equal(approval.decision.reversibility, 'limited');
+    assert.equal(approval.decision.authorityLevel, 'explicit');
+    assert.ok(approval.decision.supportingEvidence.some((item) => item.type === 'operation' && item.id === operation.id));
+    assert.ok(approval.decision.actions.includes('Approve with conditions'));
+
+    operation = await engine.approveOperationStep('personal', operation.id, approval.id, {
+      message: 'Approve only if read-back still matches version 123.',
+      conditions: ['Verify provider read-back before reporting completion.'],
+      runCycle: false,
+    });
+    const approved = operation.approvals[0];
+    assert.equal(approved.status, 'approved');
+    assert.equal(approved.decision.outcome, 'approved_with_conditions');
+    assert.deepEqual(approved.decision.conditions, ['Verify provider read-back before reporting completion.']);
+    assert.match(operation.activityLog.find((event) => event.type === 'approval_approved').data.decisionOutcome, /approved_with_conditions/);
+
+    let rejectedOperation = await engine.createOperation('personal', { title: 'Send draft', objective: 'Send only if approved.' });
+    rejectedOperation = await engine.planOperation('personal', rejectedOperation.id, {
+      steps: [{ title: 'Send client message', type: 'internal', provider: 'internal', toolName: 'send_client_communication', sequence: 1 }],
+    });
+    rejectedOperation = await engine.startOperation('personal', rejectedOperation.id, { runCycle: true });
+    rejectedOperation = await engine.rejectOperationStep('personal', rejectedOperation.id, rejectedOperation.approvals[0].id, {
+      message: 'Do not send this draft.',
+    });
+    assert.equal(rejectedOperation.approvals[0].decision.outcome, 'declined');
+    assert.match(rejectedOperation.approvals[0].decision.decisionReasoning, /Do not send/);
+  });
+});
+
 test('critical approvals require strong confirmation', async () => {
   await withEngine(async (engine) => {
     let operation = await engine.createOperation('personal', { title: 'Critical', objective: 'Critical action' });

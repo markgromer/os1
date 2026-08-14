@@ -72,6 +72,11 @@ export const PROVIDER_RESULT_STATUSES = Object.freeze([
   'completed', 'started', 'queued', 'running', 'waiting_external', 'waiting', 'failed', 'cancelled', 'paused', 'unknown',
 ]);
 
+export const DECISION_OUTCOMES = Object.freeze([
+  'pending', 'approved', 'approved_with_conditions', 'modified', 'marcus_decide',
+  'discuss', 'deferred', 'declined', 'cancelled',
+]);
+
 const SECRET_PATTERNS = [
   /(["']?(?:api[_-]?key|token|secret|password|passwd|private[_-]?key|client[_-]?secret)["']?\s*[:=]\s*["'])[^"'\r\n]*(?=["'])/gi,
   /(authorization\s*[:=]\s*(?:bearer\s+)?)[^\s,;]+/gi,
@@ -191,6 +196,33 @@ function normalizeStringArray(value, maxItems = 50, maxChars = 1_000) {
   return output;
 }
 
+function normalizeDecisionPackage(value = {}) {
+  const raw = safeObject(value);
+  return {
+    statement: redactSecrets(raw.statement || raw.clearDecisionStatement || '', 1_000).trim(),
+    project: redactSecrets(raw.project || raw.projectName || '', 300).trim(),
+    objective: redactSecrets(raw.objective || '', 2_000).trim(),
+    whyNeeded: redactSecrets(raw.whyNeeded || raw.reason || '', 2_000).trim(),
+    recommendation: redactSecrets(raw.recommendation || '', 2_000).trim(),
+    supportingEvidence: (Array.isArray(raw.supportingEvidence) ? raw.supportingEvidence : []).slice(0, 20).map((item) => sanitizeStructured(item, 5_000)),
+    alternativesConsidered: normalizeStringArray(raw.alternativesConsidered || raw.alternatives, 10, 1_000),
+    benefit: redactSecrets(raw.benefit || '', 1_000).trim(),
+    cost: redactSecrets(raw.cost || '', 1_000).trim(),
+    risk: redactSecrets(raw.risk || '', 1_000).trim(),
+    consequenceOfWaiting: redactSecrets(raw.consequenceOfWaiting || '', 1_000).trim(),
+    reversibility: safeString(raw.reversibility, 100),
+    rollbackMethod: redactSecrets(raw.rollbackMethod || raw.rollback || '', 1_000).trim(),
+    deadline: safeIso(raw.deadline),
+    authorityLevel: safeString(raw.authorityLevel, 120),
+    actions: normalizeStringArray(raw.actions, 10, 300),
+    outcome: safeEnum(raw.outcome, DECISION_OUTCOMES, 'pending'),
+    decidedAt: safeIso(raw.decidedAt),
+    decidedBy: safeString(raw.decidedBy, 200),
+    decisionReasoning: redactSecrets(raw.decisionReasoning || '', 2_000).trim(),
+    conditions: normalizeStringArray(raw.conditions, 10, 1_000),
+  };
+}
+
 export function normalizeActivityEvent(input = {}, defaults = {}) {
   const raw = safeObject(input);
   const timestamp = safeIso(raw.timestamp || raw.createdAt) || nowIso();
@@ -242,6 +274,7 @@ export function normalizeApproval(input = {}, defaults = {}) {
     approvalMessage: redactSecrets(raw.approvalMessage ?? '', 2_000).trim(),
     expiresAt: safeIso(raw.expiresAt),
     strongConfirmation: raw.strongConfirmation === true,
+    decision: normalizeDecisionPackage(raw.decision),
   };
 }
 
