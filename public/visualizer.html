@@ -885,12 +885,47 @@
       return activeDesktopMatchesWorkspace(item, desktop) ? (desktop?.receivedAt || new Date().toISOString()) : item?.modifiedAt;
     }
 
+    function workspaceTopicFromSignals(item) {
+      const branch = text(item?.gitBranch);
+      const commits = arr(item?.gitRecentCommits).map(text).filter(Boolean);
+      const changed = arr(item?.gitStatus).map((entry) => text(entry?.file)).filter(Boolean);
+      const fileCount = Number(item?.gitStatusCount || changed.length || 0);
+      const projectText = `${text(item?.projectName)} ${text(item?.folderName)} ${text(item?.workspacePath)}`.toLowerCase();
+      const haystack = [projectText, branch, ...commits, ...changed].join(" ").toLowerCase();
+      const isPoopsites = /poopsites|poopsite|scoop/i.test(projectText);
+      const hubSignals = /hub|admin\/nurture|admin\.module\.css|reggie|nurture\/page|site card|mission|va|prompt composer|connected|connection/i.test(haystack);
+      if (isPoopsites && hubSignals) {
+        return {
+          kind: "hub",
+          title: "Connect and repair the Poopsites hub",
+          shortTitle: "Poopsites hub connection",
+          pressure: fileCount >= 20
+            ? `Large hub/admin change set: ${fileCount} changed files. Treat this as an integration/debugging pass, not a one-file cleanup.`
+            : "Hub/admin files are moving. Marcus should identify what is connected, what is failing, and what Mark can do next.",
+          signal: fileCount >= 20
+            ? `${fileCount} changed files across the hub/admin surface`
+            : "Hub/admin surface is changing",
+        };
+      }
+      if (/google/i.test(projectText) && /oauth|credential|calendar|drive|analytics|token/i.test(haystack)) {
+        return {
+          kind: "oauth",
+          title: "Configure Google OAuth in Settings",
+          shortTitle: "Google OAuth setup",
+          pressure: "This is a setup blocker. Marcus should open Settings, show the missing OAuth inputs, and stop making this a dead-end card.",
+          signal: "Google integration setup evidence is visible",
+        };
+      }
+      return null;
+    }
+
     function signalSummaryFromWorkspace(item, desktop) {
       const fileCount = Number(item?.gitStatusCount || arr(item?.gitStatus).length || 0);
       const branch = branchLabel(item?.gitBranch);
       const firstFile = text(arr(item?.gitStatus)[0]?.file);
       const recentCommit = text(arr(item?.gitRecentCommits)[0]);
       const activeDesktop = activeDesktopMatchesWorkspace(item, desktop);
+      const topic = workspaceTopicFromSignals(item);
       const recency = recencyBucket(effectiveWorkspaceModifiedAt(item, desktop));
       const reviewReady = !activeDesktop && /^main$|^master$/i.test(branch) && fileCount === 0 && Boolean(recentCommit);
       const facts = [
@@ -900,13 +935,15 @@
       ];
       const signal = activeDesktop
         ? `Foreground VS Code focus is on ${text(item?.projectName || item?.folderName, "this workspace")} now.`
+        : topic ? `${topic.shortTitle}: ${topic.signal}.`
         : firstFile ? `Latest file signal: ${firstFile}` : recentCommit ? `Latest commit: ${recentCommit}` : "Workspace is visible, but no file/event detail is attached yet.";
       const stuck = activeDesktop
         ? "Foreground focus beats stale session file timestamps. Marcus should treat this as current PC activity."
+        : topic ? topic.pressure
         : reviewReady
         ? "Commit is clean on the main branch. This looks ready for your eyes, not like Codex is still typing."
         : !recency.fresh ? "This may be stale; ask Marcus to verify whether Codex is still active here." : fileCount === 0 ? "No file movement yet; useful to ask what Codex is reading or waiting on." : "";
-      return { facts, signal, stuck, tone: activeDesktop || reviewReady ? "live" : recency.tone, reviewReady, activeDesktop };
+      return { facts, signal, stuck, tone: activeDesktop || reviewReady || topic ? "live" : recency.tone, reviewReady, activeDesktop, topic };
     }
 
     function signalSummaryFromJob(job) {
@@ -947,6 +984,8 @@
       const commits = arr(item?.gitRecentCommits).map(text).filter(Boolean);
       const changed = arr(item?.gitStatus).map((entry) => text(entry?.file)).filter(Boolean);
       const haystack = [branch, ...commits, ...changed, text(item?.folderName), text(item?.projectName)].join(" ");
+      const topic = workspaceTopicFromSignals(item);
+      if (topic) return topic.title;
       if (/sng|price|sync/i.test(haystack)) return "Diagnose SNG price sync";
       if (branch && !/^main$|^master$/i.test(branch)) return branch.replace(/^codex[/-]/i, "").replace(/[-_]+/g, " ");
       if (commits[0]) return commitTitle(commits[0]);
@@ -1065,7 +1104,7 @@
         codexSessionId: text(item?.sessionId),
         name,
         state: reviewReady ? "complete" : "moving",
-        stateLabel: reviewReady ? "Ready to review" : liveSignal.activeDesktop ? "Active now" : liveSignal.tone === "live" && !liveSignal.stuck ? "Live Codex" : "Check status",
+        stateLabel: reviewReady ? "Ready to review" : liveSignal.topic?.kind === "hub" ? "Hub issue" : liveSignal.activeDesktop ? "Active now" : liveSignal.tone === "live" && !liveSignal.stuck ? "Live Codex" : "Check status",
         basis: reviewReady ? "workspace commit signal" : "live Codex workspace",
         sentence: reviewReady ? `Latest commit is ready for review: ${commitTitle(arr(item?.gitRecentCommits)[0]) || task}.` : task || "Active Codex session detected.",
         liveSignal,
@@ -1079,9 +1118,11 @@
         currentStep: task,
         changed: [
           liveSignal.activeDesktop ? `Active desktop focus: ${text(desktop?.windowTitle)}` : "",
+          liveSignal.topic ? `Project focus: ${liveSignal.topic.title}` : "",
           ...changed,
         ].filter(Boolean).length ? [
           liveSignal.activeDesktop ? `Active desktop focus: ${text(desktop?.windowTitle)}` : "",
+          liveSignal.topic ? `Project focus: ${liveSignal.topic.title}` : "",
           ...changed,
         ].filter(Boolean) : ["Recent Codex session metadata observed"],
         tasks: [
@@ -1789,6 +1830,9 @@
 
     function projectRead(project) {
       if (project.isLiveCodex) {
+        if (project.liveSignal?.topic?.kind === "hub") {
+          return `${project.liveSignal.topic.title} is the current visible work. ${project.liveSignal.signal} ${project.liveSignal.topic.pressure} Marcus should explain what is failing in the hub connection, what changed in the admin surface, and what you can approve, test, or redirect next.`;
+        }
         const signal = project.liveSignal?.signal || project.lastChange || "Live Codex workspace is visible.";
         const stuck = project.liveSignal?.stuck ? ` Watch point: ${project.liveSignal.stuck}` : "";
         return `${project.currentStep || "Codex work"} is the current visible Codex focus. ${signal}.${stuck} Marcus should compare this to the whole project outcome before steering.`;
@@ -1814,13 +1858,18 @@
         const signal = project.liveSignal?.signal || project.lastChange || "Codex reported completion without a useful summary, because of course it did.";
         return `${signal} ${changedFiles ? `${changedFiles} file-level signal${changedFiles === 1 ? "" : "s"} came back with it.` : "No file list came back, so Marcus is treating the summary as the main receipt."}`;
       }
+      if (project.liveSignal?.topic?.kind === "hub") {
+        return `This looks like active Poopsites hub connection/workbench work, not the old "admin intake tab" cleanup label. Marcus is seeing broad hub/admin movement and should turn that into a blocker, verification path, or direct Reggie prompt instead of pretending one file name explains the project.`;
+      }
       if (project.isLiveCodex) return `Codex is still visible in the workspace. This is live evidence, not a completion receipt yet. Useful, but not champagne-worthy.`;
       if (project.state === "needs_mark") return "This is waiting on a decision. The important change is that Marcus cannot safely continue until you choose a path.";
       return project.liveSignal?.signal || project.lastChange || project.sentence || "No useful change summary is attached yet.";
     }
 
     function changeItems(project) {
-      const basePrompt = `Summarize what changed for ${project.name} in plain English. Include what was updated, where it likely landed, what still needs review, and what I should inspect first.`;
+      const basePrompt = project.liveSignal?.topic?.kind === "hub"
+        ? `Summarize the Poopsites hub connection/workbench work in plain English. Include what changed in the hub/admin surface, what appears broken or unfinished, whether Reggie can receive site-specific prompts yet, and what Mark should inspect first.`
+        : `Summarize what changed for ${project.name} in plain English. Include what was updated, where it likely landed, what still needs review, and what I should inspect first.`;
       const items = [
         {
           label: project.state === "complete" ? "Give me the review briefing" : "Summarize the update",
@@ -1874,6 +1923,11 @@
         { label: "Explain the decision", tag: "Marcus", prompt: "Explain the exact decision I need to make, the options, risks, and what happens if I wait." },
         { label: "Show evidence", tag: "Review", prompt: "Show the evidence behind this decision and identify what is missing or stale." },
         { label: "Recommend one path", tag: "Decide", prompt: "Recommend one path and tell me why it is the best move for the whole project." },
+      ];
+      if (project.liveSignal?.topic?.kind === "hub") return [
+        { label: "Explain hub connection issue", tag: "Blocker", prompt: "Explain exactly what is failing or unfinished in the Poopsites/Reggie hub connection. Separate UI polish, auth/token issues, missing backend endpoints, and real user-facing blockers." },
+        { label: "Map the VA workflow", tag: "Plan", prompt: "Map the intended VA/user workflow through the Poopsites hub. Show what actions should be possible from the page and which are currently wired, copied, mocked, or missing." },
+        { label: "Verify Reggie prompt path", tag: "Verify", prompt: "Build a verification checklist for sending a site-specific prompt into Reggie from the hub. Include current evidence, required API endpoint, token requirements, and pass/fail checks." },
       ];
       if (project.isLiveCodex) return [
         { label: "Summarize current Codex progress", tag: "Marcus", prompt: "Summarize what Codex appears to be doing, what changed, and what evidence supports that." },
