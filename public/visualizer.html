@@ -418,6 +418,8 @@
       padding: 18px;
       border-bottom: 1px solid var(--line);
     }
+    .mode-kicker { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; }
+    .close-mode { min-width: 42px; height: 36px; padding: 0 12px; font-size: 18px; line-height: 1; }
     .mode-head h1 { margin: 0; font-size: 30px; }
     .mode-head p { margin: 7px 0 0; color: var(--muted); line-height: 1.4; }
     .mode-body { display: grid; grid-template-columns: 190px minmax(0, 1fr) 300px; gap: 0; min-height: 0; }
@@ -1182,7 +1184,10 @@
     function projectsForView() {
       if (viewMode === "review") return snapshot.projects.filter((project) => ["needs_mark", "verifying", "complete"].includes(project.state));
       if (viewMode === "activity") return snapshot.projects.filter((project) => project.isLiveCodex || ["moving", "blocked", "losing_thread"].includes(project.state));
-      if (viewMode === "settings") return snapshot.projects.filter((project) => ["observed desktop focus", "live Codex workspace", "observed Codex job", "observed operation"].includes(project.basis));
+      if (viewMode === "settings") return snapshot.projects.filter((project) => {
+        const haystack = `${project.name} ${project.basis} ${project.sentence} ${project.currentStep} ${arr(project.evidence).join(" ")}`.toLowerCase();
+        return /settings|credential|oauth|integration|routing|provider|desktop|codex|bridge/.test(haystack);
+      });
       return snapshot.projects;
     }
 
@@ -1346,8 +1351,8 @@
       }
       const currentSummary = project.objective === project.currentStep ? project.objective : `${project.objective} ${project.currentStep}.`;
       els.projectMode.innerHTML = `<header class="mode-head">
-        <div><h1>${esc(project.name)}</h1><p>${esc(project.sentence)}</p></div>
-        <div class="row-actions"><button class="btn" type="button" data-back>Global tracker</button><button class="btn primary" type="button" data-project-talk>Talk to MARCUS</button></div>
+        <div><div class="mode-kicker"><span>Project control</span></div><h1>${esc(project.name)}</h1><p>${esc(project.sentence)}</p></div>
+        <div class="row-actions"><button class="btn close-mode" type="button" data-back aria-label="Close project control">x</button><button class="btn" type="button" data-back>Global tracker</button><button class="btn primary" type="button" data-project-talk>Talk to MARCUS</button></div>
       </header>
       <section class="mode-body">
         <nav class="mode-nav" aria-label="Project sections">
@@ -1373,22 +1378,51 @@
         els.taskMode.innerHTML = `<div class="empty">Task link could not be resolved from the current live snapshot.</div>`;
         return;
       }
+      const settingsTask = isSettingsTask(project, task);
       els.taskMode.innerHTML = `<header class="mode-head">
-        <div><h1>${esc(task.title)}</h1><p>${esc(project.name)} - ${esc(task.status)} - ${esc(task.worker)}</p></div>
-        <div class="row-actions"><button class="btn" type="button" data-back-project="${esc(project.id)}">Project</button><button class="btn" type="button" data-back>Global tracker</button></div>
+        <div><div class="mode-kicker"><span>Task detail</span><span>${settingsTask ? "Settings signal" : esc(project.basis)}</span></div><h1>${esc(task.title)}</h1><p>${esc(project.name)} - ${esc(task.status)} - ${esc(task.worker)}</p></div>
+        <div class="row-actions"><button class="btn close-mode" type="button" data-back aria-label="Close task detail">x</button><button class="btn" type="button" data-back-project="${esc(project.id)}">Project</button><button class="btn" type="button" data-back>Global tracker</button></div>
       </header>
       <section class="mode-body">
         <nav class="mode-nav">${["Summary", "Activity", "Evidence", "Controls"].map((label, index) => `<button class="nav-link ${index === 0 ? "active" : ""}" type="button"><span class="nav-icon">${index + 1}</span><span>${esc(label)}</span></button>`).join("")}</nav>
         <section class="mode-stage">
-          <section class="mode-panel"><h2>Status narrative</h2><p>${esc(task.title)} is ${esc(task.status)}. Marcus does not treat this as complete unless evidence, verification, and Mark acceptance support that conclusion.</p></section>
-          <section class="mode-panel"><h2>Readable progression</h2><ol>${["Marcus prepared context", `${task.worker} owns current step`, "Verification remains distinct from completion", "Mark can redirect or ask for review"].map((item) => `<li>${esc(item)}</li>`).join("")}</ol></section>
+          <section class="mode-panel"><h2>Status narrative</h2><p>${esc(taskNarrative(project, task))}</p></section>
+          <section class="mode-panel"><h2>Readable progression</h2><ol>${taskProgression(project, task).map((item) => `<li>${esc(item)}</li>`).join("")}</ol></section>
         </section>
         <aside class="mode-aside">
-          <section class="mode-panel"><h2>Task controls</h2><div class="row-actions" style="justify-content:start;flex-wrap:wrap"><button class="btn">Talk</button><button class="btn">Redirect</button><button class="btn">Request review</button><button class="btn warn">Verify</button></div></section>
+          <section class="mode-panel"><h2>Task controls</h2><div class="row-actions" style="justify-content:start;flex-wrap:wrap">${taskControlButtons(settingsTask)}</div></section>
           <section class="mode-panel"><h2>Evidence</h2><p>${esc(arr(project.evidence).join("; ") || "No task-specific evidence returned.")}</p></section>
         </aside>
       </section>`;
       bindModeButtons();
+    }
+
+    function isSettingsTask(project, task) {
+      return /settings|credential|oauth|integration|routing|provider/i.test(`${project?.name} ${project?.basis} ${project?.sentence} ${task?.title} ${task?.status} ${arr(project?.evidence).join(" ")}`);
+    }
+
+    function taskNarrative(project, task) {
+      if (isSettingsTask(project, task)) {
+        return `${task.title} is a configuration signal, not normal project work. Marcus should either open the relevant settings path, explain exactly what credential or account connection is missing, or let you dismiss it if the live source is stale.`;
+      }
+      return `${task.title} is ${task.status}. Marcus does not treat this as complete unless evidence, verification, and Mark acceptance support that conclusion.`;
+    }
+
+    function taskProgression(project, task) {
+      if (isSettingsTask(project, task)) {
+        return [
+          "Marcus detected the configuration signal from ActiveBrief or system health.",
+          "The exact source is listed under Evidence.",
+          "Open settings view to inspect related source-backed signals.",
+          "Ask Marcus to explain the missing credential, reconnect path, or why this signal is stale.",
+        ];
+      }
+      return ["Marcus prepared context", `${task.worker} owns current step`, "Verification remains distinct from completion", "Mark can redirect or ask for review"];
+    }
+
+    function taskControlButtons(settingsTask) {
+      const settingsButton = settingsTask ? `<button class="btn primary" type="button" data-task-settings>Open settings view</button>` : "";
+      return `${settingsButton}<button class="btn" type="button" data-task-talk>Talk</button><button class="btn" type="button" data-task-explain>Explain exact ask</button><button class="btn" type="button" data-task-review>Request review</button><button class="btn warn" type="button" data-back>Close</button>`;
     }
 
     function bindModeButtons() {
@@ -1396,6 +1430,22 @@
       document.querySelectorAll("[data-back-project]").forEach((button) => button.addEventListener("click", () => openProject(button.dataset.backProject)));
       document.querySelectorAll("[data-project-talk]").forEach((button) => button.addEventListener("click", () => talkToProject(activeProjectId)));
       document.querySelectorAll("[data-task]").forEach((button) => button.addEventListener("click", () => openTask(button.dataset.taskProject, button.dataset.task)));
+      document.querySelectorAll("[data-task-settings]").forEach((button) => button.addEventListener("click", openSettingsView));
+      document.querySelectorAll("[data-task-talk]").forEach((button) => button.addEventListener("click", () => talkToActiveTask("What is happening here, and what can I do next?")));
+      document.querySelectorAll("[data-task-explain]").forEach((button) => button.addEventListener("click", () => talkToActiveTask("Explain the exact ask. Tell me what is missing, where to fix it, and how Marcus will know it is resolved.")));
+      document.querySelectorAll("[data-task-review]").forEach((button) => button.addEventListener("click", () => talkToActiveTask("Review this signal against live evidence. If it is stale, tell me why and what should be dismissed or refreshed.")));
+    }
+
+    function openSettingsView() {
+      viewMode = "settings";
+      backToTracker();
+    }
+
+    function talkToActiveTask(prompt) {
+      const project = snapshot.projects.find((item) => item.id === activeProjectId) || snapshot.projects[0];
+      const task = arr(project?.tasks).find((item) => item.id === activeTaskId) || arr(project?.tasks)[0];
+      if (!project || !task) return;
+      talkToProject(project.id, `${prompt} Task: ${task.title}. Status: ${task.status}. Evidence: ${arr(project.evidence).join("; ") || "none"}.`);
     }
 
     function talkToProject(id, prompt = "") {
@@ -1471,6 +1521,11 @@
       els.voiceButton.textContent = "Hold Space";
     });
     window.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && document.body.dataset.mode !== "tracker") {
+        event.preventDefault();
+        backToTracker();
+        return;
+      }
       if (event.code === "Space" && event.target === document.body && !voiceHeld) {
         event.preventDefault();
         els.voiceButton.dispatchEvent(new MouseEvent("mousedown"));
