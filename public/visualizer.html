@@ -717,11 +717,11 @@
     const phases = ["Understood", "Planned", "Building", "Verifying", "Approval", "Complete"];
     const groupOrder = [
       ["needs", "Needs you"],
+      ["complete", "Ready for your eyes"],
       ["motion", "In motion"],
       ["watching", "Watching"],
       ["risk", "Losing momentum"],
       ["parked", "Intentionally parked"],
-      ["complete", "Ready for your eyes"],
     ];
     const stateIcons = {
       moving: ">",
@@ -1360,7 +1360,7 @@
     }
 
     function rankState(state) {
-      return ({ needs_mark: 0, blocked: 1, moving: 2, verifying: 3, losing_thread: 4, monitoring: 5, quiet: 6, parked: 7, complete: 8, unknown: 9 })[state] ?? 9;
+      return ({ needs_mark: 0, complete: 1, verifying: 2, blocked: 3, moving: 4, losing_thread: 5, monitoring: 6, quiet: 7, parked: 8, unknown: 9 })[state] ?? 9;
     }
 
     function projectSortRank(project) {
