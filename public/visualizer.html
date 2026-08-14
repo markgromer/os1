@@ -721,7 +721,7 @@
       ["watching", "Watching"],
       ["risk", "Losing momentum"],
       ["parked", "Intentionally parked"],
-      ["complete", "Recently completed"],
+      ["complete", "Ready for your eyes"],
     ];
     const stateIcons = {
       moving: ">",
@@ -884,8 +884,10 @@
         { label: "Events", value: `${Number(job?.eventCount || 0)}` },
       ];
       const signal = text(job?.diffSummary || job?.finalOutput || job?.error || arr(job?.changedFiles)[0] || "Codex job is visible, but no detailed event text is attached.");
-      const stuck = raw === "failed" ? text(job?.error || "Codex job failed; inspect or reroute.") : !recency.fresh ? "The job has not reported recently; verify whether it is still moving." : files ? `${files} changed file${files === 1 ? "" : "s"} reported by the job.` : "";
-      return { facts, signal, stuck, tone: raw === "failed" ? "blocked" : recency.tone };
+      const stuck = raw === "completed"
+        ? "Codex says it is done. Marcus still wants a human eyeball pass, because apparently we enjoy not shipping mysteries."
+        : raw === "failed" ? text(job?.error || "Codex job failed; inspect or reroute.") : !recency.fresh ? "The job has not reported recently; verify whether it is still moving." : files ? `${files} changed file${files === 1 ? "" : "s"} reported by the job.` : "";
+      return { facts, signal, stuck, tone: raw === "completed" ? "live" : raw === "failed" ? "blocked" : recency.tone };
     }
 
     function displayStateLabel(project) {
@@ -988,7 +990,7 @@
         state,
         stateLabel: raw === "completed" ? "Ready to verify" : raw === "queued" ? "Queued" : raw === "failed" ? "Failed" : "Codex job",
         basis: "observed Codex job",
-        sentence: raw === "completed" ? "Ready for Marcus verification." : `${text(job?.objective || job?.title || "Codex work")} is ${raw}.`,
+        sentence: raw === "completed" ? "Codex finished the coding pass; this is ready for review." : `${text(job?.objective || job?.title || "Codex work")} is ${raw}.`,
         liveSignal,
         livePhase: phaseFor({ state, currentStep: text(job?.status, "Codex status"), objective: text(job?.objective || job?.title || name), lastChange: liveSignal.signal }),
         last: age(job?.updatedAt || job?.startedAt),
@@ -1001,7 +1003,8 @@
         changed: [liveSignal.signal, liveSignal.stuck, ...arr(job?.changedFiles).slice(0, 5).map((file) => `Changed file: ${file}`)].filter(Boolean),
         tasks: [
           { id: `${idFrom(job?.jobId || name)}-run`, title: "Codex run", status: raw, worker: "Codex" },
-          { id: `${idFrom(job?.jobId || name)}-verify`, title: "Marcus verification", status: raw === "completed" ? "queued" : "waiting", worker: "MARCUS" },
+          { id: `${idFrom(job?.jobId || name)}-review`, title: "Mark eyeball pass", status: raw === "completed" ? "ready" : "waiting", worker: "Mark" },
+          { id: `${idFrom(job?.jobId || name)}-verify`, title: "Marcus verification", status: raw === "completed" ? "ready" : "waiting", worker: "MARCUS" },
         ],
         evidence: [text(job?.jobId ? `Job ${job.jobId}` : ""), text(job?.workspacePath || ""), text(job?.repository || "")].filter(Boolean),
       };
@@ -1204,10 +1207,11 @@
           byKey.set(key, project);
           continue;
         }
-        const codexShouldLead = project.isLiveCodex && existing.state !== "needs_mark";
+        const completionShouldLead = project.state === "complete" && existing.isLiveCodex;
+        const codexShouldLead = project.isLiveCodex && existing.state !== "needs_mark" && existing.state !== "complete";
         const existingCodexLeads = existing.isLiveCodex && project.state !== "needs_mark";
-        if (codexShouldLead) {
-          existing.isLiveCodex = true;
+        if (completionShouldLead || codexShouldLead) {
+          existing.isLiveCodex = codexShouldLead;
           existing.state = project.state;
           existing.stateLabel = project.stateLabel;
           existing.sentence = project.sentence;
@@ -1262,7 +1266,7 @@
           api("/api/integrations/google/status").catch((error) => ({ ok: false, error: error.message })),
         ]);
         const operationProjects = arr(operations.operations).map(makeProjectFromOperation);
-        const jobProjects = arr(jobs.jobs).filter((job) => !["completed", "cancelled"].includes(text(job?.status).toLowerCase())).map(makeProjectFromJob);
+        const jobProjects = arr(jobs.jobs).filter((job) => text(job?.status).toLowerCase() !== "cancelled").map(makeProjectFromJob);
         const codexWorkspaceProjects = arr(desktop?.codexWorkspaces).map(makeProjectFromCodexWorkspace);
         const desktopProject = makeProjectFromDesktop(desktop);
         const briefProjects = brief?.ok === false ? [] : makeProjectsFromBrief(brief);
@@ -1705,6 +1709,11 @@
           <ul class="task-list">${nextMoveButtons(project).map((item) => `<li><button type="button" data-project-prompt="${esc(project.id)}" data-prompt="${esc(item.prompt)}"><span>${esc(item.label)}</span><span>${esc(item.tag)}</span></button></li>`).join("")}</ul>
         </div>
         <div class="drawer-card full">
+          <h3>What changed</h3>
+          <p>${esc(changeNarrative(project))}</p>
+          <ul class="task-list">${changeItems(project).map((item) => `<li><button type="button" data-project-prompt="${esc(project.id)}" data-prompt="${esc(item.prompt)}"><span>${esc(item.label)}</span><span>${esc(item.tag)}</span></button></li>`).join("")}</ul>
+        </div>
+        <div class="drawer-card full">
           <h3>Live evidence</h3>
           <ul class="task-list">${liveEvidenceItems(project).map((item) => `<li><button type="button" data-project-prompt="${esc(project.id)}" data-prompt="${esc(item.prompt)}"><span>${esc(item.label)}</span><span>${esc(item.tag)}</span></button></li>`).join("")}</ul>
         </div>
@@ -1732,6 +1741,7 @@
         return `${project.currentStep || "Codex work"} is the current visible Codex focus. ${signal}.${stuck} Marcus should compare this to the whole project outcome before steering.`;
       }
       if (project.state === "needs_mark") return `Marcus needs a decision from Mark before the next step can move. The decision cards above should state the exact ask.`;
+      if (project.state === "complete") return `Codex has stopped claiming motion and handed back a result. Marcus is putting it in front of you for review before anyone pretends "done" means "good."`;
       if (project.state === "blocked") return `Marcus has an operation record marked blocked. This may be stale if a newer Codex workspace appears for the same project.`;
       return project.objective || project.sentence;
     }
@@ -1743,6 +1753,41 @@
         { label: "Current pressure", value: project.liveSignal?.stuck || (project.state === "blocked" ? "Blocked or stale; needs recovery." : project.state === "needs_mark" ? "Waiting on your decision." : project.isLiveCodex ? "Implementation is moving; verification is the next risk." : project.stateLabel) },
         { label: "Source quality", value: `${source}. ${project.counts || "No count returned"}.` },
       ];
+    }
+
+    function changeNarrative(project) {
+      if (project.state === "complete") {
+        const changedFiles = arr(project.changed).filter((item) => /changed file|^[MADRCU?!]{1,2}\s/i.test(item)).length;
+        const signal = project.liveSignal?.signal || project.lastChange || "Codex reported completion without a useful summary, because of course it did.";
+        return `${signal} ${changedFiles ? `${changedFiles} file-level signal${changedFiles === 1 ? "" : "s"} came back with it.` : "No file list came back, so Marcus is treating the summary as the main receipt."}`;
+      }
+      if (project.isLiveCodex) return `Codex is still visible in the workspace. This is live evidence, not a completion receipt yet. Useful, but not champagne-worthy.`;
+      if (project.state === "needs_mark") return "This is waiting on a decision. The important change is that Marcus cannot safely continue until you choose a path.";
+      return project.liveSignal?.signal || project.lastChange || project.sentence || "No useful change summary is attached yet.";
+    }
+
+    function changeItems(project) {
+      const basePrompt = `Summarize what changed for ${project.name} in plain English. Include what was updated, where it likely landed, what still needs review, and what I should inspect first.`;
+      const items = [
+        {
+          label: project.state === "complete" ? "Give me the review briefing" : "Summarize the update",
+          tag: project.state === "complete" ? "ready" : "summary",
+          prompt: `${basePrompt} Keep it friendly, concise, and a little dry. No fake confidence.`,
+        },
+        {
+          label: "Tell me what to check first",
+          tag: "eyes",
+          prompt: `For ${project.name}, tell me exactly what I should inspect first and why. Use the current evidence only.`,
+        },
+      ];
+      if (project.codexJobId) {
+        items.push({
+          label: "Ask Codex for a cleaner handoff",
+          tag: "Codex",
+          prompt: "Write a clean completion handoff: files changed, behavior changed, tests run, deploy/preview URL if any, known risks, and next human review step.",
+        });
+      }
+      return items;
     }
 
     function liveEvidenceItems(project) {
@@ -1781,6 +1826,11 @@
         { label: "Summarize current Codex progress", tag: "Marcus", prompt: "Summarize what Codex appears to be doing, what changed, and what evidence supports that." },
         { label: "Check against project goal", tag: "Direction", prompt: "Compare this Codex work against the whole project goal. Tell me if it is on track or drifting." },
         { label: "Prepare verification plan", tag: "Verify", prompt: "Prepare a verification plan for this project and identify the acceptance evidence Marcus should require." },
+      ];
+      if (project.state === "complete") return [
+        { label: "Review what changed", tag: "Eyes", prompt: "Give me the completion briefing: what changed, where it changed, what was verified, what was not verified, and what I should inspect first." },
+        { label: "Find deployment or preview", tag: "Deploy", prompt: "Find the deployment, preview URL, commit, or branch tied to this completed work. If none is visible, say exactly what source is missing." },
+        { label: "Decide ship / revise / park", tag: "Decision", prompt: "Based on current evidence, recommend whether I should ship, ask for revisions, or park this. Be direct and cite the evidence." },
       ];
       if (project.state === "blocked") return [
         { label: "Diagnose blocker", tag: "Recovery", prompt: "Diagnose the blocker and propose the smallest recovery step." },
