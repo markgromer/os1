@@ -1,5 +1,7 @@
 # Product Vision
 
+Status: active
+
 ## What Marcus Should Become
 
 Marcus should be a conversational project operator.

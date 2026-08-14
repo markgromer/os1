@@ -9,6 +9,7 @@ import {
   extractWikiLinks,
   normalizeWikiTarget,
 } from '../scripts/check-obsidian-links.mjs';
+import { checkMarcusNotes } from '../scripts/check-marcus-notes.mjs';
 
 test('Obsidian wiki target normalization handles aliases, anchors, paths, and extensions', () => {
   assert.equal(normalizeWikiTarget('project-index'), 'project-index');
@@ -45,4 +46,50 @@ test('Obsidian wiki link check reports unresolved links and honors explicit allo
 test('Marcus Obsidian vault has no accidental broken wiki links', async () => {
   const result = await checkObsidianLinks();
   assert.deepEqual(result.unresolved, []);
+});
+
+test('Marcus note audit enforces typed tags and project link pairing', async () => {
+  const vaultRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'marcus-note-audit-'));
+  try {
+    await fs.mkdir(path.join(vaultRoot, 'daily'), { recursive: true });
+    await fs.mkdir(path.join(vaultRoot, 'projects'), { recursive: true });
+    await fs.writeFile(path.join(vaultRoot, 'projects', 'marcus.md'), [
+      '# Marcus',
+      '',
+      'Status: active',
+      'Tags: #project #project/marcus',
+      '',
+    ].join('\n'), 'utf8');
+    await fs.writeFile(path.join(vaultRoot, 'daily', '2026-08-14.md'), [
+      '# 2026-08-14',
+      '',
+      'Status: active',
+      'Tags: #daily #project/marcus',
+      '',
+      'Projects:',
+      '- [[marcus]]',
+      '',
+    ].join('\n'), 'utf8');
+
+    const clean = await checkMarcusNotes({ vaultRoot });
+    assert.deepEqual(clean.issues, []);
+
+    await fs.writeFile(path.join(vaultRoot, 'daily', '2026-08-15.md'), [
+      '# 2026-08-15',
+      '',
+      'Status: active',
+      'Tags: #project/marcus',
+      '',
+    ].join('\n'), 'utf8');
+    const failed = await checkMarcusNotes({ vaultRoot });
+    assert.equal(failed.issues.some((issue) => issue.code === 'missing_type_tag'), true);
+    assert.equal(failed.issues.some((issue) => issue.code === 'project_tag_without_link'), true);
+  } finally {
+    await fs.rm(vaultRoot, { recursive: true, force: true });
+  }
+});
+
+test('Marcus Obsidian vault satisfies note structure rules', async () => {
+  const result = await checkMarcusNotes();
+  assert.deepEqual(result.issues, []);
 });

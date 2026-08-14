@@ -7,6 +7,7 @@ Source notes document where Marcus can learn context from and what each source i
 ## Current Notes
 
 - [[source-map]]
+- [[quo-sms]]
 
 ## Capture Standard
 

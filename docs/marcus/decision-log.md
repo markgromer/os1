@@ -1,5 +1,7 @@
 # Decision Log
 
+Status: active
+
 ## 2026-08-13: Marcus Voice Must Not Sound Like Generic ChatGPT
 
 Context: Mark tested the Android Realtime voice using `gpt-realtime-2.1` and `cedar` and found the conversation style unacceptable: too much like a ChatGPT shell, too many polite assistant tails, too much recap of Mark's own request, and too much conversational padding. The problem is not only the acoustic voice; it is the spoken interaction contract.

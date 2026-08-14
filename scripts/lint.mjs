@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { checkObsidianLinks } from './check-obsidian-links.mjs';
+import { checkMarcusNotes } from './check-marcus-notes.mjs';
 
 const execFileAsync = promisify(execFile);
 const root = process.cwd();
@@ -34,5 +35,15 @@ if (obsidianResult.unresolved.length) {
   throw new Error(`Obsidian wiki-link check failed with ${obsidianResult.unresolved.length} unresolved link(s).`);
 }
 
+const marcusNotesResult = await checkMarcusNotes();
+if (marcusNotesResult.issues.length) {
+  for (const item of marcusNotesResult.issues) {
+    console.error(`Marcus note issue in ${item.file}: ${item.code}: ${item.message}`);
+  }
+  process.exitCode = 1;
+  throw new Error(`Marcus note check failed with ${marcusNotesResult.issues.length} issue(s).`);
+}
+
 console.log(`Syntax lint passed for ${new Set(files).size} JavaScript files.`);
 console.log(`Obsidian wiki-link check passed for ${obsidianResult.linksChecked} link(s) across ${obsidianResult.filesChecked} Markdown file(s).`);
+console.log(`Marcus note check passed across ${marcusNotesResult.filesChecked} Markdown file(s).`);

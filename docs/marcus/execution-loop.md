@@ -1,5 +1,7 @@
 # Execution Loop
 
+Status: active
+
 ## Desired Flow
 
 1. Mark talks to Marcus about a project.

@@ -119,5 +119,6 @@ Marcus should separate current state from historical evidence. Old notes are use
 - Add a retrieval index that can search this vault by folders, tags, links, aliases, dates, entity names, source systems, freshness, and status.
 - Connect money and invoice context from Airtable/client records into dedicated notes without exposing credentials.
 - Connect schedule/calendar, approved communication summaries, workload/task records, local workspace activity, GitHub, and operations into the context graph.
+- Promote useful inbound Quo SMS webhook items into conversation summaries, project communications, daily notes, and linked project/person/client/money/schedule notes without storing raw thread dumps.
 - Add voice commands for "remember this", "note this under X", "what did we work on yesterday", "what is on my plate", "what did I talk to them about", "what is waiting", "what matters today", and "who owes me money" that route to the correct durable store.
 - Add tests proving note creation avoids secrets, uses stable filenames, and preserves wiki links.

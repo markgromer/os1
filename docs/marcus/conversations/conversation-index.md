@@ -8,6 +8,10 @@ Conversation notes preserve durable facts from calls, texts, emails, meetings, c
 
 - No conversation notes have been manually created yet.
 
+## Connected Sources
+
+- [[quo-sms]] can provide text-message facts after webhook capture. Automatic durable summaries remain planned work.
+
 ## Capture Standard
 
 Each conversation note should include:

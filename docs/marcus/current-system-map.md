@@ -1,5 +1,7 @@
 # Current System Map
 
+Status: active
+
 ## Server
 
 `server.js` is the main Express app.
