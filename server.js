@@ -2124,9 +2124,10 @@ async function fetchOpenAiModelsCatalog({ apiKey, force = false } = {}) {
 
 function getOpenRouterSecrets(saved) {
   const envKey = typeof process.env.OPENROUTER_API_KEY === 'string' ? process.env.OPENROUTER_API_KEY.trim() : '';
+  const envToken = typeof process.env.OPENROUTER_API_TOKEN === 'string' ? process.env.OPENROUTER_API_TOKEN.trim() : '';
   const savedKey = typeof saved?.openrouterApiKey === 'string' ? saved.openrouterApiKey.trim() : '';
-  const apiKey = envKey || savedKey;
-  const source = envKey ? 'env' : savedKey ? 'saved' : 'none';
+  const apiKey = envKey || envToken || savedKey;
+  const source = envKey ? 'env' : envToken ? 'env_token' : savedKey ? 'saved' : 'none';
   const last4 = apiKey && apiKey.length >= 4 ? apiKey.slice(-4) : '';
   const keyHint = last4 ? `••••${last4}` : '';
   const savedModel = typeof saved?.openrouterModel === 'string' ? saved.openrouterModel.trim() : '';
@@ -2645,6 +2646,9 @@ async function buildMarcusOperatorHealth() {
   const github = getGitHubCloudConfig(settings);
   const cloudflare = getCloudflareConfig(settings);
   const render = getRenderCloudConfig(settings);
+  const openaiSecrets = getOpenAiSecrets(settings);
+  const openrouter = getOpenRouterSecrets(settings);
+  const textAiConfigured = Boolean(ai.apiKey || openrouter.apiKey);
   const desktopAgeMs = desktopRelayCache?.at ? Date.now() - desktopRelayCache.at : null;
   const desktopOnline = Number.isFinite(desktopAgeMs) && desktopAgeMs <= DESKTOP_RELAY_TTL_MS;
   const quoWebhookConfigured = Boolean(
@@ -2657,7 +2661,7 @@ async function buildMarcusOperatorHealth() {
   const codexResultReviewReady = directCodex
     && readiness.codex?.authoritativeResultEvidence === true
     && readiness.codex?.independentResultReviewerConfigured === true
-    && Boolean(ai.apiKey);
+    && textAiConfigured;
   const activeMissionMemories = missionMemory.memories || [];
   const missionMemoryReady = activeMissionMemories.some((item) => item.kind === 'mission')
     && activeMissionMemories.some((item) => item.kind === 'standing_instruction');
@@ -2732,6 +2736,13 @@ async function buildMarcusOperatorHealth() {
           voice: MARCUS_REALTIME_VOICE,
         },
       },
+      openrouter: {
+        configured: Boolean(openrouter.apiKey),
+        source: openrouter.source,
+        model: openrouter.model,
+        keyHint: openrouter.keyHint,
+        textRoutingAvailable: Boolean(openrouter.apiKey),
+      },
       desktopAgent: {
         relayOnline: desktopOnline,
         relayAgeMs: desktopAgeMs,
@@ -2758,7 +2769,8 @@ async function buildMarcusOperatorHealth() {
       !missionMemoryReady ? 'Durable mission memory is missing an active mission or standing instruction.' : '',
       !github.configured ? 'GITHUB_TOKEN is not configured for the Marcus server; GitHub reads rely on route/user tooling instead of backend provider access.' : '',
       !cloudflare.configured ? 'CLOUDFLARE_API_TOKEN is not configured for the Marcus server; Cloudflare reads rely on route/user tooling instead of backend provider access.' : '',
-      !ai.apiKey ? 'OpenAI is not configured; AI chat, transcription, and model-assisted drafting will be limited.' : '',
+      !textAiConfigured ? 'No AI text provider is configured; set OPENAI_API_KEY or OPENROUTER_API_TOKEN for chat and model-assisted drafting.' : '',
+      !openaiSecrets.apiKey ? 'OPENAI_API_KEY is not configured; Marcus Realtime voice cannot mint OpenAI client secrets.' : '',
       !directCodex ? 'No direct Codex launch adapter is configured; Marcus can prepare durable handoffs and track registered Codex results, but cannot honestly claim a real session started.' : '',
       directCodex && !codexResultReviewReady ? 'Independent Codex result review is not fully configured with authoritative GitHub evidence and AI review.' : '',
       !desktopOnline ? 'Desktop agent relay is not currently online; local workspace context/actions may be stale or unavailable.' : '',
@@ -4304,9 +4316,12 @@ function resolveAiRoute(saved, routeKey) {
   const openrouter = getOpenRouterSecrets(saved);
 
   const routes = normalizeAiRoutes(saved?.aiRoutes);
-  const r = routes?.[routeKey] || { provider: 'openai', model: '' };
+  const rawRoutes = pickObject(saved?.aiRoutes);
+  const rawRoute = pickObject(rawRoutes?.[routeKey]);
+  const r = routes?.[routeKey] || { provider: '', model: '' };
 
-  const preferredProvider = normalizeAiProvider(r.provider);
+  const hasExplicitProvider = typeof rawRoute.provider === 'string' && rawRoute.provider.trim();
+  const preferredProvider = hasExplicitProvider ? normalizeAiProvider(r.provider) : '';
   const fallbackProvider = openai.apiKey ? 'openai' : (openrouter.apiKey ? 'openrouter' : 'openai');
   const provider = preferredProvider || fallbackProvider;
 
@@ -15230,9 +15245,19 @@ function isProjectSwitchRequest(message) {
 
 function isNewProjectBootstrapRequest(message) {
   const text = String(message || '').trim();
-  if (/\b(?:do not|don't|dont|never)\b[^.!?]{0,80}\b(?:create|start|make|build)\b/i.test(text)) return false;
-  return /\b(?:create|start|make|build)\b[^.!?]{0,120}\b(?:new project|project from scratch|empty project|new app|new application)\b/i.test(text)
-    || /\b(?:new project|project from scratch|empty project|new app|new application)\b[^.!?]{0,120}\b(?:create|start|make|build)\b/i.test(text);
+  const bootstrapVerb = String.raw`(?:create|start|make|build|setup|set\s+up|scaffold|bootstrap)`;
+  const newProjectNoun = String.raw`(?:new project|project from scratch|empty project|new app|new application|new site|new website)`;
+  if (new RegExp(String.raw`\b(?:do not|don't|dont|never)\b[^.!?]{0,80}\b${bootstrapVerb}\b`, 'i').test(text)) return false;
+  return new RegExp(String.raw`\b${bootstrapVerb}\b[^.!?]{0,140}\b${newProjectNoun}\b`, 'i').test(text)
+    || new RegExp(String.raw`\b${newProjectNoun}\b[^.!?]{0,140}\b${bootstrapVerb}\b`, 'i').test(text)
+    || /\b(?:clone|rebuild|migrate|convert)\b[^.!?]{0,180}\b[a-z0-9.-]+\.[a-z]{2,}\b[^.!?]{0,180}\b(?:next\.?js|nextjs|react|cloudflare|worker|pages)\b/i.test(text);
+}
+
+function projectNameFromDomain(value) {
+  const text = String(value || '');
+  const match = text.match(/\b(?:https?:\/\/)?(?:www\.)?([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)\.(?:com|net|org|io|co|site|dev|app|ai|us|biz|info)\b/i);
+  if (!match) return '';
+  return match[1].replace(/[-_]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120);
 }
 
 function projectNameFromBootstrapRequest(message, explicitName = '') {
@@ -15245,7 +15270,7 @@ function projectNameFromBootstrapRequest(message, explicitName = '') {
   if (named) return named[1].trim();
   const beforeType = text.match(/\bnew\s+([A-Za-z0-9][A-Za-z0-9 &._-]{1,80}?)\s+(?:project|app|application)\b/i);
   if (beforeType && !/^(?:empty|software|web|mobile)$/i.test(beforeType[1].trim())) return beforeType[1].trim();
-  return '';
+  return projectNameFromDomain(text);
 }
 
 function projectSlug(value) {
