@@ -136,6 +136,10 @@ External communication routes:
 
 Email uses SMTP. Text uses Quo's message API. Every route in the external-action list requires the durable admin token or paired HttpOnly cookie; a Live token alone receives 401. Conversational approval through `/api/marcus/live/chat` also checks durable authentication on the request before it can approve or send. Drafting and approval are durable; provider acceptance moves the action through `sending` to `sent` and records the provider receipt. Marcus Mobile's admin-only `Integrations` dialog writes Quo/SMTP settings without returning secrets, verifies each provider without sending, and records a bounded timestamped verification result. The `Verify` dashboard can open an exact-draft review containing recipient, subject, project, reason, body, and draft id; its send command remains disabled until Mark explicitly authorizes that exact draft. Quo verification retains an unambiguous resolved sender. A later settings change invalidates that provider's verification. Production credentials are still required before either provider can send.
 
+Inbound email uses IMAP primitives in `server.js`: `GET /api/integrations/email/status`, `POST /api/integrations/email/test`, `POST /api/integrations/email/sync`, and `POST /api/integrations/email/archive-to-qdrant`. These routes can fetch and normalize mailbox content, import unique inbox items, and optionally upsert bounded email knowledge to Qdrant. A deployed scheduled watcher and automatic reply-draft promotion are planned rather than verified.
+
+Skool and Zoom are not provider-integrated in this repo. The operating model in [[external-presence]] treats Skool and future social/community channels as a watch-and-draft opportunity radar: Marcus may monitor permitted sources, surface interaction opportunities, and prepare copy/paste options, while Mark remains the actor who posts unless a compliant integration is explicitly approved. Zoom starts from transcript/recording ingestion after consent; live assistant attendance is blocked until identity and consent gates are met.
+
 ## Providers
 
 `marcus/providers` contains execution/read providers:
@@ -182,6 +186,39 @@ Provider mutations run through `marcus/providers/github_provider.js`, `marcus/pr
 - Desktop workspace activity.
 
 Archived project-registry records remain available for historical lookup but are excluded from provider collection, activity snapshots, current-focus selection, and bottleneck scoring. This prevents retired or mistakenly discovered records from remaining operationally active.
+
+Project activity now exposes an evidence-backed operating layer in addition to the older compatibility `state`:
+
+- `operationalState` maps the project into Marcus-facing states such as active, verifying, at risk, decaying, and dormant.
+- `health` combines objective clarity, definition-of-done presence, recent meaningful movement, blockers, verification gaps, and deterministic risk rules.
+- `momentum` counts meaningful movement rather than raw activity. Codex handoffs and repository reads do not count as implementation progress.
+- `decay` reports quiet-but-healthy, attention-slipping, at-risk, decaying, or dormant-candidate stages with cadence, evidence timestamps, severity, and a reason.
+- `lastMeaningfulMovementAt`, `lastVerifiedEvidenceAt`, and `nextExpectedEvent` are derived from observed evidence and operation state.
+
+The project registry also preserves canonical operating fields: business area, current objective, definition of done, success evidence, objective cadence, durable project memory categories, and archive history. These fields are file-backed and survive restart. They are not yet a full multi-objective/task graph; objective and granular task lifecycle expansion remains planned.
+
+Capability audit for the Marcus/OS1 operating loop:
+
+- Real: project registry, alias-aware project resolution, operation-backed Codex handoffs/direct adapters, evidence ingestion/deduplication, activity snapshots, deterministic health/decay/momentum, mission memory, approval-gated provider mutation paths, desktop context/action evidence, mobile voice bridge, and operator health reporting.
+- Partial: objective state is canonicalized on project records but only the current objective is modeled; derived project summaries exist but are not yet a full timeline/projection service; brief generation consumes older active-brief signals and project-activity data separately; notifications are consequence-oriented in selected flows but not a complete notification engine.
+- Simulated/development-only: the visualizer page remains fixture-only; browser verification can accept authenticated external/manual results when no direct browser adapter is configured.
+- Unavailable/not complete: automatic specialist-agent creation/evaluation/retirement, full natural-language global command search over every domain, complete offline mobile action reconciliation, autonomous archive/restore workflows, and a complete multi-objective decision execution graph.
+
+## Decisions And Authority
+
+Durable operation approvals are now Marcus decision records, not simple boolean flags. Each pending approval includes:
+
+- decision statement
+- project and objective
+- why the decision is needed
+- Marcus recommendation
+- supporting operation, step, and policy evidence
+- alternatives considered
+- benefit, cost, risk, and consequence of waiting
+- reversibility and rollback method
+- authority level and available actions
+
+Approval, approval with conditions, and decline outcomes are persisted back onto the same decision package with Mark's reasoning, conditions where supplied, decision actor, and timestamp. This still uses the existing operation approval lifecycle, so high/critical actions remain stopped until explicit authorization. Full decision follow-through across every domain is partial: operation approvals execute and verify through the durable runner, but broader multi-project decisions, discuss/defer workflows, and automatic post-decision notification routing are not yet a complete standalone decision engine.
 
 ## Intelligence
 

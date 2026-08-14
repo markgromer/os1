@@ -39,6 +39,12 @@ External communication now follows:
 
 Approval does not mark a message sent. The separate send action claims an approved draft as `sending`, invokes SMTP or Quo, then stores `sent` only after provider acceptance. Repeating a successful send request returns the existing receipt instead of sending twice.
 
+Inbound external presence follows the stricter pattern documented in [[external-presence]]:
+
+`email/social/zoom source -> normalized evidence -> opportunity summary or draft -> exact approval when outbound provider action exists -> provider/manual send or post confirmation`
+
+Email can use the existing IMAP sync and external-action draft/send path. Skool and future social/community channels use a watch-and-draft opportunity radar: Marcus surfaces where Mark can interact, explains why, and prepares copy/paste options while Mark remains the actor who posts. Zoom starts with transcript/recording ingestion after consent; live attendance requires a visible assistant identity and host/participant consent before implementation.
+
 Provider onboarding is separate from external actions:
 
 `paired durable admin -> save redacted server settings -> authenticate without sending -> retain bounded verification evidence`

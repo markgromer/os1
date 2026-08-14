@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { checkObsidianLinks } from './check-obsidian-links.mjs';
 
 const execFileAsync = promisify(execFile);
 const root = process.cwd();
@@ -24,4 +25,14 @@ for (const file of [...new Set(files)].sort()) {
   await execFileAsync(process.execPath, ['--check', file], { cwd: root });
 }
 
+const obsidianResult = await checkObsidianLinks();
+if (obsidianResult.unresolved.length) {
+  for (const item of obsidianResult.unresolved) {
+    console.error(`Unresolved Obsidian link in ${item.file}: ${item.raw} -> ${item.target}`);
+  }
+  process.exitCode = 1;
+  throw new Error(`Obsidian wiki-link check failed with ${obsidianResult.unresolved.length} unresolved link(s).`);
+}
+
 console.log(`Syntax lint passed for ${new Set(files).size} JavaScript files.`);
+console.log(`Obsidian wiki-link check passed for ${obsidianResult.linksChecked} link(s) across ${obsidianResult.filesChecked} Markdown file(s).`);

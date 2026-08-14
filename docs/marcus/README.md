@@ -14,6 +14,7 @@ This folder is an Obsidian-compatible documentation space for Marcus.
 - [[voice-interface]]
 - [[context-memory]]
 - [[visualizer-operational-awareness]]
+- [[external-presence]]
 
 ## Operational Notes
 

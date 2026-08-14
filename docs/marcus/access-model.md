@@ -14,6 +14,8 @@ Marcus may prepare but should require approval for:
 
 - Sending texts.
 - Sending emails.
+- Posting or commenting in external communities such as Skool.
+- Speaking, chatting, or otherwise participating in live meetings as Marcus.
 - Posting to Slack.
 - Publishing, deploying, or changing DNS.
 - Merging pull requests.
@@ -58,6 +60,8 @@ The server already has environment-driven provider config for:
 - Slack credentials
 - Twilio/Quo webhook verification
 - Quo outbound API settings: `QUO_API_KEY`, `QUO_DEFAULT_PHONE_NUMBER_ID`, `QUO_FROM_NUMBER`, and `QUO_USER_ID`
+
+Marcus's external presence model is documented in [[external-presence]]. Email read/import is allowed after IMAP configuration. Email/text sending remains exact-draft approval-gated. Skool and future social/community channels should be handled as a watch-and-draft opportunity radar: Marcus may surface good places for Mark to interact and prepare copy/paste options from permitted sources, but posting/commenting/messaging and live Zoom participation are blocked by default. Marcus may ingest meeting transcripts/recordings only when Mark has rights and consent to provide them.
 
 Local/saved settings are also supported for operator provider access:
 

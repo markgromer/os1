@@ -49,6 +49,7 @@ The first demo deployment attempt failed before Cloudflare executed because Wind
 The accepted goal establishes the durable operator foundation. These remain product enhancements rather than hidden acceptance gaps:
 
 - Automatic Obsidian note writing, indexing, and retrieval across schedule, conversations, workload, people, clients, and money.
+- External presence phase: scheduled inbound mailbox watcher, reply-needed email draft automation, Skool/social opportunity radar with copy/paste options, manual-post confirmation, and Zoom transcript ingestion. See [[external-presence]].
 - Additional provider connectors and richer read access where Mark chooses to authorize them.
 - Continued evaluation of voice behavior, latency, and native Android packaging as the product evolves.
 - Review or recovery of unrelated historical project operations on their own merits; they do not invalidate this system acceptance.

@@ -89,6 +89,30 @@ Acceptance:
 - Completion claims trigger verification against objective and evidence.
 - Consequential actions remain approval-gated.
 
+## Phase 1D: Evidence-Backed Operating State
+
+Status: implemented as the current vertical slice. Project registry records now retain business area, current objective, definition of done, success evidence, objective cadence, durable memory categories, and archive history. Project activity snapshots now derive `operationalState`, `health`, `momentum`, `decay`, `lastMeaningfulMovementAt`, `lastVerifiedEvidenceAt`, and `nextExpectedEvent` from stored evidence plus durable operation state.
+
+This slice intentionally does not claim the complete OS1 operating loop. It makes the early loop honest: Marcus can preserve canonical project truth, distinguish movement from raw activity, mark decay before a project disappears, and explain the evidence behind that assessment. Multi-objective/task graphs, autonomous agent lifecycle, full decision execution, offline mobile reconciliation, and global command search remain later phases.
+
+Regression coverage:
+
+- Registry persistence for objective, definition-of-done, durable memory, and archive history.
+- Evidence-backed project health, momentum, decay stage, operational state, and next expected event.
+- Existing ingestion deduplication, source provenance, Codex lifecycle reconstruction, desktop evidence, deployment mapping, archived-project exclusion, and activity tools.
+
+## Phase 1E: Decision Preparation And Authority Records
+
+Status: implemented for durable operation approvals. Approval requests now persist a Marcus decision package containing the decision statement, project/objective, reason, recommendation, supporting operation/step/policy evidence, alternatives, benefit/cost/risk, consequence of waiting, reversibility, rollback method, authority level, and available actions. Approvals with conditions and declines persist the outcome, Mark's reasoning, decision actor, timestamp, and conditions.
+
+This is not yet the full decision system described in the product brief. It covers the existing operation approval path and preserves approval gates for high/critical actions. Discuss/defer workflows, multi-project decisions, automatic downstream notification routing, and non-operation decision queues remain later work.
+
+Regression coverage:
+
+- Pending approvals include an auditable decision package.
+- Approve with conditions persists the conditional outcome and conditions.
+- Decline persists Mark's reasoning and blocks the operation.
+
 ## Phase 2: Context Gathering
 
 Add a reusable context gatherer that can pull:
@@ -296,6 +320,48 @@ Every meaningful Marcus architecture change should update:
 - [[execution-loop]]
 - [[access-model]]
 - [[implementation-roadmap]]
+
+## Phase 8: External Presence
+
+Status: architecture documented in [[external-presence]]. Existing email primitives support this phase, but the complete autonomous operating loop is not deployed.
+
+Goal: Marcus should have a transparent assistant identity with a real email address, inbound mailbox checking, approval-gated replies, a social/community opportunity radar with copy/paste drafts for Mark, and meeting-note support.
+
+Implemented foundation:
+
+- SMTP outbound drafts and approved sends.
+- IMAP mailbox fetch and inbox import.
+- Email archive ingestion to Qdrant when configured.
+- Exact-draft approval and provider receipt evidence.
+- Durable admin requirements for provider configuration and send authority.
+
+Planned implementation:
+
+- Scheduled IMAP watcher.
+- Reply-needed classifier for imported email.
+- Automatic creation of unsent email reply drafts from inbox items.
+- `social_opportunity` artifact type for Skool and future channels.
+- Ranked interaction digest with copy/paste options and original-post ideas.
+- Manual-post confirmation route before Marcus can claim a community/social comment was posted.
+- Zoom transcript/recording ingestion route that produces notes, decisions, and follow-up drafts.
+- Calendar connector or forwarded invite parsing for call preparation.
+
+Blocked or explicitly gated:
+
+- Skool or social scraping, auto-posting, auto-commenting, or direct-message automation.
+- Undisclosed Marcus social/community profile.
+- Zoom live attendance without visible identity and host/participant consent.
+- Speaking or chatting in Zoom without Mark's direct request and exact approval.
+
+Acceptance:
+
+- A Marcus mailbox can be configured with IMAP and SMTP.
+- IMAP sync imports a new message once and preserves thread identity.
+- Marcus drafts a reply from an imported email without sending it.
+- Mark approves the exact draft, sends it once, and retry returns the stored receipt.
+- Skool/social monitoring produces an opportunity digest with copy/paste options only.
+- Zoom transcript ingestion produces notes and follow-up drafts without live attendance claims.
+- `GET /api/marcus/operator-health` and `GET /api/marcus/acceptance` distinguish implemented email capability from planned Skool/Zoom capability.
 
 ## Phase 7: Production Voice Interface
 
