@@ -340,22 +340,26 @@
     .pulse.live { animation: breathe 1.8s ease-in-out infinite; }
     .pulse.warn { background: var(--amber); box-shadow: 0 0 14px rgba(244, 181, 68, 0.45); }
     .pulse.blocked { background: var(--red); box-shadow: 0 0 14px rgba(255, 107, 107, 0.38); }
-    .signal-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
-    .signal-chip {
+    .signal-grid {
+      display: flex;
+      align-items: center;
+      gap: 10px;
       min-width: 0;
-      display: grid;
-      gap: 2px;
-      padding: 6px 7px;
-      border: 1px solid var(--line);
-      border-radius: 7px;
-      background: rgba(255, 255, 255, 0.025);
       color: var(--muted);
       font-size: 11px;
       line-height: 1.25;
     }
+    .signal-chip {
+      min-width: 0;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      color: var(--muted);
+    }
+    .signal-chip + .signal-chip::before { content: ""; width: 1px; height: 14px; margin-right: 2px; background: var(--line); }
     .signal-chip strong {
       color: var(--text);
-      font-size: 12px;
+      font-size: 11px;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
@@ -884,6 +888,22 @@
       return { facts, signal, stuck, tone: raw === "failed" ? "blocked" : recency.tone };
     }
 
+    function displayStateLabel(project) {
+      if (project.codexJobId) {
+        const raw = text(project.currentStep).toLowerCase();
+        if (raw === "completed") return "Ready to verify";
+        if (raw === "queued") return "Queued";
+        if (raw === "failed") return "Failed";
+        return "Codex job";
+      }
+      if (project.isLiveCodex) {
+        if (project.liveSignal?.tone === "blocked" || project.liveSignal?.tone === "warn") return "Check status";
+        if (project.liveSignal?.stuck) return "Watching Codex";
+        return "Live Codex";
+      }
+      return project.stateLabel;
+    }
+
     function inferCodexWorkspaceTask(item) {
       const branch = text(item?.gitBranch);
       const commits = arr(item?.gitRecentCommits).map(text).filter(Boolean);
@@ -966,7 +986,7 @@
         codexJobId: text(job?.jobId),
         name,
         state,
-        stateLabel: labelForState(state),
+        stateLabel: raw === "completed" ? "Ready to verify" : raw === "queued" ? "Queued" : raw === "failed" ? "Failed" : "Codex job",
         basis: "observed Codex job",
         sentence: raw === "completed" ? "Ready for Marcus verification." : `${text(job?.objective || job?.title || "Codex work")} is ${raw}.`,
         liveSignal,
@@ -1004,7 +1024,7 @@
         codexSessionId: text(item?.sessionId),
         name,
         state: "moving",
-        stateLabel: labelForState("moving"),
+        stateLabel: liveSignal.tone === "live" && !liveSignal.stuck ? "Live Codex" : "Check status",
         basis: "live Codex workspace",
         sentence: task || "Active Codex session detected.",
         liveSignal,
@@ -1018,7 +1038,7 @@
         currentStep: task,
         changed: changed.length ? changed : ["Recent Codex session metadata observed"],
         tasks: [
-          { id: `${idFrom(name)}-codex-active`, title: task, status: "working", worker: "Codex" },
+          { id: `${idFrom(name)}-codex-active`, title: task, status: liveSignal.tone === "live" ? "visible now" : "needs status check", worker: "Codex" },
           { id: `${idFrom(name)}-marcus-watch`, title: "Summarize current Codex progress", status: "watching", worker: "MARCUS" },
         ],
         evidence: [
@@ -1594,9 +1614,11 @@
     function chiefBrief(projects) {
       if (!projects.length) return "I do not have enough live evidence to name a current project.";
       const needs = projects.filter((p) => p.state === "needs_mark").slice(0, 2).map((p) => p.name);
-      const moving = projects.filter((p) => ["moving", "verifying"].includes(p.state)).slice(0, 2).map((p) => p.name);
+      const liveCodex = projects.filter((p) => p.isLiveCodex).slice(0, 2).map((p) => p.name);
+      const moving = projects.filter((p) => !p.isLiveCodex && ["moving", "verifying"].includes(p.state)).slice(0, 2).map((p) => p.name);
       const risk = projects.filter((p) => ["blocked", "losing_thread"].includes(p.state)).slice(0, 2).map((p) => p.name);
       const parts = [];
+      if (liveCodex.length) parts.push(`${liveCodex.join(" and ")} ${liveCodex.length === 1 ? "has" : "have"} live Codex signals`);
       if (moving.length) parts.push(`${moving.join(" and ")} ${moving.length === 1 ? "is" : "are"} moving`);
       if (needs.length) parts.push(`${needs.join(" and ")} need Mark`);
       if (risk.length) parts.push(`${risk.join(" and ")} ${risk.length === 1 ? "is" : "are"} at risk`);
@@ -1613,12 +1635,13 @@
     function rowHtml(project) {
       const expanded = project.id === expandedId;
       const stateClass = `state-${project.state}`;
+      const label = displayStateLabel(project);
       return `<article class="ledger-row" tabindex="0" role="button" aria-expanded="${expanded ? "true" : "false"}" data-project="${esc(project.id)}">
         <div class="identity">
           <div class="avatar ${project.state === "needs_mark" || project.state === "verifying" ? "warn" : project.state === "blocked" ? "danger" : ["quiet", "parked"].includes(project.state) ? "quiet" : ""}">${esc(initials(project.name))}</div>
           <div>
             <strong>${esc(project.name)}</strong>
-            <span class="state-label ${stateClass}"><span class="state-icon">${esc(stateIcons[project.state] || "?")}</span>${esc(project.stateLabel)}</span>
+            <span class="state-label ${stateClass}"><span class="state-icon">${esc(stateIcons[project.state] || "?")}</span>${esc(label)}</span>
           </div>
         </div>
         <div class="activity-copy">${esc(project.sentence)}</div>
@@ -1658,6 +1681,7 @@
       };
       return `<div class="live-signal">
         <div class="live-signal-head"><strong>${esc(signal.signal)}</strong><span class="pulse ${esc(signal.tone || "warn")}" aria-hidden="true"></span></div>
+        ${movementRail(project)}
         <div class="signal-grid">${arr(signal.facts).slice(0, 3).map((fact) => `<span class="signal-chip"><span>${esc(fact.label)}</span><strong>${esc(fact.value)}</strong></span>`).join("")}</div>
         <div class="signal-note">${esc(signal.stuck || `${project.counts || "Partial signal"} from ${project.basis}.`)}</div>
       </div>`;
