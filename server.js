@@ -8528,6 +8528,21 @@ function buildMarcusActiveBriefForStore({ store, settings, businessKey, business
 
 async function buildMarcusActiveBrief() {
   const settings = await readSettings();
+  const openai = getOpenAiSecrets(settings);
+  const openrouter = getOpenRouterSecrets(settings);
+  const googleTokens = settings.googleTokens && typeof settings.googleTokens === 'object' ? settings.googleTokens : null;
+  const envGoogleClientId = typeof process.env.GOOGLE_CLIENT_ID === 'string' ? process.env.GOOGLE_CLIENT_ID.trim() : '';
+  const savedGoogleClientId = typeof settings.googleClientId === 'string' ? settings.googleClientId.trim() : '';
+  const effectiveGoogleClientId = envGoogleClientId || savedGoogleClientId;
+  const activeBriefSettings = {
+    ...settings,
+    aiEnabled: Boolean(openai.apiKey || openrouter.apiKey),
+    openaiKeyHint: openai.keyHint,
+    openrouterKeyHint: openrouter.keyHint,
+    openrouterConfigured: Boolean(openrouter.apiKey),
+    googleConfigured: Boolean(isLikelyGoogleClientId(effectiveGoogleClientId)),
+    googleConnected: Boolean(googleTokens?.refresh_token),
+  };
   const cfg = getBusinessConfigFromSettings(settings);
   const businesses = Array.isArray(cfg.businesses) && cfg.businesses.length
     ? cfg.businesses
@@ -8553,7 +8568,7 @@ async function buildMarcusActiveBrief() {
   // The ActiveBrief is structured first; chat/prompting explains or acts on it afterward.
   const brief = buildOperationalActiveBrief({
     stores,
-    settings,
+    settings: activeBriefSettings,
     desktopData,
     nowMs: Date.now(),
   });
@@ -21250,7 +21265,6 @@ const httpServer = app.listen(PORT, SERVER_HOST, async () => {
   // eslint-disable-next-line no-console
   console.log(`M.A.R.C.U.S. running on http://${SERVER_HOST}:${PORT}`);
 });
-
 
 
 

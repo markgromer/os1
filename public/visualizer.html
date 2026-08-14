@@ -1048,10 +1048,10 @@
         const desktopProject = makeProjectFromDesktop(desktop);
         const briefProjects = brief?.ok === false ? [] : makeProjectsFromBrief(brief);
         const registryProjects = arr(registry.projects).filter(shouldUseRegistryProject).slice(0, 8).map(makeProjectFromRegistry);
-        const decisions = [
+        const decisions = uniqueDecisions([
           ...operationProjects.map((project) => project.decision).filter(Boolean),
           ...briefProjects.map((project) => project.decision).filter(Boolean),
-        ].slice(0, 6);
+        ]).slice(0, 6);
         snapshot = {
           projects: mergeProjects([...codexWorkspaceProjects, ...jobProjects, ...operationProjects, desktopProject, ...briefProjects, ...registryProjects]),
           decisions,
@@ -1081,6 +1081,16 @@
       for (const item of arr(brief?.sessionContext?.changedSinceLastCheckIn).slice(0, 4)) rows.push({ source: text(item.source || item.category || "ActiveBrief"), project: text(item.title), text: text(item.summary || item.title), time: age(item.changedAt), tone: "monitoring" });
       if (desktop?.ok !== false && desktop?.windowTitle) rows.push({ source: "Desktop", project: text(desktop.windowTitle), text: `Focused in ${text(desktop.processName, "unknown app")}`, time: `${Number(desktop.idleSeconds || 0)}s idle`, tone: "monitoring" });
       return rows.slice(0, 10);
+    }
+
+    function uniqueDecisions(decisions) {
+      const seen = new Set();
+      return decisions.filter((decision) => {
+        const key = idFrom(`${decision?.id || ""}-${decision?.project || ""}-${decision?.title || ""}`);
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
     }
 
     function statusSentence() {

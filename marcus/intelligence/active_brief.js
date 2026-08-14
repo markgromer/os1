@@ -629,6 +629,10 @@ function buildMemoryPulse({ stores = [], settings = {}, visible = [], scored = [
 }
 
 function buildSystemHealth({ settings = {}, desktopData = null, systemSignals = [] }) {
+  const openAiReady = settings?.aiEnabled !== false && Boolean(settings?.aiEnabled || settings?.openaiKeyHint || settings?.openrouterConfigured || settings?.openrouterKeyHint);
+  const googleConfigured = Boolean(settings?.googleConfigured || settings?.googleClientId);
+  const googleConnected = Boolean(settings?.googleConnected || (settings?.googleTokens && typeof settings.googleTokens === 'object' && settings.googleTokens.refresh_token));
+  const googleNeedsConnection = googleConfigured && !googleConnected;
   const signalItems = (Array.isArray(systemSignals) ? systemSignals : []).slice(0, 12).map((item) => {
     const signal = item?.signal || item || {};
     const status = safeText(signal?.status || item?.bucket || 'active');
@@ -653,20 +657,24 @@ function buildSystemHealth({ settings = {}, desktopData = null, systemSignals = 
     {
       id: 'system:openai',
       title: 'OpenAI routing',
-      status: settings?.aiEnabled === false ? 'warning' : 'ok',
-      summary: settings?.aiEnabled === false ? 'AI routes appear disabled in settings.' : 'AI routes are available for command responses.',
+      status: openAiReady ? 'ok' : 'warning',
+      summary: openAiReady ? 'AI routes are available for command responses.' : 'AI routes are missing provider credentials.',
       source: 'settings',
       confidence: 0.78,
-      recommendedAction: settings?.aiEnabled === false ? 'Review AI provider settings.' : 'Monitor.',
+      recommendedAction: openAiReady ? 'Monitor.' : 'Review AI provider settings.',
     },
     {
       id: 'system:google',
       title: 'Google integrations',
-      status: settings?.googleConnected ? 'ok' : 'needs_credentials',
-      summary: settings?.googleConnected ? 'Google connection is available.' : 'Calendar/Drive context may be incomplete until Google is connected.',
+      status: googleConnected ? 'ok' : googleNeedsConnection ? 'needs_connection' : 'needs_credentials',
+      summary: googleConnected
+        ? 'Google connection is available.'
+        : googleNeedsConnection
+          ? 'Google OAuth app is configured, but the account connection needs refresh.'
+          : 'Calendar/Drive context may be incomplete until Google OAuth is configured.',
       source: 'settings.googleConnected',
       confidence: 0.74,
-      recommendedAction: settings?.googleConnected ? 'Monitor.' : 'Connect Google in Settings.',
+      recommendedAction: googleConnected ? 'Monitor.' : googleNeedsConnection ? 'Reconnect Google account in Settings.' : 'Configure Google OAuth in Settings.',
     },
     {
       id: 'system:desktop-context',
@@ -682,7 +690,7 @@ function buildSystemHealth({ settings = {}, desktopData = null, systemSignals = 
   return {
     items,
     criticalCount: items.filter((item) => item.status === 'critical').length,
-    warningCount: items.filter((item) => ['warning', 'needs_credentials'].includes(item.status)).length,
+    warningCount: items.filter((item) => ['warning', 'needs_credentials', 'needs_connection'].includes(item.status)).length,
     okCount: items.filter((item) => ['ok', 'active', 'quiet'].includes(item.status)).length,
   };
 }
@@ -1021,19 +1029,23 @@ function buildSettingsOperationalSignals(settings = {}, nowMs = Date.now()) {
   const s = settings && typeof settings === 'object' ? settings : {};
   const out = [];
   const now = nowIso(new Date(nowMs));
-  const hasOpenAiKey = Boolean(s.openaiApiKey || s.openaiKeyHint || s.aiEnabled);
+  const hasAiProvider = Boolean(s.openaiApiKey || s.openaiKeyHint || s.openrouterConfigured || s.openrouterKeyHint || s.aiEnabled);
   const googleTokens = s.googleTokens && typeof s.googleTokens === 'object' ? s.googleTokens : null;
   const googleConnected = Boolean(s.googleConnected || googleTokens?.refresh_token);
+  const googleConfigured = Boolean(s.googleConfigured || s.googleClientId || s.googleClientSecret);
   const automationQueue = Array.isArray(s.automationDigestQueue) ? s.automationDigestQueue : [];
   const automationPending = automationQueue.filter((item) => !item?.decision && !item?.decidedAt && !item?.approvedAt && !item?.rejectedAt);
   const integrationRows = [
     {
       id: 'openai',
       title: 'OpenAI routing',
-      configured: hasOpenAiKey && s.aiEnabled !== false,
+      configured: hasAiProvider && s.aiEnabled !== false,
       source: 'settings.openai',
-      summary: hasOpenAiKey && s.aiEnabled !== false ? 'AI routing appears configured.' : 'AI routing may be disabled or missing credentials.',
-      recommendedAction: hasOpenAiKey && s.aiEnabled !== false ? 'Monitor.' : 'Review AI provider settings.',
+      summary: hasAiProvider && s.aiEnabled !== false ? 'AI routing appears configured.' : 'AI routing may be disabled or missing provider credentials.',
+      recommendedAction: hasAiProvider && s.aiEnabled !== false ? 'Monitor.' : 'Review AI provider settings.',
+      missingTitle: 'OpenAI routing needs provider credentials',
+      missingStatus: 'needs_credentials',
+      evidence: [{ label: 'aiProviderConfigured', value: 'false' }],
     },
     {
       id: 'google',
@@ -1041,7 +1053,10 @@ function buildSettingsOperationalSignals(settings = {}, nowMs = Date.now()) {
       configured: googleConnected,
       source: 'settings.google',
       summary: googleConnected ? 'Google OAuth context is connected.' : 'Calendar, Drive, or Analytics context may be incomplete until Google is connected.',
-      recommendedAction: googleConnected ? 'Monitor.' : 'Connect or refresh Google credentials.',
+      recommendedAction: googleConnected ? 'Monitor.' : googleConfigured ? 'Reconnect Google account in Settings.' : 'Configure Google OAuth in Settings.',
+      missingTitle: googleConfigured ? 'Google account connection needs refresh' : 'Google integrations need OAuth setup',
+      missingStatus: googleConfigured ? 'needs_connection' : 'needs_credentials',
+      evidence: [{ label: googleConfigured ? 'accountConnected' : 'googleOAuthConfigured', value: 'false' }],
     },
   ];
 
@@ -1066,10 +1081,10 @@ function buildSettingsOperationalSignals(settings = {}, nowMs = Date.now()) {
       out.push(makeOperationalObject({
         id: `system:settings:${row.id}:needs-credentials`,
         type: OperationalTypes.SYSTEM_SIGNAL,
-        title: `${row.title} needs credentials`,
+        title: row.missingTitle || `${row.title} needs credentials`,
         summary: row.summary,
         source: row.source,
-        status: 'needs_credentials',
+        status: row.missingStatus || 'needs_credentials',
         priority: 2,
         importance: 2,
         urgency: 0.58,
@@ -1080,7 +1095,7 @@ function buildSettingsOperationalSignals(settings = {}, nowMs = Date.now()) {
         nextAction: row.recommendedAction,
         requiresMark: true,
         relatedEntities: [`tool:${row.id}`],
-        evidence: [{ label: 'configured', value: 'false' }],
+        evidence: row.evidence || [{ label: 'configured', value: 'false' }],
       }));
     }
   }
