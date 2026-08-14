@@ -615,6 +615,7 @@
     let snapshot = { projects: [], decisions: [], events: [], brief: null, operations: [], desktop: null, jobs: [], registry: [] };
     let expandedId = "";
     let query = "";
+    let viewMode = "projects";
     let activeProjectId = "";
     let activeTaskId = "";
     let voiceHeld = false;
@@ -698,6 +699,18 @@
       return "Understood";
     }
 
+    function inferCodexWorkspaceTask(item) {
+      const branch = text(item?.gitBranch);
+      const commits = arr(item?.gitRecentCommits).map(text).filter(Boolean);
+      const changed = arr(item?.gitStatus).map((entry) => text(entry?.file)).filter(Boolean);
+      const haystack = [branch, ...commits, ...changed, text(item?.folderName), text(item?.projectName)].join(" ");
+      if (/sng|price|sync/i.test(haystack)) return "Diagnose SNG price sync";
+      if (branch && !/^main$|^master$/i.test(branch)) return branch.replace(/^codex[/-]/i, "").replace(/[-_]+/g, " ");
+      if (commits[0]) return commits[0].replace(/^[a-f0-9]{7,}\s+/i, "");
+      if (changed[0]) return `Review ${changed[0]}`;
+      return "Active Codex session";
+    }
+
     function makeProjectFromOperation(operation) {
       const state = stateFromOperation(operation);
       const title = text(operation?.projectName || operation?.title || operation?.id, "Operation");
@@ -762,6 +775,7 @@
       const name = text(job?.projectName || job?.repository || job?.workspacePath || `Codex job ${index + 1}`);
       return {
         id: idFrom(job?.jobId || name, `job-${index}`),
+        isLiveCodex: !["completed", "cancelled", "failed"].includes(raw),
         sourceId: text(job?.jobId),
         name,
         state,
@@ -784,7 +798,47 @@
       };
     }
 
+    function makeProjectFromCodexWorkspace(item, index) {
+      const name = text(item?.projectName || item?.folderName || item?.workspacePath || `Codex workspace ${index + 1}`);
+      const task = inferCodexWorkspaceTask(item);
+      const changed = [
+        text(item?.gitBranch) ? `Branch: ${text(item.gitBranch)}` : "",
+        Number(item?.gitStatusCount || 0) ? `${Number(item.gitStatusCount)} changed file${Number(item.gitStatusCount) === 1 ? "" : "s"}` : "",
+        ...arr(item?.gitStatus).slice(0, 4).map((entry) => `${text(entry?.status, "?")} ${text(entry?.file)}`),
+        ...arr(item?.gitRecentCommits).slice(0, 2).map((entry) => `Commit: ${text(entry)}`),
+      ].filter(Boolean);
+      return {
+        id: idFrom(name, `codex-workspace-${index}`),
+        isLiveCodex: true,
+        sourceId: text(item?.sessionId),
+        name,
+        state: "moving",
+        stateLabel: labelForState("moving"),
+        basis: "live Codex workspace",
+        sentence: `Codex is active in ${name}${task ? ` on ${task}` : ""}.`,
+        last: age(item?.modifiedAt),
+        lastChange: task,
+        next: "Codex",
+        counts: `${Number(item?.gitStatusCount || arr(item?.gitStatus).length || 0)} file signal${Number(item?.gitStatusCount || arr(item?.gitStatus).length || 0) === 1 ? "" : "s"}`,
+        confidence: 88,
+        objective: task,
+        currentStep: task,
+        changed: changed.length ? changed : ["Recent Codex session metadata observed"],
+        tasks: [
+          { id: `${idFrom(name)}-codex-active`, title: task, status: "working", worker: "Codex" },
+          { id: `${idFrom(name)}-marcus-watch`, title: "Summarize current Codex progress", status: "watching", worker: "MARCUS" },
+        ],
+        evidence: [
+          "Desktop relay codexWorkspaces",
+          text(item?.sessionId ? `Session ${item.sessionId}` : ""),
+          text(item?.workspacePath || ""),
+          text(item?.gitRemote || ""),
+        ].filter(Boolean),
+      };
+    }
+
     function makeProjectFromDesktop(desktop) {
+      if (arr(desktop?.codexWorkspaces).length) return null;
       const windowTitle = text(desktop?.windowTitle);
       if (!windowTitle) return null;
       const name = text(desktop?.matchedProjectName || windowTitle.split(" - ").find((part) => !/visual studio code|google chrome|localhost/i.test(part)) || "Current desktop focus");
@@ -937,21 +991,43 @@
           byKey.set(key, project);
           continue;
         }
-        existing.sentence = existing.basis.includes("operation") ? existing.sentence : project.sentence;
+        const codexShouldLead = project.isLiveCodex && existing.state !== "needs_mark";
+        const existingCodexLeads = existing.isLiveCodex && project.state !== "needs_mark";
+        if (codexShouldLead) {
+          existing.isLiveCodex = true;
+          existing.state = project.state;
+          existing.stateLabel = project.stateLabel;
+          existing.sentence = project.sentence;
+          existing.basis = project.basis;
+          existing.last = project.last;
+          existing.lastChange = project.lastChange;
+          existing.next = project.next;
+          existing.currentStep = project.currentStep;
+          existing.objective = project.objective;
+          existing.confidence = Math.max(Number(existing.confidence || 0), Number(project.confidence || 0));
+          existing.counts = project.counts;
+        } else if (!existingCodexLeads) {
+          existing.sentence = existing.basis.includes("operation") ? existing.sentence : project.sentence;
+        }
         existing.changed = [...arr(existing.changed), ...arr(project.changed)].slice(0, 7);
         existing.tasks = [...arr(existing.tasks), ...arr(project.tasks)].slice(0, 8);
         existing.evidence = [...new Set([...arr(existing.evidence), ...arr(project.evidence)])].slice(0, 8);
-        if (rankState(project.state) < rankState(existing.state)) {
+        if (!existing.isLiveCodex && rankState(project.state) < rankState(existing.state)) {
           existing.state = project.state;
           existing.stateLabel = labelForState(project.state);
           existing.next = project.next;
         }
       }
-      return [...byKey.values()].sort((a, b) => rankState(a.state) - rankState(b.state) || b.confidence - a.confidence);
+      return [...byKey.values()].sort((a, b) => projectSortRank(a) - projectSortRank(b) || b.confidence - a.confidence);
     }
 
     function rankState(state) {
       return ({ needs_mark: 0, blocked: 1, moving: 2, verifying: 3, losing_thread: 4, monitoring: 5, quiet: 6, parked: 7, complete: 8, unknown: 9 })[state] ?? 9;
+    }
+
+    function projectSortRank(project) {
+      if (project?.isLiveCodex) return 0.5;
+      return rankState(project?.state);
     }
 
     async function load() {
@@ -966,6 +1042,7 @@
         ]);
         const operationProjects = arr(operations.operations).map(makeProjectFromOperation);
         const jobProjects = arr(jobs.jobs).filter((job) => !["completed", "cancelled"].includes(text(job?.status).toLowerCase())).map(makeProjectFromJob);
+        const codexWorkspaceProjects = arr(desktop?.codexWorkspaces).map(makeProjectFromCodexWorkspace);
         const desktopProject = makeProjectFromDesktop(desktop);
         const briefProjects = brief?.ok === false ? [] : makeProjectsFromBrief(brief);
         const registryProjects = arr(registry.projects).filter(shouldUseRegistryProject).slice(0, 8).map(makeProjectFromRegistry);
@@ -974,7 +1051,7 @@
           ...briefProjects.map((project) => project.decision).filter(Boolean),
         ].slice(0, 6);
         snapshot = {
-          projects: mergeProjects([...operationProjects, ...jobProjects, desktopProject, ...briefProjects, ...registryProjects]),
+          projects: mergeProjects([...codexWorkspaceProjects, ...jobProjects, ...operationProjects, desktopProject, ...briefProjects, ...registryProjects]),
           decisions,
           events: buildEvents({ operations, jobs, brief, desktop }),
           brief,
@@ -996,6 +1073,7 @@
 
     function buildEvents({ operations, jobs, brief, desktop }) {
       const rows = [];
+      for (const workspace of arr(desktop?.codexWorkspaces).slice(0, 6)) rows.push({ source: "Codex workspace", project: text(workspace.projectName || workspace.folderName), text: inferCodexWorkspaceTask(workspace), time: age(workspace.modifiedAt), tone: "moving" });
       for (const operation of arr(operations.operations).slice(0, 6)) rows.push({ source: "Operation", project: text(operation.projectName || operation.title), text: `${text(operation.status)}: ${text(operation.currentStep?.title || operation.title)}`, time: age(operation.updatedAt), tone: stateFromOperation(operation) });
       for (const job of arr(jobs.jobs).slice(0, 4)) rows.push({ source: "Codex", project: text(job.projectName || job.repository || "Codex"), text: text(job.finalOutput || job.diffSummary || job.error || job.status), time: age(job.updatedAt || job.startedAt), tone: "moving" });
       for (const item of arr(brief?.sessionContext?.changedSinceLastCheckIn).slice(0, 4)) rows.push({ source: text(item.source || item.category || "ActiveBrief"), project: text(item.title), text: text(item.summary || item.title), time: age(item.changedAt), tone: "monitoring" });
@@ -1008,8 +1086,9 @@
       const needs = p.filter((project) => project.state === "needs_mark").length;
       const moving = p.filter((project) => ["moving", "verifying"].includes(project.state)).length;
       const risk = p.filter((project) => ["blocked", "losing_thread"].includes(project.state)).length;
-      const partial = snapshot.jobs?.length === 0 ? " Codex jobs are currently empty or disabled." : "";
-      return `Reconciling ${p.length} projects: ${needs} need Mark, ${moving} moving, ${risk} at risk.${partial}`;
+      const activeCodex = p.filter((project) => project.isLiveCodex).length;
+      const partial = snapshot.jobs?.length === 0 && activeCodex === 0 ? " Codex jobs are currently empty or disabled." : "";
+      return `Reconciling ${p.length} projects: ${activeCodex} active Codex, ${needs} need Mark, ${moving} moving, ${risk} at risk.${partial}`;
     }
 
     function activityTone() {
@@ -1036,22 +1115,28 @@
 
     function renderChrome() {
       const mode = document.body.dataset.mode;
-      els.pageTitle.textContent = mode === "project" ? "Project God Mode" : mode === "task" ? "Task Control Room" : "Projects";
-      document.querySelectorAll(".nav-link").forEach((button) => button.classList.toggle("active", button.dataset.nav === "tracker" && mode === "tracker"));
+      const navTitle = ({ projects: "Projects", review: "Review", activity: "Activity", settings: "Settings" })[viewMode] || "Projects";
+      els.pageTitle.textContent = mode === "project" ? "Project God Mode" : mode === "task" ? "Task Control Room" : navTitle;
+      document.querySelectorAll(".nav-link").forEach((button) => {
+        const navKey = button.dataset.nav === "tracker" ? "projects" : button.dataset.nav;
+        button.classList.toggle("active", navKey === viewMode && mode === "tracker");
+      });
       const needs = snapshot.decisions.length;
       const moving = snapshot.projects.filter((p) => ["moving", "verifying"].includes(p.state)).length;
+      const liveCodex = snapshot.projects.filter((p) => p.isLiveCodex);
       els.sideSubtitle.textContent = `Working across ${snapshot.projects.length} projects`;
       els.startHere.textContent = needs
         ? `${snapshot.decisions[0].project}: ${snapshot.decisions[0].title}.`
-        : moving ? `${moving} project${moving === 1 ? "" : "s"} moving; no exact approval is first in line.` : "No live blocker is first in line.";
+        : liveCodex.length ? `${liveCodex[0].name}: ${liveCodex[0].currentStep}.`
+          : moving ? `${moving} project${moving === 1 ? "" : "s"} moving; no exact approval is first in line.` : "No live blocker is first in line.";
       els.reviewPrimary.textContent = needs ? "Review decision" : "Ask Marcus";
-      els.doingList.innerHTML = snapshot.projects.filter((p) => ["observed operation", "observed Codex job"].includes(p.basis) && p.state !== "complete").slice(0, 4).map((p) => `<li><span>${esc(stateIcons[p.state])}</span><span><strong>${esc(p.name)}</strong><br>${esc(p.currentStep)}</span></li>`).join("") || `<li><span>-</span><span>No active operation or Codex run is reporting movement.</span></li>`;
+      els.doingList.innerHTML = snapshot.projects.filter((p) => (p.isLiveCodex || ["observed operation", "observed Codex job"].includes(p.basis)) && p.state !== "complete").slice(0, 4).map((p) => `<li><span>${esc(stateIcons[p.state])}</span><span><strong>${esc(p.name)}</strong><br>${esc(p.currentStep)}</span></li>`).join("") || `<li><span>-</span><span>No active operation or Codex run is reporting movement.</span></li>`;
       els.handledList.innerHTML = snapshot.projects.filter((p) => p.state === "complete").slice(0, 3).map((p) => `<li><span>+</span><span>${esc(p.name)}</span></li>`).join("") || `<li><span>-</span><span>No recently completed work in this snapshot.</span></li>`;
       els.nextList.innerHTML = snapshot.projects.slice(0, 3).map((p) => `<li><span>${esc(stateIcons[p.state])}</span><span>${esc(p.name)}: next is ${esc(p.next)}</span></li>`).join("") || `<li><span>-</span><span>Refresh after live sources reconnect.</span></li>`;
     }
 
     function renderTracker() {
-      const filtered = snapshot.projects.filter((project) => {
+      const filtered = projectsForView().filter((project) => {
         const q = query.toLowerCase();
         return !q || JSON.stringify(project).toLowerCase().includes(q);
       });
@@ -1066,9 +1151,9 @@
           <p><strong>Blocks:</strong> ${esc(decision.blocks)}<br><strong>Marcus recommends:</strong> ${esc(decision.recommendation)}</p>
         </button>
       `).join("");
-      els.ledgerSummary.textContent = `${filtered.length} visible project${filtered.length === 1 ? "" : "s"} from live operations, ActiveBrief, registry, and desktop evidence.`;
+      els.ledgerSummary.textContent = summaryForView(filtered);
       if (!filtered.length) {
-        els.ledger.innerHTML = `<div class="empty"><strong>No projects discovered for this filter.</strong><br>MARCUS is not filling the screen with stale sample data. Clear search or refresh live sources.</div>`;
+        els.ledger.innerHTML = emptyForView();
       } else {
         els.ledger.innerHTML = groupOrder.map(([key, label]) => {
           const rows = filtered.filter((project) => groupFor(project) === key);
@@ -1080,6 +1165,27 @@
         }).join("");
       }
       bindTracker();
+    }
+
+    function projectsForView() {
+      if (viewMode === "review") return snapshot.projects.filter((project) => ["needs_mark", "verifying", "complete"].includes(project.state));
+      if (viewMode === "activity") return snapshot.projects.filter((project) => project.isLiveCodex || ["moving", "blocked", "losing_thread"].includes(project.state));
+      if (viewMode === "settings") return snapshot.projects.filter((project) => ["observed desktop focus", "live Codex workspace", "observed Codex job", "observed operation"].includes(project.basis));
+      return snapshot.projects;
+    }
+
+    function summaryForView(projects) {
+      if (viewMode === "review") return `${projects.length} review item${projects.length === 1 ? "" : "s"} needing a decision, verification, or acceptance.`;
+      if (viewMode === "activity") return `${projects.length} active/blocked work item${projects.length === 1 ? "" : "s"} from Codex, operations, and desktop relay evidence.`;
+      if (viewMode === "settings") return `${projects.length} source-backed system item${projects.length === 1 ? "" : "s"} showing what the bridge is actually reporting.`;
+      return `${projects.length} visible project${projects.length === 1 ? "" : "s"} from live operations, ActiveBrief, registry, and desktop evidence.`;
+    }
+
+    function emptyForView() {
+      if (viewMode === "review") return `<div class="empty"><strong>No review items in this snapshot.</strong><br>MARCUS has no visible decision, verification, or acceptance queue from the current sources.</div>`;
+      if (viewMode === "activity") return `<div class="empty"><strong>No active Codex or operation movement is visible.</strong><br>If Codex is working, the bridge is not relaying that workspace/job into this page yet.</div>`;
+      if (viewMode === "settings") return `<div class="empty"><strong>No source-backed system items are visible.</strong><br>Check desktop relay auth, Codex job provider status, and the active bridge connection.</div>`;
+      return `<div class="empty"><strong>No projects discovered for this filter.</strong><br>MARCUS is not filling the screen with stale sample data. Clear search or refresh live sources.</div>`;
     }
 
     function chiefBrief(projects) {
@@ -1095,9 +1201,10 @@
     }
 
     function sourceNoteHtml() {
+      const workspaces = arr(snapshot.desktop?.codexWorkspaces).length;
       const codex = snapshot.sourceState?.jobs?.enabled === false ? "Codex job provider reports disabled/empty" : `${snapshot.jobs.length} Codex jobs`;
       const desktop = snapshot.desktop?.windowTitle ? "desktop focus observed" : "desktop context partial";
-      return `<strong>Live:</strong> ${snapshot.operations.length} operations, ${codex}, ${desktop}. <strong>Fallback:</strong> registry and ActiveBrief inferences are labeled as such.`;
+      return `<strong>Live:</strong> ${snapshot.operations.length} operations, ${codex}, ${workspaces} Codex workspace${workspaces === 1 ? "" : "s"}, ${desktop}. <strong>Fallback:</strong> registry and ActiveBrief inferences are labeled as such.`;
     }
 
     function rowHtml(project) {
@@ -1356,11 +1463,10 @@
     window.addEventListener("popstate", () => { applyRoute(); render(); });
     document.querySelectorAll("[data-nav]").forEach((button) => {
       button.addEventListener("click", () => {
-        if (button.dataset.nav === "tracker") backToTracker();
-        else {
-          els.composerInput.value = `Open ${button.textContent.trim()} when that workspace is implemented.`;
-          els.composerInput.focus();
-        }
+        const nextMode = button.dataset.nav === "tracker" ? "projects" : button.dataset.nav;
+        viewMode = nextMode;
+        if (document.body.dataset.mode !== "tracker") backToTracker();
+        else render();
       });
     });
 
