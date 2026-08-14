@@ -13,31 +13,97 @@
 <style>
   :root {
     color-scheme: dark;
-    --bg: #071018;
-    --panel: #101c27;
-    --panel-2: #142535;
-    --text: #eef7fb;
-    --muted: #9fb0bd;
-    --line: rgba(151, 203, 224, 0.18);
-    --accent: #2dd4bf;
-    --accent-2: #38bdf8;
+    --bg: #070b12;
+    --panel: #0d141e;
+    --panel-2: #121b27;
+    --panel-3: #172231;
+    --text: #f4efe7;
+    --muted: #9aa6b3;
+    --line: rgba(159, 174, 190, 0.22);
+    --accent: #9b6cff;
+    --accent-2: #6f4dff;
+    --active: #45c8ff;
     --danger: #fb7185;
     --ok: #4ade80;
+    --warn: #f7b84b;
     --shadow: 0 14px 44px rgba(0,0,0,0.36);
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; letter-spacing: 0; }
   body { min-height: 100dvh; display: flex; flex-direction: column; }
   button, input, textarea { font: inherit; }
-  .app { min-height: 100dvh; display: flex; flex-direction: column; padding: max(14px, env(safe-area-inset-top)) 14px max(14px, env(safe-area-inset-bottom)); gap: 12px; }
+  .app { min-height: 100dvh; display: flex; flex-direction: column; padding: max(14px, env(safe-area-inset-top)) 14px calc(84px + max(14px, env(safe-area-inset-bottom))); gap: 12px; }
   .topbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
   .brand { min-width: 0; }
-  .brand h1 { margin: 0; font-size: 22px; line-height: 1.1; }
+  .brand h1 { margin: 0; font-size: 36px; line-height: 1.03; letter-spacing: 0; }
   .brand p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
   .status-pill { border: 1px solid var(--line); border-radius: 999px; padding: 8px 10px; font-size: 12px; color: var(--muted); background: rgba(255,255,255,0.04); white-space: nowrap; }
   .status-pill.ok { color: var(--ok); border-color: rgba(74,222,128,0.4); }
   .status-pill.warn { color: #fbbf24; border-color: rgba(251,191,36,0.4); }
-  .panel { background: linear-gradient(180deg, rgba(20,37,53,0.96), rgba(16,28,39,0.96)); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); }
+  .glyph { width: 30px; height: 30px; display: inline-grid; place-items: center; color: var(--accent); }
+  .glyph::before { content: "✧"; font-size: 28px; line-height: 1; }
+  .view { display: none; gap: 12px; }
+  body[data-view="review"] #reviewView,
+  body[data-view="projects"] #projectsView { display: grid; }
+  body[data-view="review"] .health,
+  body[data-view="review"] #activeWorkPanel,
+  body[data-view="review"] .chat,
+  body[data-view="projects"] .health,
+  body[data-view="projects"] #activeWorkPanel,
+  body[data-view="projects"] .chat { display: none !important; }
+  body[data-view="review"] .footer-actions,
+  body[data-view="projects"] .footer-actions { display: none !important; }
+  body[data-view="marcus"] #reviewView,
+  body[data-view="marcus"] #projectsView { display: none !important; }
+  .mobile-tabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); min-height: 48px; padding: 3px; border: 1px solid var(--line); border-radius: 12px; background: rgba(255,255,255,0.035); }
+  .tab-btn { min-height: 42px; border: 0; border-radius: 9px; color: var(--muted); background: transparent; font-weight: 650; cursor: pointer; }
+  .tab-btn.active { color: #c9adff; background: rgba(155,108,255,0.16); box-shadow: inset 0 -2px 0 var(--accent); }
+  .brief-card, .decision-card, .review-list, .project-ledger, .handled-card { padding: 14px; }
+  .brief-card p, .decision-card p, .review-list p, .project-ledger p, .handled-card p { overflow-wrap: anywhere; }
+  .section-label { margin: 0 0 10px; color: var(--muted); font-size: 12px; line-height: 1; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em; }
+  .brief-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 14px; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .brief-metric { min-height: 74px; display: grid; align-content: center; gap: 4px; padding: 10px; border-right: 1px solid var(--line); }
+  .brief-metric:last-child { border-right: 0; }
+  .brief-metric span { color: var(--muted); font-size: 12px; }
+  .brief-metric strong { font-size: 26px; color: var(--accent); }
+  .brief-metric.ready strong { color: var(--ok); }
+  .brief-metric.handled strong { color: #5ba8ff; }
+  .decision-card { border-color: rgba(155,108,255,0.7); }
+  .decision-head { display: grid; grid-template-columns: 54px minmax(0,1fr); gap: 12px; align-items: center; }
+  .decision-icon, .review-icon { width: 46px; height: 46px; display: grid; place-items: center; border-radius: 10px; background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: white; font-weight: 900; }
+  .decision-title { margin: 4px 0 0; font-size: 21px; line-height: 1.18; }
+  .decision-project { color: var(--text); font-size: 14px; }
+  .decision-meta { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 8px; }
+  .status-label { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 3px 8px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); font-size: 12px; font-weight: 700; }
+  .status-label.warn { color: var(--warn); border-color: rgba(247,184,75,0.55); }
+  .status-label.danger { color: var(--danger); border-color: rgba(251,113,133,0.58); }
+  .status-label.ok { color: var(--ok); border-color: rgba(74,222,128,0.48); }
+  .compare { margin-top: 14px; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .compare-row { min-height: 48px; display: grid; grid-template-columns: 116px minmax(0,1fr); align-items: center; gap: 10px; padding: 9px 12px; }
+  .compare-row + .compare-row { border-top: 1px solid var(--line); }
+  .compare-row strong { font-size: 15px; }
+  .compare-row span { color: var(--muted); overflow-wrap: anywhere; }
+  .evidence-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 12px 0; }
+  .evidence-chip { min-height: 38px; display: flex; align-items: center; justify-content: center; gap: 6px; padding: 8px; border: 1px solid var(--line); border-radius: 9px; color: var(--muted); font-size: 12px; text-align: center; }
+  .primary-action { width: 100%; min-height: 54px; margin-top: 8px; border: 0; border-radius: 10px; color: white; background: linear-gradient(135deg, var(--accent), var(--accent-2)); font-weight: 850; font-size: 16px; }
+  .secondary-actions { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 10px; margin-top: 10px; }
+  .review-row, .project-row, .handled-row { min-height: 64px; display: grid; grid-template-columns: 46px minmax(0,1fr) auto; gap: 10px; align-items: center; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: rgba(255,255,255,0.025); }
+  .review-row + .review-row, .project-row + .project-row, .handled-row + .handled-row { margin-top: 8px; }
+  .row-title { display: block; color: var(--text); font-weight: 800; overflow-wrap: anywhere; }
+  .row-copy { display: block; margin-top: 3px; color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+  .row-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+  .row-actions .btn { min-height: 36px; padding: 7px 10px; border-radius: 8px; font-size: 12px; white-space: nowrap; }
+  .project-row { grid-template-columns: 44px minmax(0,1fr); }
+  .project-row .status-label { justify-self: start; margin-top: 7px; }
+  .post-approval { min-height: 46px; display: grid; grid-template-columns: auto minmax(0,1fr); gap: 10px; align-items: center; padding: 10px 12px; color: var(--muted); }
+  .post-approval strong { color: var(--text); font-weight: 650; }
+  .mobile-empty { margin: 0; padding: 13px; border: 1px dashed var(--line); border-radius: 10px; color: var(--muted); font-size: 13px; }
+  .bottom-nav { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2px; padding: 8px 14px calc(8px + env(safe-area-inset-bottom)); background: rgba(7,11,18,0.94); border-top: 1px solid var(--line); backdrop-filter: blur(12px); }
+  .bottom-nav button { min-height: 52px; border: 0; border-radius: 10px; color: var(--muted); background: transparent; display: grid; place-items: center; gap: 2px; cursor: pointer; }
+  .bottom-nav button.active { color: #bd9cff; background: rgba(155,108,255,0.12); }
+  .bottom-nav .nav-icon { font-size: 19px; line-height: 1; }
+  .bottom-nav .nav-count { min-width: 20px; min-height: 20px; display: inline-grid; place-items: center; border-radius: 7px; background: var(--accent); color: #100821; font-size: 12px; font-weight: 900; }
   .login { padding: 16px; display: none; gap: 10px; }
   .login.visible { display: grid; }
   .login label { color: var(--muted); font-size: 13px; }
@@ -45,7 +111,8 @@
   .input:focus, .composer textarea:focus { border-color: rgba(45,212,191,0.65); }
   .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
   .btn { min-height: 44px; border: 1px solid var(--line); border-radius: 12px; color: var(--text); background: rgba(255,255,255,0.05); padding: 10px 12px; cursor: pointer; }
-  .btn.primary { color: #03211d; background: linear-gradient(135deg, var(--accent), var(--accent-2)); border: 0; font-weight: 800; }
+  .btn.primary { color: white; background: linear-gradient(135deg, var(--accent), var(--accent-2)); border: 0; font-weight: 800; }
+  button:focus-visible, .btn:focus-visible, .input:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .btn:disabled { opacity: 0.55; cursor: not-allowed; }
   .health { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding: 10px; }
   .metric { min-height: 64px; border: 1px solid var(--line); border-radius: 12px; background: rgba(0,0,0,0.15); padding: 10px; }
@@ -146,9 +213,12 @@
   @media (min-width: 760px) {
     .app { max-width: 760px; width: 100%; margin: 0 auto; }
   }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
+  }
 </style>
 </head>
-<body>
+<body data-view="review">
 <main class="app">
   <header class="topbar">
     <div class="brand">
@@ -167,6 +237,57 @@
   <section id="installPanel" class="panel install">
     <p>Install Marcus on this Android home screen.</p>
     <button id="installBtn" class="btn primary" type="button">Install</button>
+  </section>
+
+  <section id="reviewView" class="view" aria-label="Marcus review">
+    <nav class="mobile-tabs" aria-label="Review sections">
+      <button class="tab-btn active" type="button" data-review-tab="brief">Brief</button>
+      <button class="tab-btn" type="button" data-review-tab="decisions">Decisions <span id="decisionTabCount">0</span></button>
+      <button class="tab-btn" type="button" data-review-tab="review">Review <span id="readyTabCount">0</span></button>
+      <button class="tab-btn" type="button" data-review-tab="closed">Closed</button>
+    </nav>
+
+    <section class="panel brief-card" aria-labelledby="briefTitle">
+      <div class="decision-head">
+        <span class="glyph" aria-hidden="true"></span>
+        <div>
+          <p id="briefTitle" class="section-label">Working brief</p>
+          <p id="reviewBriefCopy" style="margin:0; font-size:18px; line-height:1.35;">Marcus is checking active work.</p>
+        </div>
+      </div>
+      <div class="brief-grid" aria-label="Review counts">
+        <button id="needsMetricBtn" class="brief-metric tab-btn" type="button" data-review-tab="decisions"><span>Needs you</span><strong id="needsCount">0</strong></button>
+        <button id="readyMetricBtn" class="brief-metric ready tab-btn" type="button" data-review-tab="review"><span>Ready</span><strong id="readyCount">0</strong></button>
+        <button id="handledMetricBtn" class="brief-metric handled tab-btn" type="button" data-review-tab="closed"><span>Handled</span><strong id="handledCount">0</strong></button>
+      </div>
+    </section>
+
+    <section id="recommendationCard" class="panel decision-card" aria-live="polite"></section>
+
+    <section class="review-list" aria-labelledby="readyTitle">
+      <p id="readyTitle" class="section-label">Ready for you</p>
+      <div id="readyList"></div>
+    </section>
+
+    <section class="handled-card" aria-labelledby="handledTitle">
+      <p id="handledTitle" class="section-label">Marcus handled</p>
+      <div id="handledList"></div>
+    </section>
+
+    <section class="panel post-approval">
+      <span>After I approve...</span>
+      <strong>Marcus finishes, verifies, and reports back.</strong>
+    </section>
+  </section>
+
+  <section id="projectsView" class="view" aria-label="Projects">
+    <section class="panel brief-card">
+      <p class="section-label">Projects ledger</p>
+      <p id="projectsBriefCopy" style="margin:0; font-size:17px; line-height:1.35;">Live projects will appear here after Marcus reads the current brief and desktop relay.</p>
+    </section>
+    <section class="project-ledger">
+      <div id="projectLedger"></div>
+    </section>
   </section>
 
   <section class="panel health" aria-label="Marcus capabilities">
@@ -213,6 +334,12 @@
     <button id="refreshBtn" class="btn" type="button">Refresh</button>
   </nav>
 </main>
+
+<nav class="bottom-nav" aria-label="Primary">
+  <button class="active" type="button" data-mobile-view="review"><span class="nav-icon" aria-hidden="true">*</span><span>Review</span><span id="mobileReviewCount" class="nav-count">0</span></button>
+  <button type="button" data-mobile-view="projects"><span class="nav-icon" aria-hidden="true">[]</span><span>Projects</span></button>
+  <button type="button" data-mobile-view="marcus"><span class="nav-icon" aria-hidden="true">::</span><span>Marcus</span></button>
+</nav>
 
 <dialog id="approvalDialog" class="provider-dialog">
   <section class="provider-form" aria-labelledby="approvalTitle">
@@ -436,6 +563,22 @@
     loginBtn: document.getElementById('loginBtn'),
     installPanel: document.getElementById('installPanel'),
     installBtn: document.getElementById('installBtn'),
+    reviewView: document.getElementById('reviewView'),
+    projectsView: document.getElementById('projectsView'),
+    reviewTabs: Array.from(document.querySelectorAll('[data-review-tab]')),
+    mobileNav: Array.from(document.querySelectorAll('[data-mobile-view]')),
+    decisionTabCount: document.getElementById('decisionTabCount'),
+    readyTabCount: document.getElementById('readyTabCount'),
+    reviewBriefCopy: document.getElementById('reviewBriefCopy'),
+    needsCount: document.getElementById('needsCount'),
+    readyCount: document.getElementById('readyCount'),
+    handledCount: document.getElementById('handledCount'),
+    mobileReviewCount: document.getElementById('mobileReviewCount'),
+    recommendationCard: document.getElementById('recommendationCard'),
+    readyList: document.getElementById('readyList'),
+    handledList: document.getElementById('handledList'),
+    projectsBriefCopy: document.getElementById('projectsBriefCopy'),
+    projectLedger: document.getElementById('projectLedger'),
     codex: document.getElementById('codexMetric'),
     github: document.getElementById('githubMetric'),
     cloudflare: document.getElementById('cloudflareMetric'),
@@ -553,6 +696,276 @@
   let selectedMessageAction = null;
   let messageRequestInFlight = false;
   let pcAccessRequestInFlight = false;
+  let workspaceSnapshot = { health: null, brief: null, operations: [], pcCapabilities: null };
+  let activeMobileView = document.body.dataset.view || 'review';
+  let activeReviewTab = 'brief';
+
+  function asArray(value) {
+    return Array.isArray(value) ? value : [];
+  }
+  function cleanText(value, fallback = '') {
+    return String(value ?? fallback ?? '').trim();
+  }
+  function escapeHtml(value) {
+    return cleanText(value)
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#39;');
+  }
+  function clampPercent(value, fallback = 0) {
+    const n = Number(value);
+    return Math.max(0, Math.min(100, Number.isFinite(n) ? Math.round(n) : fallback));
+  }
+  function itemTitle(item, fallback = 'Untitled work') {
+    return cleanText(item?.projectName || item?.project || item?.name || item?.title || item?.id, fallback);
+  }
+  function itemSummary(item, fallback = 'No summary available yet.') {
+    return cleanText(item?.summary || item?.detail || item?.description || item?.currentStep?.title || item?.reason || item?.status, fallback);
+  }
+  function statusTone(status, risk = '') {
+    const s = cleanText(status).toLowerCase();
+    const r = cleanText(risk).toLowerCase();
+    if (['failed', 'blocked', 'critical'].includes(s) || ['critical', 'high'].includes(r)) return 'danger';
+    if (s.includes('approval') || s.includes('decision') || ['medium'].includes(r)) return 'warn';
+    if (['completed', 'verified', 'ready', 'sent'].includes(s)) return 'ok';
+    return '';
+  }
+  function operationStatus(operation) {
+    return cleanText(operation?.status || (operation?.needsApproval ? 'waiting_for_approval' : ''), 'unknown').replaceAll('_', ' ');
+  }
+  function operationConfidence(operation) {
+    const progress = operation?.progress || {};
+    const verification = operation?.verificationSummary || {};
+    if (operation?.pendingApproval?.riskLevel === 'critical') return 45;
+    if (operation?.needsApproval) return 62;
+    if (verification.required) return clampPercent((Number(verification.passed || 0) / Number(verification.required || 1)) * 100, 60);
+    return clampPercent(progress.percent, operation?.status === 'completed' ? 86 : 68);
+  }
+  function operationEvidence(operation) {
+    const verification = operation?.verificationSummary || {};
+    return Number(verification.required || 0) || Number(operation?.progress?.total || 0) || Number(operation?.activeBlockers || 0) || (operation?.pendingApproval ? 1 : 0);
+  }
+  function setMobileView(view) {
+    activeMobileView = ['review', 'projects', 'marcus'].includes(view) ? view : 'review';
+    document.body.dataset.view = activeMobileView;
+    const titles = {
+      review: ['Review', 'Marcus reviewed live work'],
+      projects: ['Projects', 'Tracked work and Codex sessions'],
+      marcus: ['Marcus', 'Project operator'],
+    };
+    document.querySelector('.brand h1').textContent = titles[activeMobileView][0];
+    document.querySelector('.brand p').textContent = titles[activeMobileView][1];
+    for (const button of els.mobileNav) button.classList.toggle('active', button.dataset.mobileView === activeMobileView);
+  }
+  function setReviewTab(tab) {
+    activeReviewTab = ['brief', 'decisions', 'review', 'closed'].includes(tab) ? tab : 'brief';
+    for (const button of els.reviewTabs) button.classList.toggle('active', button.dataset.reviewTab === activeReviewTab);
+    renderMobileWorkspace();
+  }
+  function buildReviewModel() {
+    const operations = asArray(workspaceSnapshot.operations);
+    const brief = workspaceSnapshot.brief || {};
+    const decisionItems = [
+      ...operations.filter((operation) => operation?.pendingApproval?.id || operation?.needsApproval || ['blocked', 'waiting_for_approval', 'recovery_required', 'failed'].includes(operation?.status)),
+      ...pendingMessageActions.map((action) => ({ ...action, kind: 'message_action' })),
+      ...asArray(brief.decisionQueue).map((item) => ({ ...item, kind: 'brief_decision' })),
+    ];
+    const readyItems = [
+      ...operations.filter((operation) => ['completed', 'verifying'].includes(operation?.status) || Number(operation?.verificationSummary?.needsManualReview || 0) > 0),
+      ...asArray(brief.preparedActions).map((item) => ({ ...item, kind: 'prepared_action' })),
+      ...asArray(brief.activeActionQueue).map((item) => ({ ...item, kind: 'active_action' })),
+    ];
+    const handledItems = [
+      ...operations.filter((operation) => ['completed', 'cancelled'].includes(operation?.status)).slice(0, 6),
+      ...asArray(brief.projectActivity).filter((item) => /complete|sent|merged|deployed|handled|archived/i.test(itemSummary(item))).slice(0, 6),
+    ];
+    const projects = collectProjects(brief, operations);
+    return {
+      decisions: dedupeByLabel(decisionItems, (item) => item.id || `${itemTitle(item)}:${itemSummary(item)}`),
+      ready: dedupeByLabel(readyItems, (item) => item.id || `${itemTitle(item)}:${itemSummary(item)}`),
+      handled: dedupeByLabel(handledItems, (item) => item.id || `${itemTitle(item)}:${itemSummary(item)}`),
+      projects,
+    };
+  }
+  function dedupeByLabel(items, keyFn) {
+    const seen = new Set();
+    return asArray(items).filter((item) => {
+      const key = cleanText(keyFn(item));
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+  function collectProjects(brief, operations) {
+    const rows = [];
+    const push = (item, source = '') => {
+      const name = itemTitle(item, '');
+      if (!name) return;
+      rows.push({
+        id: cleanText(item?.id || name),
+        name,
+        source,
+        summary: itemSummary(item, source ? `From ${source}` : 'Tracked by Marcus.'),
+        status: cleanText(item?.status || item?.state || item?.lane || item?.kind || source, 'active'),
+      });
+    };
+    asArray(brief.projects).forEach((item) => push(item, 'brief'));
+    asArray(brief.projectActivity).forEach((item) => push(item, 'activity'));
+    asArray(brief.worldModel?.activeWork).forEach((item) => push(item, 'desktop'));
+    asArray(operations).forEach((item) => push(item, 'codex'));
+    return dedupeByLabel(rows, (row) => row.name.toLowerCase()).slice(0, 20);
+  }
+  function renderMobileWorkspace() {
+    const model = buildReviewModel();
+    const needs = model.decisions.length;
+    const ready = model.ready.length;
+    const handled = model.handled.length;
+    els.needsCount.textContent = String(needs);
+    els.readyCount.textContent = String(ready);
+    els.handledCount.textContent = String(handled);
+    els.decisionTabCount.textContent = String(needs);
+    els.readyTabCount.textContent = String(ready);
+    els.mobileReviewCount.textContent = String(needs + ready);
+    els.reviewBriefCopy.textContent = `${needs} decision${needs === 1 ? '' : 's'} need you. ${ready} deliverable${ready === 1 ? '' : 's'} are ready. Marcus handled ${handled} item${handled === 1 ? '' : 's'} recently.`;
+    renderRecommendation(model);
+    renderReadyList(model.ready);
+    renderHandledList(model.handled);
+    renderProjectLedger(model.projects);
+  }
+  function renderRecommendation(model) {
+    const item = activeReviewTab === 'review' ? model.ready[0] : activeReviewTab === 'closed' ? model.handled[0] : model.decisions[0] || model.ready[0] || model.handled[0];
+    if (!item) {
+      els.recommendationCard.innerHTML = '<p class="section-label">Marcus recommends</p><p class="mobile-empty">No live decision is blocking Marcus right now. The Projects tab shows the current operating ledger.</p>';
+      return;
+    }
+    const isMessage = item.kind === 'message_action';
+    const approval = item.pendingApproval || {};
+    const status = cleanText(isMessage ? item.status : item.status || approval.action || item.kind, 'review');
+    const title = isMessage
+      ? `Approve ${approvalLabel(item.type)} to ${item.to || 'recipient'}`
+      : item.pendingApproval?.action
+        ? `Approve ${approvalLabel(item.pendingApproval.action)}`
+        : itemTitle(item);
+    const project = cleanText(item.projectName || item.project || item.name || 'Marcus');
+    const summary = isMessage ? cleanText(item.reason || item.body, 'External message requires your approval before Marcus sends it.') : itemSummary(item);
+    const approveCopy = isMessage
+      ? `Send the reviewed ${approvalLabel(item.type)} exactly as drafted.`
+      : item.pendingApproval?.action
+        ? `Run ${approvalLabel(item.pendingApproval.action)} and continue verification.`
+        : statusTone(status) === 'ok'
+          ? 'Accept the verified result and let Marcus close the loop.'
+          : 'Let Marcus continue with the recommended next step.';
+    const waitCopy = statusTone(status) === 'danger'
+      ? 'Work remains blocked and Marcus should not claim progress.'
+      : 'Marcus keeps monitoring but does not execute the next step.';
+    const confidence = isMessage ? 76 : operationConfidence(item);
+    const evidence = isMessage ? 1 : operationEvidence(item);
+    els.recommendationCard.innerHTML = `
+      <p class="section-label">Marcus recommends</p>
+      <div class="decision-head">
+        <span class="decision-icon" aria-hidden="true">${escapeHtml(project.slice(0, 2).toUpperCase())}</span>
+        <div>
+          <span class="decision-project">${escapeHtml(project)}</span>
+          <span class="status-label ${statusTone(status, item.pendingApproval?.riskLevel)}">${escapeHtml(approvalLabel(status))}</span>
+          <h2 class="decision-title">${escapeHtml(title)}</h2>
+          <p style="margin:7px 0 0; color:var(--muted); line-height:1.35;">${escapeHtml(summary)}</p>
+        </div>
+      </div>
+      <div class="compare">
+        <div class="compare-row"><strong>Approve</strong><span>${escapeHtml(approveCopy)}</span></div>
+        <div class="compare-row"><strong>Wait</strong><span>${escapeHtml(waitCopy)}</span></div>
+      </div>
+      <div class="evidence-row">
+        <span class="evidence-chip">Risk ${escapeHtml(approvalLabel(item.pendingApproval?.riskLevel || item.riskLevel || 'normal'))}</span>
+        <span class="evidence-chip">Evidence ${escapeHtml(String(evidence))}</span>
+        <span class="evidence-chip">Confidence ${confidence}%</span>
+      </div>
+      <button id="recommendPrimaryAction" class="primary-action" type="button">${escapeHtml(isMessage ? 'Review exact message' : item.pendingApproval?.id ? 'Review exact approval' : 'Talk it through')}</button>
+      <div class="secondary-actions">
+        <button id="recommendTalkAction" class="btn" type="button">Talk it through</button>
+        <button id="recommendChangeAction" class="btn" type="button">Change instructions</button>
+      </div>`;
+    document.getElementById('recommendPrimaryAction')?.addEventListener('click', () => actOnReviewItem(item));
+    document.getElementById('recommendTalkAction')?.addEventListener('click', () => {
+      setMobileView('marcus');
+      sendMessage(`Talk me through ${title} for ${project}. Tell me the exact decision I need to make and the consequence of each option.`);
+    });
+    document.getElementById('recommendChangeAction')?.addEventListener('click', () => {
+      setMobileView('marcus');
+      els.input.value = `Change instructions for ${project}: `;
+      els.input.focus();
+    });
+  }
+  function renderReadyList(items) {
+    const visible = activeReviewTab === 'decisions' ? [] : asArray(items).slice(0, activeReviewTab === 'review' ? 12 : 3);
+    if (!visible.length) {
+      els.readyList.innerHTML = '<p class="mobile-empty">Nothing is ready for review in the live feed.</p>';
+      return;
+    }
+    els.readyList.innerHTML = visible.map((item, index) => `
+      <article class="review-row">
+        <span class="review-icon" aria-hidden="true">${escapeHtml(itemTitle(item).slice(0, 1).toUpperCase())}</span>
+        <div><span class="row-title">${escapeHtml(itemTitle(item))}</span><span class="row-copy">${escapeHtml(itemSummary(item))}</span></div>
+        <div class="row-actions"><button class="btn" type="button" data-ready-index="${index}">${item?.status === 'completed' ? 'Review' : 'Open'}</button></div>
+      </article>`).join('');
+    els.readyList.querySelectorAll('[data-ready-index]').forEach((button) => {
+      button.addEventListener('click', () => actOnReviewItem(visible[Number(button.dataset.readyIndex)]));
+    });
+  }
+  function renderHandledList(items) {
+    const visible = activeReviewTab === 'closed' ? asArray(items).slice(0, 12) : asArray(items).slice(0, 2);
+    if (!visible.length) {
+      els.handledList.innerHTML = '<p class="mobile-empty">No closed work is visible in the current snapshot.</p>';
+      return;
+    }
+    els.handledList.innerHTML = visible.map((item) => `
+      <article class="handled-row">
+        <span class="status-label ok" aria-hidden="true">done</span>
+        <div><span class="row-title">${escapeHtml(itemTitle(item))}</span><span class="row-copy">${escapeHtml(itemSummary(item))}</span></div>
+        <span class="row-copy">${escapeHtml(operationStatus(item))}</span>
+      </article>`).join('');
+  }
+  function renderProjectLedger(projects) {
+    els.projectsBriefCopy.textContent = `${projects.length} tracked project${projects.length === 1 ? '' : 's'} from active brief, desktop relay, and Codex operations.`;
+    if (!projects.length) {
+      els.projectLedger.innerHTML = '<p class="mobile-empty">Marcus does not have a live project ledger yet. Keep the desktop relay online and refresh after opening VS Code/Codex workspaces.</p>';
+      return;
+    }
+    els.projectLedger.innerHTML = projects.map((project, index) => `
+      <article class="project-row">
+        <span class="review-icon" aria-hidden="true">${escapeHtml(project.name.slice(0, 1).toUpperCase())}</span>
+        <div>
+          <span class="row-title">${escapeHtml(project.name)}</span>
+          <span class="row-copy">${escapeHtml(project.summary)}</span>
+          <span class="status-label ${statusTone(project.status)}">${escapeHtml(approvalLabel(project.status))}</span>
+          <div class="row-actions" style="margin-top:8px;"><button class="btn" type="button" data-project-index="${index}">Ask Marcus</button></div>
+        </div>
+      </article>`).join('');
+    els.projectLedger.querySelectorAll('[data-project-index]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const project = projects[Number(button.dataset.projectIndex)];
+        setMobileView('marcus');
+        sendMessage(`Give me the live status for ${project.name}. Include active Codex tasks, blockers, evidence, and the next decision if any.`);
+      });
+    });
+  }
+  function actOnReviewItem(item) {
+    if (!item) return;
+    if (item.kind === 'message_action') {
+      openMessageApproval(item).catch((err) => addMessage('system', err.message || String(err)));
+      return;
+    }
+    if (item.pendingApproval?.id || item.needsApproval) {
+      operationTracker?.track(item);
+      renderTrackedOperation(item);
+      openApprovalReview().catch((err) => addMessage('system', err.message || String(err)));
+      return;
+    }
+    setMobileView('marcus');
+    sendMessage(`What should I do with ${itemTitle(item)}? Give me the exact decision, evidence, and consequence of approving or waiting.`);
+  }
 
   function restoredAcceptanceSessionId() {
     try {
@@ -679,6 +1092,7 @@
     els.activeWorkProgress.style.width = `${Math.max(0, Math.min(100, Number(progress.percent) || 0))}%`;
     els.reviewApproval.hidden = !(operation.needsApproval && operation.pendingApproval?.id);
     if (els.approvalDialog.open && !operation.pendingApproval?.id) els.approvalDialog.close();
+    renderMobileWorkspace();
   }
   function approvalLabel(value) {
     return String(value || '-').replaceAll('_', ' ');
@@ -784,6 +1198,7 @@
     els.reviewMessage.textContent = pendingMessageActions.length > 1
       ? `Review ${pendingMessageActions.length} pending messages`
       : 'Review pending message';
+    renderMobileWorkspace();
     return pendingMessageActions;
   }
   function updateMessageCommandState() {
@@ -791,10 +1206,12 @@
     els.sendMessageApproval.disabled = messageRequestInFlight || !action?.id || !els.messageApprovalConfirmed.checked;
     els.rejectMessage.disabled = messageRequestInFlight || !action?.id || action.status !== 'pending_approval';
   }
-  async function openMessageApproval() {
+  async function openMessageApproval(actionOverride = null) {
     if (!(await ensureSession())) return;
     const actions = await loadPendingMessageActions();
-    selectedMessageAction = actions[0] || null;
+    selectedMessageAction = actionOverride?.id
+      ? actions.find((action) => action.id === actionOverride.id) || actionOverride
+      : actions[0] || null;
     if (!selectedMessageAction) throw new Error('There are no pending messages to review.');
     const action = selectedMessageAction;
     els.messageApprovalSummary.textContent = action.status === 'failed'
@@ -904,12 +1321,30 @@
   }
   async function refreshHealth() {
     if (!(await ensureSession())) return false;
-    const health = await api('/api/marcus/operator-health');
+    const [health, operationsPayload, brief, pcCapabilities] = await Promise.all([
+      api('/api/marcus/operator-health'),
+      api('/api/operations/summary?limit=50').catch(() => ({ operations: [] })),
+      api('/api/marcus/active-brief').catch(() => null),
+      adminApi('/api/marcus/pc/capabilities').catch(() => null),
+    ]);
+    const actions = await adminApi('/api/marcus/external-actions')
+      .then((data) => asArray(data.actions))
+      .catch(() => pendingMessageActions);
+    pendingMessageActions = actions.filter((action) => ['pending_approval', 'approved'].includes(action.status)
+      || (action.status === 'failed' && action.approvedAt && action.approvalMessage));
+    workspaceSnapshot = {
+      health,
+      operations: asArray(operationsPayload?.operations || operationsPayload),
+      brief,
+      pcCapabilities,
+    };
     const caps = health.capabilities || {};
     els.codex.textContent = caps.projectOperator?.mode || 'unknown';
     els.github.textContent = caps.github?.backendTokenConfigured ? `ready (${caps.github.source})` : 'not configured';
     els.cloudflare.textContent = caps.cloudflare?.backendTokenConfigured ? `ready (${caps.cloudflare.source})` : 'not configured';
     els.desktop.textContent = caps.desktopAgent?.relayOnline ? 'online' : 'offline';
+    renderApprovalQueue(workspaceSnapshot.operations);
+    renderMobileWorkspace();
     return true;
   }
   function updateProviderState(element, configured, detail = '') {
@@ -1329,6 +1764,12 @@
     event.preventDefault();
     sendMessage(els.input.value);
   });
+  els.mobileNav.forEach((button) => {
+    button.addEventListener('click', () => setMobileView(button.dataset.mobileView));
+  });
+  els.reviewTabs.forEach((button) => {
+    button.addEventListener('click', () => setReviewTab(button.dataset.reviewTab));
+  });
   document.querySelectorAll('[data-prompt]').forEach((btn) => {
     btn.addEventListener('click', () => sendMessage(btn.dataset.prompt));
   });
@@ -1481,6 +1922,8 @@
     });
   }
   addMessage('system', 'Marcus Mobile is ready.');
+  setMobileView(activeMobileView);
+  renderMobileWorkspace();
   refreshHealth().then((ready) => ready ? operationTracker?.start() : null).catch(() => {});
 })();
 </script>
