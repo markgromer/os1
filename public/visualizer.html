@@ -328,12 +328,13 @@
     .drawer {
       display: grid;
       grid-column: 1 / -1;
-      grid-template-columns: 1.1fr 1fr 1fr;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
       gap: 14px;
       padding: 14px 4px 2px 49px;
       border-top: 1px solid var(--line);
     }
     .drawer-card { min-width: 0; display: grid; align-content: start; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: 9px; background: rgba(5, 8, 13, 0.38); }
+    .drawer-card.full { grid-column: 1 / -1; }
     .drawer-card h3 { margin: 0; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.07em; }
     .drawer-card p { margin: 0; color: #dce4ea; line-height: 1.45; }
     .task-list { display: grid; gap: 7px; margin: 0; padding: 0; list-style: none; }
@@ -351,6 +352,7 @@
       padding: 7px 9px;
       text-align: left;
     }
+    .task-list button span { min-width: 0; overflow-wrap: anywhere; }
 
     .side {
       grid-area: side;
@@ -520,7 +522,7 @@
         <section class="ledger" id="ledger" aria-label="Live project tracker"></section>
       </div>
 
-      <section id="projectMode" class="workspace-mode" aria-label="Project God Mode"></section>
+      <section id="projectMode" class="workspace-mode" aria-label="Project Control"></section>
       <section id="taskMode" class="workspace-mode" aria-label="Task Control Room"></section>
     </section>
 
@@ -1116,7 +1118,7 @@
     function renderChrome() {
       const mode = document.body.dataset.mode;
       const navTitle = ({ projects: "Projects", review: "Review", activity: "Activity", settings: "Settings" })[viewMode] || "Projects";
-      els.pageTitle.textContent = mode === "project" ? "Project God Mode" : mode === "task" ? "Task Control Room" : navTitle;
+      els.pageTitle.textContent = mode === "project" ? "Project Control" : mode === "task" ? "Task Control Room" : navTitle;
       document.querySelectorAll(".nav-link").forEach((button) => {
         const navKey = button.dataset.nav === "tracker" ? "projects" : button.dataset.nav;
         button.classList.toggle("active", navKey === viewMode && mode === "tracker");
@@ -1246,20 +1248,27 @@
     function drawerHtml(project) {
       return `<section class="drawer">
         <div class="drawer-card">
-          <h3>Marcus understands</h3>
-          <p>${esc(project.objective)}</p>
-          <p class="meta">Next: ${esc(project.next)} - Mark needed: ${project.state === "needs_mark" ? "yes" : "not directly visible"}</p>
-          <div class="row-actions" style="justify-content:start"><button class="btn primary" type="button" data-open="${esc(project.id)}">Open Project God Mode</button></div>
+          <h3>Current read</h3>
+          <p>${esc(projectRead(project))}</p>
+          <p class="meta">Source: ${esc(project.basis)} - Next actor: ${esc(project.next)} - Mark needed: ${project.state === "needs_mark" ? "yes" : "not directly visible"}</p>
+          <div class="row-actions" style="justify-content:start"><button class="btn primary" type="button" data-open="${esc(project.id)}">Open Project Control</button></div>
         </div>
         <div class="drawer-card">
-          <h3>What changed</h3>
+          <h3>Why Marcus thinks this</h3>
           <ul class="task-list">${arr(project.changed).slice(0, 5).map((item) => `<li><button type="button" disabled><span>${esc(item)}</span><span>evidence</span></button></li>`).join("") || `<li><button type="button" disabled><span>No recent change details returned.</span><span>partial</span></button></li>`}</ul>
         </div>
-        <div class="drawer-card">
-          <h3>Active tasks</h3>
+        <div class="drawer-card full">
+          <h3>Work in flight</h3>
           <ul class="task-list">${arr(project.tasks).map((task) => `<li><button type="button" data-task="${esc(task.id)}" data-task-project="${esc(project.id)}"><span>${esc(task.title)}</span><span>${esc(task.status)} - ${esc(task.worker)}</span></button></li>`).join("")}</ul>
         </div>
       </section>`;
+    }
+
+    function projectRead(project) {
+      if (project.isLiveCodex) return `Codex is actively working. Marcus sees ${project.currentStep}; this row is based on live workspace/session evidence, not a stale task list.`;
+      if (project.state === "needs_mark") return `Marcus needs a decision from Mark before the next step can move. The decision cards above should state the exact ask.`;
+      if (project.state === "blocked") return `Marcus has an operation record marked blocked. This may be stale if a newer Codex workspace appears for the same project.`;
+      return project.objective || project.sentence;
     }
 
     function bindTracker() {
