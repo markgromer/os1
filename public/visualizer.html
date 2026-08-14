@@ -337,6 +337,23 @@
     .drawer-card.full { grid-column: 1 / -1; }
     .drawer-card h3 { margin: 0; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.07em; }
     .drawer-card p { margin: 0; color: #dce4ea; line-height: 1.45; }
+    .drawer-card textarea {
+      width: 100%;
+      min-height: 84px;
+      resize: vertical;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(5, 8, 13, 0.58);
+      color: var(--text);
+      padding: 10px;
+      outline: 0;
+      line-height: 1.4;
+    }
+    .insight-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+    .insight-list li { display: grid; gap: 3px; padding: 8px 0; border-bottom: 1px solid var(--line); color: var(--muted); line-height: 1.35; }
+    .insight-list li:last-child { border-bottom: 0; }
+    .insight-list strong { color: var(--text); }
+    .action-note { color: var(--faint); font-size: 12px; line-height: 1.4; }
     .task-list { display: grid; gap: 7px; margin: 0; padding: 0; list-style: none; }
     .task-list button {
       width: 100%;
@@ -829,11 +846,12 @@
         id: idFrom(job?.jobId || name, `job-${index}`),
         isLiveCodex: !["completed", "cancelled", "failed"].includes(raw),
         sourceId: text(job?.jobId),
+        codexJobId: text(job?.jobId),
         name,
         state,
         stateLabel: labelForState(state),
         basis: "observed Codex job",
-        sentence: raw === "completed" ? "Codex claims completion; Marcus still needs verification evidence." : `Codex job is ${raw}.`,
+        sentence: raw === "completed" ? "Ready for Marcus verification." : `${text(job?.objective || job?.title || "Codex work")} is ${raw}.`,
         last: age(job?.updatedAt || job?.startedAt),
         lastChange: text(job?.finalOutput || job?.diffSummary || job?.error || `${Number(job?.eventCount || 0)} events reported`),
         next: raw === "completed" ? "Verification" : raw === "failed" ? "MARCUS" : "Codex",
@@ -863,11 +881,12 @@
         id: idFrom(name, `codex-workspace-${index}`),
         isLiveCodex: true,
         sourceId: text(item?.sessionId),
+        codexSessionId: text(item?.sessionId),
         name,
         state: "moving",
         stateLabel: labelForState("moving"),
         basis: "live Codex workspace",
-        sentence: `Codex is active in ${name}${task ? ` on ${task}` : ""}.`,
+        sentence: task ? `Working on ${task}.` : "Active Codex session detected.",
         last: age(item?.modifiedAt),
         lastChange: task,
         next: "Codex",
@@ -1056,6 +1075,8 @@
           existing.next = project.next;
           existing.currentStep = project.currentStep;
           existing.objective = project.objective;
+          existing.codexJobId = project.codexJobId || existing.codexJobId;
+          existing.codexSessionId = project.codexSessionId || existing.codexSessionId;
           existing.confidence = Math.max(Number(existing.confidence || 0), Number(project.confidence || 0));
           existing.counts = project.counts;
         } else if (!existingCodexLeads) {
@@ -1259,10 +1280,54 @@
     }
 
     function renderSettingsConsole() {
-      const visible = viewMode === "settings";
+      const visible = ["review", "activity", "settings"].includes(viewMode);
       els.settingsConsole.classList.toggle("visible", visible);
       if (!visible) {
         els.settingsConsole.innerHTML = "";
+        return;
+      }
+      if (viewMode === "review") {
+        const reviewItems = snapshot.decisions.length ? snapshot.decisions : snapshot.projects.filter((project) => ["needs_mark", "verifying", "blocked"].includes(project.state)).slice(0, 5).map((project) => ({
+          id: `review-${project.id}`,
+          projectId: project.id,
+          project: project.name,
+          title: project.currentStep,
+          why: projectRead(project),
+          recommendation: project.state === "blocked" ? "Diagnose recovery path." : project.state === "verifying" ? "Check acceptance evidence." : "Clarify decision.",
+        }));
+        els.settingsConsole.innerHTML = `
+          <section class="mode-panel">
+            <div class="mode-kicker"><span>Review queue</span><span>${reviewItems.length} item${reviewItems.length === 1 ? "" : "s"}</span></div>
+            <h2>What needs judgment</h2>
+            <p>These are the places Marcus should ask for a decision, verification, or reroute before work drifts.</p>
+            <ul class="task-list" style="margin-top:12px">${reviewItems.map((item) => `<li><button type="button" data-review-item="${esc(item.projectId)}" data-prompt="${esc(`Review this item: ${item.title}. Explain the exact ask, options, risk, evidence, and recommendation.`)}"><span>${esc(item.project)}: ${esc(item.title)}</span><span>${esc(item.recommendation)}</span></button></li>`).join("") || `<li><button type="button" disabled><span>No review items need action.</span><span>clear</span></button></li>`}</ul>
+          </section>
+        `;
+        document.querySelectorAll("[data-review-item]").forEach((button) => button.addEventListener("click", () => {
+          expandedId = button.dataset.reviewItem;
+          renderTracker();
+          fillProjectPrompt(button.dataset.reviewItem, button.dataset.prompt);
+        }));
+        return;
+      }
+      if (viewMode === "activity") {
+        const active = snapshot.projects.filter((project) => project.isLiveCodex || ["moving", "verifying"].includes(project.state)).slice(0, 6);
+        els.settingsConsole.innerHTML = `
+          <section class="mode-panel">
+            <div class="mode-kicker"><span>Activity</span><span>live work</span></div>
+            <h2>What is moving right now</h2>
+            <p>This is the live work lens: Codex sessions, operations, and desktop evidence with direct routes to steer or inspect.</p>
+            <ul class="task-list" style="margin-top:12px">${active.map((project) => `<li><button type="button" data-activity-project="${esc(project.id)}"><span>${esc(project.name)} - ${esc(project.currentStep)}</span><span>${esc(project.last)}</span></button></li>`).join("") || `<li><button type="button" disabled><span>No active work is reporting movement.</span><span>quiet</span></button></li>`}</ul>
+          </section>
+          <section class="mode-panel">
+            <h2>Recent evidence</h2>
+            <ul class="insight-list">${snapshot.events.slice(0, 6).map((event) => `<li><strong>${esc(event.project || event.source)}</strong><span>${esc(event.text)} - ${esc(event.time)}</span></li>`).join("") || `<li><strong>No event feed</strong><span>Refresh after live sources reconnect.</span></li>`}</ul>
+          </section>
+        `;
+        document.querySelectorAll("[data-activity-project]").forEach((button) => button.addEventListener("click", () => {
+          expandedId = button.dataset.activityProject;
+          renderTracker();
+        }));
         return;
       }
       const settings = snapshot.settings || {};
@@ -1454,29 +1519,76 @@
     }
 
     function drawerHtml(project) {
+      const promptId = `prompt-${project.id}`;
       return `<section class="drawer">
         <div class="drawer-card">
-          <h3>Current read</h3>
+          <h3>Marcus read</h3>
           <p>${esc(projectRead(project))}</p>
-          <p class="meta">Source: ${esc(project.basis)} - Next actor: ${esc(project.next)} - Mark needed: ${project.state === "needs_mark" ? "yes" : "not directly visible"}</p>
-          <div class="row-actions" style="justify-content:start"><button class="btn primary" type="button" data-open="${esc(project.id)}">Open Project Control</button></div>
+          <ul class="insight-list">${projectInsights(project).map((item) => `<li><strong>${esc(item.label)}</strong><span>${esc(item.value)}</span></li>`).join("")}</ul>
+          <div class="row-actions" style="justify-content:start;flex-wrap:wrap">
+            <button class="btn primary" type="button" data-open="${esc(project.id)}">Open project</button>
+            <button class="btn" type="button" data-project-plan="${esc(project.id)}">Plan next moves</button>
+            <button class="btn" type="button" data-project-reroute="${esc(project.id)}">Check direction</button>
+          </div>
         </div>
         <div class="drawer-card">
-          <h3>Why Marcus thinks this</h3>
-          <ul class="task-list">${arr(project.changed).slice(0, 5).map((item) => `<li><button type="button" disabled><span>${esc(item)}</span><span>evidence</span></button></li>`).join("") || `<li><button type="button" disabled><span>No recent change details returned.</span><span>partial</span></button></li>`}</ul>
+          <h3>Next useful actions</h3>
+          <ul class="task-list">${nextMoveButtons(project).map((item) => `<li><button type="button" data-project-prompt="${esc(project.id)}" data-prompt="${esc(item.prompt)}"><span>${esc(item.label)}</span><span>${esc(item.tag)}</span></button></li>`).join("")}</ul>
         </div>
         <div class="drawer-card full">
           <h3>Work in flight</h3>
           <ul class="task-list">${arr(project.tasks).map((task) => `<li><button type="button" data-task="${esc(task.id)}" data-task-project="${esc(project.id)}"><span>${esc(task.title)}</span><span>${esc(task.status)} - ${esc(task.worker)}</span></button></li>`).join("")}</ul>
         </div>
+        <div class="drawer-card full">
+          <h3>Steer work</h3>
+          <textarea id="${esc(promptId)}" data-codex-input="${esc(project.id)}" placeholder="Tell Codex or Marcus what to change, investigate, verify, or avoid."></textarea>
+          <div class="row-actions" style="justify-content:start;flex-wrap:wrap">
+            <button class="btn primary" type="button" data-codex-send="${esc(project.id)}" data-mode="steer">Steer Codex</button>
+            <button class="btn" type="button" data-codex-send="${esc(project.id)}" data-mode="append">Append context</button>
+            <button class="btn" type="button" data-marcus-project="${esc(project.id)}">Ask Marcus</button>
+          </div>
+          <div class="action-note">${project.codexJobId ? "Direct Codex job follow-up is available for this project." : "No direct Codex job id is attached; Marcus will route this with project context."}</div>
+        </div>
       </section>`;
     }
 
     function projectRead(project) {
-      if (project.isLiveCodex) return `Codex is actively working. Marcus sees ${project.currentStep}; this row is based on live workspace/session evidence, not a stale task list.`;
+      if (project.isLiveCodex) return `${project.currentStep || "Codex work"} is moving. Marcus should watch the whole project outcome, not only this session.`;
       if (project.state === "needs_mark") return `Marcus needs a decision from Mark before the next step can move. The decision cards above should state the exact ask.`;
       if (project.state === "blocked") return `Marcus has an operation record marked blocked. This may be stale if a newer Codex workspace appears for the same project.`;
       return project.objective || project.sentence;
+    }
+
+    function projectInsights(project) {
+      const source = project.isLiveCodex ? (project.codexJobId ? "Tracked Codex job" : "Desktop workspace signal") : project.basis;
+      return [
+        { label: "Project outcome", value: project.objective || project.currentStep || "No outcome text returned yet." },
+        { label: "Current pressure", value: project.state === "blocked" ? "Blocked or stale; needs recovery." : project.state === "needs_mark" ? "Waiting on your decision." : project.isLiveCodex ? "Implementation is moving; verification is the next risk." : project.stateLabel },
+        { label: "Source quality", value: `${source}. ${project.counts || "No count returned"}.` },
+      ];
+    }
+
+    function nextMoveButtons(project) {
+      if (project.state === "needs_mark") return [
+        { label: "Explain the decision", tag: "Marcus", prompt: "Explain the exact decision I need to make, the options, risks, and what happens if I wait." },
+        { label: "Show evidence", tag: "Review", prompt: "Show the evidence behind this decision and identify what is missing or stale." },
+        { label: "Recommend one path", tag: "Decide", prompt: "Recommend one path and tell me why it is the best move for the whole project." },
+      ];
+      if (project.isLiveCodex) return [
+        { label: "Summarize current Codex progress", tag: "Marcus", prompt: "Summarize what Codex appears to be doing, what changed, and what evidence supports that." },
+        { label: "Check against project goal", tag: "Direction", prompt: "Compare this Codex work against the whole project goal. Tell me if it is on track or drifting." },
+        { label: "Prepare verification plan", tag: "Verify", prompt: "Prepare a verification plan for this project and identify the acceptance evidence Marcus should require." },
+      ];
+      if (project.state === "blocked") return [
+        { label: "Diagnose blocker", tag: "Recovery", prompt: "Diagnose the blocker and propose the smallest recovery step." },
+        { label: "Find newer live evidence", tag: "Audit", prompt: "Check whether this blocker is stale compared with newer Codex, desktop, or operation evidence." },
+        { label: "Reroute work", tag: "Plan", prompt: "Suggest how to reroute this work if the current path is wrong." },
+      ];
+      return [
+        { label: "Build next plan", tag: "Plan", prompt: "Build the next actionable plan for this project based on current evidence." },
+        { label: "Identify missing context", tag: "Context", prompt: "Identify what context Marcus still needs to manage this project better." },
+        { label: "Set watch criteria", tag: "Watch", prompt: "Set the criteria Marcus should watch for before interrupting me again." },
+      ];
     }
 
     function bindTracker() {
@@ -1485,9 +1597,19 @@
           const open = event.target.closest("[data-open]");
           const talk = event.target.closest("[data-talk]");
           const task = event.target.closest("[data-task]");
+          const prompt = event.target.closest("[data-project-prompt]");
+          const codexSend = event.target.closest("[data-codex-send]");
+          const marcusProject = event.target.closest("[data-marcus-project]");
+          const plan = event.target.closest("[data-project-plan]");
+          const reroute = event.target.closest("[data-project-reroute]");
           if (open) return openProject(open.dataset.open);
           if (talk) return talkToProject(talk.dataset.talk);
           if (task) return openTask(task.dataset.taskProject, task.dataset.task);
+          if (prompt) return fillProjectPrompt(prompt.dataset.projectPrompt, prompt.dataset.prompt);
+          if (codexSend) return sendProjectPrompt(codexSend.dataset.codexSend, codexSend.dataset.mode);
+          if (marcusProject) return askMarcusAboutProject(marcusProject.dataset.marcusProject);
+          if (plan) return fillProjectPrompt(plan.dataset.projectPlan, "Build a deeper project plan from the current evidence. Include goal, current work, risks, verification, and next actions.");
+          if (reroute) return fillProjectPrompt(reroute.dataset.projectReroute, "Check whether this project is drifting. Tell me what is off, what evidence says so, and how to reroute.");
           expandedId = row.dataset.project === expandedId ? "" : row.dataset.project;
           renderTracker();
           row.focus();
@@ -1510,6 +1632,57 @@
           }
         });
       });
+    }
+
+    function projectById(id) {
+      return snapshot.projects.find((project) => project.id === id) || null;
+    }
+
+    function promptInputForProject(id) {
+      return Array.from(document.querySelectorAll("[data-codex-input]")).find((node) => node.dataset.codexInput === id) || null;
+    }
+
+    function fillProjectPrompt(id, prompt) {
+      const input = promptInputForProject(id);
+      if (input) {
+        input.value = prompt || "";
+        input.focus();
+        return;
+      }
+      const project = projectById(id);
+      if (project) talkToProject(project.id, prompt);
+    }
+
+    async function sendProjectPrompt(id, mode = "steer") {
+      const project = projectById(id);
+      if (!project) return;
+      const input = promptInputForProject(id);
+      const message = text(input?.value);
+      if (!message) {
+        if (input) input.focus();
+        return;
+      }
+      const intent = mode === "append" ? "Append this context to the active work" : "Steer the active work";
+      if (project.codexJobId) {
+        const result = await api(`/api/codex/jobs/${encodeURIComponent(project.codexJobId)}/followup`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message: `${intent} for ${project.name}: ${message}` }),
+        });
+        if (input) input.value = "";
+        els.composerInput.value = `Sent to Codex: ${text(result?.job?.status || "follow-up accepted")}.`;
+        return;
+      }
+      await sendToMarcus(`${intent} for ${project.name}. Current project state: ${project.stateLabel}. Current work: ${project.currentStep}. Evidence: ${arr(project.evidence).join("; ")}. Instruction: ${message}`);
+      if (input) input.value = "";
+    }
+
+    function askMarcusAboutProject(id) {
+      const project = projectById(id);
+      if (!project) return;
+      const input = promptInputForProject(id);
+      const message = text(input?.value) || "Explain what is happening, what matters, and what I should do next.";
+      talkToProject(project.id, `${message} Consider the whole project, not just the current task.`);
     }
 
     function openProject(id) {
@@ -1554,7 +1727,7 @@
         <section class="mode-stage">
           <section class="mode-panel"><h2>Currently happening</h2><p>${esc(currentSummary)} Marcus classifies this as ${esc(project.stateLabel)} from ${esc(project.basis)}.</p></section>
           <section class="mode-panel"><h2>Work hierarchy</h2><ul class="task-list">${arr(project.tasks).map((task) => `<li><button type="button" data-task="${esc(task.id)}" data-task-project="${esc(project.id)}"><span>${esc(task.title)}</span><span>${esc(task.status)} - ${esc(task.worker)}</span></button></li>`).join("")}</ul></section>
-          <section class="mode-panel"><h2>Artifact stage</h2><p>No live preview or artifact is attached to this project yet. Marcus is showing evidence and operational state instead of pretending a preview exists.</p></section>
+          <section class="mode-panel"><h2>Project command</h2><p>Use this when the current path needs steering, a deeper plan, or a verification pass.</p><textarea data-codex-input="${esc(project.id)}" placeholder="Prompt Marcus or Codex about the whole project."></textarea><div class="row-actions" style="justify-content:start;flex-wrap:wrap;margin-top:10px"><button class="btn primary" type="button" data-codex-send="${esc(project.id)}" data-mode="steer">Steer Codex</button><button class="btn" type="button" data-codex-send="${esc(project.id)}" data-mode="append">Append context</button><button class="btn" type="button" data-project-plan="${esc(project.id)}">Plan deeper</button><button class="btn" type="button" data-project-reroute="${esc(project.id)}">Check direction</button></div></section>
         </section>
         <aside class="mode-aside">
           <section class="mode-panel"><h2>Marcus recommendation</h2><p>${esc(project.decision?.recommendation || project.currentStep || "Continue monitoring until stronger evidence appears.")}</p></section>
@@ -1627,6 +1800,9 @@
       document.querySelectorAll("[data-task-talk]").forEach((button) => button.addEventListener("click", () => talkToActiveTask("What is happening here, and what can I do next?")));
       document.querySelectorAll("[data-task-explain]").forEach((button) => button.addEventListener("click", () => talkToActiveTask("Explain the exact ask. Tell me what is missing, where to fix it, and how Marcus will know it is resolved.")));
       document.querySelectorAll("[data-task-review]").forEach((button) => button.addEventListener("click", () => talkToActiveTask("Review this signal against live evidence. If it is stale, tell me why and what should be dismissed or refreshed.")));
+      document.querySelectorAll("[data-codex-send]").forEach((button) => button.addEventListener("click", () => sendProjectPrompt(button.dataset.codexSend, button.dataset.mode)));
+      document.querySelectorAll("[data-project-plan]").forEach((button) => button.addEventListener("click", () => fillProjectPrompt(button.dataset.projectPlan, "Build a deeper project plan from the current evidence. Include goal, current work, risks, verification, and next actions.")));
+      document.querySelectorAll("[data-project-reroute]").forEach((button) => button.addEventListener("click", () => fillProjectPrompt(button.dataset.projectReroute, "Check whether this project is drifting. Tell me what is off, what evidence says so, and how to reroute.")));
     }
 
     function openSettingsView() {
