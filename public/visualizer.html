@@ -742,6 +742,7 @@
     let viewMode = "projects";
     let activeProjectId = "";
     let activeTaskId = "";
+    let activeProjectSection = "overview";
     let voiceHeld = false;
     let isLoading = false;
     const autoRefreshMs = 3000;
@@ -2099,6 +2100,7 @@
     function openProject(id) {
       activeProjectId = id;
       activeTaskId = "";
+      activeProjectSection = "overview";
       document.body.dataset.mode = "project";
       history.pushState({}, "", `?project=${encodeURIComponent(id)}`);
       render();
@@ -2116,8 +2118,38 @@
       document.body.dataset.mode = "tracker";
       activeProjectId = "";
       activeTaskId = "";
+      activeProjectSection = "overview";
       history.pushState({}, "", location.pathname);
       render();
+    }
+
+    function projectSectionHtml(project, section) {
+      const actions = nextMoveButtons(project);
+      const changes = changeItems(project);
+      const evidence = liveEvidenceItems(project);
+      const command = `<section class="mode-panel"><h2>Ask or steer</h2><p>Use this when the current read is wrong, incomplete, or needs a direct next instruction.</p><textarea data-codex-input="${esc(project.id)}" placeholder="Tell Marcus what is wrong, what to verify, or what Codex should do next."></textarea><div class="row-actions" style="justify-content:start;flex-wrap:wrap;margin-top:10px"><button class="btn primary" type="button" data-codex-send="${esc(project.id)}" data-mode="steer">Steer Codex</button><button class="btn" type="button" data-codex-send="${esc(project.id)}" data-mode="append">Append context</button><button class="btn" type="button" data-project-plan="${esc(project.id)}">Plan next</button><button class="btn" type="button" data-project-reroute="${esc(project.id)}">Check direction</button></div></section>`;
+      if (section === "work") return `
+        <section class="mode-panel"><h2>Work in flight</h2><p>${esc(projectRead(project))}</p><ul class="task-list" style="margin-top:12px">${arr(project.tasks).map((task) => `<li><button type="button" data-task="${esc(task.id)}" data-task-project="${esc(project.id)}"><span>${esc(task.title)}</span><span>${esc(task.status)} - ${esc(task.worker)}</span></button></li>`).join("") || `<li><button type="button" disabled><span>No task breakdown is attached.</span><span>missing</span></button></li>`}</ul></section>
+        ${command}`;
+      if (section === "codex") return `
+        <section class="mode-panel"><h2>Codex read</h2><p>${esc(project.liveSignal?.handoff?.summary || project.liveSignal?.signal || project.sentence || "No Codex handoff is attached yet.")}</p></section>
+        <section class="mode-panel"><h2>What this means</h2><p>${esc(project.liveSignal?.stuck || changeNarrative(project))}</p></section>
+        ${command}`;
+      if (section === "decisions") return `
+        <section class="mode-panel"><h2>Decision or review</h2><p>${esc(project.state === "complete" || project.workspaceReviewReady ? "This is ready for your eyes. Marcus should tell you exactly what changed and what to verify before closing it." : projectRead(project))}</p><ul class="task-list" style="margin-top:12px">${actions.map((item) => `<li><button type="button" data-project-prompt="${esc(project.id)}" data-prompt="${esc(item.prompt)}"><span>${esc(item.label)}</span><span>${esc(item.tag)}</span></button></li>`).join("")}</ul></section>
+        ${command}`;
+      if (section === "evidence") return `
+        <section class="mode-panel"><h2>Evidence</h2><ul class="task-list">${evidence.map((item) => `<li><button type="button" data-project-prompt="${esc(project.id)}" data-prompt="${esc(item.prompt)}"><span>${esc(item.label)}</span><span>${esc(item.tag)}</span></button></li>`).join("") || `<li><button type="button" disabled><span>No useful evidence came through.</span><span>missing</span></button></li>`}</ul></section>`;
+      if (section === "timeline") return `
+        <section class="mode-panel"><h2>What changed</h2><p>${esc(changeNarrative(project))}</p><ul class="task-list" style="margin-top:12px">${changes.map((item) => `<li><button type="button" data-project-prompt="${esc(project.id)}" data-prompt="${esc(item.prompt)}"><span>${esc(item.label)}</span><span>${esc(item.tag)}</span></button></li>`).join("")}</ul></section>`;
+      if (section === "memory") return `
+        <section class="mode-panel"><h2>Project memory</h2><p>${esc(project.objective || "No durable project outcome is attached to this snapshot.")}</p></section>
+        <section class="mode-panel"><h2>Source quality</h2><p>${esc(`${project.basis}. ${project.counts || "No count returned"}.`)}</p></section>`;
+      return `
+        <section class="mode-panel"><h2>What happened</h2><p>${esc(changeNarrative(project))}</p></section>
+        <section class="mode-panel"><h2>What you need to check</h2><ul class="task-list">${actions.map((item) => `<li><button type="button" data-project-prompt="${esc(project.id)}" data-prompt="${esc(item.prompt)}"><span>${esc(item.label)}</span><span>${esc(item.tag)}</span></button></li>`).join("")}</ul></section>
+        <section class="mode-panel"><h2>Plain-English read</h2><p>${esc(projectRead(project))}</p></section>
+        ${command}`;
     }
 
     function renderProjectMode() {
@@ -2126,23 +2158,29 @@
         els.projectMode.innerHTML = `<div class="empty">Project link could not be resolved from the current live snapshot.</div>`;
         return;
       }
-      const currentSummary = project.objective === project.currentStep ? project.objective : `${project.objective} ${project.currentStep}.`;
+      const sections = [
+        ["overview", "Overview"],
+        ["work", "Work / Tasks"],
+        ["codex", "Codex"],
+        ["decisions", "Decisions"],
+        ["evidence", "Evidence"],
+        ["timeline", "Timeline"],
+        ["memory", "Memory"],
+      ];
+      if (!sections.some(([key]) => key === activeProjectSection)) activeProjectSection = "overview";
       els.projectMode.innerHTML = `<header class="mode-head">
         <div><div class="mode-kicker"><span>Project control</span></div><h1>${esc(project.name)}</h1><p>${esc(project.sentence)}</p></div>
         <div class="row-actions"><button class="btn close-mode" type="button" data-back aria-label="Close project control">x</button><button class="btn" type="button" data-back>Global tracker</button><button class="btn primary" type="button" data-project-talk>Talk to MARCUS</button></div>
       </header>
       <section class="mode-body">
         <nav class="mode-nav" aria-label="Project sections">
-          ${["Overview", "Work / Tasks", "Codex", "Decisions", "Evidence", "Timeline", "Memory"].map((label, index) => `<button class="nav-link ${index === 0 ? "active" : ""}" type="button"><span class="nav-icon">${String(index + 1).padStart(2, "0")}</span><span>${esc(label)}</span></button>`).join("")}
+          ${sections.map(([key, label], index) => `<button class="nav-link ${key === activeProjectSection ? "active" : ""}" type="button" data-project-section="${esc(key)}"><span class="nav-icon">${String(index + 1).padStart(2, "0")}</span><span>${esc(label)}</span></button>`).join("")}
         </nav>
         <section class="mode-stage">
-          <section class="mode-panel"><h2>Live now</h2><p>${esc(project.liveSignal?.signal || currentSummary)} Marcus classifies this as ${esc(project.stateLabel)} from ${esc(project.basis)}.</p></section>
-          <section class="mode-panel"><h2>Watch point</h2><p>${esc(project.liveSignal?.stuck || "No struggle point is visible from the current relay snapshot. Ask Marcus to compare this with the project goal before assuming it is fine.")}</p></section>
-          <section class="mode-panel"><h2>Work hierarchy</h2><ul class="task-list">${arr(project.tasks).map((task) => `<li><button type="button" data-task="${esc(task.id)}" data-task-project="${esc(project.id)}"><span>${esc(task.title)}</span><span>${esc(task.status)} - ${esc(task.worker)}</span></button></li>`).join("")}</ul></section>
-          <section class="mode-panel"><h2>Project command</h2><p>Use this when the current path needs steering, a deeper plan, or a verification pass.</p><textarea data-codex-input="${esc(project.id)}" placeholder="Prompt Marcus or Codex about the whole project."></textarea><div class="row-actions" style="justify-content:start;flex-wrap:wrap;margin-top:10px"><button class="btn primary" type="button" data-codex-send="${esc(project.id)}" data-mode="steer">Steer Codex</button><button class="btn" type="button" data-codex-send="${esc(project.id)}" data-mode="append">Append context</button><button class="btn" type="button" data-project-plan="${esc(project.id)}">Plan deeper</button><button class="btn" type="button" data-project-reroute="${esc(project.id)}">Check direction</button></div></section>
+          ${projectSectionHtml(project, activeProjectSection)}
         </section>
         <aside class="mode-aside">
-          <section class="mode-panel"><h2>Marcus recommendation</h2><p>${esc(project.decision?.recommendation || project.currentStep || "Continue monitoring until stronger evidence appears.")}</p></section>
+          <section class="mode-panel"><h2>Next action</h2><p>${esc(project.state === "complete" || project.workspaceReviewReady ? "Review what changed, verify the result, then close or reroute." : project.decision?.recommendation || project.next || "Ask Marcus for the next concrete action.")}</p></section>
           <section class="mode-panel"><h2>Live evidence</h2><ul class="insight-list">${liveEvidenceItems(project).slice(0, 5).map((item) => `<li><strong>${esc(item.tag)}</strong><span>${esc(item.label)}</span></li>`).join("") || `<li><strong>none</strong><span>No evidence references returned.</span></li>`}</ul></section>
         </aside>
       </section>`;
@@ -2207,6 +2245,11 @@
       document.querySelectorAll("[data-back]").forEach((button) => button.addEventListener("click", backToTracker));
       document.querySelectorAll("[data-back-project]").forEach((button) => button.addEventListener("click", () => openProject(button.dataset.backProject)));
       document.querySelectorAll("[data-project-talk]").forEach((button) => button.addEventListener("click", () => talkToProject(activeProjectId)));
+      document.querySelectorAll("[data-project-section]").forEach((button) => button.addEventListener("click", () => {
+        activeProjectSection = button.dataset.projectSection || "overview";
+        renderProjectMode();
+      }));
+      document.querySelectorAll("[data-project-prompt]").forEach((button) => button.addEventListener("click", () => fillProjectPrompt(button.dataset.projectPrompt, button.dataset.prompt)));
       document.querySelectorAll("[data-task]").forEach((button) => button.addEventListener("click", () => openTask(button.dataset.taskProject, button.dataset.task)));
       document.querySelectorAll("[data-task-settings]").forEach((button) => button.addEventListener("click", openSettingsView));
       document.querySelectorAll("[data-task-talk]").forEach((button) => button.addEventListener("click", () => talkToActiveTask("What is happening here, and what can I do next?")));
