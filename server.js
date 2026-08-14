@@ -14839,7 +14839,7 @@ app.post('/api/desktop-context/relay', (req, res) => {
       ? desktopAuthorizationInput.capabilities.slice(0, 40).map((item) => typeof item === 'string' ? item.trim().slice(0, 100) : '').filter(Boolean)
       : [],
   };
-  const data = { ok: true, windowTitle: wt, processName: pn, idleSeconds: idle, source: 'relay', workspace, codexWorkspaces, desktopAuthorization };
+  const data = { ok: true, windowTitle: wt, processName: pn, idleSeconds: idle, source: 'relay', receivedAt: new Date().toISOString(), workspace, codexWorkspaces, desktopAuthorization };
 
   // System health telemetry from the desktop agent
   if (req.body?.systemHealth && typeof req.body.systemHealth === 'object') {
@@ -21265,7 +21265,6 @@ const httpServer = app.listen(PORT, SERVER_HOST, async () => {
   // eslint-disable-next-line no-console
   console.log(`M.A.R.C.U.S. running on http://${SERVER_HOST}:${PORT}`);
 });
-
 
 
 

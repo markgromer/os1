@@ -862,23 +862,51 @@
       return text(commit).replace(/^[a-f0-9]{7,40}\s+/i, "");
     }
 
-    function signalSummaryFromWorkspace(item) {
+    function comparableName(value) {
+      return text(value).toLowerCase().replace(/[^a-z0-9]+/g, "");
+    }
+
+    function activeDesktopMatchesWorkspace(item, desktop) {
+      if (!desktop || Number(desktop.idleSeconds || 0) > 300) return false;
+      const processName = text(desktop.processName).toLowerCase();
+      const windowTitle = comparableName(desktop.windowTitle);
+      if (!windowTitle || !/code|cursor|windsurf|vscode/.test(processName)) return false;
+      const names = [
+        item?.projectName,
+        item?.folderName,
+        item?.workspacePath?.split(/[\\/]/).filter(Boolean).slice(-1)[0],
+        desktop?.workspace?.folderName,
+        desktop?.workspace?.workspacePath?.split(/[\\/]/).filter(Boolean).slice(-1)[0],
+      ].map(comparableName).filter(Boolean);
+      return names.some((name) => name && (windowTitle.includes(name) || name.includes(windowTitle)));
+    }
+
+    function effectiveWorkspaceModifiedAt(item, desktop) {
+      return activeDesktopMatchesWorkspace(item, desktop) ? (desktop?.receivedAt || new Date().toISOString()) : item?.modifiedAt;
+    }
+
+    function signalSummaryFromWorkspace(item, desktop) {
       const fileCount = Number(item?.gitStatusCount || arr(item?.gitStatus).length || 0);
       const branch = branchLabel(item?.gitBranch);
       const firstFile = text(arr(item?.gitStatus)[0]?.file);
       const recentCommit = text(arr(item?.gitRecentCommits)[0]);
-      const recency = recencyBucket(item?.modifiedAt);
-      const reviewReady = /^main$|^master$/i.test(branch) && fileCount === 0 && Boolean(recentCommit);
+      const activeDesktop = activeDesktopMatchesWorkspace(item, desktop);
+      const recency = recencyBucket(effectiveWorkspaceModifiedAt(item, desktop));
+      const reviewReady = !activeDesktop && /^main$|^master$/i.test(branch) && fileCount === 0 && Boolean(recentCommit);
       const facts = [
         { label: "Freshness", value: recency.label },
         { label: "Branch", value: branch || "not reported" },
-        { label: "Files", value: fileCount ? `${fileCount} changed` : "no file changes" },
+        { label: activeDesktop ? "Focus" : "Files", value: activeDesktop ? "active now" : fileCount ? `${fileCount} changed` : "no file changes" },
       ];
-      const signal = firstFile ? `Latest file signal: ${firstFile}` : recentCommit ? `Latest commit: ${recentCommit}` : "Workspace is visible, but no file/event detail is attached yet.";
-      const stuck = reviewReady
+      const signal = activeDesktop
+        ? `Foreground VS Code focus is on ${text(item?.projectName || item?.folderName, "this workspace")} now.`
+        : firstFile ? `Latest file signal: ${firstFile}` : recentCommit ? `Latest commit: ${recentCommit}` : "Workspace is visible, but no file/event detail is attached yet.";
+      const stuck = activeDesktop
+        ? "Foreground focus beats stale session file timestamps. Marcus should treat this as current PC activity."
+        : reviewReady
         ? "Commit is clean on the main branch. This looks ready for your eyes, not like Codex is still typing."
         : !recency.fresh ? "This may be stale; ask Marcus to verify whether Codex is still active here." : fileCount === 0 ? "No file movement yet; useful to ask what Codex is reading or waiting on." : "";
-      return { facts, signal, stuck, tone: reviewReady ? "live" : recency.tone, reviewReady };
+      return { facts, signal, stuck, tone: activeDesktop || reviewReady ? "live" : recency.tone, reviewReady, activeDesktop };
     }
 
     function signalSummaryFromJob(job) {
@@ -906,6 +934,7 @@
         return "Codex job";
       }
       if (project.isLiveCodex) {
+        if (project.liveSignal?.activeDesktop) return "Active now";
         if (project.liveSignal?.tone === "blocked" || project.liveSignal?.tone === "warn") return "Check status";
         if (project.liveSignal?.stuck) return "Watching Codex";
         return "Live Codex";
@@ -1017,10 +1046,10 @@
       };
     }
 
-    function makeProjectFromCodexWorkspace(item, index) {
+    function makeProjectFromCodexWorkspace(item, index, desktop = null) {
       const name = text(item?.projectName || item?.folderName || item?.workspacePath || `Codex workspace ${index + 1}`);
       const task = inferCodexWorkspaceTask(item);
-      const liveSignal = signalSummaryFromWorkspace(item);
+      const liveSignal = signalSummaryFromWorkspace(item, desktop);
       const reviewReady = Boolean(liveSignal.reviewReady);
       const changed = [
         text(item?.gitBranch) ? `Branch: ${text(item.gitBranch)}` : "",
@@ -1036,19 +1065,25 @@
         codexSessionId: text(item?.sessionId),
         name,
         state: reviewReady ? "complete" : "moving",
-        stateLabel: reviewReady ? "Ready to review" : liveSignal.tone === "live" && !liveSignal.stuck ? "Live Codex" : "Check status",
+        stateLabel: reviewReady ? "Ready to review" : liveSignal.activeDesktop ? "Active now" : liveSignal.tone === "live" && !liveSignal.stuck ? "Live Codex" : "Check status",
         basis: reviewReady ? "workspace commit signal" : "live Codex workspace",
         sentence: reviewReady ? `Latest commit is ready for review: ${commitTitle(arr(item?.gitRecentCommits)[0]) || task}.` : task || "Active Codex session detected.",
         liveSignal,
         livePhase: reviewReady ? "Complete" : phaseFor({ state: "moving", currentStep: task, objective: task, lastChange: liveSignal.signal }),
-        last: age(item?.modifiedAt),
+        last: age(effectiveWorkspaceModifiedAt(item, desktop)),
         lastChange: task,
         next: reviewReady ? "Mark review" : "Codex",
         counts: `${Number(item?.gitStatusCount || arr(item?.gitStatus).length || 0)} file signal${Number(item?.gitStatusCount || arr(item?.gitStatus).length || 0) === 1 ? "" : "s"}`,
         confidence: reviewReady ? 82 : 88,
         objective: task,
         currentStep: task,
-        changed: changed.length ? changed : ["Recent Codex session metadata observed"],
+        changed: [
+          liveSignal.activeDesktop ? `Active desktop focus: ${text(desktop?.windowTitle)}` : "",
+          ...changed,
+        ].filter(Boolean).length ? [
+          liveSignal.activeDesktop ? `Active desktop focus: ${text(desktop?.windowTitle)}` : "",
+          ...changed,
+        ].filter(Boolean) : ["Recent Codex session metadata observed"],
         tasks: [
           { id: `${idFrom(name)}-codex-active`, title: task, status: reviewReady ? "commit observed" : liveSignal.tone === "live" ? "visible now" : "needs status check", worker: reviewReady ? "Git" : "Codex" },
           { id: `${idFrom(name)}-mark-review`, title: "Review latest commit", status: reviewReady ? "ready" : "waiting", worker: "Mark" },
@@ -1276,7 +1311,7 @@
         ]);
         const operationProjects = arr(operations.operations).map(makeProjectFromOperation);
         const jobProjects = arr(jobs.jobs).filter((job) => text(job?.status).toLowerCase() !== "cancelled").map(makeProjectFromJob);
-        const codexWorkspaceProjects = arr(desktop?.codexWorkspaces).map(makeProjectFromCodexWorkspace);
+        const codexWorkspaceProjects = arr(desktop?.codexWorkspaces).map((item, index) => makeProjectFromCodexWorkspace(item, index, desktop));
         const desktopProject = makeProjectFromDesktop(desktop);
         const briefProjects = brief?.ok === false ? [] : makeProjectsFromBrief(brief);
         const registryProjects = arr(registry.projects).filter(shouldUseRegistryProject).slice(0, 8).map(makeProjectFromRegistry);
@@ -1311,7 +1346,16 @@
 
     function buildEvents({ operations, jobs, brief, desktop }) {
       const rows = [];
-      for (const workspace of arr(desktop?.codexWorkspaces).slice(0, 6)) rows.push({ source: "Codex workspace", project: text(workspace.projectName || workspace.folderName), text: inferCodexWorkspaceTask(workspace), time: age(workspace.modifiedAt), tone: "moving" });
+      for (const workspace of arr(desktop?.codexWorkspaces).slice(0, 6)) {
+        const activeDesktop = activeDesktopMatchesWorkspace(workspace, desktop);
+        rows.push({
+          source: activeDesktop ? "Desktop focus" : "Codex workspace",
+          project: text(workspace.projectName || workspace.folderName),
+          text: activeDesktop ? `Active now in ${text(desktop?.windowTitle, "VS Code")}` : inferCodexWorkspaceTask(workspace),
+          time: age(effectiveWorkspaceModifiedAt(workspace, desktop)),
+          tone: "moving",
+        });
+      }
       for (const operation of arr(operations.operations).slice(0, 6)) rows.push({ source: "Operation", project: text(operation.projectName || operation.title), text: `${text(operation.status)}: ${text(operation.currentStep?.title || operation.title)}`, time: age(operation.updatedAt), tone: stateFromOperation(operation) });
       for (const job of arr(jobs.jobs).slice(0, 4)) rows.push({ source: "Codex", project: text(job.projectName || job.repository || "Codex"), text: text(job.finalOutput || job.diffSummary || job.error || job.status), time: age(job.updatedAt || job.startedAt), tone: "moving" });
       for (const item of arr(brief?.sessionContext?.changedSinceLastCheckIn).slice(0, 4)) rows.push({ source: text(item.source || item.category || "ActiveBrief"), project: text(item.title), text: text(item.summary || item.title), time: age(item.changedAt), tone: "monitoring" });
