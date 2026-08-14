@@ -744,7 +744,7 @@
     let activeTaskId = "";
     let voiceHeld = false;
     let isLoading = false;
-    const autoRefreshMs = 12000;
+    const autoRefreshMs = 3000;
 
     const text = (value, fallback = "") => String(value ?? fallback ?? "").replace(/\s+/g, " ").trim();
     const esc = (value) => text(value)
@@ -919,6 +919,24 @@
       return null;
     }
 
+    function workspaceHandoff(item) {
+      const summary = text(item?.handoffSummary);
+      if (!summary) return null;
+      const rawStatus = text(item?.handoffStatus).toLowerCase();
+      const lower = summary.toLowerCase();
+      const ready = rawStatus === "ready_for_mark" || /\b(fixed|resolved|confirmed|applied|ready|no pending migrations|returns ready|should load)\b/.test(lower);
+      const blocked = rawStatus === "blocked" || /\b(blocked|failed|error|missing|unauthorized|500|crash)\b/.test(lower);
+      const refresh = summary.match(/https?:\/\/[^\s)]+/i)?.[0] || "";
+      const title = ready ? "Codex says the live blocker is fixed" : blocked ? "Codex reported a blocker" : "Codex left a handoff";
+      return {
+        summary,
+        status: ready ? "ready_for_mark" : blocked ? "blocked" : "handoff",
+        title,
+        refresh,
+        observedAt: text(item?.handoffObservedAt || item?.modifiedAt),
+      };
+    }
+
     function signalSummaryFromWorkspace(item, desktop) {
       const fileCount = Number(item?.gitStatusCount || arr(item?.gitStatus).length || 0);
       const branch = branchLabel(item?.gitBranch);
@@ -926,24 +944,31 @@
       const recentCommit = text(arr(item?.gitRecentCommits)[0]);
       const activeDesktop = activeDesktopMatchesWorkspace(item, desktop);
       const topic = workspaceTopicFromSignals(item);
+      const handoff = workspaceHandoff(item);
       const recency = recencyBucket(effectiveWorkspaceModifiedAt(item, desktop));
-      const reviewReady = !activeDesktop && /^main$|^master$/i.test(branch) && fileCount === 0 && Boolean(recentCommit);
+      const reviewReady = !activeDesktop && !handoff && /^main$|^master$/i.test(branch) && fileCount === 0 && Boolean(recentCommit);
       const facts = [
-        { label: "Freshness", value: recency.label },
+        { label: "Freshness", value: handoff?.observedAt ? age(handoff.observedAt) : recency.label },
         { label: "Branch", value: branch || "not reported" },
         { label: activeDesktop ? "Focus" : "Files", value: activeDesktop ? "active now" : fileCount ? `${fileCount} changed` : "no file changes" },
       ];
-      const signal = activeDesktop
+      const signal = handoff
+        ? `${handoff.title}: ${handoff.summary}`
+        : activeDesktop
         ? `Foreground VS Code focus is on ${text(item?.projectName || item?.folderName, "this workspace")} now.`
         : topic ? `${topic.shortTitle}: ${topic.signal}.`
         : firstFile ? `Latest file signal: ${firstFile}` : recentCommit ? `Latest commit: ${recentCommit}` : "Workspace is visible, but no file/event detail is attached yet.";
-      const stuck = activeDesktop
+      const stuck = handoff?.status === "ready_for_mark"
+        ? `Ready for your check${handoff.refresh ? `: refresh ${handoff.refresh}` : ""}. File-count noise is lower priority than this Codex handoff.`
+        : handoff?.status === "blocked"
+        ? "Codex reported a blocker in its handoff. Marcus should explain the exact failure before showing generic project movement."
+        : activeDesktop
         ? "Foreground focus beats stale session file timestamps. Marcus should treat this as current PC activity."
         : topic ? topic.pressure
         : reviewReady
         ? "Commit is clean on the main branch. This looks ready for your eyes, not like Codex is still typing."
         : !recency.fresh ? "This may be stale; ask Marcus to verify whether Codex is still active here." : fileCount === 0 ? "No file movement yet; useful to ask what Codex is reading or waiting on." : "";
-      return { facts, signal, stuck, tone: activeDesktop || reviewReady || topic ? "live" : recency.tone, reviewReady, activeDesktop, topic };
+      return { facts, signal, stuck, tone: handoff?.status === "blocked" ? "blocked" : activeDesktop || reviewReady || topic || handoff ? "live" : recency.tone, reviewReady, activeDesktop, topic, handoff };
     }
 
     function signalSummaryFromJob(job) {
@@ -984,6 +1009,9 @@
       const commits = arr(item?.gitRecentCommits).map(text).filter(Boolean);
       const changed = arr(item?.gitStatus).map((entry) => text(entry?.file)).filter(Boolean);
       const haystack = [branch, ...commits, ...changed, text(item?.folderName), text(item?.projectName)].join(" ");
+      const handoff = workspaceHandoff(item);
+      if (handoff?.status === "ready_for_mark") return handoff.refresh ? `Refresh and verify ${handoff.refresh}` : "Review the completed Codex handoff";
+      if (handoff) return handoff.title;
       const topic = workspaceTopicFromSignals(item);
       if (topic) return topic.title;
       if (/sng|price|sync/i.test(haystack)) return "Diagnose SNG price sync";
@@ -1090,7 +1118,11 @@
       const task = inferCodexWorkspaceTask(item);
       const liveSignal = signalSummaryFromWorkspace(item, desktop);
       const reviewReady = Boolean(liveSignal.reviewReady);
+      const handoffReady = liveSignal.handoff?.status === "ready_for_mark";
+      const handoffBlocked = liveSignal.handoff?.status === "blocked";
+      const projectState = handoffReady ? "needs_mark" : handoffBlocked ? "blocked" : reviewReady ? "complete" : "moving";
       const changed = [
+        liveSignal.handoff ? `Codex handoff: ${liveSignal.handoff.summary}` : "",
         text(item?.gitBranch) ? `Branch: ${text(item.gitBranch)}` : "",
         Number(item?.gitStatusCount || 0) ? `${Number(item.gitStatusCount)} changed file${Number(item.gitStatusCount) === 1 ? "" : "s"}` : "",
         ...arr(item?.gitStatus).slice(0, 4).map((entry) => `${text(entry?.status, "?")} ${text(entry?.file)}`),
@@ -1098,22 +1130,22 @@
       ].filter(Boolean);
       return {
         id: idFrom(name, `codex-workspace-${index}`),
-        isLiveCodex: !reviewReady,
-        workspaceReviewReady: reviewReady,
+        isLiveCodex: !reviewReady && !handoffReady && !handoffBlocked,
+        workspaceReviewReady: reviewReady || handoffReady,
         sourceId: text(item?.sessionId),
         codexSessionId: text(item?.sessionId),
         name,
-        state: reviewReady ? "complete" : "moving",
-        stateLabel: reviewReady ? "Ready to review" : liveSignal.topic?.kind === "hub" ? "Hub issue" : liveSignal.activeDesktop ? "Active now" : liveSignal.tone === "live" && !liveSignal.stuck ? "Live Codex" : "Check status",
-        basis: reviewReady ? "workspace commit signal" : "live Codex workspace",
-        sentence: reviewReady ? `Latest commit is ready for review: ${commitTitle(arr(item?.gitRecentCommits)[0]) || task}.` : task || "Active Codex session detected.",
+        state: projectState,
+        stateLabel: handoffReady ? "Ready to check" : handoffBlocked ? "Codex blocker" : reviewReady ? "Ready to review" : liveSignal.topic?.kind === "hub" ? "Hub issue" : liveSignal.activeDesktop ? "Active now" : liveSignal.tone === "live" && !liveSignal.stuck ? "Live Codex" : "Check status",
+        basis: handoffReady || handoffBlocked ? "Codex handoff" : reviewReady ? "workspace commit signal" : "live Codex workspace",
+        sentence: liveSignal.handoff ? liveSignal.handoff.summary : reviewReady ? `Latest commit is ready for review: ${commitTitle(arr(item?.gitRecentCommits)[0]) || task}.` : task || "Active Codex session detected.",
         liveSignal,
-        livePhase: reviewReady ? "Complete" : phaseFor({ state: "moving", currentStep: task, objective: task, lastChange: liveSignal.signal }),
+        livePhase: handoffReady ? "Approval" : handoffBlocked ? "Building" : reviewReady ? "Complete" : phaseFor({ state: "moving", currentStep: task, objective: task, lastChange: liveSignal.signal }),
         last: age(effectiveWorkspaceModifiedAt(item, desktop)),
         lastChange: task,
-        next: reviewReady ? "Mark review" : "Codex",
+        next: handoffReady ? "Mark refresh" : handoffBlocked ? "MARCUS" : reviewReady ? "Mark review" : "Codex",
         counts: `${Number(item?.gitStatusCount || arr(item?.gitStatus).length || 0)} file signal${Number(item?.gitStatusCount || arr(item?.gitStatus).length || 0) === 1 ? "" : "s"}`,
-        confidence: reviewReady ? 82 : 88,
+        confidence: handoffReady ? 92 : handoffBlocked ? 62 : reviewReady ? 82 : 88,
         objective: task,
         currentStep: task,
         changed: [
@@ -1126,8 +1158,8 @@
           ...changed,
         ].filter(Boolean) : ["Recent Codex session metadata observed"],
         tasks: [
-          { id: `${idFrom(name)}-codex-active`, title: task, status: reviewReady ? "commit observed" : liveSignal.tone === "live" ? "visible now" : "needs status check", worker: reviewReady ? "Git" : "Codex" },
-          { id: `${idFrom(name)}-mark-review`, title: "Review latest commit", status: reviewReady ? "ready" : "waiting", worker: "Mark" },
+          { id: `${idFrom(name)}-codex-active`, title: task, status: handoffReady ? "handoff ready" : handoffBlocked ? "blocked" : reviewReady ? "commit observed" : liveSignal.tone === "live" ? "visible now" : "needs status check", worker: handoffReady || handoffBlocked ? "Codex" : reviewReady ? "Git" : "Codex" },
+          { id: `${idFrom(name)}-mark-review`, title: handoffReady ? "Refresh live page and confirm" : "Review latest commit", status: handoffReady || reviewReady ? "ready" : "waiting", worker: "Mark" },
         ],
         evidence: [
           "Desktop relay codexWorkspaces",
@@ -1829,6 +1861,9 @@
     }
 
     function projectRead(project) {
+      if (project.liveSignal?.handoff) {
+        return `${project.liveSignal.handoff.title}. ${project.liveSignal.handoff.summary} ${project.liveSignal.stuck || ""}`.trim();
+      }
       if (project.isLiveCodex) {
         if (project.liveSignal?.topic?.kind === "hub") {
           return `${project.liveSignal.topic.title} is the current visible work. ${project.liveSignal.signal} ${project.liveSignal.topic.pressure} Marcus should explain what is failing in the hub connection, what changed in the admin surface, and what you can approve, test, or redirect next.`;
@@ -1853,6 +1888,12 @@
     }
 
     function changeNarrative(project) {
+      if (project.liveSignal?.handoff?.status === "ready_for_mark") {
+        return `Codex handed back a concrete result. The important change is no longer "66 files moved"; it is: ${project.liveSignal.handoff.summary}`;
+      }
+      if (project.liveSignal?.handoff?.status === "blocked") {
+        return `Codex left a blocker handoff. Marcus should show the exact failure from the handoff before any generic activity summary.`;
+      }
       if (project.state === "complete") {
         const changedFiles = arr(project.changed).filter((item) => /changed file|^[MADRCU?!]{1,2}\s/i.test(item)).length;
         const signal = project.liveSignal?.signal || project.lastChange || "Codex reported completion without a useful summary, because of course it did.";
@@ -1919,6 +1960,16 @@
     }
 
     function nextMoveButtons(project) {
+      if (project.liveSignal?.handoff?.status === "ready_for_mark") return [
+        { label: "Tell me exactly what to verify", tag: "Eyes", prompt: "Turn the Codex handoff into a precise verification checklist. Include the URL to refresh, expected result, and what would still be broken." },
+        { label: "Open the live check plan", tag: "Verify", prompt: "Use the Codex handoff to explain how I confirm this is fixed without rereading the whole session." },
+        { label: "Capture as resolved if it passes", tag: "Close", prompt: "If the live refresh passes, tell me what status this project should move to and what evidence Marcus should keep." },
+      ];
+      if (project.liveSignal?.handoff?.status === "blocked") return [
+        { label: "Explain the exact blocker", tag: "Blocker", prompt: "Explain the Codex blocker handoff in plain English. Tell me what broke, why, and the smallest next step." },
+        { label: "Find what Mark can do", tag: "Action", prompt: "From the blocker handoff, tell me whether Mark needs to approve, provide a token, refresh, or reroute." },
+        { label: "Prepare recovery prompt", tag: "Codex", prompt: "Draft a follow-up prompt for Codex that includes the blocker, evidence, and required next verification." },
+      ];
       if (project.state === "needs_mark") return [
         { label: "Explain the decision", tag: "Marcus", prompt: "Explain the exact decision I need to make, the options, risks, and what happens if I wait." },
         { label: "Show evidence", tag: "Review", prompt: "Show the evidence behind this decision and identify what is missing or stale." },

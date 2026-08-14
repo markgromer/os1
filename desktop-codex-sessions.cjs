@@ -5,6 +5,8 @@ const path = require('path');
 const DEFAULT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const DEFAULT_MAX_RESULTS = 12;
 const MAX_METADATA_BYTES = 64 * 1024;
+const MAX_HANDOFF_BYTES = 256 * 1024;
+const MAX_HANDOFF_TEXT = 1800;
 
 function humanizeWorkspaceName(value) {
   return String(value || '')
@@ -55,6 +57,83 @@ function readFirstJsonLine(filePath) {
   }
 }
 
+function compactText(value, limit = MAX_HANDOFF_TEXT) {
+  return String(value || '').replace(/\s+/g, ' ').trim().slice(0, Math.max(1, Number(limit) || MAX_HANDOFF_TEXT));
+}
+
+function extractTextParts(value, output = []) {
+  if (!value || output.join(' ').length > MAX_HANDOFF_TEXT * 2) return output;
+  if (typeof value === 'string') {
+    const clean = compactText(value, MAX_HANDOFF_TEXT);
+    if (clean) output.push(clean);
+    return output;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) extractTextParts(item, output);
+    return output;
+  }
+  if (typeof value === 'object') {
+    for (const key of ['text', 'content', 'message', 'summary', 'final_output', 'finalOutput']) {
+      if (Object.hasOwn(value, key)) extractTextParts(value[key], output);
+    }
+  }
+  return output;
+}
+
+function eventLooksAssistantHandoff(event) {
+  const payload = event?.payload && typeof event.payload === 'object' ? event.payload : {};
+  const role = String(payload.role || payload.author?.role || event?.role || '').toLowerCase();
+  const type = String(event?.type || payload.type || '').toLowerCase();
+  const status = String(payload.status || event?.status || '').toLowerCase();
+  if (role && role !== 'assistant') return false;
+  if (role === 'assistant') return true;
+  return /assistant|final|result|completion|handoff/.test(type) || /completed|complete|succeeded|success/.test(status);
+}
+
+function classifyHandoffSummary(summary) {
+  const lower = String(summary || '').toLowerCase();
+  if (/\b(fixed|resolved|confirmed|applied|ready|no pending migrations|returns ready|should load)\b/.test(lower)) return 'ready_for_mark';
+  if (/\b(blocked|failed|error|missing|unauthorized|500|crash)\b/.test(lower)) return 'blocked';
+  return summary ? 'handoff' : '';
+}
+
+function readSessionHandoffSummary(filePath) {
+  let stat;
+  try {
+    stat = fs.statSync(filePath);
+  } catch {
+    return null;
+  }
+  if (!stat.isFile()) return null;
+  let handle;
+  try {
+    handle = fs.openSync(filePath, 'r');
+    const bytes = Math.min(MAX_HANDOFF_BYTES, stat.size);
+    const buffer = Buffer.alloc(bytes);
+    fs.readSync(handle, buffer, 0, bytes, Math.max(0, stat.size - bytes));
+    const lines = buffer.toString('utf8').split(/\r?\n/).filter(Boolean);
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      let event;
+      try { event = JSON.parse(lines[index]); } catch { continue; }
+      if (!eventLooksAssistantHandoff(event)) continue;
+      const summary = compactText(extractTextParts(event.payload || event).join(' '), MAX_HANDOFF_TEXT);
+      if (!summary) continue;
+      return {
+        summary,
+        status: classifyHandoffSummary(summary),
+        observedAt: stat.mtime.toISOString(),
+      };
+    }
+  } catch {
+    return null;
+  } finally {
+    if (handle !== undefined) {
+      try { fs.closeSync(handle); } catch {}
+    }
+  }
+  return null;
+}
+
 function parseSessionMetadata(filePath, nowMs, maxAgeMs) {
   let stat;
   try {
@@ -79,6 +158,7 @@ function parseSessionMetadata(filePath, nowMs, maxAgeMs) {
   }
 
   const folderName = path.basename(workspacePath);
+  const handoff = readSessionHandoffSummary(filePath);
   return {
     sessionId: String(payload.id || '').trim().slice(0, 160),
     workspacePath,
@@ -87,6 +167,11 @@ function parseSessionMetadata(filePath, nowMs, maxAgeMs) {
     modifiedAt: stat.mtime.toISOString(),
     source: String(payload.source || '').trim().slice(0, 80),
     originator: String(payload.originator || '').trim().slice(0, 120),
+    ...(handoff ? {
+      handoffSummary: handoff.summary,
+      handoffStatus: handoff.status,
+      handoffObservedAt: handoff.observedAt,
+    } : {}),
   };
 }
 
@@ -126,4 +211,4 @@ function discoverRecentCodexWorkspaces({
   return output;
 }
 
-module.exports = { discoverRecentCodexWorkspaces, humanizeWorkspaceName, parseGitStatus, parseSessionMetadata };
+module.exports = { discoverRecentCodexWorkspaces, humanizeWorkspaceName, parseGitStatus, parseSessionMetadata, readSessionHandoffSummary };

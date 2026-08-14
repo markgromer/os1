@@ -14812,6 +14812,9 @@ app.post('/api/desktop-context/relay', (req, res) => {
         gitRecentCommits: Array.isArray(item.gitRecentCommits)
           ? item.gitRecentCommits.slice(0, 3).map((entry) => typeof entry === 'string' ? entry.slice(0, 240) : '').filter(Boolean)
           : [],
+        handoffSummary: typeof item.handoffSummary === 'string' ? item.handoffSummary.trim().slice(0, 1800) : '',
+        handoffStatus: typeof item.handoffStatus === 'string' ? item.handoffStatus.trim().slice(0, 80) : '',
+        handoffObservedAt: typeof item.handoffObservedAt === 'string' ? item.handoffObservedAt.trim().slice(0, 40) : '',
       };
     })
     .filter((item) => item.workspacePath && item.folderName);
@@ -21265,7 +21268,6 @@ const httpServer = app.listen(PORT, SERVER_HOST, async () => {
   // eslint-disable-next-line no-console
   console.log(`M.A.R.C.U.S. running on http://${SERVER_HOST}:${PORT}`);
 });
-
 
 
 

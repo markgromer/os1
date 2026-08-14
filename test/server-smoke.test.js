@@ -533,12 +533,17 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
         modifiedAt: new Date().toISOString(), source: 'vscode', originator: 'codex_vscode', gitBranch: 'main',
         gitRemote: 'https://github.com/markgromer/scoopfairies.git', gitStatusCount: 2,
         gitStatus: [{ status: 'M', file: 'src/app/page.tsx' }], gitRecentCommits: ['abc1234 Current work'],
+        handoffSummary: 'Fixed the live blocker. Refresh https://poopsites.com/admin/reggie and confirm 15 sites load.',
+        handoffStatus: 'ready_for_mark',
+        handoffObservedAt: new Date().toISOString(),
         transcript: 'must-not-be-relayed',
       }],
     }) });
     assert.equal(relayResponse.status, 200);
     const relayedContext = await (await fetch(`${base}/api/desktop-context`, { headers: agencyHeaders })).json();
     assert.equal(relayedContext.codexWorkspaces[0].projectName, 'Scoop Fairies');
+    assert.match(relayedContext.codexWorkspaces[0].handoffSummary, /Fixed the live blocker/);
+    assert.equal(relayedContext.codexWorkspaces[0].handoffStatus, 'ready_for_mark');
     assert.equal(Object.hasOwn(relayedContext.codexWorkspaces[0], 'transcript'), false);
     assert.equal(relayedContext.desktopAuthorization.scope, 'full_pc');
     assert.equal(relayedContext.desktopAuthorization.fullPcAccess, true);
