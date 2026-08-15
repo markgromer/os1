@@ -1,2681 +1,883 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#070a10">
-  <title>MARCUS Desktop Workspace</title>
-  <link rel="icon" href="/icons/marcus.svg" type="image/svg+xml">
-  <style>
-    :root {
-      color-scheme: dark;
-      --bg: #070a10;
-      --panel: #0d141d;
-      --panel-2: #111b26;
-      --panel-3: #172332;
-      --line: rgba(168, 181, 196, 0.18);
-      --line-strong: rgba(168, 181, 196, 0.34);
-      --text: #f4efe7;
-      --muted: #a2adb9;
-      --faint: #74808c;
-      --violet: #a77bff;
-      --cyan: #46c8ff;
-      --green: #67d36f;
-      --amber: #f4b544;
-      --red: #ff6b6b;
-      --shadow: 0 18px 60px rgba(0, 0, 0, 0.38);
-      --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      --mono: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
-    }
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>M.A.R.C.U.S. — Modular Autonomous Routing & Coordination Utility System</title>
+    <link rel="stylesheet" href="/tailwind.css">
+    <link rel="stylesheet" href="/marcus-overview.css?v=1">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        :root {
+            /* Dark (default) — clean neutral greys */
+            --ops-bg: 9 9 11;        /* zinc-950 */
+            --ops-surface: 24 24 27; /* zinc-900 */
+            --ops-border: 63 63 70;  /* zinc-700 */
+            --ops-light: 161 161 170;/* zinc-400 */
+            --ops-text: 250 250 250; /* near-white */
+            --ops-accent: 59 130 246;/* blue-500 */
+            --ops-success: 16 185 129;
+            --ops-warning: 245 158 11;
+            --ops-danger: 239 68 68; /* red-500 */
 
-    * { box-sizing: border-box; }
-    html, body { min-height: 100%; }
-    body {
-      margin: 0;
-      min-height: 100vh;
-      overflow: hidden;
-      background:
-        radial-gradient(circle at 82% 2%, rgba(167, 123, 255, 0.12), transparent 28%),
-        linear-gradient(180deg, #081019 0%, #070a10 48%, #05070b 100%);
-      color: var(--text);
-      font-family: var(--sans);
-      letter-spacing: 0;
-    }
+            /* UI sizing (overridable via Settings) */
+            --ops-page-title-size: 1.4rem;
+            --ops-page-title-weight: 700;
+            --ops-section-title-size: 0.875rem; /* 14px */
+            --ops-section-title-weight: 600;
 
-    button, input { font: inherit; }
-    button { cursor: pointer; }
-    button:focus-visible, input:focus-visible, .ledger-row:focus-visible, .needs-card:focus-visible, .rail-item:focus-visible {
-      outline: 2px solid var(--violet);
-      outline-offset: 3px;
-    }
+            /* Dashboard density (overridable via Settings) */
+            --ops-dash-pad: 16px;
+            --ops-dash-gap: 12px;
+            --ops-dash-card-head-py: 10px;
+            --ops-dash-card-preview-pb: 10px;
 
-    .workspace {
-      height: 100vh;
-      display: grid;
-      grid-template-columns: 184px minmax(640px, 1fr) 380px;
-      grid-template-rows: 72px minmax(0, 1fr);
-      grid-template-areas:
-        "nav top top"
-        "nav main side";
-    }
+            --ops-scroll-thumb: 82 82 91;       /* zinc-600 */
+            --ops-scroll-thumb-hover: 113 113 122; /* zinc-500 */
+        }
 
-    .nav {
-      grid-area: nav;
-      min-height: 0;
-      padding: 20px 14px 16px;
-      border-right: 1px solid var(--line);
-      background: rgba(5, 8, 13, 0.72);
-      display: grid;
-      grid-template-rows: auto 1fr auto;
-      gap: 24px;
-    }
+        html {
+            background-color: rgb(var(--ops-bg));
+        }
 
-    .brand {
-      display: grid;
-      grid-template-columns: 34px minmax(0, 1fr);
-      gap: 10px;
-      align-items: center;
-    }
+        html[data-theme="light"] {
+            /* Light (zinc palette) */
+            --ops-bg: 250 250 250;
+            --ops-surface: 255 255 255;
+            --ops-border: 212 212 216;
+            --ops-light: 63 63 70;
+            --ops-text: 0 0 0;
 
-    .brand-mark {
-      width: 34px;
-      height: 34px;
-      display: grid;
-      place-items: center;
-      color: var(--violet);
-      border-radius: 10px;
-      background: rgba(167, 123, 255, 0.11);
-      font-size: 22px;
-      font-weight: 900;
-    }
+            --ops-scroll-thumb: 161 161 170;
+            --ops-scroll-thumb-hover: 113 113 122;
+        }
 
-    .brand h1 { margin: 0; font-size: 18px; line-height: 1; letter-spacing: 0.13em; font-weight: 720; }
-    .brand p { margin: 5px 0 0; color: var(--muted); font-size: 12px; }
-    .live-state { margin-top: 9px; display: flex; align-items: center; gap: 7px; color: var(--green); font-size: 12px; }
-    .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; flex: 0 0 auto; }
+        /* Light theme overrides for commonly-used Zinc utility classes.
+           This avoids a massive class refactor while making the UI readable. */
+        html[data-theme="light"] .bg-zinc-950 { background-color: rgb(250 250 250) !important; }
+        html[data-theme="light"] .bg-zinc-900 { background-color: rgb(255 255 255) !important; }
+        html[data-theme="light"] .bg-zinc-800 { background-color: rgb(244 244 245) !important; }
 
-    .nav-links { display: grid; align-content: start; gap: 6px; }
-    .nav-link {
-      min-height: 44px;
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 0 10px;
-      border: 1px solid transparent;
-      border-radius: 8px;
-      color: var(--muted);
-      background: transparent;
-      text-align: left;
-    }
-    .nav-link.active {
-      color: var(--text);
-      border-color: rgba(167, 123, 255, 0.5);
-      background: rgba(167, 123, 255, 0.16);
-    }
-    .nav-icon { width: 20px; color: currentColor; text-align: center; font-family: var(--mono); }
-    .nav-foot { display: grid; gap: 9px; color: var(--muted); font-size: 12px; }
-    .health-line { display: flex; align-items: center; gap: 8px; }
+        html[data-theme="light"] .bg-zinc-950\/40 { background-color: rgb(244 244 245 / 0.6) !important; }
+        html[data-theme="light"] .bg-zinc-950\/60 { background-color: rgb(244 244 245 / 0.8) !important; }
+        html[data-theme="light"] .bg-zinc-900\/30 { background-color: rgb(255 255 255 / 0.8) !important; }
+        html[data-theme="light"] .bg-zinc-900\/50 { background-color: rgb(255 255 255 / 0.9) !important; }
+        html[data-theme="light"] .bg-zinc-800\/40 { background-color: rgb(244 244 245 / 0.8) !important; }
+        html[data-theme="light"] .bg-zinc-800\/50 { background-color: rgb(244 244 245 / 0.9) !important; }
 
-    .top {
-      grid-area: top;
-      min-width: 0;
-      display: grid;
-      grid-template-columns: minmax(360px, 1fr) minmax(320px, 560px) auto;
-      align-items: center;
-      gap: 16px;
-      padding: 16px 22px 10px;
-      border-bottom: 1px solid var(--line);
-      background: rgba(7, 10, 16, 0.68);
-    }
+        html[data-theme="light"] .border-zinc-800 { border-color: rgb(212 212 216) !important; }
+        html[data-theme="light"] .border-zinc-700 { border-color: rgb(161 161 170) !important; }
+        html[data-theme="light"] .border-zinc-800\/50 { border-color: rgb(212 212 216 / 0.7) !important; }
+        html[data-theme="light"] .border-white\/20 { border-color: rgb(0 0 0 / 0.25) !important; }
+        html[data-theme="light"] .border-white\/10 { border-color: rgb(0 0 0 / 0.15) !important; }
+        html[data-theme="light"] .border-white\/5 { border-color: rgb(0 0 0 / 0.08) !important; }
+        html[data-theme="light"] .bg-white\/10 { background-color: rgb(0 0 0 / 0.08) !important; }
+        html[data-theme="light"] .bg-white\/5 { background-color: rgb(0 0 0 / 0.04) !important; }
 
-    .presence { min-width: 0; display: grid; gap: 4px; }
-    .presence-title { display: flex; align-items: center; gap: 10px; min-width: 0; }
-    .presence-title h2 { margin: 0; font-size: 22px; line-height: 1.05; }
-    .brain-glyph {
-      width: 32px;
-      height: 32px;
-      border-radius: 13px;
-      border: 1px solid rgba(70, 200, 255, 0.36);
-      background:
-        radial-gradient(circle at 34% 62%, rgba(70, 200, 255, 0.78), transparent 12%),
-        radial-gradient(circle at 64% 38%, rgba(167, 123, 255, 0.82), transparent 13%),
-        rgba(70, 200, 255, 0.07);
-      box-shadow: 0 0 20px rgba(70, 200, 255, 0.1);
-    }
-    body[data-activity="risk"] .brain-glyph { border-radius: 9px; border-color: rgba(244, 181, 68, 0.7); }
-    body[data-activity="blocked"] .brain-glyph { border-radius: 50%; border-color: rgba(255, 107, 107, 0.7); }
-    body[data-activity="moving"] .brain-glyph { animation: breathe 2.6s ease-in-out infinite; }
+        html[data-theme="light"] .text-white { color: rgb(0 0 0) !important; font-weight: 600; }
+        html[data-theme="light"] .text-zinc-200 { color: rgb(9 9 11) !important; font-weight: 500; }
+        html[data-theme="light"] .text-zinc-300 { color: rgb(24 24 27) !important; font-weight: 500; }
+        html[data-theme="light"] .text-zinc-400 { color: rgb(39 39 42) !important; font-weight: 500; }
+        html[data-theme="light"] .text-zinc-500 { color: rgb(63 63 70) !important; }
+        html[data-theme="light"] .text-zinc-600 { color: rgb(82 82 91) !important; }
 
-    @keyframes breathe {
-      0%, 100% { transform: scale(0.96); }
-      50% { transform: scale(1.04); }
-    }
+        body {
+            background-color: rgb(var(--ops-bg));
+            color: rgb(var(--ops-text));
+            position: relative;
+            background-image: none;
+            background-attachment: scroll;
+        }
 
-    .operating-state { color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .search {
-      min-width: 0;
-      display: grid;
-      grid-template-columns: 22px minmax(0, 1fr);
-      align-items: center;
-      gap: 8px;
-      height: 42px;
-      padding: 0 12px;
-      border: 1px solid var(--line-strong);
-      border-radius: 8px;
-      background: rgba(8, 13, 21, 0.78);
-      color: var(--faint);
-    }
-    .search input {
-      min-width: 0;
-      border: 0;
-      outline: 0;
-      background: transparent;
-      color: var(--text);
-    }
-    .top-actions { display: flex; align-items: center; gap: 8px; }
-    .btn {
-      min-height: 38px;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      gap: 8px;
-      padding: 8px 12px;
-      border: 1px solid var(--line-strong);
-      border-radius: 8px;
-      color: var(--text);
-      background: rgba(255, 255, 255, 0.035);
-    }
-    .btn.primary { border-color: rgba(167, 123, 255, 0.55); background: linear-gradient(135deg, rgba(167, 123, 255, 0.84), rgba(94, 73, 218, 0.82)); }
-    .btn.subtle { color: var(--muted); }
-    .btn.danger { border-color: rgba(255, 107, 107, 0.55); color: #ffd9d9; }
-    .btn.warn { border-color: rgba(244, 181, 68, 0.55); color: #ffe5aa; }
+        /* Keep background clean + high-contrast */
+        body::before { content: none; }
 
-    .main {
-      grid-area: main;
-      min-height: 0;
-      overflow: auto;
-      padding: 18px 22px 18px;
-      scroll-behavior: smooth;
-    }
+        /* Ensure app UI stays above glow */
+        #command-bar,
+        #workspace-main,
+        #neural-drawer {
+            position: relative;
+            z-index: 1;
+        }
 
-    .brief {
-      min-height: 74px;
-      display: grid;
-      align-items: center;
-      gap: 7px;
-      padding: 16px 18px;
-      border: 1px solid var(--line);
-      border-radius: 10px;
-      background: rgba(13, 20, 29, 0.72);
-      box-shadow: var(--shadow);
-    }
-    .brief p { margin: 0; font-size: 20px; line-height: 1.35; }
-    .source-note { margin: 0; color: var(--muted); font-size: 12px; }
-    .source-note strong { color: var(--text); }
+        /* Refined Scrollbars */
+        ::-webkit-scrollbar { width: 5px; height: 5px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: rgb(var(--ops-scroll-thumb)); border-radius: 2px; }
+        ::-webkit-scrollbar-thumb:hover { background: rgb(var(--ops-scroll-thumb-hover)); }
 
-    .needs { display: none; margin-top: 14px; }
-    .needs.visible { display: grid; gap: 8px; }
-    .section-title {
-      margin: 0;
-      color: var(--muted);
-      font-size: 12px;
-      line-height: 1;
-      font-weight: 760;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-    }
-    .needs-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
-    .needs-card {
-      min-height: 118px;
-      display: grid;
-      gap: 8px;
-      padding: 13px;
-      border: 1px solid rgba(244, 181, 68, 0.38);
-      border-radius: 10px;
-      background: rgba(244, 181, 68, 0.075);
-      color: var(--text);
-      text-align: left;
-    }
-    .needs-card strong { font-size: 15px; line-height: 1.25; }
-    .needs-card p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.35; }
-    .needs-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 2px; }
-    .needs-actions .btn { min-height: 32px; padding: 6px 10px; font-size: 13px; }
+        /* Utility */
+        .glass {
+            background-color: rgb(var(--ops-surface) / 0.78);
+            backdrop-filter: blur(10px) saturate(120%);
+            -webkit-backdrop-filter: blur(10px) saturate(120%);
+        }
 
-    .ledger-head {
-      display: flex;
-      align-items: end;
-      justify-content: space-between;
-      gap: 16px;
-      margin: 18px 0 8px;
-    }
-    .ledger-head h1 { margin: 0; font-size: 34px; line-height: 1; }
-    .ledger-head p { margin: 7px 0 0; color: var(--muted); }
-    .ledger-head-actions { display: flex; align-items: center; gap: 12px; }
-    .sort-label { color: var(--muted); font-size: 12px; }
+        :root {
+            --ops-glass-blur: 10px;
+            --ops-glass-sat: 125%;
+            --ops-glass-bg: 0.80;
+            --ops-glass-border: 0.85;
+            --ops-glass-inset: 0.05;
+        }
 
-    .ledger { display: grid; gap: 18px; }
-    .ledger-group { display: grid; gap: 7px; }
-    .group-label {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      color: var(--muted);
-      font-size: 12px;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-    }
-    .group-label span:last-child { color: var(--faint); }
+        .glass-panel {
+            background: rgb(var(--ops-surface) / var(--ops-glass-bg));
+            border: 1px solid rgb(var(--ops-border) / var(--ops-glass-border));
+            box-shadow:
+                0 1px 0 rgb(var(--ops-text) / var(--ops-glass-inset)) inset,
+                0 14px 34px rgb(0 0 0 / 0.22);
+            backdrop-filter: blur(var(--ops-glass-blur)) saturate(var(--ops-glass-sat));
+            -webkit-backdrop-filter: blur(var(--ops-glass-blur)) saturate(var(--ops-glass-sat));
+        }
 
-    .ledger-row {
-      display: grid;
-      grid-template-columns: 210px minmax(250px, 1fr) minmax(360px, 1.25fr) 145px 170px;
-      align-items: center;
-      gap: 16px;
-      min-height: 76px;
-      padding: 12px 14px;
-      border: 1px solid var(--line);
-      border-radius: 9px;
-      background: rgba(13, 20, 29, 0.62);
-      text-align: left;
-      color: inherit;
-    }
-    .ledger-row[aria-expanded="true"] {
-      border-color: rgba(167, 123, 255, 0.5);
-      background: rgba(17, 27, 38, 0.86);
-    }
-    .identity { min-width: 0; display: grid; grid-template-columns: 38px minmax(0, 1fr); gap: 11px; align-items: center; }
-    .avatar {
-      width: 38px;
-      height: 38px;
-      display: grid;
-      place-items: center;
-      border-radius: 9px;
-      border: 1px solid rgba(70, 200, 255, 0.42);
-      color: var(--cyan);
-      background: rgba(70, 200, 255, 0.08);
-      font-weight: 820;
-      font-size: 14px;
-    }
-    .avatar.warn { color: var(--amber); border-color: rgba(244, 181, 68, 0.52); background: rgba(244, 181, 68, 0.08); }
-    .avatar.danger { color: var(--red); border-color: rgba(255, 107, 107, 0.52); background: rgba(255, 107, 107, 0.08); }
-    .avatar.quiet { color: var(--violet); border-color: rgba(167, 123, 255, 0.48); background: rgba(167, 123, 255, 0.08); }
-    .identity strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 17px; }
-    .state-label { display: inline-flex; width: fit-content; align-items: center; gap: 7px; margin-top: 5px; color: var(--muted); font-size: 12px; }
-    .state-icon { width: 18px; height: 18px; display: inline-grid; place-items: center; border: 1px solid currentColor; border-radius: 50%; font-size: 10px; font-family: var(--mono); }
-    .state-moving { color: var(--cyan); }
-    .state-needs_mark, .state-verifying { color: var(--amber); }
-    .state-blocked { color: var(--red); }
-    .state-monitoring, .state-quiet, .state-unknown { color: var(--muted); }
-    .state-complete { color: var(--green); }
-    .activity-copy { min-width: 0; color: #dce4ea; font-size: 14px; line-height: 1.36; }
-    .meta { color: var(--muted); font-size: 12px; line-height: 1.35; }
+        /* Command bar + header glass */
+        #command-bar {
+            background-color: rgb(var(--ops-surface) / 0.92) !important;
+            backdrop-filter: blur(8px) saturate(120%);
+            -webkit-backdrop-filter: blur(8px) saturate(120%);
+        }
+        #workspace-main {
+            background-color: rgb(var(--ops-bg) / 0.94) !important;
+            backdrop-filter: none !important;
+            -webkit-backdrop-filter: none !important;
+        }
+        #workspace-main > header {
+            background-color: rgb(var(--ops-bg) / 0.88) !important;
+            backdrop-filter: blur(6px) saturate(120%);
+            -webkit-backdrop-filter: blur(6px) saturate(120%);
+        }
 
-    .movement { min-width: 0; display: grid; gap: 7px; }
-    .live-signal {
-      display: grid;
-      gap: 7px;
-      min-width: 0;
-    }
-    .live-signal-head {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-      min-width: 0;
-      color: var(--text);
-      font-size: 12px;
-    }
-    .live-signal-head strong {
-      min-width: 0;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    .pulse {
-      width: 10px;
-      height: 10px;
-      border-radius: 50%;
-      background: var(--cyan);
-      box-shadow: 0 0 14px rgba(70, 200, 255, 0.55);
-      flex: 0 0 auto;
-    }
-    .pulse.live { animation: breathe 1.8s ease-in-out infinite; }
-    .pulse.warn { background: var(--amber); box-shadow: 0 0 14px rgba(244, 181, 68, 0.45); }
-    .pulse.blocked { background: var(--red); box-shadow: 0 0 14px rgba(255, 107, 107, 0.38); }
-    .signal-grid {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      min-width: 0;
-      color: var(--muted);
-      font-size: 11px;
-      line-height: 1.25;
-    }
-    .signal-chip {
-      min-width: 0;
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-      color: var(--muted);
-    }
-    .signal-chip + .signal-chip::before { content: ""; width: 1px; height: 14px; margin-right: 2px; background: var(--line); }
-    .signal-chip strong {
-      color: var(--text);
-      font-size: 11px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    .signal-note { color: var(--faint); font-size: 11px; line-height: 1.35; overflow-wrap: anywhere; }
-    .rail { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 5px; align-items: center; }
-    .rail-item { min-width: 0; display: grid; gap: 5px; color: var(--faint); font-size: 10px; text-align: center; }
-    .rail-dot {
-      height: 6px;
-      border-radius: 999px;
-      background: rgba(255, 255, 255, 0.09);
-      border: 1px solid rgba(255, 255, 255, 0.05);
-    }
-    .rail-item.done .rail-dot { background: rgba(103, 211, 111, 0.72); }
-    .rail-item.active { color: var(--text); }
-    .rail-item.active .rail-dot { background: var(--cyan); box-shadow: 0 0 14px rgba(70, 200, 255, 0.35); }
-    .rail-item.blocked .rail-dot { background: var(--red); }
-    .rail-item.waiting .rail-dot { background: var(--amber); }
-    .row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 7px; }
-    .row-actions .btn { min-height: 34px; padding: 7px 10px; }
+        #page-title {
+            font-size: var(--ops-page-title-size);
+            font-weight: var(--ops-page-title-weight);
+            letter-spacing: 0;
+        }
 
-    .drawer {
-      display: grid;
-      grid-column: 1 / -1;
-      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-      gap: 14px;
-      padding: 14px 4px 2px 49px;
-      border-top: 1px solid var(--line);
-    }
-    .drawer-card { min-width: 0; display: grid; align-content: start; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: 9px; background: rgba(5, 8, 13, 0.38); }
-    .drawer-card.full { grid-column: 1 / -1; }
-    .drawer-card h3 { margin: 0; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.07em; }
-    .drawer-card p { margin: 0; color: #dce4ea; line-height: 1.45; }
-    .drawer-card textarea {
-      width: 100%;
-      min-height: 84px;
-      resize: vertical;
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      background: rgba(5, 8, 13, 0.58);
-      color: var(--text);
-      padding: 10px;
-      outline: 0;
-      line-height: 1.4;
-    }
-    .insight-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
-    .insight-list li { display: grid; gap: 3px; padding: 8px 0; border-bottom: 1px solid var(--line); color: var(--muted); line-height: 1.35; }
-    .insight-list li:last-child { border-bottom: 0; }
-    .insight-list strong { color: var(--text); }
-    .action-note { color: var(--faint); font-size: 12px; line-height: 1.4; }
-    .task-list { display: grid; gap: 7px; margin: 0; padding: 0; list-style: none; }
-    .task-list button {
-      width: 100%;
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
-      gap: 10px;
-      align-items: center;
-      min-height: 38px;
-      border: 1px solid var(--line);
-      border-radius: 7px;
-      background: rgba(255, 255, 255, 0.025);
-      color: var(--text);
-      padding: 7px 9px;
-      text-align: left;
-    }
-    .task-list button span { min-width: 0; overflow-wrap: anywhere; }
-    .fact-list { display: grid; gap: 7px; margin: 12px 0 0; padding: 0; list-style: none; }
-    .fact-row {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
-      gap: 10px;
-      align-items: center;
-      min-height: 38px;
-      border: 1px solid var(--line);
-      border-radius: 7px;
-      background: rgba(255, 255, 255, 0.02);
-      padding: 7px 9px;
-    }
-    .fact-row-body { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; }
-    .fact-label { min-width: 0; overflow-wrap: anywhere; color: var(--text); }
-    .fact-tag { color: var(--faint); font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; }
-    .fact-ask {
-      border: 1px solid var(--line-strong);
-      border-radius: 6px;
-      background: transparent;
-      color: var(--muted);
-      font-size: 12px;
-      padding: 5px 9px;
-      flex: 0 0 auto;
-    }
-    .fact-ask:hover { color: var(--text); border-color: var(--violet); }
+        @media (max-width: 480px) {
+            #workspace-main > header { padding-left: 12px !important; padding-right: 12px !important; }
+            #workspace-main > header > div { gap: 8px !important; }
+            #page-title { font-size: 1rem; line-height: 1.1; white-space: nowrap; }
+        }
 
-    .side {
-      grid-area: side;
-      min-height: 0;
-      overflow: hidden;
-      border-left: 1px solid var(--line);
-      background: rgba(5, 8, 13, 0.54);
-      display: grid;
-      grid-template-rows: minmax(420px, 3fr) minmax(220px, 1fr);
-    }
-    .side-status {
-      min-height: 0;
-      overflow: auto;
-      padding: 22px 18px 18px;
-      display: grid;
-      align-content: start;
-      gap: 18px;
-    }
-    .side-brand { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 12px; align-items: center; }
-    .side-brand .brand-mark { width: 44px; height: 44px; font-size: 26px; }
-    .side-brand h2 { margin: 0; font-size: 24px; letter-spacing: 0.12em; }
-    .side-brand p { margin: 5px 0 0; color: var(--muted); }
-    .rail-panel { display: grid; gap: 10px; padding-top: 16px; border-top: 1px solid var(--line); }
-    .rail-panel h3 { margin: 0; color: var(--violet); font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; }
-    .rail-panel p { margin: 0; color: #dce4ea; line-height: 1.45; }
-    .side-list { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
-    .side-list li { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 9px; color: var(--muted); line-height: 1.35; }
-    .side-list strong { color: var(--text); }
+        .ops-section-title {
+            font-size: var(--ops-section-title-size);
+            line-height: 1.1;
+            letter-spacing: 0.14em;
+            color: rgb(var(--ops-text) / 0.88);
+            font-weight: var(--ops-section-title-weight);
+        }
 
-    .chat-dock {
-      min-height: 0;
-      display: grid;
-      grid-template-rows: auto minmax(0, 1fr) auto;
-      border-top: 1px solid var(--line-strong);
-      background: rgba(7, 10, 16, 0.62);
-    }
-    .chat-dock-head { padding: 12px 16px 6px; color: var(--violet); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; }
-    .chat-thread { min-height: 0; overflow: auto; padding: 2px 16px 10px; display: grid; align-content: start; gap: 10px; }
-    .chat-empty { color: var(--faint); font-size: 13px; line-height: 1.4; }
-    .chat-msg { display: grid; gap: 4px; padding: 9px 11px; border-radius: 10px; border: 1px solid var(--line); background: rgba(255, 255, 255, 0.03); line-height: 1.42; max-width: 96%; overflow-wrap: anywhere; }
-    .chat-msg.user { justify-self: end; max-width: 92%; background: rgba(167, 123, 255, 0.14); border-color: rgba(167, 123, 255, 0.32); }
-    .chat-msg.assistant { justify-self: start; }
-    .chat-msg.error { border-color: rgba(255, 107, 107, 0.4); background: rgba(255, 107, 107, 0.08); }
-    .chat-msg .chat-meta { font-size: 10px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--faint); }
+        /* Dashboard density knobs (Settings-controlled) */
+        .dash-stagger {
+            padding: var(--ops-dash-pad) !important;
+        }
+        .dash-stagger > :not([hidden]) ~ :not([hidden]) {
+            margin-top: var(--ops-dash-gap) !important;
+        }
+        .dash-card-head {
+            padding-top: var(--ops-dash-card-head-py) !important;
+            padding-bottom: var(--ops-dash-card-head-py) !important;
+        }
+        /* In our dash-card HTML, the preview block is the 2nd child div */
+        .dash-card > div:nth-child(2) {
+            padding-bottom: var(--ops-dash-card-preview-pb) !important;
+        }
+        
+        .nav-item {
+            position: relative;
+            transition: all 0.2s ease;
+        }
+        .nav-item::before {
+            content: "";
+            position: absolute;
+            left: 0; top: 0; bottom: 0; width: 2px;
+            background: rgb(var(--ops-accent));
+            transform: scaleY(0);
+            transition: transform 0.2s ease;
+        }
+        .nav-item.active { background: rgb(var(--ops-surface)); color: rgb(var(--ops-text)); }
+        .nav-item.active::before { transform: scaleY(1); }
 
-    .composer {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
-      align-items: end;
-      gap: 8px;
-      padding: 10px 16px 16px;
-      border-top: 1px solid var(--line);
-      background: rgba(7, 10, 16, 0.8);
-    }
-    .composer textarea {
-      width: 100%;
-      min-height: 40px;
-      max-height: 160px;
-      resize: none;
-      overflow-y: auto;
-      border: 1px solid var(--line-strong);
-      border-radius: 9px;
-      background: rgba(8, 13, 21, 0.82);
-      color: var(--text);
-      padding: 9px 12px;
-      outline: 0;
-      line-height: 1.4;
-      font-family: inherit;
-    }
-    .composer-actions { display: grid; gap: 6px; }
+        /* Transitions */
+        .fade-enter { animation: fadeEnter 0.2s ease-out; }
+        @keyframes fadeEnter { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 
-    .workspace-mode {
-      display: none;
-      min-height: 100%;
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      background: rgba(13, 20, 29, 0.72);
-      box-shadow: var(--shadow);
-      overflow: hidden;
-    }
-    body[data-mode="project"] .tracker-mode,
-    body[data-mode="task"] .tracker-mode { display: none; }
-    body[data-mode="project"] #projectMode,
-    body[data-mode="task"] #taskMode { display: grid; }
-    .mode-head {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
-      align-items: start;
-      gap: 16px;
-      padding: 18px;
-      border-bottom: 1px solid var(--line);
-    }
-    .mode-kicker { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; }
-    .close-mode { min-width: 42px; height: 36px; padding: 0 12px; font-size: 18px; line-height: 1; }
-    .mode-head h1 { margin: 0; font-size: 30px; }
-    .mode-head p { margin: 7px 0 0; color: var(--muted); line-height: 1.4; }
-    .mode-body { display: grid; grid-template-columns: 190px minmax(0, 1fr) 300px; gap: 0; min-height: 0; }
-    .mode-nav { padding: 14px; border-right: 1px solid var(--line); display: grid; align-content: start; gap: 6px; }
-    .mode-stage { min-width: 0; padding: 18px; display: grid; align-content: start; gap: 14px; }
-    .mode-panel { padding: 14px; border: 1px solid var(--line); border-radius: 9px; background: rgba(5, 8, 13, 0.35); overflow-wrap: anywhere; }
-    .mode-panel h2 { margin: 0 0 8px; font-size: 16px; }
-    .mode-panel p { margin: 0; color: #dce4ea; line-height: 1.45; }
-    .mode-aside { padding: 18px; border-left: 1px solid var(--line); display: grid; align-content: start; gap: 12px; }
+        .spinner { animation: spin 1s linear infinite; }
+        @keyframes spin { 100% { transform: rotate(360deg); } }
 
-    .empty {
-      padding: 24px;
-      border: 1px dashed var(--line-strong);
-      border-radius: 10px;
-      color: var(--muted);
-      line-height: 1.45;
-    }
-    .settings-console {
-      display: none;
-      gap: 14px;
-      margin-bottom: 18px;
-    }
-    .settings-console.visible { display: grid; }
-    .settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-    .field { display: grid; gap: 6px; }
-    .field label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; }
-    .field input {
-      width: 100%;
-      min-height: 40px;
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      background: rgba(5, 8, 13, 0.56);
-      color: var(--text);
-      padding: 8px 10px;
-      outline: 0;
-    }
-    .field small { color: var(--faint); line-height: 1.35; }
-    .status-pill {
-      display: inline-flex;
-      align-items: center;
-      width: fit-content;
-      min-height: 28px;
-      padding: 4px 9px;
-      border: 1px solid var(--line);
-      border-radius: 999px;
-      color: var(--muted);
-      background: rgba(255, 255, 255, 0.035);
-    }
-    .status-pill.ok { color: var(--green); border-color: rgba(103, 211, 111, 0.44); }
-    .status-pill.warn { color: var(--amber); border-color: rgba(244, 181, 68, 0.48); }
-    .settings-output {
-      display: none;
-      max-height: 220px;
-      overflow: auto;
-      white-space: pre-wrap;
-      font-family: var(--mono);
-      color: var(--muted);
-      font-size: 12px;
-      line-height: 1.45;
-    }
-    .settings-output.visible { display: block; }
+        .marcus-orb {
+            position: relative;
+            width: 18px;
+            height: 18px;
+            border-radius: 9999px;
+            overflow: hidden;
+            flex: 0 0 auto;
+            --marcus-core: 96 165 250;
+            --marcus-current-a: 34 211 238;
+            --marcus-current-b: 139 92 246;
+            --marcus-spark: 251 191 36;
+            background:
+                radial-gradient(circle at 30% 22%, rgb(255 255 255 / 0.95) 0 7%, transparent 15%),
+                radial-gradient(circle at 68% 72%, rgb(var(--marcus-current-a) / 0.86) 0 9%, transparent 22%),
+                radial-gradient(circle at 45% 46%, rgb(var(--marcus-current-b) / 0.88) 0 12%, transparent 31%),
+                radial-gradient(circle at 50% 50%, rgb(var(--marcus-core) / 0.62) 0 42%, rgb(15 23 42 / 0.72) 68%, rgb(2 6 23 / 0.96) 100%);
+            border: 1px solid rgb(191 219 254 / 0.62);
+            box-shadow:
+                inset 0 1px 2px rgb(255 255 255 / 0.82),
+                inset -3px -4px 8px rgb(15 23 42 / 0.62),
+                0 0 0 4px rgb(var(--marcus-core) / 0.08),
+                0 0 18px rgb(var(--marcus-core) / 0.34);
+            transition: transform 0.2s ease, filter 0.2s ease, opacity 0.2s ease;
+            isolation: isolate;
+        }
 
-    @media (max-width: 1220px) {
-      body { overflow: auto; }
-      .workspace { height: auto; min-height: 100vh; grid-template-columns: 72px minmax(0, 1fr); grid-template-rows: auto auto auto; grid-template-areas: "nav top" "nav main" "nav side"; }
-      .side { grid-template-rows: none; min-height: 480px; border-left: 0; border-top: 1px solid var(--line); }
-      .side-status { max-height: 240px; }
-      .nav { padding: 14px 8px; }
-      .brand { grid-template-columns: 1fr; justify-items: center; }
-      .brand h1, .brand p, .live-state, .nav-link span:not(.nav-icon), .nav-foot { display: none; }
-      .top { grid-template-columns: 1fr; }
-      .ledger-row { grid-template-columns: 1fr; }
-      .drawer { grid-template-columns: 1fr; padding-left: 0; }
-      .needs-grid { grid-template-columns: 1fr; }
-      .mode-body { grid-template-columns: 1fr; }
-      .mode-nav, .mode-aside { border: 0; }
-      .settings-grid { grid-template-columns: 1fr; }
-    }
+        .marcus-orb::before,
+        .marcus-orb::after {
+            content: "";
+            position: absolute;
+            inset: 2px;
+            border-radius: inherit;
+            pointer-events: none;
+        }
 
-    @media (prefers-reduced-motion: reduce) {
-      *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
-    }
-  </style>
+        .marcus-orb::before {
+            background:
+                linear-gradient(118deg, transparent 18%, rgb(var(--marcus-current-a) / 0.92) 31%, transparent 43%),
+                linear-gradient(34deg, transparent 25%, rgb(var(--marcus-current-b) / 0.92) 45%, transparent 61%),
+                radial-gradient(circle at 73% 29%, rgb(var(--marcus-spark) / 0.95) 0 4%, transparent 9%),
+                radial-gradient(circle at 28% 70%, rgb(226 232 240 / 0.92) 0 3%, transparent 8%);
+            filter: blur(0.15px);
+            mix-blend-mode: screen;
+            opacity: 0.92;
+            animation: marcusOrbCurrents 5.5s linear infinite;
+        }
+
+        .marcus-orb::after {
+            inset: 0;
+            background:
+                radial-gradient(circle at 34% 20%, rgb(255 255 255 / 0.84) 0 10%, transparent 24%),
+                radial-gradient(circle at 50% 106%, rgb(255 255 255 / 0.32) 0 5%, transparent 13%),
+                linear-gradient(145deg, rgb(255 255 255 / 0.26), transparent 42%);
+            box-shadow: inset 2px 2px 5px rgb(255 255 255 / 0.24);
+            opacity: 0.88;
+        }
+
+        .marcus-orb.idle {
+            animation: marcusIdle 3.2s ease-in-out infinite;
+        }
+
+        .marcus-orb.busy {
+            animation: marcusBusy 1.05s ease-in-out infinite;
+        }
+
+        .marcus-orb.responding {
+            --marcus-core: 16 185 129;
+            --marcus-current-a: 52 211 153;
+            --marcus-current-b: 14 165 233;
+            animation: marcusRespond 0.72s ease-in-out infinite;
+        }
+
+        .marcus-orb.has-signal {
+            --marcus-core: 96 165 250;
+            --marcus-current-a: 34 211 238;
+            --marcus-current-b: 139 92 246;
+        }
+
+        .marcus-orb.needs-approval {
+            --marcus-core: 16 185 129;
+            --marcus-current-a: 45 212 191;
+            --marcus-current-b: 59 130 246;
+        }
+
+        .marcus-orb.has-warning {
+            --marcus-core: 245 158 11;
+            --marcus-current-a: 251 191 36;
+            --marcus-current-b: 168 85 247;
+            animation: marcusWarning 1.35s ease-in-out infinite;
+        }
+
+        .marcus-orb.focus-mode {
+            --marcus-core: 56 189 248;
+            --marcus-current-a: 125 211 252;
+            --marcus-current-b: 34 211 238;
+        }
+
+        .marcus-orb.quiet-mode {
+            --marcus-core: 148 163 184;
+            --marcus-current-a: 100 116 139;
+            --marcus-current-b: 59 130 246;
+            animation-duration: 3.6s;
+            filter: saturate(0.78);
+        }
+
+        @keyframes marcusIdle {
+            0%, 100% { transform: scale(1); box-shadow: inset 0 1px 2px rgb(255 255 255 / 0.82), inset -3px -4px 8px rgb(15 23 42 / 0.62), 0 0 0 4px rgb(var(--marcus-core) / 0.08), 0 0 18px rgb(var(--marcus-core) / 0.34); }
+            50% { transform: scale(1.05); box-shadow: inset 0 1px 2px rgb(255 255 255 / 0.82), inset -3px -4px 8px rgb(15 23 42 / 0.62), 0 0 0 7px rgb(var(--marcus-core) / 0.08), 0 0 26px rgb(var(--marcus-core) / 0.46); }
+        }
+
+        @keyframes marcusBusy {
+            0% { transform: scale(1) rotate(0deg); filter: saturate(1.12); }
+            55% { transform: scale(1.15) rotate(9deg); filter: saturate(1.45); }
+            100% { transform: scale(1) rotate(0deg); filter: saturate(1.12); }
+        }
+
+        @keyframes marcusRespond {
+            0%, 100% { transform: translateY(0) scale(1); }
+            50% { transform: translateY(-1px) scale(1.08); }
+        }
+
+        @keyframes marcusWarning {
+            0%, 100% { transform: scale(1); filter: saturate(1.1); }
+            50% { transform: scale(1.12); filter: saturate(1.5); }
+        }
+
+        @keyframes marcusOrbCurrents {
+            0% { transform: rotate(0deg) scale(1); opacity: 0.88; }
+            50% { transform: rotate(180deg) scale(1.04); opacity: 1; }
+            100% { transform: rotate(360deg) scale(1); opacity: 0.88; }
+        }
+
+        #neural-drawer.marcus-thinking {
+            box-shadow: 0 0 0 1px rgba(59,130,246,0.35), 0 18px 50px rgba(2,6,23,0.45);
+        }
+
+        #neural-drawer.marcus-responding {
+            box-shadow: 0 0 0 1px rgba(16,185,129,0.35), 0 18px 50px rgba(2,6,23,0.45);
+        }
+
+        #neural-drawer {
+            min-width: 280px;
+            min-height: 260px;
+        }
+
+        #marcus-resize-handle {
+            position: absolute;
+            right: 4px;
+            bottom: 4px;
+            width: 14px;
+            height: 14px;
+            cursor: nwse-resize;
+            opacity: 0.7;
+        }
+
+        #marcus-resize-handle::before {
+            content: "";
+            position: absolute;
+            right: 0;
+            bottom: 0;
+            width: 10px;
+            height: 10px;
+            border-right: 2px solid rgb(var(--ops-border));
+            border-bottom: 2px solid rgb(var(--ops-border));
+            border-radius: 1px;
+        }
+
+        body.marcus-popout-mode {
+            overflow: hidden;
+            min-height: 100vh;
+            background:
+                radial-gradient(circle at top left, rgb(var(--ops-accent) / 0.16), transparent 32%),
+                radial-gradient(circle at bottom right, rgb(var(--ops-border) / 0.28), transparent 30%),
+                rgb(var(--ops-bg));
+        }
+
+        body.marcus-popout-mode #command-bar,
+        body.marcus-popout-mode #workspace-main {
+            display: none !important;
+        }
+
+        body.marcus-popout-mode #neural-drawer {
+            position: fixed !important;
+            inset: 12px !important;
+            width: auto !important;
+            height: auto !important;
+            min-width: 0 !important;
+            min-height: 0 !important;
+            border-radius: 22px !important;
+            border: 1px solid rgb(var(--ops-border) / 0.72) !important;
+            box-shadow:
+                0 1px 0 rgb(var(--ops-text) / 0.06) inset,
+                0 24px 64px rgb(0 0 0 / 0.42),
+                0 0 0 1px rgb(var(--ops-text) / 0.03) !important;
+        }
+
+        body.marcus-popout-mode #marcus-drag-handle {
+            cursor: default;
+        }
+
+        body.marcus-popout-mode #marcus-resize-handle {
+            display: none;
+        }
+
+        /* ═══ Dashboard Card System ═══════════════════════════════════════ */
+        .dash-card {
+            border-radius: 0.75rem;
+            background: rgb(var(--ops-surface) / 0.78);
+            border: 1px solid rgb(var(--ops-border) / 0.60);
+            box-shadow:
+                0 1px 0 rgb(var(--ops-text) / 0.05) inset,
+                0 12px 28px rgb(0 0 0 / 0.20);
+            backdrop-filter: blur(10px) saturate(120%);
+            -webkit-backdrop-filter: blur(10px) saturate(120%);
+            transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+        }
+        .dash-card:hover {
+            border-color: rgb(var(--ops-accent) / 0.32);
+            box-shadow:
+                0 1px 0 rgb(var(--ops-text) / 0.06) inset,
+                0 0 0 1px rgb(var(--ops-accent) / 0.06),
+                0 14px 32px rgb(0 0 0 / 0.22);
+            transform: none;
+        }
+        .dash-card-head {
+            cursor: pointer;
+            user-select: none;
+        }
+        .dash-card-body {
+            max-height: 0;
+            overflow: hidden;
+            opacity: 0;
+            transition: max-height 0.35s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.25s ease, padding 0.25s ease;
+            padding-top: 0;
+        }
+        .dash-card.expanded .dash-card-body {
+            max-height: 800px;
+            opacity: 1;
+            padding-top: 0.5rem;
+        }
+        .dash-card .expand-chevron {
+            transition: transform 0.25s ease;
+            font-size: 9px;
+            color: rgb(var(--ops-light) / 0.4);
+        }
+        .dash-card.expanded .expand-chevron {
+            transform: rotate(180deg);
+            color: rgb(var(--ops-accent));
+        }
+
+        /* M.A.R.C.U.S. Ambient Intelligence Bar */
+        .marcus-ambient {
+            background: linear-gradient(135deg, rgb(59 130 246 / 0.06), rgb(16 185 129 / 0.04));
+            border: 1px solid rgb(59 130 246 / 0.15);
+            border-radius: 0.75rem;
+            transition: border-color 0.3s, box-shadow 0.3s;
+        }
+        .marcus-ambient.marcus-live {
+            animation: marcusGlow 1.1s ease-in-out 1;
+            border-color: rgb(59 130 246 / 0.35);
+            box-shadow: 0 0 22px rgb(59 130 246 / 0.15);
+        }
+        .marcus-ambient.marcus-busy {
+            border-color: rgb(56 189 248 / 0.4);
+        }
+        .marcus-ambient.marcus-responding {
+            border-color: rgb(16 185 129 / 0.4);
+            box-shadow: 0 0 24px rgb(16 185 129 / 0.15);
+        }
+        .marcus-ambient:hover {
+            border-color: rgb(59 130 246 / 0.3);
+            box-shadow: 0 0 20px rgb(59 130 246 / 0.08);
+        }
+        .marcus-status-dot {
+            width: 6px; height: 6px; border-radius: 50%;
+            background: rgb(59 130 246);
+            animation: marcusDotPulse 2.5s ease-in-out infinite;
+        }
+        .marcus-ambient.marcus-live .marcus-status-dot {
+            animation-duration: 0.85s;
+        }
+        .marcus-ambient.marcus-responding .marcus-status-dot {
+            background: rgb(16 185 129);
+        }
+        @keyframes marcusDotPulse {
+            0%, 100% { opacity: 0.5; box-shadow: 0 0 0 0 rgb(59 130 246 / 0.4); }
+            50% { opacity: 1; box-shadow: 0 0 0 4px rgb(59 130 246 / 0); }
+        }
+        @keyframes marcusGlow {
+            0% { transform: translateY(0); box-shadow: 0 0 0 rgb(59 130 246 / 0); }
+            50% { transform: translateY(-1px); box-shadow: 0 0 24px rgb(59 130 246 / 0.18); }
+            100% { transform: translateY(0); box-shadow: 0 0 0 rgb(59 130 246 / 0); }
+        }
+        .marcus-insight {
+            padding: 6px 10px;
+            border-radius: 6px;
+            background: rgb(59 130 246 / 0.06);
+            border-left: 2px solid rgb(59 130 246 / 0.3);
+            font-size: 11px;
+            color: rgb(var(--ops-text) / 0.8);
+            transition: background 0.2s;
+        }
+        .marcus-ambient.marcus-live .marcus-insight {
+            animation: marcusInsightShift 1.1s ease-out 1;
+        }
+        .marcus-insight:hover {
+            background: rgb(59 130 246 / 0.1);
+        }
+        .marcus-orb.muted {
+            animation: none !important;
+            opacity: 0.55;
+        }
+        #toggle-chat.marcus-presence-muted {
+            color: rgb(var(--ops-light));
+        }
+        #toggle-chat.marcus-presence-minimized {
+            gap: 0.35rem;
+            max-width: 5.25rem;
+        }
+        #toggle-chat.marcus-presence-minimized [data-marcus-presence-label] {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            padding: 0;
+            margin: -1px;
+            overflow: hidden;
+            clip: rect(0, 0, 0, 0);
+            white-space: nowrap;
+            border: 0;
+        }
+        .marcus-presence-peek {
+            position: fixed;
+            top: 3.75rem;
+            right: 1.5rem;
+            width: min(23rem, calc(100vw - 2rem));
+            max-height: calc(100vh - 5rem);
+            overflow: auto;
+            padding: 0.875rem;
+            border: 1px solid rgb(var(--ops-border));
+            border-radius: 0.5rem;
+            background: rgb(var(--ops-surface) / 0.96);
+            box-shadow: 0 18px 45px rgb(0 0 0 / 0.42);
+            backdrop-filter: blur(18px) saturate(130%);
+            -webkit-backdrop-filter: blur(18px) saturate(130%);
+            opacity: 0;
+            pointer-events: none;
+            transform: translateY(-4px);
+            transition: opacity 0.16s ease, transform 0.16s ease;
+            z-index: 70;
+        }
+        .marcus-presence-peek.open {
+            opacity: 1;
+            pointer-events: auto;
+            transform: translateY(0);
+        }
+        .marcus-presence-peek.muted {
+            border-color: rgb(var(--ops-border) / 0.75);
+            filter: saturate(0.78);
+        }
+        .marcus-presence-peek.minimized {
+            width: min(20rem, calc(100vw - 2rem));
+        }
+        .marcus-presence-action {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            min-height: 1.75rem;
+            padding: 0.35rem 0.5rem;
+            border: 1px solid rgb(var(--ops-border));
+            border-radius: 0.375rem;
+            background: rgb(var(--ops-bg) / 0.55);
+            color: rgb(var(--ops-light));
+            font-size: 0.68rem;
+            line-height: 1;
+            font-family: 'JetBrains Mono', monospace;
+            transition: border-color 0.16s ease, color 0.16s ease, background 0.16s ease;
+        }
+        .marcus-presence-action:hover {
+            border-color: rgb(var(--ops-accent) / 0.45);
+            background: rgb(var(--ops-accent) / 0.08);
+            color: white;
+        }
+        @keyframes marcusInsightShift {
+            0% { transform: translateX(0); }
+            35% { transform: translateX(2px); }
+            100% { transform: translateX(0); }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .marcus-ambient,
+            .marcus-status-dot,
+            .marcus-insight,
+            .marcus-orb,
+            .marcus-orb::before {
+                animation: none !important;
+                transition: none !important;
+            }
+        }
+
+        /* Stat pill */
+        .stat-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 2px 8px;
+            border-radius: 999px;
+            font-size: 10px;
+            font-family: 'JetBrains Mono', monospace;
+            border: 1px solid rgb(var(--ops-border) / 0.85);
+            background: rgb(var(--ops-bg) / 0.55);
+            color: rgb(var(--ops-light));
+            transition: all 0.2s;
+            backdrop-filter: blur(8px) saturate(120%);
+            -webkit-backdrop-filter: blur(8px) saturate(120%);
+        }
+        .stat-pill:hover {
+            color: white;
+            border-color: rgb(var(--ops-accent) / 0.3);
+        }
+
+        .stat-pill--muted {
+            color: rgb(var(--ops-light) / 0.75);
+            background: rgb(var(--ops-surface) / 0.18);
+        }
+        .stat-pill--accent {
+            border-color: rgb(var(--ops-accent) / 0.35);
+            background: rgb(var(--ops-accent) / 0.10);
+            color: rgb(var(--ops-text));
+        }
+        .stat-pill--danger {
+            border-color: rgb(var(--ops-danger) / 0.38);
+            background: rgb(var(--ops-danger) / 0.12);
+            color: rgb(var(--ops-text));
+        }
+        .stat-pill--warning {
+            border-color: rgb(var(--ops-warning) / 0.38);
+            background: rgb(var(--ops-warning) / 0.12);
+            color: rgb(var(--ops-text));
+        }
+        .stat-pill--success {
+            border-color: rgb(var(--ops-success) / 0.35);
+            background: rgb(var(--ops-success) / 0.12);
+            color: rgb(var(--ops-text));
+        }
+
+        .dash-card--accent { border-color: rgb(var(--ops-accent) / 0.30) !important; }
+        .dash-card--warning { border-color: rgb(var(--ops-warning) / 0.30) !important; }
+        .dash-card--danger { border-color: rgb(var(--ops-danger) / 0.34) !important; }
+
+        /* M.A.R.C.U.S. drawer: glass + cleaner internal chrome */
+        #neural-drawer {
+            background-color: rgb(var(--ops-surface) / 0.92) !important;
+            backdrop-filter: blur(10px) saturate(120%);
+            -webkit-backdrop-filter: blur(10px) saturate(120%);
+            box-shadow:
+                0 1px 0 rgb(var(--ops-text) / 0.05) inset,
+                0 24px 64px rgb(0 0 0 / 0.40);
+        }
+        #neural-drawer .bg-zinc-900,
+        #neural-drawer .bg-zinc-900\/50 {
+            background-color: rgb(var(--ops-surface) / 0.35) !important;
+            backdrop-filter: blur(16px) saturate(165%);
+            -webkit-backdrop-filter: blur(16px) saturate(165%);
+        }
+
+        /* Apply a glass treatment to the legacy zinc panels in main views (dark theme only). */
+        html:not([data-theme="light"]) #main-port .bg-zinc-900\/30,
+        html:not([data-theme="light"]) #main-port .bg-zinc-900\/20,
+        html:not([data-theme="light"]) #main-port .bg-zinc-950\/20,
+        html:not([data-theme="light"]) #main-port .bg-zinc-950\/40,
+        html:not([data-theme="light"]) #main-port .bg-zinc-900\/50 {
+            background-color: rgb(var(--ops-surface) / 0.25) !important;
+            backdrop-filter: blur(14px) saturate(160%);
+            -webkit-backdrop-filter: blur(14px) saturate(160%);
+        }
+        html:not([data-theme="light"]) #main-port .border-zinc-800,
+        html:not([data-theme="light"]) #main-port .border-zinc-700,
+        html:not([data-theme="light"]) #main-port .border-zinc-800\/60,
+        html:not([data-theme="light"]) #main-port .border-zinc-800\/50 {
+            border-color: rgb(var(--ops-border) / 0.70) !important;
+        }
+
+        /* Responsive main layout */
+        @media (max-width: 1024px) {
+            #main-port {
+                grid-template-columns: 1fr !important;
+            }
+            #marcus-port {
+                display: none !important;
+            }
+        }
+
+        /* Smooth fade-in for dashboard items */
+        .dash-stagger > * {
+            animation: dashFadeUp 0.3s ease-out both;
+        }
+        .dash-stagger > *:nth-child(1) { animation-delay: 0ms; }
+        .dash-stagger > *:nth-child(2) { animation-delay: 40ms; }
+        .dash-stagger > *:nth-child(3) { animation-delay: 80ms; }
+        .dash-stagger > *:nth-child(4) { animation-delay: 120ms; }
+        .dash-stagger > *:nth-child(5) { animation-delay: 160ms; }
+        .dash-stagger > *:nth-child(6) { animation-delay: 200ms; }
+        .dash-stagger > *:nth-child(7) { animation-delay: 240ms; }
+        .dash-stagger > *:nth-child(8) { animation-delay: 280ms; }
+        .dash-stagger > *:nth-child(9) { animation-delay: 320ms; }
+        .dash-stagger > *:nth-child(10) { animation-delay: 360ms; }
+        /* Landscape Layout Overrides */
+        html[data-layout="landscape"] .dash-stagger {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 1.25rem;
+            align-items: start;
+        }
+        html[data-layout="landscape"] .dash-stagger > * {
+            margin-top: 0 !important;
+        }
+        /* Make header, marcus bar, and wide banners span full width */
+        html[data-layout="landscape"] .dash-stagger > *:nth-child(1),
+        html[data-layout="landscape"] .dash-stagger > *:nth-child(2),
+        html[data-layout="landscape"] .dash-stagger > *:nth-child(3),
+        html[data-layout="landscape"] .dash-stagger > *:nth-child(4) {
+            grid-column: 1 / -1;
+        }
+        
+        /* Magic: Flatten rows so cards flow evenly inside the grid */
+        html[data-layout="landscape"] .dash-stagger > .grid {
+            display: contents;
+        }
+
+        /* Project View Landscape Overrides (50/50 split) */
+        @media (min-width: 1024px) {
+            html[data-layout="landscape"] .xl\:grid-cols-3 {
+                grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+            }
+            html[data-layout="landscape"] .xl\:col-span-2 {
+                grid-column: span 1 / span 1 !important;
+            }
+            html[data-layout="landscape"] .p-6 {
+                padding: 2rem !important; /* more breathing room in landscape */
+            }
+        }
+
+        @keyframes dashFadeUp {
+            from { opacity: 0; transform: translateY(8px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+    </style>
 </head>
-<body data-mode="tracker" data-activity="quiet">
-  <main class="workspace">
-    <nav class="nav" aria-label="MARCUS workspace">
-      <section>
-        <div class="brand">
-          <div class="brand-mark" aria-hidden="true">*</div>
-          <div><h1>MARCUS</h1><p>Chief of Staff</p></div>
+<body class="h-screen flex text-sm overflow-hidden antialiased selection:bg-red-500/30 selection:text-red-200">
+
+    <!-- COMMAND BAR (Left) -->
+    <aside id="command-bar" class="w-16 border-r border-ops-border flex flex-col items-center py-4 bg-ops-surface/60 backdrop-blur-2xl z-30 shadow-2xl">
+        <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-600 to-blue-400 mb-6 flex items-center justify-center font-mono font-bold text-white text-[10px] leading-none shadow-lg shadow-blue-500/20" title="M.A.R.C.U.S. — Modular Autonomous Routing & Coordination Utility System">
+            MARCUS
         </div>
-        <div class="live-state"><span class="dot"></span><span id="navState">Syncing</span></div>
-      </section>
 
-      <section class="nav-links">
-        <button class="nav-link active" type="button" data-nav="tracker"><span class="nav-icon">01</span><span>Projects</span></button>
-        <button class="nav-link" type="button" data-nav="review"><span class="nav-icon">02</span><span>Review</span></button>
-        <button class="nav-link" type="button" data-nav="activity"><span class="nav-icon">03</span><span>Activity</span></button>
-        <button class="nav-link" type="button" data-nav="settings"><span class="nav-icon">04</span><span>Settings</span></button>
-      </section>
-
-      <section class="nav-foot">
-        <div class="health-line"><span class="dot" style="color:var(--green)"></span><span id="healthText">Checking systems</span></div>
-        <div id="lastUpdated">Not synced yet</div>
-      </section>
-    </nav>
-
-    <header class="top">
-      <section class="presence" aria-label="MARCUS presence">
-        <div class="presence-title">
-          <div class="brain-glyph" id="brainGlyph" title="MARCUS activity indicator"></div>
-          <h2 id="pageTitle">Projects</h2>
-        </div>
-        <div class="operating-state" id="operatingState">Reconciling live work.</div>
-      </section>
-      <label class="search" aria-label="Search projects and tasks">
-        <span aria-hidden="true">/</span>
-        <input id="searchInput" type="search" placeholder="Search projects, tasks, evidence...">
-      </label>
-      <section class="top-actions">
-        <button class="btn primary" type="button" id="askMarcusTop">Ask Marcus</button>
-        <button class="btn" type="button" id="voiceButton" aria-pressed="false">Hold Space</button>
-        <button class="btn subtle" type="button" id="refreshButton">Refresh</button>
-      </section>
-    </header>
-
-    <section class="main">
-      <div class="tracker-mode">
-        <section class="brief" aria-labelledby="briefHeading">
-          <p id="chiefBrief">MARCUS is building the operating picture.</p>
-          <p class="source-note" id="sourceNote"><strong>Syncing:</strong> checking live operations, ActiveBrief, desktop context, and project registry.</p>
-        </section>
-
-        <section class="needs" id="needsSection" aria-labelledby="needsHeading">
-          <h2 id="needsHeading" class="section-title">Needs Mark</h2>
-          <div class="needs-grid" id="needsGrid"></div>
-        </section>
-
-        <section class="ledger-head">
-          <div>
-            <h1>Projects</h1>
-            <p id="ledgerSummary">No project movement loaded yet.</p>
-          </div>
-          <div class="ledger-head-actions">
-            <button class="btn subtle" type="button" id="archiveToggle">Show archived (0)</button>
-            <div class="sort-label">Marcus priority</div>
-          </div>
-        </section>
-
-        <section class="settings-console" id="settingsConsole" aria-label="Dashboard settings"></section>
-        <section class="ledger" id="ledger" aria-label="Live project tracker"></section>
-      </div>
-
-      <section id="projectMode" class="workspace-mode" aria-label="Project Control"></section>
-      <section id="taskMode" class="workspace-mode" aria-label="Task Control Room"></section>
-    </section>
-
-    <aside class="side" aria-label="MARCUS current read and conversation">
-      <div class="side-status">
-        <section class="side-brand">
-          <div class="brand-mark" aria-hidden="true">*</div>
-          <div><h2>MARCUS</h2><p id="sideSubtitle">Working across live evidence</p></div>
-        </section>
-
-        <section class="rail-panel">
-          <h3>Start here</h3>
-          <p id="startHere">I will put the highest-value decision here after the live sources sync.</p>
-          <button class="btn primary" type="button" id="reviewPrimary">Review now</button>
-        </section>
-
-        <section class="rail-panel">
-          <h3>MARCUS is doing</h3>
-          <ul class="side-list" id="doingList"></ul>
-        </section>
-
-        <section class="rail-panel">
-          <h3>MARCUS handled</h3>
-          <ul class="side-list" id="handledList"></ul>
-        </section>
-
-        <section class="rail-panel">
-          <h3>Next</h3>
-          <ul class="side-list" id="nextList"></ul>
-        </section>
-      </div>
-
-      <div class="chat-dock">
-        <div class="chat-dock-head">Talk to MARCUS</div>
-        <div class="chat-thread" id="chatThread" aria-live="polite">
-          <p class="chat-empty" id="chatEmpty">Nothing said yet. Ask about any project, decision, or what to do next.</p>
-        </div>
-        <form class="composer" id="composer">
-          <textarea id="composerInput" rows="1" placeholder="Tell MARCUS what you're thinking, seeing, or trying to accomplish. Enter to send, Shift+Enter for a new line."></textarea>
-          <div class="composer-actions">
-            <button class="btn subtle" type="button" id="captureButton">Capture</button>
-            <button class="btn primary" type="submit">Send</button>
-          </div>
-        </form>
-      </div>
-    </aside>
-  </main>
-
-  <script>
-  (() => {
-    const els = {
-      navState: document.getElementById("navState"),
-      healthText: document.getElementById("healthText"),
-      lastUpdated: document.getElementById("lastUpdated"),
-      pageTitle: document.getElementById("pageTitle"),
-      operatingState: document.getElementById("operatingState"),
-      searchInput: document.getElementById("searchInput"),
-      refreshButton: document.getElementById("refreshButton"),
-      askMarcusTop: document.getElementById("askMarcusTop"),
-      voiceButton: document.getElementById("voiceButton"),
-      chiefBrief: document.getElementById("chiefBrief"),
-      sourceNote: document.getElementById("sourceNote"),
-      needsSection: document.getElementById("needsSection"),
-      needsGrid: document.getElementById("needsGrid"),
-      ledgerSummary: document.getElementById("ledgerSummary"),
-      ledger: document.getElementById("ledger"),
-      archiveToggle: document.getElementById("archiveToggle"),
-      startHere: document.getElementById("startHere"),
-      sideSubtitle: document.getElementById("sideSubtitle"),
-      reviewPrimary: document.getElementById("reviewPrimary"),
-      doingList: document.getElementById("doingList"),
-      handledList: document.getElementById("handledList"),
-      nextList: document.getElementById("nextList"),
-      settingsConsole: document.getElementById("settingsConsole"),
-      composer: document.getElementById("composer"),
-      composerInput: document.getElementById("composerInput"),
-      chatThread: document.getElementById("chatThread"),
-      chatEmpty: document.getElementById("chatEmpty"),
-      captureButton: document.getElementById("captureButton"),
-      projectMode: document.getElementById("projectMode"),
-      taskMode: document.getElementById("taskMode"),
-    };
-
-    const phases = ["Understood", "Planned", "Building", "Verifying", "Approval", "Complete"];
-    const groupOrder = [
-      ["needs", "Needs you"],
-      ["complete", "Ready for your eyes"],
-      ["motion", "In motion"],
-      ["watching", "Watching"],
-      ["risk", "Losing momentum"],
-      ["parked", "Intentionally parked"],
-    ];
-    const stateIcons = {
-      moving: ">",
-      needs_mark: "!",
-      blocked: "x",
-      monitoring: "o",
-      quiet: "-",
-      losing_thread: "?",
-      parked: "p",
-      verifying: "v",
-      complete: "+",
-      unknown: "?",
-    };
-
-    let snapshot = { projects: [], decisions: [], events: [], brief: null, operations: [], desktop: null, jobs: [], registry: [], awareness: null, settings: {}, googleStatus: null };
-    let expandedId = "";
-    let query = "";
-    let viewMode = "projects";
-    let showArchived = false;
-    let activeProjectId = "";
-    let activeTaskId = "";
-    let activeProjectSection = "overview";
-    let voiceHeld = false;
-    let isLoading = false;
-    const autoRefreshMs = 3000;
-
-    const text = (value, fallback = "") => String(value ?? fallback ?? "").replace(/\s+/g, " ").trim();
-    const esc = (value) => text(value)
-      .replaceAll("&", "&amp;")
-      .replaceAll("<", "&lt;")
-      .replaceAll(">", "&gt;")
-      .replaceAll('"', "&quot;")
-      .replaceAll("'", "&#39;");
-    const arr = (value) => Array.isArray(value) ? value : [];
-    const clamp = (n, min = 0, max = 100) => Math.max(min, Math.min(max, Number.isFinite(Number(n)) ? Number(n) : min));
-    const initials = (name) => text(name, "M").split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase() || "M";
-    const idFrom = (value, prefix = "item") => text(value, prefix).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || prefix;
-    const nowLabel = () => new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    const adminToken = () => { try { return text(localStorage.getItem("opsAdminToken")); } catch { return ""; } };
-    const businessKey = () => { try { return text(localStorage.getItem("opsBusinessKey"), "personal"); } catch { return "personal"; } };
-    const activeTextInput = () => {
-      const active = document.activeElement;
-      return active && ["INPUT", "TEXTAREA", "SELECT"].includes(active.tagName);
-    };
-
-    async function api(url, options = {}) {
-      const headers = new Headers(options.headers || {});
-      const token = adminToken();
-      if (token) headers.set("Authorization", `Bearer ${token}`);
-      const key = businessKey();
-      if (key) headers.set("X-Business-Key", key);
-      let response = await fetch(url, { ...options, headers, credentials: "include" });
-      if ((response.status === 401 || response.status === 403) && !token) {
-        const entered = text(window.prompt("Paste ADMIN_TOKEN to view live MARCUS data:") || "");
-        if (entered) {
-          try { localStorage.setItem("opsAdminToken", entered); } catch {}
-          headers.set("Authorization", `Bearer ${entered}`);
-          await fetch("/api/auth/login", {
-            method: "POST",
-            credentials: "include",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ token: entered, remember: true }),
-          }).catch(() => {});
-          response = await fetch(url, { ...options, headers, credentials: "include" });
-        }
-      }
-      const data = await response.json().catch(() => null);
-      if (!response.ok) throw new Error(text(data?.error || data?.message || `${url} returned ${response.status}`));
-      return data;
-    }
-
-    function age(value) {
-      const time = Date.parse(value || "");
-      if (!Number.isFinite(time)) return "unknown";
-      const mins = Math.max(0, Math.round((Date.now() - time) / 60000));
-      if (mins < 1) return "now";
-      if (mins < 60) return `${mins}m ago`;
-      const hours = Math.round(mins / 60);
-      if (hours < 24) return `${hours}h ago`;
-      return `${Math.round(hours / 24)}d ago`;
-    }
-
-    function canArchive(project) {
-      return Boolean(project?.awarenessProjectId) && !project.archived && (groupFor(project) === "complete" || project.state === "parked");
-    }
-    async function dismissProject(id) {
-      try {
-        await api(`/api/marcus/awareness/projects/${encodeURIComponent(id)}/lifecycle`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ lifecycle: "archived", reason: "Archived from the MARCUS desktop visualizer after completion or intentional parking." }),
-        });
-        await load();
-      } catch (error) {
-        appendChatMessage("assistant error", `Archive failed: ${error.message}`);
-      }
-    }
-    async function restoreProject(id) {
-      try {
-        await api(`/api/marcus/awareness/projects/${encodeURIComponent(id)}/lifecycle`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ lifecycle: "active", reason: "Restored to active attention from the MARCUS desktop visualizer." }),
-        });
-        showArchived = false;
-        await load();
-      } catch (error) {
-        appendChatMessage("assistant error", `Restore failed: ${error.message}`);
-      }
-    }
-
-    function stateFromOperation(operation) {
-      const raw = text(operation?.status).toLowerCase();
-      if (operation?.needsApproval || operation?.pendingApproval) return "needs_mark";
-      if (operation?.needsRecovery || operation?.activeBlockers || ["blocked", "failed", "recovery_required"].includes(raw)) return "blocked";
-      if (raw.includes("verif")) return "verifying";
-      if (["completed", "accepted"].includes(raw)) return "complete";
-      if (["queued", "running", "external_handoff", "waiting_for_provider"].includes(raw)) return "moving";
-      return "monitoring";
-    }
-
-    function groupFor(project) {
-      if (project.state === "needs_mark") return "needs";
-      if (project.state === "blocked" || project.state === "losing_thread") return "risk";
-      if (project.state === "moving" || project.state === "verifying") return "motion";
-      if (project.state === "parked") return "parked";
-      if (project.state === "complete") return "complete";
-      return "watching";
-    }
-
-    function phaseFor(project) {
-      if (project.state === "complete") return "Complete";
-      if (project.state === "needs_mark") return "Approval";
-      if (project.state === "verifying") return "Verifying";
-      if (project.state === "blocked") return project.isLiveCodex ? "Verifying" : "Planned";
-      if (project.livePhase) return project.livePhase;
-      if (project.state === "moving") {
-        const current = `${project.currentStep} ${project.objective} ${project.lastChange}`.toLowerCase();
-        if (/test|verify|check|review|audit|qa|diagnos|debug|fix failing/.test(current)) return "Verifying";
-        if (/plan|setup|design|scope|research|wizard/.test(current)) return "Planned";
-        return "Building";
-      }
-      return "Understood";
-    }
-
-    function minutesSince(value) {
-      const time = Date.parse(value || "");
-      if (!Number.isFinite(time)) return null;
-      return Math.max(0, Math.round((Date.now() - time) / 60000));
-    }
-
-    function recencyBucket(value) {
-      const minutes = minutesSince(value);
-      if (minutes === null) return { label: "unknown", tone: "warn", fresh: false };
-      if (minutes < 2) return { label: "just now", tone: "live", fresh: true };
-      if (minutes < 15) return { label: `${minutes}m ago`, tone: "live", fresh: true };
-      if (minutes < 90) return { label: `${minutes}m ago`, tone: "warn", fresh: false };
-      const hours = Math.round(minutes / 60);
-      return { label: `${hours}h ago`, tone: "blocked", fresh: false };
-    }
-
-    function branchLabel(branch) {
-      const raw = text(branch);
-      if (!raw) return "";
-      return raw.replace(/^refs\/heads\//, "");
-    }
-
-    function commitTitle(commit) {
-      return text(commit).replace(/^[a-f0-9]{7,40}\s+/i, "");
-    }
-
-    function comparableName(value) {
-      return text(value).toLowerCase().replace(/[^a-z0-9]+/g, "");
-    }
-
-    function activeDesktopMatchesWorkspace(item, desktop) {
-      if (!desktop || Number(desktop.idleSeconds || 0) > 300) return false;
-      const processName = text(desktop.processName).toLowerCase();
-      const windowTitle = comparableName(desktop.windowTitle);
-      if (!windowTitle || !/code|cursor|windsurf|vscode/.test(processName)) return false;
-      const names = [
-        item?.projectName,
-        item?.folderName,
-        item?.workspacePath?.split(/[\\/]/).filter(Boolean).slice(-1)[0],
-        desktop?.workspace?.folderName,
-        desktop?.workspace?.workspacePath?.split(/[\\/]/).filter(Boolean).slice(-1)[0],
-      ].map(comparableName).filter(Boolean);
-      return names.some((name) => name && (windowTitle.includes(name) || name.includes(windowTitle)));
-    }
-
-    function effectiveWorkspaceModifiedAt(item, desktop) {
-      return activeDesktopMatchesWorkspace(item, desktop) ? (desktop?.receivedAt || new Date().toISOString()) : item?.modifiedAt;
-    }
-
-    function workspaceTopicFromSignals(item) {
-      const branch = text(item?.gitBranch);
-      const commits = arr(item?.gitRecentCommits).map(text).filter(Boolean);
-      const changed = arr(item?.gitStatus).map((entry) => text(entry?.file)).filter(Boolean);
-      const fileCount = Number(item?.gitStatusCount || changed.length || 0);
-      const projectText = `${text(item?.projectName)} ${text(item?.folderName)} ${text(item?.workspacePath)}`.toLowerCase();
-      const haystack = [projectText, branch, ...commits, ...changed].join(" ").toLowerCase();
-      const isPoopsites = /poopsites|poopsite|scoop/i.test(projectText);
-      const hubSignals = /hub|admin\/nurture|admin\.module\.css|reggie|nurture\/page|site card|mission|va|prompt composer|connected|connection/i.test(haystack);
-      if (isPoopsites && hubSignals) {
-        return {
-          kind: "hub",
-          title: "Connect and repair the Poopsites hub",
-          shortTitle: "Poopsites hub connection",
-          pressure: fileCount >= 20
-            ? `Large hub/admin change set: ${fileCount} changed files. Treat this as an integration/debugging pass, not a one-file cleanup.`
-            : "Hub/admin files are moving. Marcus should identify what is connected, what is failing, and what Mark can do next.",
-          signal: fileCount >= 20
-            ? `${fileCount} changed files across the hub/admin surface`
-            : "Hub/admin surface is changing",
-        };
-      }
-      if (/google/i.test(projectText) && /oauth|credential|calendar|drive|analytics|token/i.test(haystack)) {
-        return {
-          kind: "oauth",
-          title: "Configure Google OAuth in Settings",
-          shortTitle: "Google OAuth setup",
-          pressure: "This is a setup blocker. Marcus should open Settings, show the missing OAuth inputs, and stop making this a dead-end card.",
-          signal: "Google integration setup evidence is visible",
-        };
-      }
-      return null;
-    }
-
-    function workspaceHandoff(item) {
-      const summary = text(item?.handoffSummary);
-      if (!summary) return null;
-      const rawStatus = text(item?.handoffStatus).toLowerCase();
-      const lower = summary.toLowerCase();
-      const ready = rawStatus === "ready_for_mark" || /\b(fixed|resolved|confirmed|applied|ready|no pending migrations|returns ready|should load)\b/.test(lower);
-      const blocked = rawStatus === "blocked" || /\b(blocked|failed|error|missing|unauthorized|500|crash)\b/.test(lower);
-      const refresh = summary.match(/https?:\/\/[^\s)]+/i)?.[0] || "";
-      const title = ready ? "Codex says the live blocker is fixed" : blocked ? "Codex reported a blocker" : "Codex left a handoff";
-      return {
-        summary,
-        status: ready ? "ready_for_mark" : blocked ? "blocked" : "handoff",
-        title,
-        refresh,
-        observedAt: text(item?.handoffObservedAt || item?.modifiedAt),
-      };
-    }
-
-    function signalSummaryFromWorkspace(item, desktop) {
-      const fileCount = Number(item?.gitStatusCount || arr(item?.gitStatus).length || 0);
-      const branch = branchLabel(item?.gitBranch);
-      const firstFile = text(arr(item?.gitStatus)[0]?.file);
-      const recentCommit = text(arr(item?.gitRecentCommits)[0]);
-      const activeDesktop = activeDesktopMatchesWorkspace(item, desktop);
-      const topic = workspaceTopicFromSignals(item);
-      const handoff = workspaceHandoff(item);
-      const recency = recencyBucket(effectiveWorkspaceModifiedAt(item, desktop));
-      const reviewReady = !activeDesktop && !handoff && /^main$|^master$/i.test(branch) && fileCount === 0 && Boolean(recentCommit);
-      const facts = [
-        { label: "Freshness", value: handoff?.observedAt ? age(handoff.observedAt) : recency.label },
-        { label: "Branch", value: branch || "not reported" },
-        { label: activeDesktop ? "Focus" : "Files", value: activeDesktop ? "active now" : fileCount ? `${fileCount} changed` : "no file changes" },
-      ];
-      const signal = handoff
-        ? `${handoff.title}: ${handoff.summary}`
-        : activeDesktop
-        ? `Foreground VS Code focus is on ${text(item?.projectName || item?.folderName, "this workspace")} now.`
-        : topic ? `${topic.shortTitle}: ${topic.signal}.`
-        : firstFile ? `Latest file signal: ${firstFile}` : recentCommit ? `Latest commit: ${recentCommit}` : "Workspace is visible, but no file/event detail is attached yet.";
-      const stuck = handoff?.status === "ready_for_mark"
-        ? `Ready for your check${handoff.refresh ? `: refresh ${handoff.refresh}` : ""}. File-count noise is lower priority than this Codex handoff.`
-        : handoff?.status === "blocked"
-        ? "Codex reported a blocker in its handoff. Marcus should explain the exact failure before showing generic project movement."
-        : activeDesktop
-        ? "Foreground focus beats stale session file timestamps. Marcus should treat this as current PC activity."
-        : topic ? topic.pressure
-        : reviewReady
-        ? "Commit is clean on the main branch. This looks ready for your eyes, not like Codex is still typing."
-        : !recency.fresh ? "This may be stale; ask Marcus to verify whether Codex is still active here." : fileCount === 0 ? "No file movement yet; useful to ask what Codex is reading or waiting on." : "";
-      return { facts, signal, stuck, tone: handoff?.status === "blocked" ? "blocked" : activeDesktop || reviewReady || topic || handoff ? "live" : recency.tone, reviewReady, activeDesktop, topic, handoff };
-    }
-
-    function signalSummaryFromJob(job) {
-      const raw = text(job?.status, "unknown").toLowerCase();
-      const recency = recencyBucket(job?.updatedAt || job?.startedAt);
-      const files = arr(job?.changedFiles).length;
-      const facts = [
-        { label: "Job", value: raw || "unknown" },
-        { label: "Freshness", value: recency.label },
-        { label: "Events", value: `${Number(job?.eventCount || 0)}` },
-      ];
-      const signal = text(job?.diffSummary || job?.finalOutput || job?.error || arr(job?.changedFiles)[0] || "Codex job is visible, but no detailed event text is attached.");
-      const stuck = raw === "completed"
-        ? "Codex says it is done. Marcus still wants a human eyeball pass, because apparently we enjoy not shipping mysteries."
-        : raw === "failed" ? text(job?.error || "Codex job failed; inspect or reroute.") : !recency.fresh ? "The job has not reported recently; verify whether it is still moving." : files ? `${files} changed file${files === 1 ? "" : "s"} reported by the job.` : "";
-      return { facts, signal, stuck, tone: raw === "completed" ? "live" : raw === "failed" ? "blocked" : recency.tone };
-    }
-
-    function displayStateLabel(project) {
-      if (project.codexJobId) {
-        const raw = text(project.currentStep).toLowerCase();
-        if (raw === "completed") return "Ready to verify";
-        if (raw === "queued") return "Queued";
-        if (raw === "failed") return "Failed";
-        return "Codex job";
-      }
-      if (project.isLiveCodex) {
-        if (project.liveSignal?.activeDesktop) return "Active now";
-        if (project.liveSignal?.tone === "blocked" || project.liveSignal?.tone === "warn") return "Check status";
-        if (project.liveSignal?.stuck) return "Watching Codex";
-        return "Live Codex";
-      }
-      return project.stateLabel;
-    }
-
-    function inferCodexWorkspaceTask(item) {
-      const branch = text(item?.gitBranch);
-      const commits = arr(item?.gitRecentCommits).map(text).filter(Boolean);
-      const changed = arr(item?.gitStatus).map((entry) => text(entry?.file)).filter(Boolean);
-      const haystack = [branch, ...commits, ...changed, text(item?.folderName), text(item?.projectName)].join(" ");
-      const handoff = workspaceHandoff(item);
-      if (handoff?.status === "ready_for_mark") return handoff.refresh ? `Refresh and verify ${handoff.refresh}` : "Review the completed Codex handoff";
-      if (handoff) return handoff.title;
-      const topic = workspaceTopicFromSignals(item);
-      if (topic) return topic.title;
-      if (/sng|price|sync/i.test(haystack)) return "Diagnose SNG price sync";
-      if (branch && !/^main$|^master$/i.test(branch)) return branch.replace(/^codex[/-]/i, "").replace(/[-_]+/g, " ");
-      if (commits[0]) return commitTitle(commits[0]);
-      if (changed[0]) return `Review ${changed[0]}`;
-      return "Active Codex session";
-    }
-
-    function makeProjectFromOperation(operation) {
-      const state = stateFromOperation(operation);
-      const title = text(operation?.projectName || operation?.title || operation?.id, "Operation");
-      const current = text(operation?.currentStep?.title || operation?.status, "Current state observed");
-      const verification = operation?.verificationSummary || {};
-      const progress = operation?.progress || {};
-      const decision = operation?.pendingApproval ? {
-        id: operation.pendingApproval.id,
-        operationId: text(operation.id),
-        approvalId: text(operation.pendingApproval.id),
-        projectId: idFrom(operation.id, "operation"),
-        project: title,
-        title: `Approve ${text(operation.pendingApproval.action, "operation action")}`,
-        why: text(operation.pendingApproval.reason, "Marcus cannot run this consequential action without exact approval."),
-        blocks: current,
-        recommendation: "Review the exact scope, risk, rollback, and verification before approving.",
-        risk: text(operation.pendingApproval.riskLevel || operation.riskLevel, "unknown"),
-        action: "Review approval",
-      } : null;
-      const verificationRequired = Number(verification.required || 0);
-      const verificationPassed = Number(verification.passed || 0);
-      const verificationClear = verificationRequired > 0 && verificationPassed >= verificationRequired;
-      const completedWhat = text(operation?.title || operation?.projectName || current, "the last tracked step");
-      const completeSentence = verificationRequired > 0
-        ? (verificationClear
-          ? `Completed: ${completedWhat}. All ${verificationRequired} required verification check${verificationRequired === 1 ? "" : "s"} passed. Mark acceptance is the only thing left.`
-          : `Completed: ${completedWhat}. Only ${verificationPassed}/${verificationRequired} required verification checks have passed - do not treat this as done yet.`)
-        : `Completed: ${completedWhat}. No required verification checks are recorded, so Mark acceptance is still open.`;
-      return {
-        id: idFrom(operation.id, "operation"),
-        sourceId: text(operation.id),
-        name: title,
-        state,
-        stateLabel: labelForState(state),
-        basis: "observed operation",
-        sentence: state === "blocked"
-          ? `Marcus is blocked at ${current}; completion has not been claimed.`
-          : state === "needs_mark"
-            ? `Marcus is waiting for Mark before ${current}.`
-            : state === "complete"
-              ? completeSentence
-              : `Marcus is moving through ${current}.`,
-        last: age(operation?.updatedAt),
-        lastAt: Date.parse(operation?.updatedAt || "") || 0,
-        lastChange: current,
-        next: state === "blocked" ? "MARCUS recovery" : state === "needs_mark" ? "Mark" : state === "complete" ? "Review" : "Codex",
-        counts: `${Number(progress.completed || 0)}/${Number(progress.total || 0)} steps`,
-        confidence: state === "blocked" ? 56 : state === "complete" ? (verificationClear ? 92 : 68) : 72,
-        currentStep: current,
-        objective: text(operation?.title || operation?.projectName, "No objective text available."),
-        changed: [
-          `Status: ${text(operation?.status, "unknown")}`,
-          progress.total ? `Progress: ${progress.completed}/${progress.total} steps` : "Step progress unavailable",
-          verification.required ? `Verification: ${verification.passed}/${verification.required} required checks passed` : "No required verification summary returned",
-          operation.activeBlockers ? `${operation.activeBlockers} active blocker` : "",
-        ].filter(Boolean),
-        tasks: [
-          { id: `${idFrom(operation.id)}-context`, title: "Marcus prepared context", status: "done", worker: "MARCUS" },
-          { id: `${idFrom(operation.id)}-current`, title: current, status: text(operation?.currentStep?.status || operation?.status, "active"), worker: text(operation?.currentStep?.type || "Codex") },
-          { id: `${idFrom(operation.id)}-verify`, title: "Verify evidence before completion", status: state === "complete" ? "ready" : "queued", worker: "MARCUS" },
-        ],
-        evidence: [
-          `Operation ${text(operation.id)}`,
-          `Risk ${text(operation.riskLevel, "unknown")}`,
-          operation.needsRecovery ? "Recovery required" : "",
-        ].filter(Boolean),
-        decision,
-      };
-    }
-
-    function makeProjectFromJob(job, index) {
-      const raw = text(job?.status, "unknown").toLowerCase();
-      const state = raw === "completed" ? "complete" : raw === "failed" ? "blocked" : raw === "queued" ? "monitoring" : "moving";
-      const name = text(job?.projectName || job?.repository || job?.workspacePath || `Codex job ${index + 1}`);
-      const liveSignal = signalSummaryFromJob(job);
-      return {
-        id: idFrom(job?.jobId || name, `job-${index}`),
-        isLiveCodex: !["completed", "cancelled", "failed"].includes(raw),
-        sourceId: text(job?.jobId),
-        codexJobId: text(job?.jobId),
-        name,
-        state,
-        stateLabel: raw === "completed" ? "Ready to verify" : raw === "queued" ? "Queued" : raw === "failed" ? "Failed" : "Codex job",
-        basis: "observed Codex job",
-        sentence: raw === "completed" ? "Codex finished the coding pass; this is ready for review." : `${text(job?.objective || job?.title || "Codex work")} is ${raw}.`,
-        liveSignal,
-        livePhase: phaseFor({ state, currentStep: text(job?.status, "Codex status"), objective: text(job?.objective || job?.title || name), lastChange: liveSignal.signal }),
-        last: age(job?.updatedAt || job?.startedAt),
-        lastAt: Date.parse(job?.updatedAt || job?.startedAt || "") || 0,
-        lastChange: text(job?.finalOutput || job?.diffSummary || job?.error || `${Number(job?.eventCount || 0)} events reported`),
-        next: raw === "completed" ? "Verification" : raw === "failed" ? "MARCUS" : "Codex",
-        counts: `${Number(job?.eventCount || 0)} events`,
-        confidence: raw === "failed" ? 48 : 74,
-        objective: text(job?.objective || job?.title || name),
-        currentStep: text(job?.status, "Codex status"),
-        changed: [liveSignal.signal, liveSignal.stuck, ...arr(job?.changedFiles).slice(0, 5).map((file) => `Changed file: ${file}`)].filter(Boolean),
-        tasks: [
-          { id: `${idFrom(job?.jobId || name)}-run`, title: "Codex run", status: raw, worker: "Codex" },
-          { id: `${idFrom(job?.jobId || name)}-review`, title: "Mark eyeball pass", status: raw === "completed" ? "ready" : "waiting", worker: "Mark" },
-          { id: `${idFrom(job?.jobId || name)}-verify`, title: "Marcus verification", status: raw === "completed" ? "ready" : "waiting", worker: "MARCUS" },
-        ],
-        evidence: [text(job?.jobId ? `Job ${job.jobId}` : ""), text(job?.workspacePath || ""), text(job?.repository || "")].filter(Boolean),
-      };
-    }
-
-    function makeProjectFromCodexWorkspace(item, index, desktop = null) {
-      const name = text(item?.projectName || item?.folderName || item?.workspacePath || `Codex workspace ${index + 1}`);
-      const task = inferCodexWorkspaceTask(item);
-      const liveSignal = signalSummaryFromWorkspace(item, desktop);
-      const reviewReady = Boolean(liveSignal.reviewReady);
-      const handoffReady = liveSignal.handoff?.status === "ready_for_mark";
-      const handoffBlocked = liveSignal.handoff?.status === "blocked";
-      const projectState = handoffReady ? "needs_mark" : handoffBlocked ? "blocked" : reviewReady ? "complete" : "moving";
-      const changed = [
-        liveSignal.handoff ? `Codex handoff: ${liveSignal.handoff.summary}` : "",
-        text(item?.gitBranch) ? `Branch: ${text(item.gitBranch)}` : "",
-        Number(item?.gitStatusCount || 0) ? `${Number(item.gitStatusCount)} changed file${Number(item.gitStatusCount) === 1 ? "" : "s"}` : "",
-        ...arr(item?.gitStatus).slice(0, 4).map((entry) => `${text(entry?.status, "?")} ${text(entry?.file)}`),
-        ...arr(item?.gitRecentCommits).slice(0, 2).map((entry) => `Commit: ${text(entry)}`),
-      ].filter(Boolean);
-      return {
-        id: idFrom(name, `codex-workspace-${index}`),
-        isLiveCodex: !reviewReady && !handoffReady && !handoffBlocked,
-        workspaceReviewReady: reviewReady || handoffReady,
-        sourceId: text(item?.sessionId),
-        codexSessionId: text(item?.sessionId),
-        name,
-        state: projectState,
-        stateLabel: handoffReady ? "Ready to check" : handoffBlocked ? "Codex blocker" : reviewReady ? "Ready to review" : liveSignal.topic?.kind === "hub" ? "Hub issue" : liveSignal.activeDesktop ? "Active now" : liveSignal.tone === "live" && !liveSignal.stuck ? "Live Codex" : "Check status",
-        basis: handoffReady || handoffBlocked ? "Codex handoff" : reviewReady ? "workspace commit signal" : "live Codex workspace",
-        sentence: liveSignal.handoff ? liveSignal.handoff.summary : reviewReady ? `Latest commit is ready for review: ${commitTitle(arr(item?.gitRecentCommits)[0]) || task}.` : task || "Active Codex session detected.",
-        liveSignal,
-        livePhase: handoffReady ? "Approval" : handoffBlocked ? "Building" : reviewReady ? "Complete" : phaseFor({ state: "moving", currentStep: task, objective: task, lastChange: liveSignal.signal }),
-        last: age(effectiveWorkspaceModifiedAt(item, desktop)),
-        lastAt: Date.parse(effectiveWorkspaceModifiedAt(item, desktop) || "") || 0,
-        lastChange: task,
-        next: handoffReady ? "Mark refresh" : handoffBlocked ? "MARCUS" : reviewReady ? "Mark review" : "Codex",
-        counts: `${Number(item?.gitStatusCount || arr(item?.gitStatus).length || 0)} file signal${Number(item?.gitStatusCount || arr(item?.gitStatus).length || 0) === 1 ? "" : "s"}`,
-        confidence: handoffReady ? 92 : handoffBlocked ? 62 : reviewReady ? 82 : 88,
-        objective: task,
-        currentStep: task,
-        changed: [
-          liveSignal.activeDesktop ? `Active desktop focus: ${text(desktop?.windowTitle)}` : "",
-          liveSignal.topic ? `Project focus: ${liveSignal.topic.title}` : "",
-          ...changed,
-        ].filter(Boolean).length ? [
-          liveSignal.activeDesktop ? `Active desktop focus: ${text(desktop?.windowTitle)}` : "",
-          liveSignal.topic ? `Project focus: ${liveSignal.topic.title}` : "",
-          ...changed,
-        ].filter(Boolean) : ["Recent Codex session metadata observed"],
-        tasks: [
-          { id: `${idFrom(name)}-codex-active`, title: task, status: handoffReady ? "handoff ready" : handoffBlocked ? "blocked" : reviewReady ? "commit observed" : liveSignal.tone === "live" ? "visible now" : "needs status check", worker: handoffReady || handoffBlocked ? "Codex" : reviewReady ? "Git" : "Codex" },
-          { id: `${idFrom(name)}-mark-review`, title: handoffReady ? "Refresh live page and confirm" : "Review latest commit", status: handoffReady || reviewReady ? "ready" : "waiting", worker: "Mark" },
-        ],
-        evidence: [
-          "Desktop relay codexWorkspaces",
-          text(item?.sessionId ? `Session ${item.sessionId}` : ""),
-          text(item?.workspacePath || ""),
-          text(item?.gitRemote || ""),
-        ].filter(Boolean),
-      };
-    }
-
-    function makeProjectFromDesktop(desktop) {
-      if (arr(desktop?.codexWorkspaces).length) return null;
-      const windowTitle = text(desktop?.windowTitle);
-      if (!windowTitle) return null;
-      const name = text(desktop?.matchedProjectName || windowTitle.split(" - ").find((part) => !/visual studio code|google chrome|localhost/i.test(part)) || "Current desktop focus");
-      return {
-        id: idFrom(`desktop-${name}`),
-        name,
-        state: "monitoring",
-        stateLabel: "Monitoring",
-        basis: "observed desktop focus",
-        sentence: `The desktop relay sees ${text(desktop?.processName, "an app")} focused on ${windowTitle}.`,
-        last: `${Math.round(Number(desktop?.idleSeconds || 0))}s idle`,
-        lastAt: Date.now() - Number(desktop?.idleSeconds || 0) * 1000,
-        lastChange: "Desktop focus observed",
-        next: "MARCUS",
-        counts: "partial evidence",
-        confidence: 54,
-        objective: "Marcus can use this as context, but it is not proof of project progress.",
-        currentStep: "Monitor desktop context",
-        changed: [`Window: ${windowTitle}`, `Process: ${text(desktop?.processName, "unknown")}`, "No Codex job or workspace list attached to this signal"],
-        tasks: [
-          { id: `${idFrom(name)}-observe`, title: "Observe active window", status: "observed", worker: "Desktop relay" },
-          { id: `${idFrom(name)}-bind`, title: "Bind to project evidence", status: "needs stronger evidence", worker: "MARCUS" },
-        ],
-        evidence: ["Desktop context endpoint", windowTitle],
-      };
-    }
-
-    function makeProjectsFromBrief(brief) {
-      const rows = [
-        ...(brief?.currentFocus ? [brief.currentFocus] : []),
-        ...arr(brief?.worldModel?.activeWork),
-        ...arr(brief?.controlledAttention?.topPriorities || brief?.topPriorities).slice(0, 6),
-      ].filter(shouldUseBriefItemAsProject);
-      return rows.map((item, index) => {
-        const name = text(item?.name || item?.title || item?.projectName || `ActiveBrief item ${index + 1}`);
-        const raw = text(item?.activityStatus || item?.projectState || item?.status || item?.bucket).toLowerCase();
-        const markRequired = /mark|required|interrupt|credential|approval|decision/.test(JSON.stringify(item || {}).toLowerCase());
-        const state = markRequired ? "needs_mark" : raw.includes("stale") ? "losing_thread" : raw.includes("archive") ? "parked" : raw.includes("active") ? "moving" : "monitoring";
-        return {
-          id: idFrom(item?.id || name, `brief-${index}`),
-          name,
-          state,
-          stateLabel: labelForState(state),
-          basis: "ActiveBrief inference",
-          sentence: text(item?.detail || item?.summary || item?.reason || "Marcus surfaced this from the ActiveBrief."),
-          last: age(item?.updatedAt || item?.createdAt || brief?.generatedAt),
-          lastAt: Date.parse(item?.updatedAt || item?.createdAt || brief?.generatedAt || "") || 0,
-          lastChange: text(item?.recommendedAction || item?.reason || item?.bucket || "ActiveBrief signal"),
-          next: markRequired ? "Mark" : "MARCUS",
-          counts: item?.duplicateCount ? `${item.duplicateCount} signals` : "brief",
-          confidence: Math.round(clamp(Number(item?.confidence || 0.64) * 100, 5, 99)),
-          objective: text(item?.recommendedAction || item?.prompt || item?.detail || name),
-          currentStep: text(item?.recommendedAction || item?.bucket || "Review signal"),
-          changed: arr(item?.reasons).map(text).filter(Boolean).slice(0, 5),
-          tasks: [
-            { id: `${idFrom(item?.id || name)}-inspect`, title: text(item?.recommendedAction || "Inspect signal"), status: markRequired ? "needs Mark" : "planned", worker: markRequired ? "Mark" : "MARCUS" },
-          ],
-          evidence: [text(item?.source || item?.kind || "ActiveBrief"), text(item?.id || "")].filter(Boolean),
-          decision: markRequired ? decisionFromBriefItem(item, name) : null,
-        };
-      });
-    }
-
-    function shouldUseBriefItemAsProject(item) {
-      const title = text(item?.name || item?.title || item?.projectName);
-      const kind = text(item?.kind).toLowerCase();
-      const targetType = text(item?.targetType).toLowerCase();
-      const id = text(item?.id).toLowerCase();
-      if (!title) return false;
-      if (/^inboxcreate\s+\d+$/i.test(title)) return false;
-      if (kind === "task" && !targetType && !/project:|website:|repo:|workspace:/i.test(id + " " + text(item?.target))) return false;
-      return true;
-    }
-
-    function decisionFromBriefItem(item, name) {
-      const rawTitle = text(item?.title);
-      const recommended = text(item?.recommendedAction || item?.detail || item?.reason);
-      const title = rawTitle && rawTitle.toLowerCase() !== name.toLowerCase() ? rawTitle : recommended || `Decide next move for ${name}`;
-      return {
-        id: idFrom(`decision-${item?.id || name}`),
-        projectId: idFrom(item?.id || name),
-        project: name,
-        title,
-        why: text(item?.detail || item?.reason || "Marcus marked this as requiring Mark's judgment."),
-        blocks: text(item?.recommendedAction || "The next operational step"),
-        recommendation: text(item?.recommendedAction || "Review this item before Marcus continues."),
-        risk: text(item?.priority || "unknown"),
-        action: "Discuss",
-      };
-    }
-
-    function makeProjectFromAwareness(project, index) {
-      const name = text(project?.canonicalName || `Known project ${index + 1}`);
-      const state = ({
-        waiting_on_mark: "needs_mark",
-        blocked: "blocked",
-        verifying: "verifying",
-        moving: "moving",
-        losing_thread: "losing_thread",
-        intentionally_dormant: "parked",
-        completed: "complete",
-        archived: "parked",
-        quiet: "quiet",
-        waiting_external: "monitoring",
-        monitoring: "monitoring",
-      })[text(project?.attentionState).toLowerCase()] || "monitoring";
-      const knowledge = project?.knowledge || {};
-      const latestOperation = project?.latestOperation || {};
-      return {
-        id: text(project?.id, `awareness-${index}`),
-        awarenessProjectId: text(project?.id),
-        projectRegistryId: text(project?.projectRegistryId),
-        name,
-        state,
-        stateLabel: labelForState(state),
-        lifecycle: text(project?.lifecycle),
-        archived: project?.archived === true,
-        dashboardVisible: project?.dashboardVisible !== false,
-        basis: "canonical MARCUS awareness",
-        sentence: text(project?.objectiveBelief || knowledge.summary || "MARCUS has indexed this project but still needs a durable objective."),
-        last: age(project?.updatedAt),
-        lastAt: Date.parse(project?.updatedAt || "") || 0,
-        lastChange: text(project?.latestMeaningfulChange || project?.currentActivity || project?.status || "Awareness record synchronized"),
-        next: state === "needs_mark" ? "Mark" : state === "complete" ? "Review" : state === "parked" ? "None" : "MARCUS",
-        counts: `${Number(knowledge.sourceCount || 0)} memory source${Number(knowledge.sourceCount || 0) === 1 ? "" : "s"}, ${Number(project?.operationCount || 0)} operation${Number(project?.operationCount || 0) === 1 ? "" : "s"}`,
-        confidence: clamp(Number(project?.confidence || 0) * 100, 35, 98),
-        objective: text(project?.objectiveBelief || knowledge.summary || "No current objective stored."),
-        currentStep: text(project?.currentActivity || latestOperation?.currentStep?.title || "Monitor for meaningful evidence"),
-        changed: [
-          `Lifecycle: ${text(project?.lifecycle, "unknown")}`,
-          `Knowledge: ${text(knowledge.status, "unavailable")}${knowledge.lastIndexedAt ? `, indexed ${age(knowledge.lastIndexedAt)}` : ""}`,
-          Number(knowledge.repositoryFileCount || 0) ? `Repository manifest: ${Number(knowledge.repositoryFileCount)} files${knowledge.repositoryTruncated ? " (bounded)" : ""}` : "Repository manifest unavailable",
-          text(project?.blockerOrDependency),
-        ].filter(Boolean),
-        tasks: latestOperation?.currentStep?.title ? [{ id: `${text(project?.id)}-operation`, title: latestOperation.currentStep.title, status: text(latestOperation.status), worker: "MARCUS" }] : [],
-        evidence: [text(project?.projectRegistryId), text(project?.repo?.fullName), text(project?.localWorkspace?.path), text(knowledge.summary)].filter(Boolean),
-      };
-    }
-
-    function makeProjectFromRegistry(project, index) {
-      const name = text(project?.canonicalName || project?.name || `Registered project ${index + 1}`);
-      const raw = text(project?.status, "unknown").toLowerCase();
-      const state = raw.includes("archive") || raw.includes("done") ? "parked" : "monitoring";
-      return {
-        id: idFrom(project?.id || project?.projectId || name, `registry-${index}`),
-        name,
-        state,
-        stateLabel: labelForState(state),
-        basis: "project registry",
-        sentence: project?.localWorkspace?.path
-          ? `Registered with local workspace ${project.localWorkspace.path}.`
-          : "Registered project exists, but Marcus has no current activity evidence attached.",
-        last: age(project?.updatedAt || project?.createdAt),
-        lastAt: Date.parse(project?.updatedAt || project?.createdAt || "") || 0,
-        lastChange: text(project?.description || project?.definitionOfDone || project?.status || "Registry record"),
-        next: state === "parked" ? "None" : "MARCUS",
-        counts: "registry",
-        confidence: project?.localWorkspace?.path ? 58 : 42,
-        objective: text(project?.currentObjective?.summary || project?.description || "No current objective stored."),
-        currentStep: "Monitor for meaningful evidence",
-        changed: [
-          `Registry status: ${text(project?.status, "unknown")}`,
-          project?.localWorkspace?.path ? `Workspace: ${project.localWorkspace.path}` : "No workspace path registered",
-          project?.repo?.fullName ? `Repo: ${project.repo.fullName}` : "No repo binding registered",
-        ],
-        tasks: [
-          { id: `${idFrom(project?.id || name)}-registry`, title: "Attach stronger evidence", status: "available", worker: "MARCUS" },
-        ],
-        evidence: [text(project?.id || ""), text(project?.localWorkspace?.path || ""), text(project?.repo?.fullName || "")].filter(Boolean),
-      };
-    }
-
-    function shouldUseRegistryProject(project) {
-      const name = text(project?.canonicalName || project?.name);
-      if (!name || /^inboxcreate\s+\d+$/i.test(name)) return false;
-      if (/archived|done/i.test(text(project?.status))) return false;
-      return true;
-    }
-
-    function labelForState(state) {
-      return ({
-        moving: "Moving",
-        needs_mark: "Needs Mark",
-        blocked: "Blocked",
-        monitoring: "Monitoring",
-        quiet: "Quiet",
-        losing_thread: "Losing the thread",
-        parked: "Parked",
-        verifying: "Verifying",
-        complete: "Complete",
-        unknown: "Insufficient evidence",
-      })[state] || "Insufficient evidence";
-    }
-
-    function mergeProjects(projects) {
-      const byKey = new Map();
-      for (const project of projects.filter(Boolean)) {
-        const key = idFrom(project.name);
-        const existing = byKey.get(key);
-        if (!existing) {
-          byKey.set(key, project);
-          continue;
-        }
-        const completionShouldLead = project.state === "complete" && existing.isLiveCodex;
-        const codexShouldLead = project.isLiveCodex && existing.state !== "needs_mark" && existing.state !== "complete";
-        const existingCodexLeads = existing.isLiveCodex && project.state !== "needs_mark";
-        if (completionShouldLead || codexShouldLead) {
-          existing.isLiveCodex = codexShouldLead;
-          existing.state = project.state;
-          existing.stateLabel = project.stateLabel;
-          existing.sentence = project.sentence;
-          existing.basis = project.basis;
-          existing.last = project.last;
-          existing.lastChange = project.lastChange;
-          existing.next = project.next;
-          existing.currentStep = project.currentStep;
-          existing.objective = project.objective;
-          existing.liveSignal = project.liveSignal || existing.liveSignal;
-          existing.livePhase = project.livePhase || existing.livePhase;
-          existing.codexJobId = project.codexJobId || existing.codexJobId;
-          existing.codexSessionId = project.codexSessionId || existing.codexSessionId;
-          existing.confidence = Math.max(Number(existing.confidence || 0), Number(project.confidence || 0));
-          existing.counts = project.counts;
-        } else if (!existingCodexLeads) {
-          existing.sentence = existing.basis.includes("operation") ? existing.sentence : project.sentence;
-        }
-        existing.changed = [...arr(existing.changed), ...arr(project.changed)].slice(0, 7);
-        existing.tasks = [...arr(existing.tasks), ...arr(project.tasks)].slice(0, 8);
-        existing.evidence = [...new Set([...arr(existing.evidence), ...arr(project.evidence)])].slice(0, 8);
-        existing.awarenessProjectId = existing.awarenessProjectId || project.awarenessProjectId || "";
-        existing.projectRegistryId = existing.projectRegistryId || project.projectRegistryId || "";
-        existing.lifecycle = project.lifecycle || existing.lifecycle || "";
-        existing.archived = existing.archived === true || project.archived === true;
-        if (typeof project.dashboardVisible === "boolean") existing.dashboardVisible = project.dashboardVisible;
-        if (existing.archived) {
-          existing.state = "parked";
-          existing.stateLabel = labelForState("parked");
-          existing.next = "None";
-        }
-        if (!existing.isLiveCodex && rankState(project.state) < rankState(existing.state)) {
-          existing.state = project.state;
-          existing.stateLabel = labelForState(project.state);
-          existing.next = project.next;
-        }
-      }
-      return [...byKey.values()].sort((a, b) => projectSortRank(a) - projectSortRank(b) || b.confidence - a.confidence);
-    }
-
-    function rankState(state) {
-      return ({ needs_mark: 0, complete: 1, verifying: 2, blocked: 3, moving: 4, losing_thread: 5, monitoring: 6, quiet: 7, parked: 8, unknown: 9 })[state] ?? 9;
-    }
-
-    function projectSortRank(project) {
-      if (project?.isLiveCodex) return 0.5;
-      return rankState(project?.state);
-    }
-
-    async function load() {
-      if (isLoading) return;
-      isLoading = true;
-      setStatus("Syncing live sources", "quiet");
-      try {
-        const [operations, jobs, desktop, brief, registry, awareness, settings, googleStatus] = await Promise.all([
-          api("/api/operations/summary?limit=50").catch((error) => ({ ok: false, error: error.message, operations: [] })),
-          api("/api/codex/jobs").catch((error) => ({ ok: false, error: error.message, jobs: [] })),
-          api("/api/desktop-context").catch((error) => ({ ok: false, error: error.message })),
-          api("/api/marcus/active-brief").catch((error) => ({ ok: false, error: error.message })),
-          api("/api/project-registry").catch((error) => ({ ok: false, error: error.message, projects: [] })),
-          api("/api/marcus/awareness?includeArchived=true").catch((error) => ({ ok: false, error: error.message, projects: [], counts: {} })),
-          api("/api/settings").catch((error) => ({ ok: false, error: error.message })),
-          api("/api/integrations/google/status").catch((error) => ({ ok: false, error: error.message })),
-        ]);
-        const operationProjects = arr(operations.operations).map(makeProjectFromOperation);
-        const jobProjects = arr(jobs.jobs).filter((job) => text(job?.status).toLowerCase() !== "cancelled").map(makeProjectFromJob);
-        const codexWorkspaceProjects = arr(desktop?.codexWorkspaces).map((item, index) => makeProjectFromCodexWorkspace(item, index, desktop));
-        const desktopProject = makeProjectFromDesktop(desktop);
-        const briefProjects = brief?.ok === false ? [] : makeProjectsFromBrief(brief);
-        const awarenessProjects = arr(awareness.projects).map(makeProjectFromAwareness);
-        const registryProjects = awarenessProjects.length ? [] : arr(registry.projects).filter(shouldUseRegistryProject).slice(0, 8).map(makeProjectFromRegistry);
-        const decisions = uniqueDecisions([
-          ...operationProjects.map((project) => project.decision).filter(Boolean),
-          ...briefProjects.map((project) => project.decision).filter(Boolean),
-        ]).slice(0, 6);
-        snapshot = {
-          projects: mergeProjects([...codexWorkspaceProjects, ...jobProjects, ...operationProjects, desktopProject, ...briefProjects, ...registryProjects, ...awarenessProjects]),
-          decisions,
-          events: buildEvents({ operations, jobs, brief, desktop }),
-          brief,
-          operations: arr(operations.operations),
-          desktop,
-          jobs: arr(jobs.jobs),
-          registry: arr(registry.projects),
-          awareness,
-          settings,
-          googleStatus,
-          sourceState: { operations, jobs, desktop, brief, registry, awareness },
-        };
-        setStatus(statusSentence(), activityTone());
-        applyRoute();
-        render();
-      } catch (error) {
-        snapshot = { projects: [], decisions: [], events: [], settings: {}, googleStatus: null, error };
-        setStatus(`Unable to sync: ${error.message}`, "blocked");
-        render();
-      } finally {
-        isLoading = false;
-      }
-    }
-
-    function buildEvents({ operations, jobs, brief, desktop }) {
-      const rows = [];
-      for (const workspace of arr(desktop?.codexWorkspaces).slice(0, 6)) {
-        const activeDesktop = activeDesktopMatchesWorkspace(workspace, desktop);
-        rows.push({
-          source: activeDesktop ? "Desktop focus" : "Codex workspace",
-          project: text(workspace.projectName || workspace.folderName),
-          text: activeDesktop ? `Active now in ${text(desktop?.windowTitle, "VS Code")}` : inferCodexWorkspaceTask(workspace),
-          time: age(effectiveWorkspaceModifiedAt(workspace, desktop)),
-          tone: "moving",
-        });
-      }
-      for (const operation of arr(operations.operations).slice(0, 6)) rows.push({ source: "Operation", project: text(operation.projectName || operation.title), text: `${text(operation.status)}: ${text(operation.currentStep?.title || operation.title)}`, time: age(operation.updatedAt), tone: stateFromOperation(operation) });
-      for (const job of arr(jobs.jobs).slice(0, 4)) rows.push({ source: "Codex", project: text(job.projectName || job.repository || "Codex"), text: text(job.finalOutput || job.diffSummary || job.error || job.status), time: age(job.updatedAt || job.startedAt), tone: "moving" });
-      for (const item of arr(brief?.sessionContext?.changedSinceLastCheckIn).slice(0, 4)) rows.push({ source: text(item.source || item.category || "ActiveBrief"), project: text(item.title), text: text(item.summary || item.title), time: age(item.changedAt), tone: "monitoring" });
-      if (desktop?.ok !== false && desktop?.windowTitle) rows.push({ source: "Desktop", project: text(desktop.windowTitle), text: `Focused in ${text(desktop.processName, "unknown app")}`, time: `${Number(desktop.idleSeconds || 0)}s idle`, tone: "monitoring" });
-      return rows.slice(0, 10);
-    }
-
-    function uniqueDecisions(decisions) {
-      const seen = new Set();
-      return decisions.filter((decision) => {
-        const key = idFrom(`${decision?.id || ""}-${decision?.project || ""}-${decision?.title || ""}`);
-        if (!key || seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      });
-    }
-
-    function activeDashboardProjects() {
-      return snapshot.projects.filter((project) => project.archived !== true && project.dashboardVisible !== false);
-    }
-
-    function statusSentence() {
-      const p = activeDashboardProjects();
-      const needs = p.filter((project) => project.state === "needs_mark").length;
-      const moving = p.filter((project) => ["moving", "verifying"].includes(project.state)).length;
-      const risk = p.filter((project) => ["blocked", "losing_thread"].includes(project.state)).length;
-      const activeCodex = p.filter((project) => project.isLiveCodex).length;
-      const partial = snapshot.jobs?.length === 0 && activeCodex === 0 ? " Codex jobs are currently empty or disabled." : "";
-      return `Reconciling ${p.length} projects: ${activeCodex} active Codex, ${needs} need Mark, ${moving} moving, ${risk} at risk.${partial}`;
-    }
-
-    function activityTone() {
-      const projects = activeDashboardProjects();
-      if (projects.some((project) => project.state === "blocked")) return "blocked";
-      if (projects.some((project) => project.state === "needs_mark")) return "risk";
-      if (projects.some((project) => ["moving", "verifying"].includes(project.state))) return "moving";
-      return "quiet";
-    }
-
-    function setStatus(label, tone) {
-      document.body.dataset.activity = tone;
-      els.navState.textContent = tone === "blocked" ? "Needs recovery" : tone === "risk" ? "Needs Mark" : tone === "moving" ? "Monitoring" : "Watching";
-      els.operatingState.textContent = label;
-      els.healthText.textContent = tone === "blocked" ? "Partial data / blocker" : "Live sources connected";
-      els.lastUpdated.textContent = `Updated ${nowLabel()}`;
-    }
-
-    function render() {
-      renderChrome();
-      if (document.body.dataset.mode === "project") renderProjectMode();
-      else if (document.body.dataset.mode === "task") renderTaskMode();
-      renderTracker();
-    }
-
-    function renderChrome() {
-      const mode = document.body.dataset.mode;
-      const navTitle = ({ projects: "Projects", review: "Review", activity: "Activity", settings: "Settings" })[viewMode] || "Projects";
-      els.pageTitle.textContent = mode === "project" ? "Project Control" : mode === "task" ? "Task Control Room" : navTitle;
-      document.querySelectorAll(".nav-link").forEach((button) => {
-        const navKey = button.dataset.nav === "tracker" ? "projects" : button.dataset.nav;
-        button.classList.toggle("active", navKey === viewMode && mode === "tracker");
-      });
-      const activeProjects = activeDashboardProjects();
-      const needs = snapshot.decisions.length;
-      const moving = activeProjects.filter((p) => ["moving", "verifying"].includes(p.state)).length;
-      const liveCodex = activeProjects.filter((p) => p.isLiveCodex);
-      els.sideSubtitle.textContent = `Working across ${activeProjects.length} active projects`;
-      els.startHere.textContent = needs
-        ? `${snapshot.decisions[0].project}: ${snapshot.decisions[0].title}.`
-        : liveCodex.length ? `${liveCodex[0].name}: ${liveCodex[0].currentStep}.`
-          : moving ? `${moving} project${moving === 1 ? "" : "s"} moving; no exact approval is first in line.` : "No live blocker is first in line.";
-      els.reviewPrimary.textContent = needs ? "Review decision" : "Ask Marcus";
-      els.doingList.innerHTML = activeProjects.filter((p) => (p.isLiveCodex || ["observed operation", "observed Codex job"].includes(p.basis)) && p.state !== "complete").slice(0, 4).map((p) => `<li><span>${esc(stateIcons[p.state])}</span><span><strong>${esc(p.name)}</strong><br>${esc(p.liveSignal?.signal || p.currentStep)}</span></li>`).join("") || `<li><span>-</span><span>No active operation or Codex run is reporting movement.</span></li>`;
-      els.handledList.innerHTML = activeProjects.filter((p) => p.state === "complete").slice(0, 3).map((p) => `<li><span>+</span><span>${esc(p.name)}</span></li>`).join("") || `<li><span>-</span><span>No recently completed work in this snapshot.</span></li>`;
-      els.nextList.innerHTML = activeProjects.slice(0, 3).map((p) => `<li><span>${esc(stateIcons[p.state])}</span><span>${esc(p.name)}: next is ${esc(p.next)}</span></li>`).join("") || `<li><span>-</span><span>Refresh after live sources reconnect.</span></li>`;
-    }
-
-    function renderTracker() {
-      const viewProjects = projectsForView();
-      const archivedCount = viewProjects.filter((project) => project.archived === true).length;
-      const filtered = viewProjects.filter((project) => {
-        const q = query.toLowerCase();
-        const matchesSearch = !q || JSON.stringify(project).toLowerCase().includes(q);
-        const matchesArchiveState = showArchived
-          ? project.archived === true
-          : project.archived !== true && (query.trim() ? true : project.dashboardVisible !== false);
-        return matchesSearch && matchesArchiveState;
-      });
-      const needs = showArchived ? [] : snapshot.decisions.slice(0, 3);
-      if (els.archiveToggle) {
-        els.archiveToggle.textContent = showArchived ? "Back to active" : `Show archived (${archivedCount})`;
-        els.archiveToggle.classList.toggle("primary", showArchived);
-      }
-      els.chiefBrief.textContent = chiefBrief(filtered);
-      els.sourceNote.innerHTML = sourceNoteHtml();
-      els.needsSection.classList.toggle("visible", needs.length > 0);
-      renderSettingsConsole();
-      els.needsGrid.innerHTML = needs.map((decision) => `
-        <div class="needs-card" data-decision="${esc(decision.id)}">
-          <strong>${esc(decision.project)}: ${esc(decision.title)}</strong>
-          <p>${esc(decision.why)}</p>
-          <p><strong>Blocks:</strong> ${esc(decision.blocks)}<br><strong>Marcus recommends:</strong> ${esc(decision.recommendation)}</p>
-          <div class="needs-actions">
-            ${decision.operationId && decision.approvalId ? `
-              <button class="btn primary" type="button" data-approve="${esc(decision.operationId)}" data-approval="${esc(decision.approvalId)}">Approve</button>
-              <button class="btn warn" type="button" data-reject="${esc(decision.operationId)}" data-approval="${esc(decision.approvalId)}">Reject</button>
-            ` : ""}
-            <button class="btn subtle" type="button" data-discuss="${esc(decision.id)}">Discuss with Marcus</button>
-          </div>
-        </div>
-      `).join("");
-      els.ledgerSummary.textContent = showArchived
-        ? `${filtered.length} archived project${filtered.length === 1 ? "" : "s"} hidden from your active list.`
-        : summaryForView(filtered);
-      if (!filtered.length) {
-        els.ledger.innerHTML = showArchived
-          ? `<div class="empty"><strong>Nothing archived yet.</strong><br>Completed or parked projects you archive will show up here so you can restore them anytime.</div>`
-          : emptyForView();
-      } else if (showArchived) {
-        els.ledger.innerHTML = `<section class="ledger-group" aria-label="Archived">
-          <div class="group-label"><span>Archived</span><span>${filtered.length}</span></div>
-          ${filtered.map((project) => rowHtml(project, true)).join("")}
-        </section>`;
-      } else {
-        els.ledger.innerHTML = groupOrder.map(([key, label]) => {
-          const rows = filtered.filter((project) => groupFor(project) === key);
-          if (!rows.length) return "";
-          return `<section class="ledger-group" aria-label="${esc(label)}">
-            <div class="group-label"><span>${esc(label)}</span><span>${rows.length}</span></div>
-            ${rows.map((project) => rowHtml(project, false)).join("")}
-          </section>`;
-        }).join("");
-      }
-      bindTracker();
-    }
-
-    function projectsForView() {
-      if (viewMode === "review") return snapshot.projects.filter((project) => ["needs_mark", "verifying", "complete"].includes(project.state));
-      if (viewMode === "activity") return snapshot.projects.filter((project) => project.isLiveCodex || ["moving", "blocked", "losing_thread"].includes(project.state));
-      if (viewMode === "settings") return snapshot.projects.filter((project) => {
-        const haystack = `${project.name} ${project.basis} ${project.sentence} ${project.currentStep} ${arr(project.evidence).join(" ")}`.toLowerCase();
-        return /settings|credential|oauth|integration|routing|provider|desktop|codex|bridge/.test(haystack);
-      });
-      return snapshot.projects;
-    }
-
-    function summaryForView(projects) {
-      if (viewMode === "review") return `${projects.length} review item${projects.length === 1 ? "" : "s"} needing a decision, verification, or acceptance.`;
-      if (viewMode === "activity") return `${projects.length} active/blocked work item${projects.length === 1 ? "" : "s"} from Codex, operations, and desktop relay evidence.`;
-      if (viewMode === "settings") return `${projects.length} source-backed system item${projects.length === 1 ? "" : "s"} showing what the bridge is actually reporting.`;
-      return `${projects.length} visible project${projects.length === 1 ? "" : "s"} from live operations, ActiveBrief, registry, and desktop evidence.`;
-    }
-
-    function emptyForView() {
-      if (viewMode === "review") return `<div class="empty"><strong>No review items in this snapshot.</strong><br>MARCUS has no visible decision, verification, or acceptance queue from the current sources.</div>`;
-      if (viewMode === "activity") return `<div class="empty"><strong>No active Codex or operation movement is visible.</strong><br>If Codex is working, the bridge is not relaying that workspace/job into this page yet.</div>`;
-      if (viewMode === "settings") return `<div class="empty"><strong>No source-backed system items are visible.</strong><br>Check desktop relay auth, Codex job provider status, and the active bridge connection.</div>`;
-      return `<div class="empty"><strong>No projects discovered for this filter.</strong><br>MARCUS is not filling the screen with stale sample data. Clear search or refresh live sources.</div>`;
-    }
-
-    function renderSettingsConsole() {
-      const visible = ["review", "activity", "settings"].includes(viewMode);
-      els.settingsConsole.classList.toggle("visible", visible);
-      if (!visible) {
-        els.settingsConsole.innerHTML = "";
-        return;
-      }
-      if (viewMode === "review") {
-        const reviewItems = snapshot.decisions.length ? snapshot.decisions : snapshot.projects.filter((project) => ["needs_mark", "verifying", "blocked"].includes(project.state)).slice(0, 5).map((project) => ({
-          id: `review-${project.id}`,
-          projectId: project.id,
-          project: project.name,
-          title: project.currentStep,
-          why: projectRead(project),
-          recommendation: project.state === "blocked" ? "Diagnose recovery path." : project.state === "verifying" ? "Check acceptance evidence." : "Clarify decision.",
-        }));
-        els.settingsConsole.innerHTML = `
-          <section class="mode-panel">
-            <div class="mode-kicker"><span>Review queue</span><span>${reviewItems.length} item${reviewItems.length === 1 ? "" : "s"}</span></div>
-            <h2>What needs judgment</h2>
-            <p>These are the places Marcus should ask for a decision, verification, or reroute before work drifts.</p>
-            <ul class="task-list" style="margin-top:12px">${reviewItems.map((item) => `<li><button type="button" data-review-item="${esc(item.projectId)}" data-prompt="${esc(`Review this item: ${item.title}. Explain the exact ask, options, risk, evidence, and recommendation.`)}"><span>${esc(item.project)}: ${esc(item.title)}</span><span>${esc(item.recommendation)}</span></button></li>`).join("") || `<li><button type="button" disabled><span>No review items need action.</span><span>clear</span></button></li>`}</ul>
-          </section>
-        `;
-        document.querySelectorAll("[data-review-item]").forEach((button) => button.addEventListener("click", () => {
-          expandedId = button.dataset.reviewItem;
-          renderTracker();
-          fillProjectPrompt(button.dataset.reviewItem, button.dataset.prompt);
-        }));
-        return;
-      }
-      if (viewMode === "activity") {
-        const active = snapshot.projects.filter((project) => project.isLiveCodex || ["moving", "verifying"].includes(project.state)).slice(0, 6);
-        els.settingsConsole.innerHTML = `
-          <section class="mode-panel">
-            <div class="mode-kicker"><span>Activity</span><span>live work</span></div>
-            <h2>What is moving right now</h2>
-            <p>This is the live work lens: exact visible Codex signals first, then operations and desktop evidence.</p>
-            <ul class="task-list" style="margin-top:12px">${active.map((project) => `<li><button type="button" data-activity-project="${esc(project.id)}"><span>${esc(project.name)} - ${esc(project.liveSignal?.signal || project.currentStep)}</span><span>${esc(project.last)} - ${esc(project.codexJobId ? "direct job" : project.isLiveCodex ? "workspace relay" : project.basis)}</span></button></li>`).join("") || `<li><button type="button" disabled><span>No active work is reporting movement.</span><span>quiet</span></button></li>`}</ul>
-          </section>
-          <section class="mode-panel">
-            <h2>Recent evidence</h2>
-            <ul class="insight-list">${snapshot.events.slice(0, 6).map((event) => `<li><strong>${esc(event.project || event.source)}</strong><span>${esc(event.text)} - ${esc(event.time)}</span></li>`).join("") || `<li><strong>No event feed</strong><span>Refresh after live sources reconnect.</span></li>`}</ul>
-          </section>
-        `;
-        document.querySelectorAll("[data-activity-project]").forEach((button) => button.addEventListener("click", () => {
-          expandedId = button.dataset.activityProject;
-          renderTracker();
-        }));
-        return;
-      }
-      const settings = snapshot.settings || {};
-      const google = snapshot.googleStatus || {};
-      const connected = Boolean(settings.googleConnected || google.connected);
-      const configured = Boolean(settings.googleConfigured || google.configured);
-      const statusClass = connected ? "ok" : configured ? "warn" : "warn";
-      const statusText = connected ? "Google connected" : configured ? "OAuth configured; account not connected" : "OAuth client missing";
-      els.settingsConsole.innerHTML = `
-        <section class="mode-panel">
-          <div class="mode-kicker"><span>Settings console</span><span>Google OAuth</span></div>
-          <h2>Google Calendar, Drive, and Analytics</h2>
-          <p>This is the live setup path Marcus is asking for. Save the OAuth client, connect the Google account, then refresh the dashboard signal.</p>
-          <div style="margin-top:10px"><span class="status-pill ${statusClass}">${esc(statusText)}</span></div>
-          <div class="settings-grid" style="margin-top:14px">
-            <div class="field">
-              <label for="googleClientId">Client ID</label>
-              <input id="googleClientId" type="text" autocomplete="off" value="${esc(settings.googleClientId || "")}" placeholder="123...apps.googleusercontent.com">
-              <small>${configured && !settings.googleClientId ? "Configured from server environment. Paste here only if you want to override saved settings." : "Must end with .apps.googleusercontent.com."}</small>
-            </div>
-            <div class="field">
-              <label for="googleClientSecret">Client Secret</label>
-              <input id="googleClientSecret" type="password" autocomplete="off" placeholder="Leave blank to keep existing or use PKCE">
-              <small>Optional. If blank, Marcus uses PKCE when the OAuth client allows it.</small>
-            </div>
-            <div class="field">
-              <label for="googleReadCalendarId">Read calendar</label>
-              <input id="googleReadCalendarId" type="text" autocomplete="off" value="${esc(settings.googleReadCalendarId || google.calendarId || "")}" placeholder="primary">
-              <small>Use primary unless you want Marcus reading a specific calendar ID.</small>
-            </div>
-            <div class="field">
-              <label>Connection state</label>
-              <div class="status-pill ${configured ? "ok" : "warn"}">OAuth client: ${configured ? "configured" : "missing"}</div>
-              <div class="status-pill ${connected ? "ok" : "warn"}">Account token: ${connected ? "connected" : "not connected"}</div>
-            </div>
-          </div>
-          <div class="row-actions" style="justify-content:start;flex-wrap:wrap;margin-top:14px">
-            <button class="btn primary" type="button" data-google-save>Save Google settings</button>
-            <button class="btn" type="button" data-google-connect>${connected ? "Reconnect Google" : "Connect Google"}</button>
-            <button class="btn" type="button" data-google-status>Refresh status</button>
-            <button class="btn" type="button" data-google-upcoming>Show next 7 days</button>
-            <button class="btn" type="button" data-google-sync>Sync projects</button>
-            <button class="btn warn" type="button" data-google-disconnect>Disconnect stale token</button>
-          </div>
-        </section>
-        <section class="mode-panel settings-output" id="settingsOutput" aria-live="polite"></section>
-      `;
-      bindSettingsConsole();
-    }
-
-    function settingsOutput(message, data = null) {
-      const output = document.getElementById("settingsOutput");
-      if (!output) return;
-      output.classList.add("visible");
-      output.textContent = data ? `${message}\n${JSON.stringify(data, null, 2)}` : message;
-    }
-
-    function readGoogleFields() {
-      return {
-        googleClientId: text(document.getElementById("googleClientId")?.value),
-        googleClientSecret: text(document.getElementById("googleClientSecret")?.value),
-        googleReadCalendarId: text(document.getElementById("googleReadCalendarId")?.value),
-      };
-    }
-
-    function bindSettingsConsole() {
-      document.querySelectorAll("[data-google-save]").forEach((button) => button.addEventListener("click", saveGoogleSettings));
-      document.querySelectorAll("[data-google-connect]").forEach((button) => button.addEventListener("click", connectGoogle));
-      document.querySelectorAll("[data-google-status]").forEach((button) => button.addEventListener("click", refreshGoogleStatus));
-      document.querySelectorAll("[data-google-upcoming]").forEach((button) => button.addEventListener("click", showGoogleUpcoming));
-      document.querySelectorAll("[data-google-sync]").forEach((button) => button.addEventListener("click", syncGoogleProjects));
-      document.querySelectorAll("[data-google-disconnect]").forEach((button) => button.addEventListener("click", disconnectGoogle));
-    }
-
-    async function saveGoogleSettings() {
-      const fields = readGoogleFields();
-      const patch = {
-        googleClientId: fields.googleClientId,
-        googleReadCalendarId: fields.googleReadCalendarId,
-      };
-      if (fields.googleClientSecret) patch.googleClientSecret = fields.googleClientSecret;
-      await api("/api/settings", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(patch),
-      });
-      settingsOutput("Saved Google settings. Next step: Connect Google.");
-      await refreshGoogleStatus();
-    }
-
-    async function connectGoogle() {
-      const fields = readGoogleFields();
-      if (fields.googleClientId || fields.googleReadCalendarId || fields.googleClientSecret) await saveGoogleSettings();
-      const data = await api("/api/integrations/google/auth-url");
-      const popup = window.open(data.url, "_blank", "noopener,noreferrer");
-      if (!popup) {
-        window.location.href = data.url;
-        return;
-      }
-      settingsOutput("Google OAuth opened in a new tab. Finish the Google consent flow, return here, then click Refresh status.");
-    }
-
-    async function refreshGoogleStatus() {
-      const [settings, googleStatus] = await Promise.all([
-        api("/api/settings"),
-        api("/api/integrations/google/status"),
-      ]);
-      snapshot.settings = settings;
-      snapshot.googleStatus = googleStatus;
-      renderSettingsConsole();
-      settingsOutput("Google status refreshed.", googleStatus);
-    }
-
-    async function showGoogleUpcoming() {
-      const data = await api("/api/integrations/google/upcoming?days=7&max=20");
-      settingsOutput("Upcoming Google events:", data);
-    }
-
-    async function syncGoogleProjects() {
-      const data = await api("/api/integrations/google/sync", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
-      settingsOutput("Google project sync finished.", data);
-      await load();
-    }
-
-    async function disconnectGoogle() {
-      if (!window.confirm("Disconnect the saved Google account token? OAuth client settings will remain.")) return;
-      await api("/api/settings", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ googleTokens: null, googleCalendarId: "", googleProjectEventIds: {} }),
-      });
-      settingsOutput("Disconnected Google account token. Click Connect Google to create a fresh connection.");
-      await refreshGoogleStatus();
-    }
-
-    function chiefBrief(projects) {
-      if (!projects.length) return "I do not have enough live evidence to name a current project.";
-      const needs = projects.filter((p) => p.state === "needs_mark").slice(0, 2).map((p) => p.name);
-      const liveCodex = projects.filter((p) => p.isLiveCodex).slice(0, 2).map((p) => p.name);
-      const moving = projects.filter((p) => !p.isLiveCodex && ["moving", "verifying"].includes(p.state)).slice(0, 2).map((p) => p.name);
-      const risk = projects.filter((p) => ["blocked", "losing_thread"].includes(p.state)).slice(0, 2).map((p) => p.name);
-      const parts = [];
-      if (liveCodex.length) parts.push(`${liveCodex.join(" and ")} ${liveCodex.length === 1 ? "has" : "have"} live Codex signals`);
-      if (moving.length) parts.push(`${moving.join(" and ")} ${moving.length === 1 ? "is" : "are"} moving`);
-      if (needs.length) parts.push(`${needs.join(" and ")} need Mark`);
-      if (risk.length) parts.push(`${risk.join(" and ")} ${risk.length === 1 ? "is" : "are"} at risk`);
-      return parts.length ? `${parts.join(". ")}.` : "MARCUS is watching registered projects, but no strong movement or blocker is visible.";
-    }
-
-    function sourceNoteHtml() {
-      const workspaces = arr(snapshot.desktop?.codexWorkspaces).length;
-      const codex = snapshot.sourceState?.jobs?.enabled === false ? "Codex job provider reports disabled/empty" : `${snapshot.jobs.length} Codex jobs`;
-      const desktop = snapshot.desktop?.windowTitle ? "desktop focus observed" : "desktop context partial";
-      return `<strong>Auto-refresh:</strong> every ${Math.round(autoRefreshMs / 1000)}s while you are not typing. <strong>Live:</strong> ${snapshot.operations.length} operations, ${codex}, ${workspaces} Codex workspace${workspaces === 1 ? "" : "s"}, ${desktop}. <strong>Fallback:</strong> registry and ActiveBrief inferences are labeled as such.`;
-    }
-
-    function rowHtml(project, archived = false) {
-      const expanded = project.id === expandedId;
-      const stateClass = `state-${project.state}`;
-      const label = displayStateLabel(project);
-      return `<article class="ledger-row" tabindex="0" role="button" aria-expanded="${expanded ? "true" : "false"}" data-project="${esc(project.id)}">
-        <div class="identity">
-          <div class="avatar ${project.state === "needs_mark" || project.state === "verifying" ? "warn" : project.state === "blocked" ? "danger" : ["quiet", "parked"].includes(project.state) ? "quiet" : ""}">${esc(initials(project.name))}</div>
-          <div>
-            <strong>${esc(project.name)}</strong>
-            <span class="state-label ${stateClass}"><span class="state-icon">${esc(stateIcons[project.state] || "?")}</span>${esc(label)}</span>
-          </div>
-        </div>
-        <div class="activity-copy">${esc(project.sentence)}</div>
-        <div class="movement">
-          ${liveSignalHtml(project)}
-        </div>
-        <div class="meta"><strong>${esc(project.last)}</strong><br>${esc(project.lastChange)}</div>
-        <div class="row-actions">
-          ${archived
-            ? `<button class="btn primary" type="button" data-restore="${esc(project.awarenessProjectId)}">Restore</button>`
-            : `<button class="btn subtle" type="button" data-talk="${esc(project.id)}">Talk</button>
-               <button class="btn" type="button" data-open="${esc(project.id)}">Open</button>
-               ${canArchive(project) ? `<button class="btn subtle" type="button" data-archive="${esc(project.awarenessProjectId)}" title="Remove from active attention while preserving memory">Archive</button>` : ""}`}
-        </div>
-        ${expanded ? drawerHtml(project) : ""}
-      </article>`;
-    }
-
-    function movementRail(project) {
-      const active = phaseFor(project);
-      const activeIndex = phases.indexOf(active);
-      return `<div class="rail" aria-label="Movement rail: active phase ${esc(active)}">
-        ${phases.map((phase, index) => {
-          const cls = index < activeIndex ? "done" : phase === active ? `active ${project.state === "blocked" ? "blocked" : project.state === "needs_mark" ? "waiting" : ""}` : "";
-          return `<span class="rail-item ${cls}" title="${esc(phase)}"><span class="rail-dot"></span><span>${esc(phase)}</span></span>`;
-        }).join("")}
-      </div>`;
-    }
-
-    function liveSignalHtml(project) {
-      const signal = project.liveSignal || {
-        facts: [
-          { label: "State", value: project.stateLabel },
-          { label: "Source", value: project.basis },
-          { label: "Signal", value: project.counts || "partial" },
-        ],
-        signal: project.lastChange || project.sentence,
-        stuck: project.state === "blocked" ? "Blocked source is visible; ask Marcus to verify whether this is stale." : "",
-        tone: project.state === "blocked" ? "blocked" : project.state === "needs_mark" ? "warn" : "warn",
-      };
-      return `<div class="live-signal">
-        <div class="live-signal-head"><strong>${esc(signal.signal)}</strong><span class="pulse ${esc(signal.tone || "warn")}" aria-hidden="true"></span></div>
-        ${movementRail(project)}
-        <div class="signal-grid">${arr(signal.facts).slice(0, 3).map((fact) => `<span class="signal-chip"><span>${esc(fact.label)}</span><strong>${esc(fact.value)}</strong></span>`).join("")}</div>
-        <div class="signal-note">${esc(signal.stuck || `${project.counts || "Partial signal"} from ${project.basis}.`)}</div>
-      </div>`;
-    }
-
-    function nextActionText(project) {
-      if (project.decision?.recommendation) return project.decision.recommendation;
-      if (project.state === "complete" || project.workspaceReviewReady) return "Review what changed, verify the result, then close or reroute.";
-      if (project.state === "needs_mark") return "Make the decision above so Marcus can continue.";
-      if (project.state === "blocked") return "Diagnose the blocker below, or ask Marcus to attempt recovery.";
-      return project.next ? `Next step: ${project.next}.` : "Ask Marcus for the next concrete action.";
-    }
-
-    function drawerFactRows(items, projectId, emptyLabel) {
-      return `<ul class="fact-list">${items.map((item) => `
-        <li class="fact-row">
-          <div class="fact-row-body"><span class="fact-label">${esc(item.label)}</span><span class="fact-tag">${esc(item.tag)}</span></div>
-          <button class="fact-ask" type="button" data-project-prompt="${esc(projectId)}" data-prompt="${esc(item.prompt)}" title="Ask Marcus about this">Ask</button>
-        </li>`).join("") || `<li class="fact-row"><div class="fact-row-body"><span class="fact-label">${esc(emptyLabel)}</span></div></li>`}</ul>`;
-    }
-
-    function drawerHtml(project) {
-      const promptId = `prompt-${project.id}`;
-      const approvable = project.decision?.operationId && project.decision?.approvalId;
-      return `<section class="drawer">
-        <div class="drawer-card full">
-          <h3>What to do now</h3>
-          <p>${esc(nextActionText(project))}</p>
-          <ul class="insight-list">${projectInsights(project).map((item) => `<li><strong>${esc(item.label)}</strong><span>${esc(item.value)}</span></li>`).join("")}</ul>
-          <div class="row-actions" style="justify-content:start;flex-wrap:wrap">
-            ${approvable ? `
-              <button class="btn primary" type="button" data-approve="${esc(project.decision.operationId)}" data-approval="${esc(project.decision.approvalId)}">Approve</button>
-              <button class="btn warn" type="button" data-reject="${esc(project.decision.operationId)}" data-approval="${esc(project.decision.approvalId)}">Reject</button>
-            ` : ""}
-            <button class="btn primary" type="button" data-open="${esc(project.id)}">Open project</button>
-            <button class="btn" type="button" data-project-plan="${esc(project.id)}">Plan next moves</button>
-            <button class="btn" type="button" data-project-reroute="${esc(project.id)}">Check direction</button>
-            ${canArchive(project) ? `<button class="btn subtle" type="button" data-archive="${esc(project.awarenessProjectId)}" title="Remove from active attention while preserving memory">Archive this project</button>` : ""}
-          </div>
-        </div>
-        <div class="drawer-card full">
-          <h3>Evidence</h3>
-          ${drawerFactRows(liveEvidenceItems(project), project.id, "No useful evidence came through.")}
-        </div>
-        <div class="drawer-card full">
-          <h3>What changed</h3>
-          <p>${esc(changeNarrative(project))}</p>
-          ${drawerFactRows(changeItems(project), project.id, "No useful change summary is attached.")}
-        </div>
-        <div class="drawer-card full">
-          <h3>Work in flight</h3>
-          <ul class="task-list">${arr(project.tasks).map((task) => `<li><button type="button" data-task="${esc(task.id)}" data-task-project="${esc(project.id)}"><span>${esc(task.title)}</span><span>${esc(task.status)} - ${esc(task.worker)}</span></button></li>`).join("") || `<li><button type="button" disabled><span>No task breakdown is attached.</span><span>missing</span></button></li>`}</ul>
-        </div>
-        <div class="drawer-card full">
-          <h3>Ask Marcus something specific</h3>
-          <p class="action-note">These start a conversation, they do not change anything by themselves.</p>
-          <ul class="task-list">${nextMoveButtons(project).map((item) => `<li><button type="button" data-project-prompt="${esc(project.id)}" data-prompt="${esc(item.prompt)}"><span>${esc(item.label)}</span><span>${esc(item.tag)}</span></button></li>`).join("")}</ul>
-        </div>
-        <div class="drawer-card full">
-          <h3>Steer work</h3>
-          <textarea id="${esc(promptId)}" data-codex-input="${esc(project.id)}" placeholder="Tell Codex or Marcus what to change, investigate, verify, or avoid."></textarea>
-          <div class="row-actions" style="justify-content:start;flex-wrap:wrap">
-            <button class="btn primary" type="button" data-codex-send="${esc(project.id)}" data-mode="steer">Steer Codex</button>
-            <button class="btn" type="button" data-codex-send="${esc(project.id)}" data-mode="append">Append context</button>
-            <button class="btn" type="button" data-marcus-project="${esc(project.id)}">Ask Marcus</button>
-          </div>
-          <div class="action-note">${project.codexJobId ? "Direct Codex job follow-up is available for this project." : "No direct Codex job id is attached; Marcus will route this with project context."}</div>
-        </div>
-      </section>`;
-    }
-
-    function projectRead(project) {
-      if (project.liveSignal?.handoff) {
-        return `${project.liveSignal.handoff.title}. ${project.liveSignal.handoff.summary} ${project.liveSignal.stuck || ""}`.trim();
-      }
-      if (project.isLiveCodex) {
-        if (project.liveSignal?.topic?.kind === "hub") {
-          return `${project.liveSignal.topic.title} is the current visible work. ${project.liveSignal.signal} ${project.liveSignal.topic.pressure} Marcus should explain what is failing in the hub connection, what changed in the admin surface, and what you can approve, test, or redirect next.`;
-        }
-        const signal = project.liveSignal?.signal || project.lastChange || "Live Codex workspace is visible.";
-        const stuck = project.liveSignal?.stuck ? ` Watch point: ${project.liveSignal.stuck}` : "";
-        return `${project.currentStep || "Codex work"} is the current visible Codex focus. ${signal}.${stuck} Marcus should compare this to the whole project outcome before steering.`;
-      }
-      if (project.state === "needs_mark") return `Marcus needs a decision from Mark before the next step can move. The decision cards above should state the exact ask.`;
-      if (project.state === "complete") return `Codex has stopped claiming motion and handed back a result. Marcus is putting it in front of you for review before anyone pretends "done" means "good."`;
-      if (project.state === "blocked") return `Marcus has an operation record marked blocked. This may be stale if a newer Codex workspace appears for the same project.`;
-      return project.objective || project.sentence;
-    }
-
-    function projectInsights(project) {
-      const source = project.isLiveCodex ? (project.codexJobId ? "Tracked Codex job" : "Desktop workspace signal") : project.basis;
-      return [
-        { label: "Project outcome", value: project.objective || project.currentStep || "No outcome text returned yet." },
-        { label: "Current pressure", value: project.liveSignal?.stuck || (project.state === "blocked" ? "Blocked or stale; needs recovery." : project.state === "needs_mark" ? "Waiting on your decision." : project.isLiveCodex ? "Implementation is moving; verification is the next risk." : project.stateLabel) },
-        { label: "Source quality", value: `${source}. ${project.counts || "No count returned"}.` },
-      ];
-    }
-
-    function changeNarrative(project) {
-      if (project.liveSignal?.handoff?.status === "ready_for_mark") {
-        return `Codex handed back a concrete result. The important change is no longer "66 files moved"; it is: ${project.liveSignal.handoff.summary}`;
-      }
-      if (project.liveSignal?.handoff?.status === "blocked") {
-        return `Codex left a blocker handoff. Marcus should show the exact failure from the handoff before any generic activity summary.`;
-      }
-      if (project.state === "complete") {
-        const changedFiles = arr(project.changed).filter((item) => /changed file|^[MADRCU?!]{1,2}\s/i.test(item)).length;
-        const signal = project.liveSignal?.signal || project.lastChange || "Codex reported completion without a useful summary, because of course it did.";
-        return `${signal} ${changedFiles ? `${changedFiles} file-level signal${changedFiles === 1 ? "" : "s"} came back with it.` : "No file list came back, so Marcus is treating the summary as the main receipt."}`;
-      }
-      if (project.liveSignal?.topic?.kind === "hub") {
-        return `This looks like active Poopsites hub connection/workbench work, not the old "admin intake tab" cleanup label. Marcus is seeing broad hub/admin movement and should turn that into a blocker, verification path, or direct Reggie prompt instead of pretending one file name explains the project.`;
-      }
-      if (project.isLiveCodex) return `Codex is still visible in the workspace. This is live evidence, not a completion receipt yet. Useful, but not champagne-worthy.`;
-      if (project.state === "needs_mark") return "This is waiting on a decision. The important change is that Marcus cannot safely continue until you choose a path.";
-      return project.liveSignal?.signal || project.lastChange || project.sentence || "No useful change summary is attached yet.";
-    }
-
-    function changeItems(project) {
-      const basePrompt = project.liveSignal?.topic?.kind === "hub"
-        ? `Summarize the Poopsites hub connection/workbench work in plain English. Include what changed in the hub/admin surface, what appears broken or unfinished, whether Reggie can receive site-specific prompts yet, and what Mark should inspect first.`
-        : `Summarize what changed for ${project.name} in plain English. Include what was updated, where it likely landed, what still needs review, and what I should inspect first.`;
-      const items = [
-        {
-          label: project.state === "complete" ? "Give me the review briefing" : "Summarize the update",
-          tag: project.state === "complete" ? "ready" : "summary",
-          prompt: `${basePrompt} Keep it friendly, concise, and a little dry. No fake confidence.`,
-        },
-        {
-          label: "Tell me what to check first",
-          tag: "eyes",
-          prompt: `For ${project.name}, tell me exactly what I should inspect first and why. Use the current evidence only.`,
-        },
-      ];
-      if (project.codexJobId) {
-        items.push({
-          label: "Ask Codex for a cleaner handoff",
-          tag: "Codex",
-          prompt: "Write a clean completion handoff: files changed, behavior changed, tests run, deploy/preview URL if any, known risks, and next human review step.",
-        });
-      }
-      return items;
-    }
-
-    function liveEvidenceItems(project) {
-      const items = [];
-      if (project.liveSignal?.signal) {
-        items.push({
-          label: project.liveSignal.signal,
-          tag: project.liveSignal.tone === "live" ? "live" : "check",
-          prompt: `Explain this live signal for ${project.name}: ${project.liveSignal.signal}. Tell me what it means and whether it is enough evidence to keep moving.`,
-        });
-      }
-      for (const item of arr(project.changed).slice(0, 6)) {
-        items.push({
-          label: item,
-          tag: /branch|file|commit|changed|event|status/i.test(item) ? "evidence" : "read",
-          prompt: `Use this evidence for ${project.name}: ${item}. Explain what it implies, whether it is stale, and what action I should take.`,
-        });
-      }
-      if (project.liveSignal?.stuck) {
-        items.unshift({
-          label: project.liveSignal.stuck,
-          tag: "watch point",
-          prompt: `This looks like a possible struggle point for ${project.name}: ${project.liveSignal.stuck}. Diagnose whether Codex is stuck, waiting, or just not relaying enough detail.`,
-        });
-      }
-      return items.slice(0, 7);
-    }
-
-    function nextMoveButtons(project) {
-      if (project.liveSignal?.handoff?.status === "ready_for_mark") return [
-        { label: "Tell me exactly what to verify", tag: "Eyes", prompt: "Turn the Codex handoff into a precise verification checklist. Include the URL to refresh, expected result, and what would still be broken." },
-        { label: "Open the live check plan", tag: "Verify", prompt: "Use the Codex handoff to explain how I confirm this is fixed without rereading the whole session." },
-        { label: "Capture as resolved if it passes", tag: "Close", prompt: "If the live refresh passes, tell me what status this project should move to and what evidence Marcus should keep." },
-      ];
-      if (project.liveSignal?.handoff?.status === "blocked") return [
-        { label: "Explain the exact blocker", tag: "Blocker", prompt: "Explain the Codex blocker handoff in plain English. Tell me what broke, why, and the smallest next step." },
-        { label: "Find what Mark can do", tag: "Action", prompt: "From the blocker handoff, tell me whether Mark needs to approve, provide a token, refresh, or reroute." },
-        { label: "Prepare recovery prompt", tag: "Codex", prompt: "Draft a follow-up prompt for Codex that includes the blocker, evidence, and required next verification." },
-      ];
-      if (project.state === "needs_mark") return [
-        { label: "Explain the decision", tag: "Marcus", prompt: "Explain the exact decision I need to make, the options, risks, and what happens if I wait." },
-        { label: "Show evidence", tag: "Review", prompt: "Show the evidence behind this decision and identify what is missing or stale." },
-        { label: "Recommend one path", tag: "Decide", prompt: "Recommend one path and tell me why it is the best move for the whole project." },
-      ];
-      if (project.liveSignal?.topic?.kind === "hub") return [
-        { label: "Explain hub connection issue", tag: "Blocker", prompt: "Explain exactly what is failing or unfinished in the Poopsites/Reggie hub connection. Separate UI polish, auth/token issues, missing backend endpoints, and real user-facing blockers." },
-        { label: "Map the VA workflow", tag: "Plan", prompt: "Map the intended VA/user workflow through the Poopsites hub. Show what actions should be possible from the page and which are currently wired, copied, mocked, or missing." },
-        { label: "Verify Reggie prompt path", tag: "Verify", prompt: "Build a verification checklist for sending a site-specific prompt into Reggie from the hub. Include current evidence, required API endpoint, token requirements, and pass/fail checks." },
-      ];
-      if (project.isLiveCodex) return [
-        { label: "Summarize current Codex progress", tag: "Marcus", prompt: "Summarize what Codex appears to be doing, what changed, and what evidence supports that." },
-        { label: "Check against project goal", tag: "Direction", prompt: "Compare this Codex work against the whole project goal. Tell me if it is on track or drifting." },
-        { label: "Prepare verification plan", tag: "Verify", prompt: "Prepare a verification plan for this project and identify the acceptance evidence Marcus should require." },
-      ];
-      if (project.state === "complete") return [
-        { label: "Review what changed", tag: "Eyes", prompt: "Give me the completion briefing: what changed, where it changed, what was verified, what was not verified, and what I should inspect first." },
-        { label: "Find deployment or preview", tag: "Deploy", prompt: "Find the deployment, preview URL, commit, or branch tied to this completed work. If none is visible, say exactly what source is missing." },
-        { label: "Decide ship / revise / park", tag: "Decision", prompt: "Based on current evidence, recommend whether I should ship, ask for revisions, or park this. Be direct and cite the evidence." },
-      ];
-      if (project.state === "blocked") return [
-        { label: "Diagnose blocker", tag: "Recovery", prompt: "Diagnose the blocker and propose the smallest recovery step." },
-        { label: "Find newer live evidence", tag: "Audit", prompt: "Check whether this blocker is stale compared with newer Codex, desktop, or operation evidence." },
-        { label: "Reroute work", tag: "Plan", prompt: "Suggest how to reroute this work if the current path is wrong." },
-      ];
-      return [
-        { label: "Build next plan", tag: "Plan", prompt: "Build the next actionable plan for this project based on current evidence." },
-        { label: "Identify missing context", tag: "Context", prompt: "Identify what context Marcus still needs to manage this project better." },
-        { label: "Set watch criteria", tag: "Watch", prompt: "Set the criteria Marcus should watch for before interrupting me again." },
-      ];
-    }
-
-    function bindTracker() {
-      document.querySelectorAll(".ledger-row").forEach((row) => {
-        row.addEventListener("click", (event) => {
-          const open = event.target.closest("[data-open]");
-          const talk = event.target.closest("[data-talk]");
-          const task = event.target.closest("[data-task]");
-          const prompt = event.target.closest("[data-project-prompt]");
-          const codexSend = event.target.closest("[data-codex-send]");
-          const marcusProject = event.target.closest("[data-marcus-project]");
-          const plan = event.target.closest("[data-project-plan]");
-          const reroute = event.target.closest("[data-project-reroute]");
-          const archive = event.target.closest("[data-archive]");
-          const restore = event.target.closest("[data-restore]");
-          if (open) return openProject(open.dataset.open);
-          if (talk) return talkToProject(talk.dataset.talk);
-          if (task) return openTask(task.dataset.taskProject, task.dataset.task);
-          if (prompt) return fillProjectPrompt(prompt.dataset.projectPrompt, prompt.dataset.prompt);
-          if (codexSend) return sendProjectPrompt(codexSend.dataset.codexSend, codexSend.dataset.mode);
-          if (marcusProject) return askMarcusAboutProject(marcusProject.dataset.marcusProject);
-          if (plan) return fillProjectPrompt(plan.dataset.projectPlan, "Build a deeper project plan from the current evidence. Include goal, current work, risks, verification, and next actions.");
-          if (reroute) return fillProjectPrompt(reroute.dataset.projectReroute, "Check whether this project is drifting. Tell me what is off, what evidence says so, and how to reroute.");
-          if (archive) return dismissProject(archive.dataset.archive);
-          if (restore) return restoreProject(restore.dataset.restore);
-          expandedId = row.dataset.project === expandedId ? "" : row.dataset.project;
-          renderTracker();
-          row.focus();
-        });
-        row.addEventListener("keydown", (event) => {
-          if (event.key !== "Enter" && event.key !== " ") return;
-          event.preventDefault();
-          row.click();
-        });
-      });
-      document.querySelectorAll("[data-discuss]").forEach((button) => {
-        button.addEventListener("click", () => {
-          const decision = snapshot.decisions.find((item) => item.id === button.dataset.discuss);
-          if (!decision) return;
-          const project = snapshot.projects.find((item) => item.id === decision.projectId || item.name === decision.project) || snapshot.projects[0];
-          if (project) {
-            expandedId = project.id;
-            renderTracker();
-            talkToProject(project.id, `Explain the decision: ${decision.title}. Tell me scope, risk, rollback, verification, and what happens if I wait.`);
-          }
-        });
-      });
-      document.querySelectorAll("[data-approve]").forEach((button) => {
-        button.addEventListener("click", () => decideApproval(button.dataset.approve, button.dataset.approval, "approve"));
-      });
-      document.querySelectorAll("[data-reject]").forEach((button) => {
-        button.addEventListener("click", () => decideApproval(button.dataset.reject, button.dataset.approval, "reject"));
-      });
-    }
-
-    async function decideApproval(operationId, approvalId, decision) {
-      if (!operationId || !approvalId) return;
-      try {
-        await api(`/api/operations/${encodeURIComponent(operationId)}/approvals/${encodeURIComponent(approvalId)}/${decision}`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({}),
-        });
-        appendChatMessage("assistant", `${decision === "approve" ? "Approved" : "Rejected"} the pending operation step.`);
-        load();
-      } catch (error) {
-        appendChatMessage("assistant error", `Could not ${decision} that operation step: ${error.message}`);
-      }
-    }
-
-    function projectById(id) {
-      return snapshot.projects.find((project) => project.id === id) || null;
-    }
-
-    function promptInputForProject(id) {
-      return Array.from(document.querySelectorAll("[data-codex-input]")).find((node) => node.dataset.codexInput === id) || null;
-    }
-
-    function fillProjectPrompt(id, prompt) {
-      const input = promptInputForProject(id);
-      if (input) {
-        input.value = prompt || "";
-        input.focus();
-        return;
-      }
-      const project = projectById(id);
-      if (project) talkToProject(project.id, prompt);
-    }
-
-    async function sendProjectPrompt(id, mode = "steer") {
-      const project = projectById(id);
-      if (!project) return;
-      const input = promptInputForProject(id);
-      const message = text(input?.value);
-      if (!message) {
-        if (input) input.focus();
-        return;
-      }
-      const intent = mode === "append" ? "Append this context to the active work" : "Steer the active work";
-      if (project.codexJobId) {
-        const result = await api(`/api/codex/jobs/${encodeURIComponent(project.codexJobId)}/followup`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message: `${intent} for ${project.name}: ${message}` }),
-        });
-        if (input) input.value = "";
-        appendChatMessage("assistant", `Sent to Codex: ${text(result?.job?.status || "follow-up accepted")}.`);
-        return;
-      }
-      await sendToMarcus(`${intent} for ${project.name}. Current project state: ${project.stateLabel}. Current work: ${project.currentStep}. Evidence: ${arr(project.evidence).join("; ")}. Instruction: ${message}`);
-      if (input) input.value = "";
-    }
-
-    function askMarcusAboutProject(id) {
-      const project = projectById(id);
-      if (!project) return;
-      const input = promptInputForProject(id);
-      const message = text(input?.value) || "Explain what is happening, what matters, and what I should do next.";
-      talkToProject(project.id, `${message} Consider the whole project, not just the current task.`);
-    }
-
-    function openProject(id) {
-      activeProjectId = id;
-      activeTaskId = "";
-      activeProjectSection = "overview";
-      document.body.dataset.mode = "project";
-      history.pushState({}, "", `?project=${encodeURIComponent(id)}`);
-      render();
-    }
-
-    function openTask(projectId, taskId) {
-      activeProjectId = projectId;
-      activeTaskId = taskId;
-      document.body.dataset.mode = "task";
-      history.pushState({}, "", `?project=${encodeURIComponent(projectId)}&task=${encodeURIComponent(taskId)}`);
-      render();
-    }
-
-    function backToTracker() {
-      document.body.dataset.mode = "tracker";
-      activeProjectId = "";
-      activeTaskId = "";
-      activeProjectSection = "overview";
-      history.pushState({}, "", location.pathname);
-      render();
-    }
-
-    function projectSectionHtml(project, section) {
-      const actions = nextMoveButtons(project);
-      const changes = changeItems(project);
-      const evidence = liveEvidenceItems(project);
-      const factRows = (items, emptyLabel) => `<ul class="fact-list">${items.map((item) => `
-        <li class="fact-row">
-          <div class="fact-row-body"><span class="fact-label">${esc(item.label)}</span><span class="fact-tag">${esc(item.tag)}</span></div>
-          <button class="fact-ask" type="button" data-project-prompt="${esc(project.id)}" data-prompt="${esc(item.prompt)}" title="Ask Marcus about this">Ask</button>
-        </li>`).join("") || `<li class="fact-row"><div class="fact-row-body"><span class="fact-label">${esc(emptyLabel)}</span></div></li>`}</ul>`;
-      const command = `<section class="mode-panel"><h2>Ask or steer</h2><p>Use this when the current read is wrong, incomplete, or needs a direct next instruction.</p><textarea data-codex-input="${esc(project.id)}" placeholder="Tell Marcus what is wrong, what to verify, or what Codex should do next."></textarea><div class="row-actions" style="justify-content:start;flex-wrap:wrap;margin-top:10px"><button class="btn primary" type="button" data-codex-send="${esc(project.id)}" data-mode="steer">Steer Codex</button><button class="btn" type="button" data-codex-send="${esc(project.id)}" data-mode="append">Append context</button><button class="btn" type="button" data-project-plan="${esc(project.id)}">Plan next</button><button class="btn" type="button" data-project-reroute="${esc(project.id)}">Check direction</button></div></section>`;
-      if (section === "work") return `
-        <section class="mode-panel"><h2>Work in flight</h2><p>${esc(projectRead(project))}</p><ul class="task-list" style="margin-top:12px">${arr(project.tasks).map((task) => `<li><button type="button" data-task="${esc(task.id)}" data-task-project="${esc(project.id)}"><span>${esc(task.title)}</span><span>${esc(task.status)} - ${esc(task.worker)}</span></button></li>`).join("") || `<li><button type="button" disabled><span>No task breakdown is attached.</span><span>missing</span></button></li>`}</ul></section>
-        ${command}`;
-      if (section === "codex") return `
-        <section class="mode-panel"><h2>Codex read</h2><p>${esc(project.liveSignal?.handoff?.summary || project.liveSignal?.signal || project.sentence || "No Codex handoff is attached yet.")}</p></section>
-        <section class="mode-panel"><h2>What this means</h2><p>${esc(project.liveSignal?.stuck || changeNarrative(project))}</p></section>
-        ${command}`;
-      if (section === "decisions") return `
-        <section class="mode-panel"><h2>Decision or review</h2><p>${esc(project.state === "complete" || project.workspaceReviewReady ? "This is ready for your eyes. Marcus should tell you exactly what changed and what to verify before closing it." : projectRead(project))}</p><p class="action-note">These start a conversation with Marcus, they do not change anything by themselves.</p><ul class="task-list" style="margin-top:12px">${actions.map((item) => `<li><button type="button" data-project-prompt="${esc(project.id)}" data-prompt="${esc(item.prompt)}"><span>${esc(item.label)}</span><span>${esc(item.tag)}</span></button></li>`).join("")}</ul></section>
-        ${command}`;
-      if (section === "evidence") return `
-        <section class="mode-panel"><h2>Evidence</h2>${factRows(evidence, "No useful evidence came through.")}</section>`;
-      if (section === "timeline") return `
-        <section class="mode-panel"><h2>What changed</h2><p>${esc(changeNarrative(project))}</p>${factRows(changes, "No useful change summary is attached.")}</section>`;
-      if (section === "memory") return `
-        <section class="mode-panel"><h2>Project memory</h2><p>${esc(project.objective || "No durable project outcome is attached to this snapshot.")}</p></section>
-        <section class="mode-panel"><h2>Source quality</h2><p>${esc(`${project.basis}. ${project.counts || "No count returned"}.`)}</p></section>`;
-      return `
-        <section class="mode-panel"><h2>What happened</h2><p>${esc(changeNarrative(project))}</p></section>
-        <section class="mode-panel"><h2>What you need to check</h2><p class="action-note">These start a conversation with Marcus, they do not change anything by themselves.</p><ul class="task-list">${actions.map((item) => `<li><button type="button" data-project-prompt="${esc(project.id)}" data-prompt="${esc(item.prompt)}"><span>${esc(item.label)}</span><span>${esc(item.tag)}</span></button></li>`).join("")}</ul></section>
-        <section class="mode-panel"><h2>Plain-English read</h2><p>${esc(projectRead(project))}</p></section>
-        ${command}`;
-    }
-
-    function renderProjectMode() {
-      const project = snapshot.projects.find((item) => item.id === activeProjectId) || snapshot.projects[0];
-      if (!project) {
-        els.projectMode.innerHTML = `<div class="empty">Project link could not be resolved from the current live snapshot.</div>`;
-        return;
-      }
-      const sections = [
-        ["overview", "Overview"],
-        ["work", "Work / Tasks"],
-        ["codex", "Codex"],
-        ["decisions", "Decisions"],
-        ["evidence", "Evidence"],
-        ["timeline", "Timeline"],
-        ["memory", "Memory"],
-      ];
-      if (!sections.some(([key]) => key === activeProjectSection)) activeProjectSection = "overview";
-      els.projectMode.innerHTML = `<header class="mode-head">
-        <div><div class="mode-kicker"><span>Project control</span></div><h1>${esc(project.name)}</h1><p>${esc(project.sentence)}</p></div>
-        <div class="row-actions"><button class="btn close-mode" type="button" data-back aria-label="Close project control">x</button><button class="btn" type="button" data-back>Global tracker</button><button class="btn primary" type="button" data-project-talk>Talk to MARCUS</button></div>
-      </header>
-      <section class="mode-body">
-        <nav class="mode-nav" aria-label="Project sections">
-          ${sections.map(([key, label], index) => `<button class="nav-link ${key === activeProjectSection ? "active" : ""}" type="button" data-project-section="${esc(key)}"><span class="nav-icon">${String(index + 1).padStart(2, "0")}</span><span>${esc(label)}</span></button>`).join("")}
+        <nav class="flex-1 w-full flex flex-col gap-2 px-2" id="primary-nav">
+            <!-- Injected Icons -->
         </nav>
-        <section class="mode-stage">
-          ${projectSectionHtml(project, activeProjectSection)}
-        </section>
-        <aside class="mode-aside">
-          <section class="mode-panel"><h2>Next action</h2><p>${esc(project.state === "complete" || project.workspaceReviewReady ? "Review what changed, verify the result, then close or reroute." : project.decision?.recommendation || project.next || "Ask Marcus for the next concrete action.")}</p></section>
-          <section class="mode-panel"><h2>Live evidence</h2><ul class="insight-list">${liveEvidenceItems(project).slice(0, 5).map((item) => `<li><strong>${esc(item.tag)}</strong><span>${esc(item.label)}</span></li>`).join("") || `<li><strong>none</strong><span>No evidence references returned.</span></li>`}</ul></section>
-        </aside>
-      </section>`;
-      bindModeButtons();
-    }
 
-    function renderTaskMode() {
-      const project = snapshot.projects.find((item) => item.id === activeProjectId) || snapshot.projects[0];
-      const task = arr(project?.tasks).find((item) => item.id === activeTaskId) || arr(project?.tasks)[0];
-      if (!project || !task) {
-        els.taskMode.innerHTML = `<div class="empty">Task link could not be resolved from the current live snapshot.</div>`;
-        return;
-      }
-      const settingsTask = isSettingsTask(project, task);
-      els.taskMode.innerHTML = `<header class="mode-head">
-        <div><div class="mode-kicker"><span>Task detail</span><span>${settingsTask ? "Settings signal" : esc(project.basis)}</span></div><h1>${esc(task.title)}</h1><p>${esc(project.name)} - ${esc(task.status)} - ${esc(task.worker)}</p></div>
-        <div class="row-actions"><button class="btn close-mode" type="button" data-back aria-label="Close task detail">x</button><button class="btn" type="button" data-back-project="${esc(project.id)}">Project</button><button class="btn" type="button" data-back>Global tracker</button></div>
-      </header>
-      <section class="mode-body">
-        <nav class="mode-nav">${["Summary", "Activity", "Evidence", "Controls"].map((label, index) => `<button class="nav-link ${index === 0 ? "active" : ""}" type="button"><span class="nav-icon">${index + 1}</span><span>${esc(label)}</span></button>`).join("")}</nav>
-        <section class="mode-stage">
-          <section class="mode-panel"><h2>Status narrative</h2><p>${esc(taskNarrative(project, task))}</p></section>
-          <section class="mode-panel"><h2>Readable progression</h2><ol>${taskProgression(project, task).map((item) => `<li>${esc(item)}</li>`).join("")}</ol></section>
-        </section>
-        <aside class="mode-aside">
-          <section class="mode-panel"><h2>Task controls</h2><div class="row-actions" style="justify-content:start;flex-wrap:wrap">${taskControlButtons(settingsTask)}</div></section>
-          <section class="mode-panel"><h2>Evidence</h2><p>${esc(arr(project.evidence).join("; ") || "No task-specific evidence returned.")}</p></section>
-        </aside>
-      </section>`;
-      bindModeButtons();
-    }
+        <div class="mt-auto flex flex-col gap-4">
+             <button id="server-status" class="w-2 h-2 rounded-full bg-red-500 mx-auto" title="Offline"></button>
+        </div>
+    </aside>
 
-    function isSettingsTask(project, task) {
-      return /settings|credential|oauth|integration|routing|provider/i.test(`${project?.name} ${project?.basis} ${project?.sentence} ${task?.title} ${task?.status} ${arr(project?.evidence).join(" ")}`);
-    }
+    <!-- CONTENT (Center) -->
+    <main id="workspace-main" class="flex-1 flex flex-col min-w-0 bg-ops-bg/30 backdrop-blur-md relative z-10">
+        <!-- Header -->
+        <header class="h-12 border-b border-ops-border flex items-center justify-between px-6 bg-ops-bg/40 backdrop-blur-xl z-20">
+            <div class="flex items-center gap-3">
+                <h1 id="page-title" class="font-semibold text-white tracking-tight">Command</h1>
+                <span id="page-meta" class="text-xs text-ops-light px-2 py-0.5 rounded bg-ops-surface border border-ops-border hidden"></span>
+            </div>
+            <div class="flex items-center gap-3">
+                <button id="send-summary-btn" class="hidden px-3 py-1 bg-ops-surface border border-ops-border text-ops-light text-xs font-semibold rounded hover:text-white transition items-center gap-2" title="Legacy Slack task delegation summary">
+                    <i class="fa-solid fa-paper-plane"></i>
+                    <span>Legacy Summary</span>
+                </button>
+                <button id="sync-btn" class="text-ops-light hover:text-white transition-colors" title="Sync Data">
+                    <i class="fa-solid fa-rotate"></i>
+                </button>
+                <button id="toggle-layout" class="text-ops-light hover:text-white transition-colors" title="Toggle Layout (Auto/Standard/Landscape)">
+                    <i class="fa-solid fa-table-columns"></i>
+                </button>
+                <button id="toggle-theme" class="text-ops-light hover:text-white transition-colors" title="Toggle light/dark">
+                    <i class="fa-solid fa-moon"></i>
+                </button>
+                <div class="h-4 w-px bg-ops-border"></div>
+                <button id="toggle-chat" class="text-ops-accent hover:text-blue-400 transition-colors text-xs font-medium flex items-center gap-2">
+                    <i class="fa-solid fa-bolt"></i><span data-marcus-presence-label>Command</span>
+                </button>
+                <span id="marcus-detached-indicator" class="hidden px-2 py-0.5 rounded border border-blue-600/40 bg-blue-600/10 text-blue-300 text-[10px] font-mono uppercase tracking-wider">Pop-out active</span>
+            </div>
+        </header>
 
-    function taskNarrative(project, task) {
-      if (isSettingsTask(project, task)) {
-        return `${task.title} is a configuration signal, not normal project work. Marcus should either open the relevant settings path, explain exactly what credential or account connection is missing, or let you dismiss it if the live source is stale.`;
-      }
-      return `${task.title} is ${task.status}. Marcus does not treat this as complete unless evidence, verification, and Mark acceptance support that conclusion.`;
-    }
+        <!-- Viewport -->
+        <div id="main-port" class="flex-1 overflow-y-auto p-0 scroll-smooth">
+             <!-- Dynamic Content -->
+        </div>
+    </main>
 
-    function taskProgression(project, task) {
-      if (isSettingsTask(project, task)) {
-        return [
-          "Marcus detected the configuration signal from ActiveBrief or system health.",
-          "The exact source is listed under Evidence.",
-          "Open settings view to inspect related source-backed signals.",
-          "Ask Marcus to explain the missing credential, reconnect path, or why this signal is stale.",
-        ];
-      }
-      return ["Marcus prepared context", `${task.worker} owns current step`, "Verification remains distinct from completion", "Mark can redirect or ask for review"];
-    }
+    <!-- M.A.R.C.U.S. FLOATING PANEL -->
+    <aside id="neural-drawer" class="fixed right-6 bottom-6 w-[22rem] h-[32rem] border border-white/10 rounded-2xl bg-ops-surface/50 backdrop-blur-2xl hidden flex-col z-40 shadow-[0_8px_32px_rgba(0,0,0,0.5)] overflow-hidden transition-all duration-300">
+        <div id="marcus-drag-handle" class="p-2.5 border-b border-white/5 flex justify-between items-center bg-white/5 cursor-move select-none">
+            <div class="flex items-center gap-2 min-w-0">
+                <div id="marcus-orb" class="marcus-orb idle"></div>
+                <span class="text-[11px] font-mono font-bold text-ops-light tracking-widest uppercase truncate">
+                    <i class="fa-solid fa-microchip mr-1.5 text-ops-accent"></i>M.A.R.C.U.S.
+                </span>
+            </div>
+            <div class="flex items-center gap-2">
+                <button id="marcus-popout-toggle" class="text-ops-light hover:text-white transition-colors text-[11px]" title="Detach M.A.R.C.U.S.">
+                    <i class="fa-solid fa-up-right-from-square"></i>
+                </button>
+                <select id="marcus-thread-select" class="bg-ops-bg border border-ops-border rounded px-2 py-1 text-[10px] text-white font-mono focus:outline-none focus:ring-1 focus:ring-ops-accent" title="M.A.R.C.U.S. thread">
+                    <option value="default">Direct</option>
+                    <option value="operator_bio">Bio</option>
+                </select>
+                <select id="marcus-model-select" class="bg-ops-bg border border-ops-border rounded px-2 py-1 text-[10px] text-white font-mono focus:outline-none focus:ring-1 focus:ring-ops-accent">
+                    <option value="gpt-5">GPT-5</option>
+                    <option value="gpt-5-mini">GPT-5 Mini</option>
+                    <option value="gpt-4.1">GPT-4.1</option>
+                    <option value="gpt-4o">GPT-4o</option>
+                    <option value="gpt-4o-mini">GPT-4o Mini</option>
+                </select>
+                <span id="ai-model-badge" class="px-1.5 py-0.5 rounded text-[10px] bg-blue-500/10 text-blue-400 border border-blue-500/20 font-mono">GPT-4o-Mini</span>
+            </div>
+        </div>
 
-    function taskControlButtons(settingsTask) {
-      const settingsButton = settingsTask ? `<button class="btn primary" type="button" data-task-settings>Open settings view</button>` : "";
-      return `${settingsButton}<button class="btn" type="button" data-task-talk>Talk</button><button class="btn" type="button" data-task-explain>Explain exact ask</button><button class="btn" type="button" data-task-review>Request review</button><button class="btn warn" type="button" data-back>Close</button>`;
-    }
+        <div id="chat-stream" class="flex-1 overflow-y-auto p-3 space-y-3 font-mono text-xs">
+            <div class="text-center mt-10 opacity-30">
+                <i class="fa-solid fa-terminal text-2xl mb-2"></i>
+                <p>M.A.R.C.U.S. ready for directives.</p>
+            </div>
+        </div>
 
-    function bindModeButtons() {
-      document.querySelectorAll("[data-back]").forEach((button) => button.addEventListener("click", backToTracker));
-      document.querySelectorAll("[data-back-project]").forEach((button) => button.addEventListener("click", () => openProject(button.dataset.backProject)));
-      document.querySelectorAll("[data-project-talk]").forEach((button) => button.addEventListener("click", () => talkToProject(activeProjectId)));
-      document.querySelectorAll("[data-project-section]").forEach((button) => button.addEventListener("click", () => {
-        activeProjectSection = button.dataset.projectSection || "overview";
-        renderProjectMode();
-      }));
-      document.querySelectorAll("[data-project-prompt]").forEach((button) => button.addEventListener("click", () => fillProjectPrompt(button.dataset.projectPrompt, button.dataset.prompt)));
-      document.querySelectorAll("[data-task]").forEach((button) => button.addEventListener("click", () => openTask(button.dataset.taskProject, button.dataset.task)));
-      document.querySelectorAll("[data-task-settings]").forEach((button) => button.addEventListener("click", openSettingsView));
-      document.querySelectorAll("[data-task-talk]").forEach((button) => button.addEventListener("click", () => talkToActiveTask("What is happening here, and what can I do next?")));
-      document.querySelectorAll("[data-task-explain]").forEach((button) => button.addEventListener("click", () => talkToActiveTask("Explain the exact ask. Tell me what is missing, where to fix it, and how Marcus will know it is resolved.")));
-      document.querySelectorAll("[data-task-review]").forEach((button) => button.addEventListener("click", () => talkToActiveTask("Review this signal against live evidence. If it is stale, tell me why and what should be dismissed or refreshed.")));
-      document.querySelectorAll("[data-codex-send]").forEach((button) => button.addEventListener("click", () => sendProjectPrompt(button.dataset.codexSend, button.dataset.mode)));
-      document.querySelectorAll("[data-project-plan]").forEach((button) => button.addEventListener("click", () => fillProjectPrompt(button.dataset.projectPlan, "Build a deeper project plan from the current evidence. Include goal, current work, risks, verification, and next actions.")));
-      document.querySelectorAll("[data-project-reroute]").forEach((button) => button.addEventListener("click", () => fillProjectPrompt(button.dataset.projectReroute, "Check whether this project is drifting. Tell me what is off, what evidence says so, and how to reroute.")));
-    }
+        <div class="p-2.5 border-t border-ops-border bg-zinc-900">
+            <div class="relative">
+                <textarea id="cmd-input" rows="1"
+                    class="w-full bg-black/20 border border-white/10 rounded-xl p-3 pr-10 text-white text-xs font-mono focus:border-ops-accent focus:outline-none focus:ring-1 focus:ring-ops-accent transition-all resize-none shadow-inner"
+                    placeholder="Execute directive..."></textarea>
+                <div class="absolute right-2 bottom-2 flex items-center gap-1">
+                    <button id="cmd-mic" class="text-ops-light hover:text-white transition-colors p-1" title="Voice input">
+                        <i class="fa-solid fa-microphone"></i>
+                    </button>
+                    <button id="cmd-speak" class="text-ops-light hover:text-white transition-colors p-1" title="Voice output">
+                        <i class="fa-solid fa-volume-high"></i>
+                    </button>
+                    <button id="cmd-send" class="text-ops-light hover:text-white transition-colors p-1" title="Send">
+                        <i class="fa-solid fa-arrow-turn-up"></i>
+                    </button>
+                </div>
+            </div>
+            <div id="ai-status" class="flex justify-between mt-2 text-[10px] text-ops-light font-mono opacity-0 transition-opacity">
+                <span id="marcus-state">M.A.R.C.U.S. IDLE</span>
+                <span class="animate-pulse">///</span>
+            </div>
+        </div>
+        <div id="marcus-resize-handle" aria-hidden="true"></div>
+    </aside>
 
-    function openSettingsView() {
-      viewMode = "settings";
-      backToTracker();
-    }
-
-    function talkToActiveTask(prompt) {
-      const project = snapshot.projects.find((item) => item.id === activeProjectId) || snapshot.projects[0];
-      const task = arr(project?.tasks).find((item) => item.id === activeTaskId) || arr(project?.tasks)[0];
-      if (!project || !task) return;
-      talkToProject(project.id, `${prompt} Task: ${task.title}. Status: ${task.status}. Evidence: ${arr(project.evidence).join("; ") || "none"}.`);
-    }
-
-    function autoGrowComposer() {
-      els.composerInput.style.height = "auto";
-      els.composerInput.style.height = `${Math.min(els.composerInput.scrollHeight, 160)}px`;
-    }
-
-    function appendChatMessage(role, content, { pending = false } = {}) {
-      if (els.chatEmpty) els.chatEmpty.remove();
-      const node = document.createElement("div");
-      node.className = `chat-msg ${role}`;
-      if (pending) node.dataset.pending = "true";
-      node.innerHTML = `<span class="chat-meta">${role === "user" ? "You" : "MARCUS"} - ${esc(nowLabel())}</span><span>${esc(content)}</span>`;
-      els.chatThread.appendChild(node);
-      els.chatThread.scrollTop = els.chatThread.scrollHeight;
-      return node;
-    }
-
-    function talkToProject(id, prompt = "") {
-      const project = snapshot.projects.find((item) => item.id === id) || snapshot.projects[0];
-      if (!project) return;
-      els.composerInput.value = prompt || `Talk to me about ${project.name}. What is happening, what changed, what is blocked, and what should happen next?`;
-      autoGrowComposer();
-      els.composerInput.focus();
-    }
-
-    async function sendToMarcus(message) {
-      const context = activeProjectId ? snapshot.projects.find((project) => project.id === activeProjectId) : expandedId ? snapshot.projects.find((project) => project.id === expandedId) : null;
-      const scoped = context ? `[Project context: ${context.name}; state: ${context.stateLabel}; evidence basis: ${context.basis}] ${message}` : message;
-      const pendingNode = appendChatMessage("assistant", "MARCUS is thinking...", { pending: true });
-      try {
-        const data = await api("/api/marcus/live/chat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message: scoped, awarenessProjectId: context?.awarenessProjectId || "" }),
-        });
-        pendingNode.remove();
-        appendChatMessage("assistant", text(data.reply || data.message || "Marcus responded without text."));
-      } catch (error) {
-        pendingNode.remove();
-        appendChatMessage("assistant error", `Marcus chat failed: ${error.message}`);
-      }
-    }
-
-    function applyRoute() {
-      const params = new URLSearchParams(location.search);
-      const project = params.get("project");
-      const task = params.get("task");
-      const matchedProject = project
-        ? snapshot.projects.find((item) => item.id === project || idFrom(item.name) === project)
-        : null;
-      if (matchedProject) {
-        activeProjectId = matchedProject.id;
-        activeTaskId = task || "";
-        document.body.dataset.mode = task ? "task" : "project";
-      } else {
-        document.body.dataset.mode = "tracker";
-      }
-    }
-
-    els.refreshButton.addEventListener("click", load);
-    els.searchInput.addEventListener("input", () => { query = els.searchInput.value; renderTracker(); });
-    els.askMarcusTop.addEventListener("click", () => { els.composerInput.focus(); });
-    els.archiveToggle.addEventListener("click", () => {
-      showArchived = !showArchived;
-      expandedId = "";
-      renderTracker();
-    });
-    els.reviewPrimary.addEventListener("click", () => {
-      const decision = snapshot.decisions[0];
-      if (decision) talkToProject(decision.projectId, `Review this decision with me: ${decision.title}.`);
-      else els.composerInput.focus();
-    });
-    els.captureButton.addEventListener("click", () => {
-      const note = text(els.composerInput.value);
-      if (!note) { els.composerInput.focus(); return; }
-      appendChatMessage("user", `Capture this thought: ${note}`);
-      els.composerInput.value = "";
-      autoGrowComposer();
-      sendToMarcus(`Capture this thought for later, do not act on it yet: ${note}`);
-    });
-    els.composer.addEventListener("submit", (event) => {
-      event.preventDefault();
-      const message = text(els.composerInput.value);
-      if (!message) return;
-      appendChatMessage("user", message);
-      els.composerInput.value = "";
-      autoGrowComposer();
-      sendToMarcus(message);
-    });
-    els.composerInput.addEventListener("input", autoGrowComposer);
-    els.composerInput.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" && !event.shiftKey) {
-        event.preventDefault();
-        els.composer.requestSubmit();
-      }
-    });
-    els.voiceButton.addEventListener("mousedown", () => {
-      voiceHeld = true;
-      els.voiceButton.setAttribute("aria-pressed", "true");
-      els.voiceButton.textContent = "Listening";
-    });
-    window.addEventListener("mouseup", () => {
-      if (!voiceHeld) return;
-      voiceHeld = false;
-      els.voiceButton.setAttribute("aria-pressed", "false");
-      els.voiceButton.textContent = "Hold Space";
-    });
-    window.addEventListener("keydown", (event) => {
-      if (event.key === "Escape" && document.body.dataset.mode !== "tracker") {
-        event.preventDefault();
-        backToTracker();
-        return;
-      }
-      if (event.code === "Space" && event.target === document.body && !voiceHeld) {
-        event.preventDefault();
-        els.voiceButton.dispatchEvent(new MouseEvent("mousedown"));
-      }
-    });
-    window.addEventListener("keyup", (event) => {
-      if (event.code === "Space") window.dispatchEvent(new MouseEvent("mouseup"));
-    });
-    window.addEventListener("popstate", () => { applyRoute(); render(); });
-    window.setInterval(() => {
-      if (document.visibilityState !== "visible" || activeTextInput() || voiceHeld) return;
-      load();
-    }, autoRefreshMs);
-    document.querySelectorAll("[data-nav]").forEach((button) => {
-      button.addEventListener("click", () => {
-        const nextMode = button.dataset.nav === "tracker" ? "projects" : button.dataset.nav;
-        viewMode = nextMode;
-        if (document.body.dataset.mode !== "tracker") backToTracker();
-        else render();
-      });
-    });
-
-    load();
-  })();
-  </script>
+    <script>
+        window.MARCUS_VISUALIZER_AWARENESS = {
+            endpoint: '/api/marcus/awareness?includeArchived=true',
+            projectIdField: 'awarenessProjectId',
+        };
+    </script>
+    <script src="/marcus-realtime-client.js?v=1"></script>
+    <script src="/marcus-overview.js?v=1"></script>
+    <script src="app.js?v=ops3.22"></script>
 </body>
 </html>
+
