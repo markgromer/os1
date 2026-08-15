@@ -128,6 +128,12 @@ Every initial connection, reconnect, foreground resume, and scheduled session re
 
 Memory input is bounded and redacted. Content that matches credential, token, password, private-key, or API-key assignment patterns is rejected rather than stored in redacted but misleading form. Memory is isolated by business key and never broadens project, provider, deployment, communication, or approval authority.
 
+## Project Awareness And Local Indexing
+
+Awareness lifecycle and memory APIs require the existing authenticated Marcus API context. Archive, restore, and memory refresh do not grant provider, deployment, messaging, publishing, merge, or arbitrary filesystem authority.
+
+The server indexer reads or creates `marcus.txt` only when the workspace is the current server workspace or the project registry marks the path approved. Repository inventory does not follow symlinks and excludes `.git`, dependencies, generated output, environment files, private keys, credential files, and other secret-like paths. A desktop-discovered Codex workspace is registered with pending trust; discovery alone does not authorize server filesystem access.
+
 Live-session tokens are process-bound. If a Render restart invalidates one while the installed mobile client still has its valid HttpOnly pairing cookie, authentication falls back to that cookie in the same request and the client obtains a fresh Live token on reconnect. An invalid stale bearer header does not mask a valid pairing cookie.
 
 Voice acceptance telemetry uses the same admin-cookie or short-lived Live-session authentication. `POST /api/marcus/realtime/telemetry` drops every field outside its strict allowlist before persistence. User and assistant transcripts are represented only by bounded character counts. The server stores no request text, reply text, credential, IP address, or raw user agent, and retains at most 1,000 events per business. `GET /api/marcus/realtime/acceptance` exposes only derived gates and coarse client context. `GET /api/marcus/acceptance` combines those gates with non-secret provider and operator readiness; it returns message action IDs/timestamps but no message bodies or credentials.

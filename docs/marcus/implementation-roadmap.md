@@ -1,5 +1,20 @@
 # Implementation Roadmap
 
+## 2026-08-15: Canonical Project Awareness And Memory Index
+
+Status: implemented locally and covered by focused tests. Production deployment was authorized on 2026-08-15 and requires exact live verification after the GitHub push.
+
+- Added durable `marcus-awareness.json` storage with stable registry binding, lifecycle history, atomic writes, backup recovery, and archived retrieval.
+- Added root `marcus.txt` creation for desktop-created projects and trusted local refreshes.
+- Added idempotent root-note append and awareness work history for terminal durable-operation outcomes.
+- Added bounded project-note, README/package, and repository-manifest indexing with secret-path exclusions.
+- Added awareness feed, search, detail, lifecycle, refresh, and context APIs.
+- Scoped Visualizer conversation to stable awareness ids and replaced browser-local archive state with authenticated server lifecycle writes.
+- Normalized `Done`, `Complete`, `Completed`, `Archive`, and `Archived` as historical for active evidence collection.
+- Added focused tests for persistence, indexing, secret exclusion, lifecycle visibility, historical search, and Visualizer wiring.
+
+Remaining: automatic append for meaningful work that never creates a durable operation, richer cross-vault link/tag retrieval, desktop-relay content indexing for trusted workspaces not mounted on the server, explicit correction/conflict records, and first-class Codex dispatch packets.
+
 ## Phase 1: Project Operator Service
 
 Create a dedicated `ProjectOperatorService`.
@@ -67,18 +82,24 @@ Acceptance:
 
 ## Phase 1C: Visualizer Operational Awareness
 
-Status: architecture documented; fixture-only prototype exists at `public/visualizer.html`. See [[visualizer-operational-awareness]].
+Status: initial live implementation completed on 2026-08-15. `public/visualizer.html` consumes canonical awareness and persists lifecycle changes through authenticated APIs. See [[visualizer-operational-awareness]].
 
 Goal: Marcus should maintain a compact desktop view of his own operational awareness: what he believes is active, what Codex is doing, what changed, what needs Mark, what is blocked or external, what has gone quiet, and what he recommends recovering next. Mark should steer this conversationally through project-scoped `Talk to MARCUS` interactions, not by administering tracker fields.
 
-Planned implementation:
+Implemented foundation:
 
 - Durable awareness project store separate from the project registry.
-- Evidence-to-project reconciliation that can merge overlapping signals and split multiple initiatives inside one repository.
-- Confidence, uncertainty, conflict, lifecycle, and decay-recovery models.
-- Project-scoped conversation classification and correction handling.
-- Scoped Codex work packet preparation with existing approval boundaries preserved.
-- Incremental live adapters starting from existing operation, evidence, project-activity, registry, and Codex-job routes.
+- Incremental reconciliation across operations, evidence, project activity, registry, Codex jobs, and bounded local repository memory.
+- Confidence, uncertainty, lifecycle, attention-state, archive, and recent-completion handling.
+- Stable project-scoped MARCUS conversation context and server-authoritative archive/restore.
+- Default dashboard suppression for archived, dormant, and older completed work without deleting searchable history.
+
+Remaining expansion:
+
+- Split and reconcile multiple initiatives that intentionally share one repository.
+- Add explicit conflict correction and richer decay-recovery models.
+- Extend automatic note writing beyond terminal operation outcomes into broader verified session summaries.
+- Expand vault-wide semantic retrieval while preserving bounded reads, provenance, and secret exclusions.
 
 Acceptance:
 

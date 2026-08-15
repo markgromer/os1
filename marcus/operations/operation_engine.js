@@ -509,7 +509,8 @@ export function createOperationsEngine({
         const required = operation.verification.filter((item) => item.required !== false);
         const passed = required.filter((item) => item.status === 'passed' || (item.waived === true && item.waiverApprovalId)).length;
         return {
-          id: operation.id, title: operation.title, projectName: operation.projectName, status: operation.status,
+          id: operation.id, title: operation.title, projectName: operation.projectName,
+          projectId: operation.projectId, projectRegistryId: operation.projectRegistryId, status: operation.status,
           riskLevel: operation.riskLevel, updatedAt: operation.updatedAt, progress: summarizeOperationProgress(operation),
           needsApproval: operation.approvals.some((approval) => approval.status === 'pending'),
           pendingApproval: pendingApproval ? {

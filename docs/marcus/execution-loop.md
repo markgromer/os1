@@ -87,6 +87,13 @@ The active project and recent requirements remain server-side during transport r
 
 Project continuity follows:
 
+1. Synchronize registry records into the business-scoped awareness store.
+2. Discover exact recent Codex workspaces additively without approving their local paths.
+3. Resolve active projects normally and explicitly named archived/completed projects historically.
+4. Load indexed `marcus.txt`, matching project-note, README/package, and repository-manifest context when a stable awareness id is supplied.
+5. Keep archived, dormant, completed, and active-attention lifecycle separate from whether project knowledge remains indexed.
+6. Send execution requests through the existing project operator and durable operation engine; awareness never grants execution authority.
+
 `explicit project in current turn -> resolve target -> merge durable project memory and matching operation evidence -> select only target-project requirements -> audit/plan/execute against that target`
 
 The current explicit project wins over an older active project. Context-only requests return a bounded requirement summary; they do not echo unrelated conversation history or imply that an audit or Codex session ran. Requirement memory is bounded and survives rolling chat eviction. Matching durable operations provide a migration/recovery source when older conversations predate project memory.

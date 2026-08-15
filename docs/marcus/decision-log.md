@@ -2,6 +2,14 @@
 
 Status: active
 
+## 2026-08-15: Archive Removes Attention, Not Knowledge
+
+Context: Mark needs a compact Visualizer that excludes inactive work while Marcus retains immediate access to every known project, including archived history.
+
+Decision: Store canonical project lifecycle and indexed-memory metadata in a separate business-scoped awareness file. Treat archived, dormant, completed, and active attention as lifecycle concerns independent from memory retention. Replace browser-local Visualizer dismissal with authenticated server lifecycle updates. Keep historical records searchable and allow an explicitly named archived/completed project to resolve without reactivating it.
+
+Consequence: The default dashboard can stay focused while `marcus.txt`, project notes, repository manifests, registry identity, operations, and evidence remain recoverable. Awareness and indexing do not add provider or filesystem authority; normal project trust, durable operations, approvals, and verification still apply.
+
 ## 2026-08-13: Marcus Voice Must Not Sound Like Generic ChatGPT
 
 Context: Mark tested the Android Realtime voice using `gpt-realtime-2.1` and `cedar` and found the conversation style unacceptable: too much like a ChatGPT shell, too many polite assistant tails, too much recap of Mark's own request, and too much conversational padding. The problem is not only the acoustic voice; it is the spoken interaction contract.
@@ -320,7 +328,7 @@ Consequence: Codex polling and verification no longer depend on the phone remain
 
 Context: A Live relay sentence containing `workflow/operation` was interpreted as a raw GitHub `owner/repository` declaration. Marcus registered a false project, selected it as active conversation context, and prepared approval-gated work against it.
 
-Decision: Auto-register only GitHub URLs, `.git` targets, whole-message `owner/repository` values, or slash targets adjacent to an explicit GitHub/repository label. Exclude archived registry records from resolution, provider evidence refresh, activity snapshots, focus, and bottlenecks while retaining historical lookup.
+Decision: Auto-register only GitHub URLs, `.git` targets, whole-message `owner/repository` values, or slash targets adjacent to an explicit GitHub/repository label. Exclude archived registry records from ordinary resolution, provider evidence refresh, activity snapshots, focus, and bottlenecks while retaining exact-name historical lookup.
 
 Consequence: Conversational slash phrases cannot silently become projects. The false operation was cancelled without provider execution, the record was archived, and production read-back retained the real Reggie context and the two legitimate demo approvals.
 

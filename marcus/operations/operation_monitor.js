@@ -5,7 +5,7 @@ const MONITORED_OPERATION_STATUSES = Object.freeze([
   'verifying',
 ]);
 
-export async function runOperationMonitorPass({ engine, businessKeys = [], maxOperationsPerBusiness = 20, onError = () => {} } = {}) {
+export async function runOperationMonitorPass({ engine, businessKeys = [], maxOperationsPerBusiness = 20, onError = () => {}, onOperationSettled = async () => {} } = {}) {
   if (!engine || typeof engine.listOperations !== 'function' || typeof engine.tick !== 'function') {
     throw new Error('Operation monitor requires an operations engine.');
   }
@@ -31,13 +31,17 @@ export async function runOperationMonitorPass({ engine, businessKeys = [], maxOp
       .slice(0, Math.max(1, Number(maxOperationsPerBusiness) || 20));
     result.inspected += monitored.length;
     const settled = await Promise.allSettled(monitored.map((operation) => engine.tick(businessKey, operation.id)));
-    settled.forEach((entry, index) => {
-      if (entry.status === 'fulfilled') result.ticked += 1;
-      else {
+    for (let index = 0; index < settled.length; index += 1) {
+      const entry = settled[index];
+      if (entry.status === 'fulfilled') {
+        result.ticked += 1;
+        try { await onOperationSettled(entry.value, { businessKey, previous: monitored[index] }); }
+        catch (error) { onError(error, { businessKey, operationId: monitored[index]?.id || '', phase: 'settled_callback' }); }
+      } else {
         result.failed += 1;
         onError(entry.reason, { businessKey, operationId: monitored[index]?.id || '', phase: 'tick' });
       }
-    });
+    }
   }
   return result;
 }
@@ -49,6 +53,7 @@ export function startOperationMonitor({
   intervalMs = 15_000,
   maxOperationsPerBusiness = 20,
   onError = () => {},
+  onOperationSettled = async () => {},
   timers = globalThis,
 } = {}) {
   if (typeof listBusinessKeys !== 'function') throw new Error('Operation monitor requires listBusinessKeys.');
@@ -63,6 +68,7 @@ export function startOperationMonitor({
         businessKeys: await listBusinessKeys(),
         maxOperationsPerBusiness,
         onError,
+        onOperationSettled,
       });
     } catch (error) {
       onError(error, { phase: 'pass' });

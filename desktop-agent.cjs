@@ -940,6 +940,32 @@ async function createProjectWorkspace(payload) {
   if (!fs.existsSync(path.join(destination, '.git'))) {
     return { ok: false, error: 'The project workspace is not a Git repository' };
   }
+  const marcusNotePath = path.join(destination, 'marcus.txt');
+  if (!fs.existsSync(marcusNotePath)) {
+    const projectName = String(payload?.projectName || path.basename(destination)).trim().slice(0, 300);
+    const date = new Date().toISOString().slice(0, 10);
+    const note = [
+      'MARCUS PROJECT NOTE',
+      '',
+      `Project: ${projectName}`,
+      `Workspace: ${destination}`,
+      'Status: active',
+      `Last reviewed: ${date}`,
+      '',
+      'Purpose:',
+      'MARCUS created this workspace for a new project. Replace this sentence with the durable project objective as the implementation becomes clear.',
+      '',
+      'Standing instruction:',
+      'Read this repository and this note before reporting. Append concise dated context after meaningful work. Keep credentials and raw secrets out.',
+      '',
+      'Append Log:',
+      '',
+      date,
+      '- MARCUS created the project workspace, initialized project memory, and bound it to the durable project operation.',
+      '',
+    ].join('\n');
+    fs.writeFileSync(marcusNotePath, note, { encoding: 'utf8', flag: 'wx' });
+  }
   fs.writeFileSync(markerPath, `${JSON.stringify({ ...binding, createdAt: new Date().toISOString() }, null, 2)}\n`, 'utf8');
   const openResult = payload?.openInVsCode === false ? { ok: true, skipped: true } : await openVsCode(destination);
   let canonicalPath = destination;
@@ -952,6 +978,7 @@ async function createProjectWorkspace(payload) {
       registeredPath: String(payload?.path || destination),
       canonicalPath,
       destination,
+      marcusNotePath,
       gitResult,
       openResult,
     },

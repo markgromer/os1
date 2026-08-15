@@ -1,6 +1,6 @@
 # Context Memory
 
-Status: doctrine and manual note structure. Marcus currently has durable mission memory, project-scoped conversation requirements, active brief intelligence, relationship signals, and this Obsidian-compatible vault. The vault now has manual indexes and templates for daily, project, person, client, money, decision, workflow, inbox, schedule, conversation, workload, status, and source notes. A full automatic Obsidian write/index loop remains planned work unless a note is manually maintained here.
+Status: active doctrine with initial automatic project indexing. Marcus has durable mission memory, project-scoped conversation requirements, ActiveBrief intelligence, a canonical awareness store, root `marcus.txt` indexing, bounded repository manifests, and this Obsidian-compatible vault. Automatic creation of root `marcus.txt` is implemented for new desktop-created projects and trusted local memory refreshes. Automatic writing of the broader typed Obsidian notes remains planned work.
 
 ## Objective
 
@@ -89,6 +89,7 @@ Use lowercase hyphen-case filenames. Link across notes with wiki links. Start ne
 
 To answer "show me everything we have done on this project", Marcus should gather:
 
+- the root-level `marcus.txt` file when a project has one
 - the project note in `projects/`
 - all notes linking to that project note
 - all notes carrying the stable project tag
@@ -96,7 +97,7 @@ To answer "show me everything we have done on this project", Marcus should gathe
 - decisions, workflows, money notes, client notes, people notes, inbox captures, and system docs connected by wiki links
 - known repo, domain, provider, client, and alias references listed in the project note
 
-The project note is the hub. Daily notes are the timeline. Other typed notes are the durable context around people, clients, money, decisions, and workflows.
+The root `marcus.txt` is the repo-entry anchor. The project note is the vault hub. Daily notes are the timeline. Other typed notes are the durable context around people, clients, money, decisions, and workflows.
 
 ## Whole-Life Operating Retrieval
 
@@ -115,8 +116,9 @@ Marcus should separate current state from historical evidence. Old notes are use
 
 ## Open Implementation Work
 
+- Extend automatic root-note append beyond terminal durable operations to meaningful work that never creates an operation. Terminal operation completion, failure, cancellation, blocking, and recovery-required transitions are appended idempotently when the trusted local workspace is readable.
 - Add an automatic Obsidian writer for daily/project/person/client/money/decision/workflow/schedule/conversation/workload/status notes using the existing templates.
-- Add a retrieval index that can search this vault by folders, tags, links, aliases, dates, entity names, source systems, freshness, and status.
+- Expand the project-memory index beyond root notes, matching project notes, README/package metadata, and repository manifests into full vault link/tag/date/source search.
 - Connect money and invoice context from Airtable/client records into dedicated notes without exposing credentials.
 - Connect schedule/calendar, approved communication summaries, workload/task records, local workspace activity, GitHub, and operations into the context graph.
 - Promote useful inbound Quo SMS webhook items into conversation summaries, project communications, daily notes, and linked project/person/client/money/schedule notes without storing raw thread dumps.

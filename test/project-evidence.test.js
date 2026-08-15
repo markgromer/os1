@@ -300,14 +300,15 @@ test('Codex lifecycle is reconstructed without counting a handoff as implementat
   }
 });
 
-test('archived projects remain queryable but are excluded from activity and collection', async () => {
+test('archived and completed projects remain queryable but are excluded from activity and collection', async () => {
   const root = await temporaryDataDir();
   try {
     const active = project('active', 'Active Project');
     const archived = project('archived', 'Archived Project', { status: 'archived' });
+    const completed = project('completed', 'Completed Project', { status: 'Done' });
     const service = new ProjectEvidenceService({
       dataDir: root,
-      listProjects: async () => [active, archived],
+      listProjects: async () => [active, archived, completed],
       listOperations: async () => [{
         id: 'op-archived', projectRegistryId: archived.id, projectId: archived.projectId,
         title: 'Historical operation', status: 'completed', updatedAt: '2026-08-05T19:30:00Z',
@@ -316,6 +317,7 @@ test('archived projects remain queryable but are excluded from activity and coll
     });
 
     assert.equal((await service.assertProject('personal', archived.id)).id, archived.id);
+    assert.equal((await service.assertProject('personal', completed.id)).id, completed.id);
     const refreshed = await service.refresh('personal', { sources: ['operations'], nowMs: NOW });
     assert.deepEqual(refreshed.activity.snapshots.map((item) => item.projectRegistryId), [active.id]);
     assert.equal((await service.listEvidence('personal', { projectRegistryId: archived.id })).length, 0);

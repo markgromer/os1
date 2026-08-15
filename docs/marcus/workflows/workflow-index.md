@@ -7,6 +7,7 @@ Workflow notes capture reusable ways Marcus and Mark work: delivery checklists, 
 ## Current Notes
 
 - [[manual-context-capture]]
+- [[repo-root-marcus-note]]
 
 ## Capture Standard
 

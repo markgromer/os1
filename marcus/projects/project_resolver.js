@@ -1,4 +1,5 @@
 import { safeBusinessKey, safeObject, safeString } from '../operations/operation_types.js';
+import { isHistoricalProjectStatus } from './project_lifecycle.js';
 
 export const PROJECT_RESOLUTION_THRESHOLDS = Object.freeze({ high: 75, medium: 45 });
 
@@ -148,8 +149,18 @@ export class ProjectResolver {
 
   async resolve({ businessKey, request, legacyProjects = [], context = {} }) {
     const key = safeBusinessKey(businessKey);
-    const records = (await this.registry.list(key))
-      .filter((record) => safeString(record?.status, 100).toLowerCase() !== 'archived');
+    const allRecords = await this.registry.list(key);
+    const requestText = normalizeText(request);
+    const explicitlyNamedHistorical = allRecords.filter((record) => {
+      if (!isHistoricalProjectStatus(record?.status)) return false;
+      const targets = [record.canonicalName, ...(Array.isArray(record.aliases) ? record.aliases : []), record.repo?.fullName]
+        .map(normalizeText).filter((value) => value.length >= 3);
+      return targets.some((value) => requestText === value || requestText.includes(value));
+    });
+    const records = [
+      ...allRecords.filter((record) => !isHistoricalProjectStatus(record?.status)),
+      ...explicitlyNamedHistorical,
+    ];
     const legacy = Array.isArray(legacyProjects) ? legacyProjects : [];
     const ctx = { ...safeObject(context), activeBusinessKey: key };
     const scored = records.map((record) => {

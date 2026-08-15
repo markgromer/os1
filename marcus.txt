@@ -1,0 +1,58 @@
+MARCUS PROJECT NOTE
+
+Project: Task Tracker / M.A.R.C.U.S.
+Workspace: C:\Users\markg\OneDrive\Documents\Task Tracker
+Status: active
+Last reviewed: 2026-08-15
+
+Purpose:
+This repository is the local and production codebase for M.A.R.C.U.S., Mark's operating partner. It combines task/project tracking, Marcus Mobile, voice, durable operation handling, provider verification, project evidence, desktop-agent control, Codex handoff/execution, and Obsidian-compatible operator memory.
+
+Standing instruction:
+Every project should have a root-level marcus.txt file. Before reporting or acting in a project, Marcus should read the repo, understand the current implementation and docs, then append a concise dated note here whenever meaningful work happens. Marcus should want full project context for anything Mark touches, while keeping secrets out of notes.
+
+Current project map:
+- Main server: server.js
+- Frontend assets: public/
+- Mobile client bundles: client/ and public/mobile.html
+- Marcus runtime modules: marcus/
+- Durable/local data: data/
+- Tests: test/
+- Utility scripts: scripts/
+- Marcus documentation vault: docs/marcus/
+- Existing project note: docs/marcus/projects/marcus.md
+- Current system map: docs/marcus/current-system-map.md
+- Context-memory doctrine: docs/marcus/context-memory.md
+
+Repository facts from this review:
+- package.json defines a Node.js ES module app with Express and node --test.
+- npm run build:mobile bundles the mobile realtime/operation clients.
+- npm test runs the full test suite after the mobile build.
+- npm run lint runs scripts/lint.mjs.
+- npm run lint:obsidian checks wiki links and note hygiene for docs/marcus.
+- docs/marcus already defines manual note structure for daily, project, workflow, status, source, and related context.
+- Approved local projects now have bounded automatic memory indexing, durable awareness records, and idempotent terminal-operation note appends.
+
+Working rule for future sessions:
+1. Read marcus.txt first when entering this repo.
+2. Check git status before editing.
+3. Inspect README.md, package.json, docs/marcus/README.md, docs/marcus/current-system-map.md, and docs/marcus/context-memory.md when project-level context matters.
+4. Prefer existing Marcus modules and docs conventions over new one-off structures.
+5. Append a dated update below after meaningful repo work, including what changed, what was verified, and any unverified assumptions.
+6. Never store credentials, tokens, private keys, or raw secrets here.
+
+Append Log:
+
+2026-08-14
+- Created this root project-memory anchor from a repo review.
+- Added the convention that Marcus should maintain a root marcus.txt in every project and append concise work notes after meaningful sessions.
+- This file is intentionally plain text so it can be read before any project-specific tooling or vault conventions are understood.
+
+2026-08-15
+- Implemented business-scoped durable project awareness with stable registry bindings, lifecycle history, work history, bounded repository manifests, and indexed excerpts from marcus.txt, README, package metadata, and matching Obsidian project notes.
+- Added authenticated awareness feed, search, detail, lifecycle, refresh, and context APIs; MARCUS Live chat now receives canonical project context when a project is selected.
+- Changed archive semantics so archived, completed, and dormant work leaves the default attention dashboard without losing memory or exact historical lookup; archive and restore now persist server-side instead of in browser storage.
+- Added automatic marcus.txt creation for approved/current local workspaces and idempotent terminal-operation append notes with status, verification, and blocker context. Secret-like paths and text remain excluded or redacted.
+- Integrated canonical awareness into the desktop visualizer, corrected active project counts, preserved archived search/restore access, and adjusted the right rail so project context remains visible above chat.
+- Verified with npm test (163/163), npm run lint, Obsidian wiki/note audits, focused awareness tests, and Playwright at 1440x900 and 390x844 with zero browser console errors or warnings.
+- No implementation blocker remains. This work runs locally at http://127.0.0.1:3030; every production push must be verified against the exact Render service and live awareness routes.

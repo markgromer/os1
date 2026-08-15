@@ -1,6 +1,7 @@
 import path from 'node:path';
 
 import { safeBusinessKey, safeHttpUrl, safeIso, safeObject, safeString } from '../operations/operation_types.js';
+import { isHistoricalProjectStatus } from '../projects/project_lifecycle.js';
 import { calculateBusinessActivity, DEFAULT_ACTIVITY_RULES, DEFAULT_SIGNAL_WEIGHTS } from './activity_engine.js';
 import { ProjectEvidenceStore } from './evidence_store.js';
 import { normalizeEvidence, normalizeManualEvidence } from './evidence_types.js';
@@ -14,7 +15,7 @@ const CODEX_LIFECYCLE_EVENTS = new Set([
 ]);
 
 function isArchivedProject(project) {
-  return safeString(project?.status, 100).toLowerCase() === 'archived';
+  return isHistoricalProjectStatus(project?.status);
 }
 
 function projectPathKey(value) {

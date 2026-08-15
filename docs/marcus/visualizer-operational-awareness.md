@@ -1,6 +1,6 @@
 # Visualizer Operational Awareness
 
-Status: prototype direction locked, runtime awareness layer not yet implemented.
+Status: initial live awareness layer implemented locally; deeper reconciliation and correction semantics remain partial.
 
 ## Product Truth
 
@@ -16,7 +16,7 @@ Mark should not add projects, assign status, connect repositories, calculate dec
 
 Current useful pieces:
 
-- `public/visualizer.html` is a static public demo served through Express static hosting. It has no live data connection and must be labeled as demo data.
+- `public/visualizer.html` polls live operations, Codex jobs, desktop context, ActiveBrief, project registry, settings, integrations, and the canonical awareness feed.
 - `marcus/evidence/evidence_types.js` defines normalized project evidence with source, type, timestamp, project registry id, confidence, provenance, repository, branch, commit, PR, deployment, workspace, Codex job, and operation references.
 - `marcus/evidence/project_evidence_service.js` can collect trusted evidence from operations, Codex lifecycle callbacks, GitHub, desktop context/actions, browser verification, Cloudflare/Render-style deployment signals, Airtable-derived legacy state, and authenticated manual ingestion.
 - `marcus/evidence/activity_engine.js` already computes project activity snapshots, current focus, stale projects, bottlenecks, confidence, weighted signals, risks, missing expected signals, and suggested actions.
@@ -27,14 +27,14 @@ Current useful pieces:
 - `marcus/operators/project_operator_service.js` can assemble audited project context and scoped Codex prompts from registry, legacy store, GitHub, desktop, mission memory, and recent conversation context.
 - `public/mobile.html` and `client/mobile-operation-tracker.js` already show the pattern for read-only operation polling plus separate exact approval flows.
 
-Missing capabilities:
+Current gaps and partial capabilities:
 
-- No canonical "Marcus awareness project" model exists above the registry. Today a registry record is often treated as the project boundary.
+- A canonical awareness record now exists above each registry record, with stable identity, lifecycle, memory freshness, and history. Multi-initiative reconciliation beyond one registry binding remains incomplete.
 - No reconciliation service merges duplicate or overlapping signals into one initiative when a repository contains multiple initiatives or one initiative spans multiple systems.
-- No durable per-project interpretation record stores "what I believe", "what changed", "what I am waiting on", explicit Mark corrections, conflicting evidence, uncertainty, or decay rationale.
-- No project-scoped visualizer conversation endpoint exists. Existing Live chat can carry project context, but the UI does not yet send a scoped message with an awareness project id and classification intent.
+- Durable awareness records store objective belief, current activity, likely next step, blocker/dependency, uncertainty notes, confidence, lifecycle history, and memory metadata. Explicit correction and conflicting-evidence workflows remain incomplete.
+- Visualizer conversation now sends `awarenessProjectId` through `POST /api/marcus/live/chat`, which loads canonical project context before normal intent and durable-operation routing.
 - No Codex dispatch packet object exists as a first-class persisted artifact. The project operator builds prompts, but the visualizer needs a visible prepare -> dispatch -> active -> completed -> verified lifecycle.
-- The current visualizer has only fixture state. It must not imply live Marcus awareness until adapters are connected incrementally.
+- The current visualizer uses live state and labels its evidence basis. Some merged operation, Codex, desktop, and ActiveBrief conclusions remain compatibility inferences rather than reconciled awareness evidence.
 
 Data-source map:
 
@@ -57,7 +57,7 @@ Risks and uncertainties:
 
 ### Canonical Awareness Project
 
-Create a durable `MarcusAwarenessProject` layer separate from the registry:
+The durable `MarcusAwarenessProject` layer currently includes:
 
 - `id`: stable awareness id.
 - `canonicalIdentity`: normalized title plus durable aliases and source fingerprints.
@@ -175,19 +175,21 @@ Consequential actions remain gated by the existing approval model.
 
 Planned service modules:
 
-- `marcus/awareness/awareness_store.js`: durable awareness projects, revisions, decisions, corrections, and archived context.
+- `marcus/awareness/awareness_store.js`: durable awareness projects, revisions, lifecycle history, indexed-memory metadata, and archived context.
 - `marcus/awareness/evidence_reconciler.js`: maps normalized evidence to awareness projects.
 - `marcus/awareness/confidence.js`: confidence scoring and basis labels.
 - `marcus/awareness/decay.js`: attention recovery classification and recommendations.
 - `marcus/awareness/conversation.js`: project-scoped message classification and understanding updates.
 - `marcus/awareness/codex_packet.js`: scoped Codex dispatch packet assembly.
-- `marcus/api/awareness_routes.js`: read-only visualizer feed first, conversation and dispatch later.
+- `marcus/awareness/project_memory_index.js`: root-note/project-note indexing and bounded repository manifests.
+- `marcus/awareness/awareness_service.js`: registry/activity/operation reconciliation, lifecycle writes, historical search, and project context.
+- `marcus/api/awareness_routes.js`: feed, search, detail, lifecycle, refresh, and context routes.
 
 Initial API shape:
 
 - `GET /api/marcus/awareness`: compact projects, right-rail sections, system state, and latest events.
 - `GET /api/marcus/awareness/projects/:id`: expanded project detail and evidence refs.
-- `POST /api/marcus/awareness/projects/:id/chat`: scoped conversation with Marcus.
+- `POST /api/marcus/live/chat` with `awarenessProjectId`: scoped conversation through the existing durable operator path.
 - `POST /api/marcus/awareness/projects/:id/codex-packet`: prepare a Codex packet without dispatching consequential work.
 
 ### Persistence Requirements

@@ -105,6 +105,7 @@ async function startMarcus(providerBase, dataDir) {
     env: {
       ...process.env, NODE_ENV: 'test', PORT: String(port), MARCUS_HOST: '127.0.0.1', ADMIN_TOKEN: 'provider-test-admin',
       MARCUS_ALLOW_UNAUTHENTICATED_LOCAL: 'false', TASK_TRACKER_DATA_DIR: dataDir,
+      MARCUS_ALLOWED_WORKSPACE_ROOTS: dataDir,
       TASK_TRACKER_SETTINGS_DIR: path.join(dataDir, 'settings'), TASK_TRACKER_BACKUP_DIR: path.join(dataDir, 'backups'),
       GITHUB_TOKEN: 'github-test-token', GITHUB_OWNER: 'markgromer', CLOUDFLARE_API_TOKEN: 'cloudflare-test-token',
       CLOUDFLARE_ACCOUNT_ID: ACCOUNT, CLOUDFLARE_DEFAULT_ZONE_ID: ZONE,

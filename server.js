@@ -19,6 +19,10 @@ import { mcpCallTool, mcpListTools } from './mcpClient.js';
 import { registerOperationsRoutes } from './marcus/api/operations_routes.js';
 import { registerMissionMemoryRoutes } from './marcus/api/mission_memory_routes.js';
 import { registerProjectEvidenceRoutes } from './marcus/api/project_evidence_routes.js';
+import { registerAwarenessRoutes } from './marcus/api/awareness_routes.js';
+import { AwarenessService } from './marcus/awareness/awareness_service.js';
+import { AwarenessStore } from './marcus/awareness/awareness_store.js';
+import { ProjectMemoryIndexer } from './marcus/awareness/project_memory_index.js';
 import { scopeAuthorizedPublishActions } from './marcus/approvals/publish_safeguard.js';
 import { buildMarcusSystemPrompt } from './marcus/core/build_system_prompt.js';
 import { explicitlyDefersCodexStart, explicitlyDefersProjectAudit, withoutProjectExecutionDeferrals } from './marcus/core/request_intent.js';
@@ -298,6 +302,54 @@ const projectEvidenceService = new ProjectEvidenceService({
   cloudflareApi: (pathPart) => cloudflareApi(pathPart),
 });
 operationsEngine.setCodexLifecycleRecorder((event) => projectEvidenceService.recordCodexLifecycle(event));
+
+async function listAwarenessRegistryProjects(businessKey) {
+  const key = String(businessKey || 'personal').trim() || 'personal';
+  let projects = await operationsEngine.listProjectRegistry(key);
+  const workspaces = Array.isArray(desktopRelayCache?.data?.codexWorkspaces) ? desktopRelayCache.data.codexWorkspaces : [];
+  for (const workspace of workspaces.slice(0, 40)) {
+    const workspacePath = String(workspace?.workspacePath || '').trim();
+    const canonicalName = String(workspace?.projectName || workspace?.folderName || '').trim().slice(0, 300);
+    if (!workspacePath || !canonicalName) continue;
+    const comparablePath = workspacePath.replaceAll('\\', '/').replace(/\/+$/g, '').toLowerCase();
+    const repoFullName = String(workspace?.repoFullName || workspace?.gitRemote || '').trim().replace(/^https?:\/\/github\.com\//i, '').replace(/\.git$/i, '');
+    const exists = projects.some((project) => {
+      const projectPath = String(project?.localWorkspace?.canonicalPath || project?.localWorkspace?.path || '').replaceAll('\\', '/').replace(/\/+$/g, '').toLowerCase();
+      return (projectPath && projectPath === comparablePath)
+        || (repoFullName && String(project?.repo?.fullName || '').toLowerCase() === repoFullName.toLowerCase());
+    });
+    if (exists) continue;
+    try {
+      await operationsEngine.createProjectRegistryRecord(key, {
+        canonicalName,
+        aliases: [String(workspace?.folderName || '').trim()].filter(Boolean),
+        workspacePath,
+        repoUrl: /^[-\w.]+\/[-\w.]+$/.test(repoFullName) ? `https://github.com/${repoFullName}` : '',
+        status: 'Active',
+        description: 'Discovered from an exact recent Codex workspace reported by the MARCUS desktop relay.',
+        metadata: { discoverySource: 'desktop_codex_workspace', discoveredAt: new Date().toISOString() },
+      });
+      projects = await operationsEngine.listProjectRegistry(key);
+    } catch {
+      // Concurrent feed refreshes may discover the same workspace; the next read reconciles it.
+    }
+  }
+  return projects;
+}
+
+const awarenessStore = new AwarenessStore({ dataDir: DATA_DIR });
+const projectMemoryIndexer = new ProjectMemoryIndexer({
+  vaultDir: path.join(process.cwd(), 'docs', 'marcus'),
+  currentWorkspace: process.cwd(),
+});
+const awarenessService = new AwarenessService({
+  store: awarenessStore,
+  listProjects: (businessKey) => listAwarenessRegistryProjects(businessKey),
+  updateProject: (businessKey, id, patch) => operationsEngine.updateProjectRegistryRecord(businessKey, id, patch),
+  listOperations: (businessKey, filters) => operationsEngine.listOperationSummaries(businessKey, filters),
+  evidenceService: projectEvidenceService,
+  memoryIndexer: projectMemoryIndexer,
+});
 
 const projectOperatorService = new ProjectOperatorService({
   operationsEngine,
@@ -956,6 +1008,11 @@ registerMissionMemoryRoutes(app, {
 
 registerProjectEvidenceRoutes(app, {
   service: projectEvidenceService,
+  getBusinessKey: () => getBusinessKeyFromContext(),
+});
+
+registerAwarenessRoutes(app, {
+  service: awarenessService,
   getBusinessKey: () => getBusinessKeyFromContext(),
 });
 
@@ -17530,6 +17587,19 @@ app.post('/api/marcus/live/chat', async (req, res) => {
 
   try {
     const conversation = await readMarcusLiveConversation();
+    const requestedAwarenessProjectId = typeof req.body?.awarenessProjectId === 'string'
+      ? req.body.awarenessProjectId.trim().slice(0, 160)
+      : '';
+    let awarenessContext = null;
+    if (requestedAwarenessProjectId) {
+      awarenessContext = await awarenessService.projectContext(getBusinessKeyFromContext(), requestedAwarenessProjectId);
+      conversation.activeProject = conversationProjectReference({
+        projectRegistryId: awarenessContext.project.projectRegistryId,
+        projectId: awarenessContext.project.projectId,
+        name: awarenessContext.project.canonicalName,
+        repo: awarenessContext.project.repo?.fullName,
+      });
+    }
     const approvalAuthorized = hasDurableAdminAuthentication(req);
 
     const sentExternalAction = await maybeApproveAndSendExternalActionFromMessage(message, { approvalAuthorized });
@@ -17693,6 +17763,7 @@ app.post('/api/marcus/live/chat', async (req, res) => {
     // Build context from current workspace
     const ws = desktopRelayCache?.data?.workspace;
     const contextParts = [];
+    if (awarenessContext?.text) contextParts.push(`CANONICAL PROJECT AWARENESS:\n${awarenessContext.text}`);
     if (conversation.activeProject.name || conversation.activeProject.repo) {
       contextParts.push(`ACTIVE CONVERSATION PROJECT: ${conversation.activeProject.name || 'unnamed'}${conversation.activeProject.repo ? ` (${conversation.activeProject.repo})` : ''}`);
     }
@@ -21170,6 +21241,24 @@ function startMarcusBriefScheduler() {
   setInterval(() => { void tick(); }, 30_000);
 }
 
+async function recordOperationAwarenessNote(businessKey, operation) {
+  if (!operation?.projectRegistryId || !['completed', 'failed', 'cancelled', 'blocked', 'recovery_required'].includes(String(operation.status || ''))) return;
+  const required = Array.isArray(operation.verification) ? operation.verification.filter((item) => item.required !== false) : [];
+  const passed = required.filter((item) => item.status === 'passed' || item.waived === true).length;
+  const blockers = Array.isArray(operation.blockers)
+    ? operation.blockers.filter((item) => item.status === 'active').map((item) => item.message || item.reason || item.type).filter(Boolean).slice(0, 5).join('; ')
+    : '';
+  await awarenessService.recordWorkEvent(businessKey, operation.projectRegistryId, {
+    eventId: `operation:${operation.id}:${operation.status}`,
+    type: 'operation_status',
+    summary: `${operation.title || operation.objective || 'Project operation'} changed to ${String(operation.status).replaceAll('_', ' ')}.`,
+    status: operation.status,
+    verification: required.length ? `${passed}/${required.length} required checks passed.` : 'No required verification checks were recorded.',
+    blockers,
+    recordedAt: operation.updatedAt,
+  });
+}
+
 function startProjectEvidenceScheduler() {
   let running = false;
   const tick = async () => {
@@ -21185,6 +21274,8 @@ function startProjectEvidenceScheduler() {
       for (const business of cfg.businesses || []) {
         const businessKey = normalizeBusinessKey(business?.key || '') || DEFAULT_BUSINESS_KEY;
         await withBusinessKey(businessKey, () => projectEvidenceService.refresh(businessKey, { sources }));
+        const terminalOperations = await operationsEngine.listOperations(businessKey, { limit: 100 });
+        for (const operation of terminalOperations) await recordOperationAwarenessNote(businessKey, operation);
       }
     } catch (error) {
       console.error('Project evidence refresh failed:', error?.message || error);
@@ -21211,6 +21302,10 @@ function startDurableOperationMonitor() {
     maxOperationsPerBusiness: 20,
     onError: (error, context = {}) => {
       console.error(`Durable operation monitor ${context.phase || 'pass'} failed${context.operationId ? ` for ${context.operationId}` : ''}:`, error?.message || error);
+    },
+    onOperationSettled: async (operation, { businessKey, previous } = {}) => {
+      if (!operation?.projectRegistryId || operation.status === previous?.status) return;
+      await recordOperationAwarenessNote(businessKey, operation);
     },
   });
 }
@@ -21268,6 +21363,3 @@ const httpServer = app.listen(PORT, SERVER_HOST, async () => {
   // eslint-disable-next-line no-console
   console.log(`M.A.R.C.U.S. running on http://${SERVER_HOST}:${PORT}`);
 });
-
-
-

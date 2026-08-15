@@ -175,6 +175,18 @@ Cloudflare production access uses a dedicated account token named `Marcus Produc
 
 Provider mutations run through `marcus/providers/github_provider.js`, `marcus/providers/cloudflare_provider.js`, and the durable operation runner. The project registry is the authority boundary. Successful completion requires a trusted `provider_readback` verification result and `provider_mutation_evidence` artifact. If a provider accepts a mutation but Marcus cannot prove final state, the operation enters recovery instead of retrying. The production demo merge and Worker deployment operations are prepared and waiting for explicit approval; no live provider mutation has been executed through these paths yet.
 
+## Project Awareness And Memory Index
+
+`marcus/awareness/awareness_store.js` persists business-scoped awareness projects in `data/businesses/<business>/marcus-awareness.json`. Each record has a stable awareness id, registry binding, lifecycle, objective belief, confidence, lifecycle history, and indexed-memory metadata. Writes are serialized, atomic, backed up, and recover from the last valid sibling backup.
+
+`marcus/awareness/project_memory_index.js` creates a missing root `marcus.txt` only for the current workspace or an approved local workspace. It reads bounded non-secret excerpts from `marcus.txt`, README/package metadata, and a matching `docs/marcus/projects/<project>.md` note. It also builds a bounded repository manifest while excluding dependencies, build output, Git internals, symlinks, environment files, and secret-like files.
+
+The durable operation monitor and periodic evidence pass record terminal operation outcomes into awareness work history. When the bound local workspace is readable, the same idempotent event is appended to `marcus.txt` with status, verification count, and unresolved blockers, then the project memory index is refreshed.
+
+`marcus/awareness/awareness_service.js` reconciles registry identity, lifecycle, project activity, operation summaries, and indexed project memory. Recent exact Codex workspaces reported by the desktop relay are additively registered as pending-trust projects when no path or repository match exists. Archived and completed projects remain searchable, while active evidence collection excludes both statuses.
+
+Authenticated routes in `marcus/api/awareness_routes.js` expose the compact feed, historical search, project detail, lifecycle changes, memory refresh, and bounded project context. `POST /api/marcus/live/chat` accepts an `awarenessProjectId`; when present, the exact awareness context is loaded before normal Marcus intent, operation, and approval routing.
+
 ## Evidence
 
 `marcus/evidence` collects activity signals from:
@@ -187,7 +199,7 @@ Provider mutations run through `marcus/providers/github_provider.js`, `marcus/pr
 - Browser verification.
 - Desktop workspace activity.
 
-Archived project-registry records remain available for historical lookup but are excluded from provider collection, activity snapshots, current-focus selection, and bottleneck scoring. This prevents retired or mistakenly discovered records from remaining operationally active.
+Archived and completed project-registry records remain available for historical lookup but are excluded from provider collection, activity snapshots, current-focus selection, and bottleneck scoring. This prevents retired or finished records from remaining operationally active.
 
 Project activity now exposes an evidence-backed operating layer in addition to the older compatibility `state`:
 
@@ -203,8 +215,8 @@ Capability audit for the Marcus/OS1 operating loop:
 
 - Real: project registry, alias-aware project resolution, operation-backed Codex handoffs/direct adapters, evidence ingestion/deduplication, activity snapshots, deterministic health/decay/momentum, mission memory, approval-gated provider mutation paths, desktop context/action evidence, mobile voice bridge, and operator health reporting.
 - Partial: objective state is canonicalized on project records but only the current objective is modeled; derived project summaries exist but are not yet a full timeline/projection service; brief generation consumes older active-brief signals and project-activity data separately; notifications are consequence-oriented in selected flows but not a complete notification engine.
-- Simulated/development-only: the visualizer page remains fixture-only; browser verification can accept authenticated external/manual results when no direct browser adapter is configured.
-- Unavailable/not complete: automatic specialist-agent creation/evaluation/retirement, full natural-language global command search over every domain, complete offline mobile action reconciliation, autonomous archive/restore workflows, and a complete multi-objective decision execution graph.
+- Simulated/development-only: browser verification can accept authenticated external/manual results when no direct browser adapter is configured.
+- Unavailable/not complete: automatic specialist-agent creation/evaluation/retirement, full natural-language global command search over every domain, complete offline mobile action reconciliation, and a complete multi-objective decision execution graph.
 
 ## Decisions And Authority
 
@@ -243,9 +255,9 @@ The existing Live voice path is a chained fallback: browser or recorded speech i
 
 ## Visualizer UI
 
-`public/visualizer.html` is a fixture-only prototype for the MARCUS Visualizer. It is public at `/visualizer.html`, but it is not yet connected to live Marcus awareness data. The intended product model is documented in [[visualizer-operational-awareness]]: Marcus owns project discovery, reconciliation, lifecycle conclusions, decay recovery, and Codex coordination; Mark steers the system conversationally instead of maintaining tracker fields.
+`public/visualizer.html` is connected to live operations, Codex jobs, desktop context, ActiveBrief, the project registry, and `GET /api/marcus/awareness?includeArchived=true`. Canonical awareness supplies lifecycle, archive state, indexed-memory freshness, and stable project context. Archive and restore use authenticated server lifecycle writes; browser-local dismissal is no longer the project authority.
 
-The prototype should stay labeled as demonstration data until a real awareness service is implemented. Existing live sources that can feed that service incrementally include `GET /api/project-activity`, `GET /api/project-evidence`, `GET /api/operations/summary`, `GET /api/codex/jobs`, `GET /api/project-registry`, and `POST /api/marcus/live/chat`.
+The default ledger suppresses archived projects, intentionally dormant projects, and completed projects older than fourteen days. Search can reveal non-archived historical projects, while the archived view remains separate. Project conversation sends the stable awareness id through the existing Live chat so durable work still follows the normal operation and approval boundaries. The richer evidence reconciliation, explicit correction model, and first-class Codex packet described in [[visualizer-operational-awareness]] remain partial.
 
 ## Mobile UI
 

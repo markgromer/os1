@@ -16,13 +16,13 @@ Marcus is Mark's operating partner: a conversational system that can understand 
 
 ## Current State
 
-The original trusted-operator goal is accepted at 13/13 production gates. Marcus has durable mission memory, deep audits and Codex execution, exact approvals, GitHub and Cloudflare access, verified messaging, bounded full-PC use, a confirmed Android voice workflow, and a private/live from-scratch demo. The root system docs remain in `docs/marcus/`; automatic note writing and vault retrieval remain planned work in [[context-memory]].
+The original trusted-operator goal is accepted at 13/13 production gates. Marcus has durable mission memory, deep audits and Codex execution, exact approvals, GitHub and Cloudflare access, verified messaging, bounded full-PC use, a confirmed Android voice workflow, and a private/live from-scratch demo. The root system docs remain in `docs/marcus/`. Approved local projects now receive bounded repository indexing and terminal-operation root-note appends; broader vault-wide retrieval and non-operation session capture remain planned in [[context-memory]].
 
 ## Latest Update
 
-- Date: 2026-08-13
-- Change: Completed physical Android acceptance, published the Marcus PC Bridge Demo to private GitHub and Cloudflare, independently verified the live URL, preserved PC action evidence, fixed the Windows Cloudflare launcher path, refined voice/personality/context-memory rules, and added manual Obsidian note topology with seed notes.
-- Source: [[2026-08-13]], [[completion-audit]], [[decision-log]], [[context-memory]], [[manual-context-capture]]
+- Date: 2026-08-15
+- Change: Added durable project awareness, bounded repository memory indexing, automatic root `marcus.txt` creation and terminal-operation appends, server-authoritative lifecycle/archive controls, searchable historical context, and canonical awareness in the desktop visualizer and MARCUS Live chat.
+- Source: [[current-system-map]], [[decision-log]], [[context-memory]], [[visualizer-operational-awareness]], [[repo-root-marcus-note]]
 
 ## References
 
@@ -45,15 +45,15 @@ The original trusted-operator goal is accepted at 13/13 production gates. Marcus
 ## Blockers
 
 - No blocker remains for the accepted trusted-operator goal.
-- Automatic Obsidian writing/retrieval and voice note-capture commands are planned enhancements.
+- Broader Obsidian writing/retrieval and voice note-capture commands remain planned enhancements.
 
 ## Links
 
 - Decisions: [[decision-log]], [[decision-index]]
 - Daily: [[2026-08-13]]
-- Workflows: [[manual-context-capture]]
+- Workflows: [[manual-context-capture]], [[repo-root-marcus-note]]
 - Memory doctrine: [[context-memory]]
 
 ## Next Action
 
-- Implement the automatic writer/indexer against the structure defined in [[context-memory]], while continuing ordinary production monitoring of the accepted operator foundation.
+- Extend the verified writer/indexer from terminal operation outcomes into broader session summaries and vault-wide retrieval while continuing ordinary production monitoring.

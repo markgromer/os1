@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#070a10">
   <title>MARCUS Desktop Workspace</title>
+  <link rel="icon" href="/icons/marcus.svg" type="image/svg+xml">
   <style>
     :root {
       color-scheme: dark;
@@ -52,11 +53,10 @@
       height: 100vh;
       display: grid;
       grid-template-columns: 184px minmax(640px, 1fr) 380px;
-      grid-template-rows: 72px minmax(0, 1fr) 76px;
+      grid-template-rows: 72px minmax(0, 1fr);
       grid-template-areas:
         "nav top top"
-        "nav main side"
-        "nav composer side";
+        "nav main side";
     }
 
     .nav {
@@ -238,6 +238,8 @@
     }
     .needs-card strong { font-size: 15px; line-height: 1.25; }
     .needs-card p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.35; }
+    .needs-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 2px; }
+    .needs-actions .btn { min-height: 32px; padding: 6px 10px; font-size: 13px; }
 
     .ledger-head {
       display: flex;
@@ -248,6 +250,7 @@
     }
     .ledger-head h1 { margin: 0; font-size: 34px; line-height: 1; }
     .ledger-head p { margin: 7px 0 0; color: var(--muted); }
+    .ledger-head-actions { display: flex; align-items: center; gap: 12px; }
     .sort-label { color: var(--muted); font-size: 12px; }
 
     .ledger { display: grid; gap: 18px; }
@@ -426,13 +429,44 @@
       text-align: left;
     }
     .task-list button span { min-width: 0; overflow-wrap: anywhere; }
+    .fact-list { display: grid; gap: 7px; margin: 12px 0 0; padding: 0; list-style: none; }
+    .fact-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+      min-height: 38px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: rgba(255, 255, 255, 0.02);
+      padding: 7px 9px;
+    }
+    .fact-row-body { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; }
+    .fact-label { min-width: 0; overflow-wrap: anywhere; color: var(--text); }
+    .fact-tag { color: var(--faint); font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; }
+    .fact-ask {
+      border: 1px solid var(--line-strong);
+      border-radius: 6px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 12px;
+      padding: 5px 9px;
+      flex: 0 0 auto;
+    }
+    .fact-ask:hover { color: var(--text); border-color: var(--violet); }
 
     .side {
       grid-area: side;
       min-height: 0;
-      overflow: auto;
+      overflow: hidden;
       border-left: 1px solid var(--line);
       background: rgba(5, 8, 13, 0.54);
+      display: grid;
+      grid-template-rows: minmax(420px, 3fr) minmax(220px, 1fr);
+    }
+    .side-status {
+      min-height: 0;
+      overflow: auto;
       padding: 22px 18px 18px;
       display: grid;
       align-content: start;
@@ -449,26 +483,47 @@
     .side-list li { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 9px; color: var(--muted); line-height: 1.35; }
     .side-list strong { color: var(--text); }
 
-    .composer {
-      grid-area: composer;
+    .chat-dock {
+      min-height: 0;
       display: grid;
-      grid-template-columns: minmax(0, 1fr) auto auto;
-      align-items: center;
-      gap: 10px;
-      padding: 12px 22px 16px;
+      grid-template-rows: auto minmax(0, 1fr) auto;
+      border-top: 1px solid var(--line-strong);
+      background: rgba(7, 10, 16, 0.62);
+    }
+    .chat-dock-head { padding: 12px 16px 6px; color: var(--violet); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; }
+    .chat-thread { min-height: 0; overflow: auto; padding: 2px 16px 10px; display: grid; align-content: start; gap: 10px; }
+    .chat-empty { color: var(--faint); font-size: 13px; line-height: 1.4; }
+    .chat-msg { display: grid; gap: 4px; padding: 9px 11px; border-radius: 10px; border: 1px solid var(--line); background: rgba(255, 255, 255, 0.03); line-height: 1.42; max-width: 96%; overflow-wrap: anywhere; }
+    .chat-msg.user { justify-self: end; max-width: 92%; background: rgba(167, 123, 255, 0.14); border-color: rgba(167, 123, 255, 0.32); }
+    .chat-msg.assistant { justify-self: start; }
+    .chat-msg.error { border-color: rgba(255, 107, 107, 0.4); background: rgba(255, 107, 107, 0.08); }
+    .chat-msg .chat-meta { font-size: 10px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--faint); }
+
+    .composer {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: end;
+      gap: 8px;
+      padding: 10px 16px 16px;
       border-top: 1px solid var(--line);
       background: rgba(7, 10, 16, 0.8);
     }
-    .composer input {
+    .composer textarea {
       width: 100%;
-      height: 48px;
+      min-height: 40px;
+      max-height: 160px;
+      resize: none;
+      overflow-y: auto;
       border: 1px solid var(--line-strong);
       border-radius: 9px;
       background: rgba(8, 13, 21, 0.82);
       color: var(--text);
-      padding: 0 14px;
+      padding: 9px 12px;
       outline: 0;
+      line-height: 1.4;
+      font-family: inherit;
     }
+    .composer-actions { display: grid; gap: 6px; }
 
     .workspace-mode {
       display: none;
@@ -557,8 +612,9 @@
 
     @media (max-width: 1220px) {
       body { overflow: auto; }
-      .workspace { height: auto; min-height: 100vh; grid-template-columns: 72px minmax(0, 1fr); grid-template-rows: auto auto auto; grid-template-areas: "nav top" "nav main" "nav composer"; }
-      .side { display: none; }
+      .workspace { height: auto; min-height: 100vh; grid-template-columns: 72px minmax(0, 1fr); grid-template-rows: auto auto auto; grid-template-areas: "nav top" "nav main" "nav side"; }
+      .side { grid-template-rows: none; min-height: 480px; border-left: 0; border-top: 1px solid var(--line); }
+      .side-status { max-height: 240px; }
       .nav { padding: 14px 8px; }
       .brand { grid-template-columns: 1fr; justify-items: center; }
       .brand h1, .brand p, .live-state, .nav-link span:not(.nav-icon), .nav-foot { display: none; }
@@ -636,7 +692,10 @@
             <h1>Projects</h1>
             <p id="ledgerSummary">No project movement loaded yet.</p>
           </div>
-          <div class="sort-label">Marcus priority</div>
+          <div class="ledger-head-actions">
+            <button class="btn subtle" type="button" id="archiveToggle">Show archived (0)</button>
+            <div class="sort-label">Marcus priority</div>
+          </div>
         </section>
 
         <section class="settings-console" id="settingsConsole" aria-label="Dashboard settings"></section>
@@ -647,39 +706,49 @@
       <section id="taskMode" class="workspace-mode" aria-label="Task Control Room"></section>
     </section>
 
-    <aside class="side" aria-label="MARCUS current read">
-      <section class="side-brand">
-        <div class="brand-mark" aria-hidden="true">*</div>
-        <div><h2>MARCUS</h2><p id="sideSubtitle">Working across live evidence</p></div>
-      </section>
+    <aside class="side" aria-label="MARCUS current read and conversation">
+      <div class="side-status">
+        <section class="side-brand">
+          <div class="brand-mark" aria-hidden="true">*</div>
+          <div><h2>MARCUS</h2><p id="sideSubtitle">Working across live evidence</p></div>
+        </section>
 
-      <section class="rail-panel">
-        <h3>Start here</h3>
-        <p id="startHere">I will put the highest-value decision here after the live sources sync.</p>
-        <button class="btn primary" type="button" id="reviewPrimary">Review now</button>
-      </section>
+        <section class="rail-panel">
+          <h3>Start here</h3>
+          <p id="startHere">I will put the highest-value decision here after the live sources sync.</p>
+          <button class="btn primary" type="button" id="reviewPrimary">Review now</button>
+        </section>
 
-      <section class="rail-panel">
-        <h3>MARCUS is doing</h3>
-        <ul class="side-list" id="doingList"></ul>
-      </section>
+        <section class="rail-panel">
+          <h3>MARCUS is doing</h3>
+          <ul class="side-list" id="doingList"></ul>
+        </section>
 
-      <section class="rail-panel">
-        <h3>MARCUS handled</h3>
-        <ul class="side-list" id="handledList"></ul>
-      </section>
+        <section class="rail-panel">
+          <h3>MARCUS handled</h3>
+          <ul class="side-list" id="handledList"></ul>
+        </section>
 
-      <section class="rail-panel">
-        <h3>Next</h3>
-        <ul class="side-list" id="nextList"></ul>
-      </section>
+        <section class="rail-panel">
+          <h3>Next</h3>
+          <ul class="side-list" id="nextList"></ul>
+        </section>
+      </div>
+
+      <div class="chat-dock">
+        <div class="chat-dock-head">Talk to MARCUS</div>
+        <div class="chat-thread" id="chatThread" aria-live="polite">
+          <p class="chat-empty" id="chatEmpty">Nothing said yet. Ask about any project, decision, or what to do next.</p>
+        </div>
+        <form class="composer" id="composer">
+          <textarea id="composerInput" rows="1" placeholder="Tell MARCUS what you're thinking, seeing, or trying to accomplish. Enter to send, Shift+Enter for a new line."></textarea>
+          <div class="composer-actions">
+            <button class="btn subtle" type="button" id="captureButton">Capture</button>
+            <button class="btn primary" type="submit">Send</button>
+          </div>
+        </form>
+      </div>
     </aside>
-
-    <form class="composer" id="composer">
-      <input id="composerInput" type="text" placeholder="Tell MARCUS what you're thinking, seeing, or trying to accomplish.">
-      <button class="btn" type="button" id="captureButton">Capture thought</button>
-      <button class="btn primary" type="submit">Send</button>
-    </form>
   </main>
 
   <script>
@@ -700,6 +769,7 @@
       needsGrid: document.getElementById("needsGrid"),
       ledgerSummary: document.getElementById("ledgerSummary"),
       ledger: document.getElementById("ledger"),
+      archiveToggle: document.getElementById("archiveToggle"),
       startHere: document.getElementById("startHere"),
       sideSubtitle: document.getElementById("sideSubtitle"),
       reviewPrimary: document.getElementById("reviewPrimary"),
@@ -709,6 +779,8 @@
       settingsConsole: document.getElementById("settingsConsole"),
       composer: document.getElementById("composer"),
       composerInput: document.getElementById("composerInput"),
+      chatThread: document.getElementById("chatThread"),
+      chatEmpty: document.getElementById("chatEmpty"),
       captureButton: document.getElementById("captureButton"),
       projectMode: document.getElementById("projectMode"),
       taskMode: document.getElementById("taskMode"),
@@ -736,10 +808,11 @@
       unknown: "?",
     };
 
-    let snapshot = { projects: [], decisions: [], events: [], brief: null, operations: [], desktop: null, jobs: [], registry: [], settings: {}, googleStatus: null };
+    let snapshot = { projects: [], decisions: [], events: [], brief: null, operations: [], desktop: null, jobs: [], registry: [], awareness: null, settings: {}, googleStatus: null };
     let expandedId = "";
     let query = "";
     let viewMode = "projects";
+    let showArchived = false;
     let activeProjectId = "";
     let activeTaskId = "";
     let activeProjectSection = "overview";
@@ -801,6 +874,35 @@
       const hours = Math.round(mins / 60);
       if (hours < 24) return `${hours}h ago`;
       return `${Math.round(hours / 24)}d ago`;
+    }
+
+    function canArchive(project) {
+      return Boolean(project?.awarenessProjectId) && !project.archived && (groupFor(project) === "complete" || project.state === "parked");
+    }
+    async function dismissProject(id) {
+      try {
+        await api(`/api/marcus/awareness/projects/${encodeURIComponent(id)}/lifecycle`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ lifecycle: "archived", reason: "Archived from the MARCUS desktop visualizer after completion or intentional parking." }),
+        });
+        await load();
+      } catch (error) {
+        appendChatMessage("assistant error", `Archive failed: ${error.message}`);
+      }
+    }
+    async function restoreProject(id) {
+      try {
+        await api(`/api/marcus/awareness/projects/${encodeURIComponent(id)}/lifecycle`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ lifecycle: "active", reason: "Restored to active attention from the MARCUS desktop visualizer." }),
+        });
+        showArchived = false;
+        await load();
+      } catch (error) {
+        appendChatMessage("assistant error", `Restore failed: ${error.message}`);
+      }
     }
 
     function stateFromOperation(operation) {
@@ -1030,6 +1132,8 @@
       const progress = operation?.progress || {};
       const decision = operation?.pendingApproval ? {
         id: operation.pendingApproval.id,
+        operationId: text(operation.id),
+        approvalId: text(operation.pendingApproval.id),
         projectId: idFrom(operation.id, "operation"),
         project: title,
         title: `Approve ${text(operation.pendingApproval.action, "operation action")}`,
@@ -1039,6 +1143,15 @@
         risk: text(operation.pendingApproval.riskLevel || operation.riskLevel, "unknown"),
         action: "Review approval",
       } : null;
+      const verificationRequired = Number(verification.required || 0);
+      const verificationPassed = Number(verification.passed || 0);
+      const verificationClear = verificationRequired > 0 && verificationPassed >= verificationRequired;
+      const completedWhat = text(operation?.title || operation?.projectName || current, "the last tracked step");
+      const completeSentence = verificationRequired > 0
+        ? (verificationClear
+          ? `Completed: ${completedWhat}. All ${verificationRequired} required verification check${verificationRequired === 1 ? "" : "s"} passed. Mark acceptance is the only thing left.`
+          : `Completed: ${completedWhat}. Only ${verificationPassed}/${verificationRequired} required verification checks have passed - do not treat this as done yet.`)
+        : `Completed: ${completedWhat}. No required verification checks are recorded, so Mark acceptance is still open.`;
       return {
         id: idFrom(operation.id, "operation"),
         sourceId: text(operation.id),
@@ -1051,13 +1164,14 @@
           : state === "needs_mark"
             ? `Marcus is waiting for Mark before ${current}.`
             : state === "complete"
-              ? `Marcus has operation evidence, but Mark acceptance and product verification remain distinct.`
+              ? completeSentence
               : `Marcus is moving through ${current}.`,
         last: age(operation?.updatedAt),
+        lastAt: Date.parse(operation?.updatedAt || "") || 0,
         lastChange: current,
         next: state === "blocked" ? "MARCUS recovery" : state === "needs_mark" ? "Mark" : state === "complete" ? "Review" : "Codex",
         counts: `${Number(progress.completed || 0)}/${Number(progress.total || 0)} steps`,
-        confidence: state === "blocked" ? 56 : state === "complete" ? 86 : 72,
+        confidence: state === "blocked" ? 56 : state === "complete" ? (verificationClear ? 92 : 68) : 72,
         currentStep: current,
         objective: text(operation?.title || operation?.projectName, "No objective text available."),
         changed: [
@@ -1098,6 +1212,7 @@
         liveSignal,
         livePhase: phaseFor({ state, currentStep: text(job?.status, "Codex status"), objective: text(job?.objective || job?.title || name), lastChange: liveSignal.signal }),
         last: age(job?.updatedAt || job?.startedAt),
+        lastAt: Date.parse(job?.updatedAt || job?.startedAt || "") || 0,
         lastChange: text(job?.finalOutput || job?.diffSummary || job?.error || `${Number(job?.eventCount || 0)} events reported`),
         next: raw === "completed" ? "Verification" : raw === "failed" ? "MARCUS" : "Codex",
         counts: `${Number(job?.eventCount || 0)} events`,
@@ -1143,6 +1258,7 @@
         liveSignal,
         livePhase: handoffReady ? "Approval" : handoffBlocked ? "Building" : reviewReady ? "Complete" : phaseFor({ state: "moving", currentStep: task, objective: task, lastChange: liveSignal.signal }),
         last: age(effectiveWorkspaceModifiedAt(item, desktop)),
+        lastAt: Date.parse(effectiveWorkspaceModifiedAt(item, desktop) || "") || 0,
         lastChange: task,
         next: handoffReady ? "Mark refresh" : handoffBlocked ? "MARCUS" : reviewReady ? "Mark review" : "Codex",
         counts: `${Number(item?.gitStatusCount || arr(item?.gitStatus).length || 0)} file signal${Number(item?.gitStatusCount || arr(item?.gitStatus).length || 0) === 1 ? "" : "s"}`,
@@ -1184,6 +1300,7 @@
         basis: "observed desktop focus",
         sentence: `The desktop relay sees ${text(desktop?.processName, "an app")} focused on ${windowTitle}.`,
         last: `${Math.round(Number(desktop?.idleSeconds || 0))}s idle`,
+        lastAt: Date.now() - Number(desktop?.idleSeconds || 0) * 1000,
         lastChange: "Desktop focus observed",
         next: "MARCUS",
         counts: "partial evidence",
@@ -1218,6 +1335,7 @@
           basis: "ActiveBrief inference",
           sentence: text(item?.detail || item?.summary || item?.reason || "Marcus surfaced this from the ActiveBrief."),
           last: age(item?.updatedAt || item?.createdAt || brief?.generatedAt),
+          lastAt: Date.parse(item?.updatedAt || item?.createdAt || brief?.generatedAt || "") || 0,
           lastChange: text(item?.recommendedAction || item?.reason || item?.bucket || "ActiveBrief signal"),
           next: markRequired ? "Mark" : "MARCUS",
           counts: item?.duplicateCount ? `${item.duplicateCount} signals` : "brief",
@@ -1262,6 +1380,54 @@
       };
     }
 
+    function makeProjectFromAwareness(project, index) {
+      const name = text(project?.canonicalName || `Known project ${index + 1}`);
+      const state = ({
+        waiting_on_mark: "needs_mark",
+        blocked: "blocked",
+        verifying: "verifying",
+        moving: "moving",
+        losing_thread: "losing_thread",
+        intentionally_dormant: "parked",
+        completed: "complete",
+        archived: "parked",
+        quiet: "quiet",
+        waiting_external: "monitoring",
+        monitoring: "monitoring",
+      })[text(project?.attentionState).toLowerCase()] || "monitoring";
+      const knowledge = project?.knowledge || {};
+      const latestOperation = project?.latestOperation || {};
+      return {
+        id: text(project?.id, `awareness-${index}`),
+        awarenessProjectId: text(project?.id),
+        projectRegistryId: text(project?.projectRegistryId),
+        name,
+        state,
+        stateLabel: labelForState(state),
+        lifecycle: text(project?.lifecycle),
+        archived: project?.archived === true,
+        dashboardVisible: project?.dashboardVisible !== false,
+        basis: "canonical MARCUS awareness",
+        sentence: text(project?.objectiveBelief || knowledge.summary || "MARCUS has indexed this project but still needs a durable objective."),
+        last: age(project?.updatedAt),
+        lastAt: Date.parse(project?.updatedAt || "") || 0,
+        lastChange: text(project?.latestMeaningfulChange || project?.currentActivity || project?.status || "Awareness record synchronized"),
+        next: state === "needs_mark" ? "Mark" : state === "complete" ? "Review" : state === "parked" ? "None" : "MARCUS",
+        counts: `${Number(knowledge.sourceCount || 0)} memory source${Number(knowledge.sourceCount || 0) === 1 ? "" : "s"}, ${Number(project?.operationCount || 0)} operation${Number(project?.operationCount || 0) === 1 ? "" : "s"}`,
+        confidence: clamp(Number(project?.confidence || 0) * 100, 35, 98),
+        objective: text(project?.objectiveBelief || knowledge.summary || "No current objective stored."),
+        currentStep: text(project?.currentActivity || latestOperation?.currentStep?.title || "Monitor for meaningful evidence"),
+        changed: [
+          `Lifecycle: ${text(project?.lifecycle, "unknown")}`,
+          `Knowledge: ${text(knowledge.status, "unavailable")}${knowledge.lastIndexedAt ? `, indexed ${age(knowledge.lastIndexedAt)}` : ""}`,
+          Number(knowledge.repositoryFileCount || 0) ? `Repository manifest: ${Number(knowledge.repositoryFileCount)} files${knowledge.repositoryTruncated ? " (bounded)" : ""}` : "Repository manifest unavailable",
+          text(project?.blockerOrDependency),
+        ].filter(Boolean),
+        tasks: latestOperation?.currentStep?.title ? [{ id: `${text(project?.id)}-operation`, title: latestOperation.currentStep.title, status: text(latestOperation.status), worker: "MARCUS" }] : [],
+        evidence: [text(project?.projectRegistryId), text(project?.repo?.fullName), text(project?.localWorkspace?.path), text(knowledge.summary)].filter(Boolean),
+      };
+    }
+
     function makeProjectFromRegistry(project, index) {
       const name = text(project?.canonicalName || project?.name || `Registered project ${index + 1}`);
       const raw = text(project?.status, "unknown").toLowerCase();
@@ -1276,6 +1442,7 @@
           ? `Registered with local workspace ${project.localWorkspace.path}.`
           : "Registered project exists, but Marcus has no current activity evidence attached.",
         last: age(project?.updatedAt || project?.createdAt),
+        lastAt: Date.parse(project?.updatedAt || project?.createdAt || "") || 0,
         lastChange: text(project?.description || project?.definitionOfDone || project?.status || "Registry record"),
         next: state === "parked" ? "None" : "MARCUS",
         counts: "registry",
@@ -1351,6 +1518,16 @@
         existing.changed = [...arr(existing.changed), ...arr(project.changed)].slice(0, 7);
         existing.tasks = [...arr(existing.tasks), ...arr(project.tasks)].slice(0, 8);
         existing.evidence = [...new Set([...arr(existing.evidence), ...arr(project.evidence)])].slice(0, 8);
+        existing.awarenessProjectId = existing.awarenessProjectId || project.awarenessProjectId || "";
+        existing.projectRegistryId = existing.projectRegistryId || project.projectRegistryId || "";
+        existing.lifecycle = project.lifecycle || existing.lifecycle || "";
+        existing.archived = existing.archived === true || project.archived === true;
+        if (typeof project.dashboardVisible === "boolean") existing.dashboardVisible = project.dashboardVisible;
+        if (existing.archived) {
+          existing.state = "parked";
+          existing.stateLabel = labelForState("parked");
+          existing.next = "None";
+        }
         if (!existing.isLiveCodex && rankState(project.state) < rankState(existing.state)) {
           existing.state = project.state;
           existing.stateLabel = labelForState(project.state);
@@ -1374,12 +1551,13 @@
       isLoading = true;
       setStatus("Syncing live sources", "quiet");
       try {
-        const [operations, jobs, desktop, brief, registry, settings, googleStatus] = await Promise.all([
+        const [operations, jobs, desktop, brief, registry, awareness, settings, googleStatus] = await Promise.all([
           api("/api/operations/summary?limit=50").catch((error) => ({ ok: false, error: error.message, operations: [] })),
           api("/api/codex/jobs").catch((error) => ({ ok: false, error: error.message, jobs: [] })),
           api("/api/desktop-context").catch((error) => ({ ok: false, error: error.message })),
           api("/api/marcus/active-brief").catch((error) => ({ ok: false, error: error.message })),
           api("/api/project-registry").catch((error) => ({ ok: false, error: error.message, projects: [] })),
+          api("/api/marcus/awareness?includeArchived=true").catch((error) => ({ ok: false, error: error.message, projects: [], counts: {} })),
           api("/api/settings").catch((error) => ({ ok: false, error: error.message })),
           api("/api/integrations/google/status").catch((error) => ({ ok: false, error: error.message })),
         ]);
@@ -1388,13 +1566,14 @@
         const codexWorkspaceProjects = arr(desktop?.codexWorkspaces).map((item, index) => makeProjectFromCodexWorkspace(item, index, desktop));
         const desktopProject = makeProjectFromDesktop(desktop);
         const briefProjects = brief?.ok === false ? [] : makeProjectsFromBrief(brief);
-        const registryProjects = arr(registry.projects).filter(shouldUseRegistryProject).slice(0, 8).map(makeProjectFromRegistry);
+        const awarenessProjects = arr(awareness.projects).map(makeProjectFromAwareness);
+        const registryProjects = awarenessProjects.length ? [] : arr(registry.projects).filter(shouldUseRegistryProject).slice(0, 8).map(makeProjectFromRegistry);
         const decisions = uniqueDecisions([
           ...operationProjects.map((project) => project.decision).filter(Boolean),
           ...briefProjects.map((project) => project.decision).filter(Boolean),
         ]).slice(0, 6);
         snapshot = {
-          projects: mergeProjects([...codexWorkspaceProjects, ...jobProjects, ...operationProjects, desktopProject, ...briefProjects, ...registryProjects]),
+          projects: mergeProjects([...codexWorkspaceProjects, ...jobProjects, ...operationProjects, desktopProject, ...briefProjects, ...registryProjects, ...awarenessProjects]),
           decisions,
           events: buildEvents({ operations, jobs, brief, desktop }),
           brief,
@@ -1402,9 +1581,10 @@
           desktop,
           jobs: arr(jobs.jobs),
           registry: arr(registry.projects),
+          awareness,
           settings,
           googleStatus,
-          sourceState: { operations, jobs, desktop, brief, registry },
+          sourceState: { operations, jobs, desktop, brief, registry, awareness },
         };
         setStatus(statusSentence(), activityTone());
         applyRoute();
@@ -1447,8 +1627,12 @@
       });
     }
 
+    function activeDashboardProjects() {
+      return snapshot.projects.filter((project) => project.archived !== true && project.dashboardVisible !== false);
+    }
+
     function statusSentence() {
-      const p = snapshot.projects;
+      const p = activeDashboardProjects();
       const needs = p.filter((project) => project.state === "needs_mark").length;
       const moving = p.filter((project) => ["moving", "verifying"].includes(project.state)).length;
       const risk = p.filter((project) => ["blocked", "losing_thread"].includes(project.state)).length;
@@ -1458,9 +1642,10 @@
     }
 
     function activityTone() {
-      if (snapshot.projects.some((project) => project.state === "blocked")) return "blocked";
-      if (snapshot.projects.some((project) => project.state === "needs_mark")) return "risk";
-      if (snapshot.projects.some((project) => ["moving", "verifying"].includes(project.state))) return "moving";
+      const projects = activeDashboardProjects();
+      if (projects.some((project) => project.state === "blocked")) return "blocked";
+      if (projects.some((project) => project.state === "needs_mark")) return "risk";
+      if (projects.some((project) => ["moving", "verifying"].includes(project.state))) return "moving";
       return "quiet";
     }
 
@@ -1487,47 +1672,74 @@
         const navKey = button.dataset.nav === "tracker" ? "projects" : button.dataset.nav;
         button.classList.toggle("active", navKey === viewMode && mode === "tracker");
       });
+      const activeProjects = activeDashboardProjects();
       const needs = snapshot.decisions.length;
-      const moving = snapshot.projects.filter((p) => ["moving", "verifying"].includes(p.state)).length;
-      const liveCodex = snapshot.projects.filter((p) => p.isLiveCodex);
-      els.sideSubtitle.textContent = `Working across ${snapshot.projects.length} projects`;
+      const moving = activeProjects.filter((p) => ["moving", "verifying"].includes(p.state)).length;
+      const liveCodex = activeProjects.filter((p) => p.isLiveCodex);
+      els.sideSubtitle.textContent = `Working across ${activeProjects.length} active projects`;
       els.startHere.textContent = needs
         ? `${snapshot.decisions[0].project}: ${snapshot.decisions[0].title}.`
         : liveCodex.length ? `${liveCodex[0].name}: ${liveCodex[0].currentStep}.`
           : moving ? `${moving} project${moving === 1 ? "" : "s"} moving; no exact approval is first in line.` : "No live blocker is first in line.";
       els.reviewPrimary.textContent = needs ? "Review decision" : "Ask Marcus";
-      els.doingList.innerHTML = snapshot.projects.filter((p) => (p.isLiveCodex || ["observed operation", "observed Codex job"].includes(p.basis)) && p.state !== "complete").slice(0, 4).map((p) => `<li><span>${esc(stateIcons[p.state])}</span><span><strong>${esc(p.name)}</strong><br>${esc(p.liveSignal?.signal || p.currentStep)}</span></li>`).join("") || `<li><span>-</span><span>No active operation or Codex run is reporting movement.</span></li>`;
-      els.handledList.innerHTML = snapshot.projects.filter((p) => p.state === "complete").slice(0, 3).map((p) => `<li><span>+</span><span>${esc(p.name)}</span></li>`).join("") || `<li><span>-</span><span>No recently completed work in this snapshot.</span></li>`;
-      els.nextList.innerHTML = snapshot.projects.slice(0, 3).map((p) => `<li><span>${esc(stateIcons[p.state])}</span><span>${esc(p.name)}: next is ${esc(p.next)}</span></li>`).join("") || `<li><span>-</span><span>Refresh after live sources reconnect.</span></li>`;
+      els.doingList.innerHTML = activeProjects.filter((p) => (p.isLiveCodex || ["observed operation", "observed Codex job"].includes(p.basis)) && p.state !== "complete").slice(0, 4).map((p) => `<li><span>${esc(stateIcons[p.state])}</span><span><strong>${esc(p.name)}</strong><br>${esc(p.liveSignal?.signal || p.currentStep)}</span></li>`).join("") || `<li><span>-</span><span>No active operation or Codex run is reporting movement.</span></li>`;
+      els.handledList.innerHTML = activeProjects.filter((p) => p.state === "complete").slice(0, 3).map((p) => `<li><span>+</span><span>${esc(p.name)}</span></li>`).join("") || `<li><span>-</span><span>No recently completed work in this snapshot.</span></li>`;
+      els.nextList.innerHTML = activeProjects.slice(0, 3).map((p) => `<li><span>${esc(stateIcons[p.state])}</span><span>${esc(p.name)}: next is ${esc(p.next)}</span></li>`).join("") || `<li><span>-</span><span>Refresh after live sources reconnect.</span></li>`;
     }
 
     function renderTracker() {
-      const filtered = projectsForView().filter((project) => {
+      const viewProjects = projectsForView();
+      const archivedCount = viewProjects.filter((project) => project.archived === true).length;
+      const filtered = viewProjects.filter((project) => {
         const q = query.toLowerCase();
-        return !q || JSON.stringify(project).toLowerCase().includes(q);
+        const matchesSearch = !q || JSON.stringify(project).toLowerCase().includes(q);
+        const matchesArchiveState = showArchived
+          ? project.archived === true
+          : project.archived !== true && (query.trim() ? true : project.dashboardVisible !== false);
+        return matchesSearch && matchesArchiveState;
       });
-      const needs = snapshot.decisions.slice(0, 3);
+      const needs = showArchived ? [] : snapshot.decisions.slice(0, 3);
+      if (els.archiveToggle) {
+        els.archiveToggle.textContent = showArchived ? "Back to active" : `Show archived (${archivedCount})`;
+        els.archiveToggle.classList.toggle("primary", showArchived);
+      }
       els.chiefBrief.textContent = chiefBrief(filtered);
       els.sourceNote.innerHTML = sourceNoteHtml();
       els.needsSection.classList.toggle("visible", needs.length > 0);
       renderSettingsConsole();
       els.needsGrid.innerHTML = needs.map((decision) => `
-        <button class="needs-card" type="button" data-decision="${esc(decision.id)}">
+        <div class="needs-card" data-decision="${esc(decision.id)}">
           <strong>${esc(decision.project)}: ${esc(decision.title)}</strong>
           <p>${esc(decision.why)}</p>
           <p><strong>Blocks:</strong> ${esc(decision.blocks)}<br><strong>Marcus recommends:</strong> ${esc(decision.recommendation)}</p>
-        </button>
+          <div class="needs-actions">
+            ${decision.operationId && decision.approvalId ? `
+              <button class="btn primary" type="button" data-approve="${esc(decision.operationId)}" data-approval="${esc(decision.approvalId)}">Approve</button>
+              <button class="btn warn" type="button" data-reject="${esc(decision.operationId)}" data-approval="${esc(decision.approvalId)}">Reject</button>
+            ` : ""}
+            <button class="btn subtle" type="button" data-discuss="${esc(decision.id)}">Discuss with Marcus</button>
+          </div>
+        </div>
       `).join("");
-      els.ledgerSummary.textContent = summaryForView(filtered);
+      els.ledgerSummary.textContent = showArchived
+        ? `${filtered.length} archived project${filtered.length === 1 ? "" : "s"} hidden from your active list.`
+        : summaryForView(filtered);
       if (!filtered.length) {
-        els.ledger.innerHTML = emptyForView();
+        els.ledger.innerHTML = showArchived
+          ? `<div class="empty"><strong>Nothing archived yet.</strong><br>Completed or parked projects you archive will show up here so you can restore them anytime.</div>`
+          : emptyForView();
+      } else if (showArchived) {
+        els.ledger.innerHTML = `<section class="ledger-group" aria-label="Archived">
+          <div class="group-label"><span>Archived</span><span>${filtered.length}</span></div>
+          ${filtered.map((project) => rowHtml(project, true)).join("")}
+        </section>`;
       } else {
         els.ledger.innerHTML = groupOrder.map(([key, label]) => {
           const rows = filtered.filter((project) => groupFor(project) === key);
           if (!rows.length) return "";
           return `<section class="ledger-group" aria-label="${esc(label)}">
             <div class="group-label"><span>${esc(label)}</span><span>${rows.length}</span></div>
-            ${rows.map(rowHtml).join("")}
+            ${rows.map((project) => rowHtml(project, false)).join("")}
           </section>`;
         }).join("");
       }
@@ -1763,7 +1975,7 @@
       return `<strong>Auto-refresh:</strong> every ${Math.round(autoRefreshMs / 1000)}s while you are not typing. <strong>Live:</strong> ${snapshot.operations.length} operations, ${codex}, ${workspaces} Codex workspace${workspaces === 1 ? "" : "s"}, ${desktop}. <strong>Fallback:</strong> registry and ActiveBrief inferences are labeled as such.`;
     }
 
-    function rowHtml(project) {
+    function rowHtml(project, archived = false) {
       const expanded = project.id === expandedId;
       const stateClass = `state-${project.state}`;
       const label = displayStateLabel(project);
@@ -1781,8 +1993,11 @@
         </div>
         <div class="meta"><strong>${esc(project.last)}</strong><br>${esc(project.lastChange)}</div>
         <div class="row-actions">
-          <button class="btn subtle" type="button" data-talk="${esc(project.id)}">Talk</button>
-          <button class="btn" type="button" data-open="${esc(project.id)}">Open</button>
+          ${archived
+            ? `<button class="btn primary" type="button" data-restore="${esc(project.awarenessProjectId)}">Restore</button>`
+            : `<button class="btn subtle" type="button" data-talk="${esc(project.id)}">Talk</button>
+               <button class="btn" type="button" data-open="${esc(project.id)}">Open</button>
+               ${canArchive(project) ? `<button class="btn subtle" type="button" data-archive="${esc(project.awarenessProjectId)}" title="Remove from active attention while preserving memory">Archive</button>` : ""}`}
         </div>
         ${expanded ? drawerHtml(project) : ""}
       </article>`;
@@ -1818,35 +2033,58 @@
       </div>`;
     }
 
+    function nextActionText(project) {
+      if (project.decision?.recommendation) return project.decision.recommendation;
+      if (project.state === "complete" || project.workspaceReviewReady) return "Review what changed, verify the result, then close or reroute.";
+      if (project.state === "needs_mark") return "Make the decision above so Marcus can continue.";
+      if (project.state === "blocked") return "Diagnose the blocker below, or ask Marcus to attempt recovery.";
+      return project.next ? `Next step: ${project.next}.` : "Ask Marcus for the next concrete action.";
+    }
+
+    function drawerFactRows(items, projectId, emptyLabel) {
+      return `<ul class="fact-list">${items.map((item) => `
+        <li class="fact-row">
+          <div class="fact-row-body"><span class="fact-label">${esc(item.label)}</span><span class="fact-tag">${esc(item.tag)}</span></div>
+          <button class="fact-ask" type="button" data-project-prompt="${esc(projectId)}" data-prompt="${esc(item.prompt)}" title="Ask Marcus about this">Ask</button>
+        </li>`).join("") || `<li class="fact-row"><div class="fact-row-body"><span class="fact-label">${esc(emptyLabel)}</span></div></li>`}</ul>`;
+    }
+
     function drawerHtml(project) {
       const promptId = `prompt-${project.id}`;
+      const approvable = project.decision?.operationId && project.decision?.approvalId;
       return `<section class="drawer">
-        <div class="drawer-card">
-          <h3>Marcus read</h3>
-          <p>${esc(projectRead(project))}</p>
+        <div class="drawer-card full">
+          <h3>What to do now</h3>
+          <p>${esc(nextActionText(project))}</p>
           <ul class="insight-list">${projectInsights(project).map((item) => `<li><strong>${esc(item.label)}</strong><span>${esc(item.value)}</span></li>`).join("")}</ul>
           <div class="row-actions" style="justify-content:start;flex-wrap:wrap">
+            ${approvable ? `
+              <button class="btn primary" type="button" data-approve="${esc(project.decision.operationId)}" data-approval="${esc(project.decision.approvalId)}">Approve</button>
+              <button class="btn warn" type="button" data-reject="${esc(project.decision.operationId)}" data-approval="${esc(project.decision.approvalId)}">Reject</button>
+            ` : ""}
             <button class="btn primary" type="button" data-open="${esc(project.id)}">Open project</button>
             <button class="btn" type="button" data-project-plan="${esc(project.id)}">Plan next moves</button>
             <button class="btn" type="button" data-project-reroute="${esc(project.id)}">Check direction</button>
+            ${canArchive(project) ? `<button class="btn subtle" type="button" data-archive="${esc(project.awarenessProjectId)}" title="Remove from active attention while preserving memory">Archive this project</button>` : ""}
           </div>
         </div>
-        <div class="drawer-card">
-          <h3>Next useful actions</h3>
-          <ul class="task-list">${nextMoveButtons(project).map((item) => `<li><button type="button" data-project-prompt="${esc(project.id)}" data-prompt="${esc(item.prompt)}"><span>${esc(item.label)}</span><span>${esc(item.tag)}</span></button></li>`).join("")}</ul>
+        <div class="drawer-card full">
+          <h3>Evidence</h3>
+          ${drawerFactRows(liveEvidenceItems(project), project.id, "No useful evidence came through.")}
         </div>
         <div class="drawer-card full">
           <h3>What changed</h3>
           <p>${esc(changeNarrative(project))}</p>
-          <ul class="task-list">${changeItems(project).map((item) => `<li><button type="button" data-project-prompt="${esc(project.id)}" data-prompt="${esc(item.prompt)}"><span>${esc(item.label)}</span><span>${esc(item.tag)}</span></button></li>`).join("")}</ul>
-        </div>
-        <div class="drawer-card full">
-          <h3>Live evidence</h3>
-          <ul class="task-list">${liveEvidenceItems(project).map((item) => `<li><button type="button" data-project-prompt="${esc(project.id)}" data-prompt="${esc(item.prompt)}"><span>${esc(item.label)}</span><span>${esc(item.tag)}</span></button></li>`).join("")}</ul>
+          ${drawerFactRows(changeItems(project), project.id, "No useful change summary is attached.")}
         </div>
         <div class="drawer-card full">
           <h3>Work in flight</h3>
-          <ul class="task-list">${arr(project.tasks).map((task) => `<li><button type="button" data-task="${esc(task.id)}" data-task-project="${esc(project.id)}"><span>${esc(task.title)}</span><span>${esc(task.status)} - ${esc(task.worker)}</span></button></li>`).join("")}</ul>
+          <ul class="task-list">${arr(project.tasks).map((task) => `<li><button type="button" data-task="${esc(task.id)}" data-task-project="${esc(project.id)}"><span>${esc(task.title)}</span><span>${esc(task.status)} - ${esc(task.worker)}</span></button></li>`).join("") || `<li><button type="button" disabled><span>No task breakdown is attached.</span><span>missing</span></button></li>`}</ul>
+        </div>
+        <div class="drawer-card full">
+          <h3>Ask Marcus something specific</h3>
+          <p class="action-note">These start a conversation, they do not change anything by themselves.</p>
+          <ul class="task-list">${nextMoveButtons(project).map((item) => `<li><button type="button" data-project-prompt="${esc(project.id)}" data-prompt="${esc(item.prompt)}"><span>${esc(item.label)}</span><span>${esc(item.tag)}</span></button></li>`).join("")}</ul>
         </div>
         <div class="drawer-card full">
           <h3>Steer work</h3>
@@ -2014,6 +2252,8 @@
           const marcusProject = event.target.closest("[data-marcus-project]");
           const plan = event.target.closest("[data-project-plan]");
           const reroute = event.target.closest("[data-project-reroute]");
+          const archive = event.target.closest("[data-archive]");
+          const restore = event.target.closest("[data-restore]");
           if (open) return openProject(open.dataset.open);
           if (talk) return talkToProject(talk.dataset.talk);
           if (task) return openTask(task.dataset.taskProject, task.dataset.task);
@@ -2022,6 +2262,8 @@
           if (marcusProject) return askMarcusAboutProject(marcusProject.dataset.marcusProject);
           if (plan) return fillProjectPrompt(plan.dataset.projectPlan, "Build a deeper project plan from the current evidence. Include goal, current work, risks, verification, and next actions.");
           if (reroute) return fillProjectPrompt(reroute.dataset.projectReroute, "Check whether this project is drifting. Tell me what is off, what evidence says so, and how to reroute.");
+          if (archive) return dismissProject(archive.dataset.archive);
+          if (restore) return restoreProject(restore.dataset.restore);
           expandedId = row.dataset.project === expandedId ? "" : row.dataset.project;
           renderTracker();
           row.focus();
@@ -2032,9 +2274,9 @@
           row.click();
         });
       });
-      document.querySelectorAll("[data-decision]").forEach((button) => {
+      document.querySelectorAll("[data-discuss]").forEach((button) => {
         button.addEventListener("click", () => {
-          const decision = snapshot.decisions.find((item) => item.id === button.dataset.decision);
+          const decision = snapshot.decisions.find((item) => item.id === button.dataset.discuss);
           if (!decision) return;
           const project = snapshot.projects.find((item) => item.id === decision.projectId || item.name === decision.project) || snapshot.projects[0];
           if (project) {
@@ -2044,6 +2286,27 @@
           }
         });
       });
+      document.querySelectorAll("[data-approve]").forEach((button) => {
+        button.addEventListener("click", () => decideApproval(button.dataset.approve, button.dataset.approval, "approve"));
+      });
+      document.querySelectorAll("[data-reject]").forEach((button) => {
+        button.addEventListener("click", () => decideApproval(button.dataset.reject, button.dataset.approval, "reject"));
+      });
+    }
+
+    async function decideApproval(operationId, approvalId, decision) {
+      if (!operationId || !approvalId) return;
+      try {
+        await api(`/api/operations/${encodeURIComponent(operationId)}/approvals/${encodeURIComponent(approvalId)}/${decision}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+        });
+        appendChatMessage("assistant", `${decision === "approve" ? "Approved" : "Rejected"} the pending operation step.`);
+        load();
+      } catch (error) {
+        appendChatMessage("assistant error", `Could not ${decision} that operation step: ${error.message}`);
+      }
     }
 
     function projectById(id) {
@@ -2082,7 +2345,7 @@
           body: JSON.stringify({ message: `${intent} for ${project.name}: ${message}` }),
         });
         if (input) input.value = "";
-        els.composerInput.value = `Sent to Codex: ${text(result?.job?.status || "follow-up accepted")}.`;
+        appendChatMessage("assistant", `Sent to Codex: ${text(result?.job?.status || "follow-up accepted")}.`);
         return;
       }
       await sendToMarcus(`${intent} for ${project.name}. Current project state: ${project.stateLabel}. Current work: ${project.currentStep}. Evidence: ${arr(project.evidence).join("; ")}. Instruction: ${message}`);
@@ -2127,6 +2390,11 @@
       const actions = nextMoveButtons(project);
       const changes = changeItems(project);
       const evidence = liveEvidenceItems(project);
+      const factRows = (items, emptyLabel) => `<ul class="fact-list">${items.map((item) => `
+        <li class="fact-row">
+          <div class="fact-row-body"><span class="fact-label">${esc(item.label)}</span><span class="fact-tag">${esc(item.tag)}</span></div>
+          <button class="fact-ask" type="button" data-project-prompt="${esc(project.id)}" data-prompt="${esc(item.prompt)}" title="Ask Marcus about this">Ask</button>
+        </li>`).join("") || `<li class="fact-row"><div class="fact-row-body"><span class="fact-label">${esc(emptyLabel)}</span></div></li>`}</ul>`;
       const command = `<section class="mode-panel"><h2>Ask or steer</h2><p>Use this when the current read is wrong, incomplete, or needs a direct next instruction.</p><textarea data-codex-input="${esc(project.id)}" placeholder="Tell Marcus what is wrong, what to verify, or what Codex should do next."></textarea><div class="row-actions" style="justify-content:start;flex-wrap:wrap;margin-top:10px"><button class="btn primary" type="button" data-codex-send="${esc(project.id)}" data-mode="steer">Steer Codex</button><button class="btn" type="button" data-codex-send="${esc(project.id)}" data-mode="append">Append context</button><button class="btn" type="button" data-project-plan="${esc(project.id)}">Plan next</button><button class="btn" type="button" data-project-reroute="${esc(project.id)}">Check direction</button></div></section>`;
       if (section === "work") return `
         <section class="mode-panel"><h2>Work in flight</h2><p>${esc(projectRead(project))}</p><ul class="task-list" style="margin-top:12px">${arr(project.tasks).map((task) => `<li><button type="button" data-task="${esc(task.id)}" data-task-project="${esc(project.id)}"><span>${esc(task.title)}</span><span>${esc(task.status)} - ${esc(task.worker)}</span></button></li>`).join("") || `<li><button type="button" disabled><span>No task breakdown is attached.</span><span>missing</span></button></li>`}</ul></section>
@@ -2136,18 +2404,18 @@
         <section class="mode-panel"><h2>What this means</h2><p>${esc(project.liveSignal?.stuck || changeNarrative(project))}</p></section>
         ${command}`;
       if (section === "decisions") return `
-        <section class="mode-panel"><h2>Decision or review</h2><p>${esc(project.state === "complete" || project.workspaceReviewReady ? "This is ready for your eyes. Marcus should tell you exactly what changed and what to verify before closing it." : projectRead(project))}</p><ul class="task-list" style="margin-top:12px">${actions.map((item) => `<li><button type="button" data-project-prompt="${esc(project.id)}" data-prompt="${esc(item.prompt)}"><span>${esc(item.label)}</span><span>${esc(item.tag)}</span></button></li>`).join("")}</ul></section>
+        <section class="mode-panel"><h2>Decision or review</h2><p>${esc(project.state === "complete" || project.workspaceReviewReady ? "This is ready for your eyes. Marcus should tell you exactly what changed and what to verify before closing it." : projectRead(project))}</p><p class="action-note">These start a conversation with Marcus, they do not change anything by themselves.</p><ul class="task-list" style="margin-top:12px">${actions.map((item) => `<li><button type="button" data-project-prompt="${esc(project.id)}" data-prompt="${esc(item.prompt)}"><span>${esc(item.label)}</span><span>${esc(item.tag)}</span></button></li>`).join("")}</ul></section>
         ${command}`;
       if (section === "evidence") return `
-        <section class="mode-panel"><h2>Evidence</h2><ul class="task-list">${evidence.map((item) => `<li><button type="button" data-project-prompt="${esc(project.id)}" data-prompt="${esc(item.prompt)}"><span>${esc(item.label)}</span><span>${esc(item.tag)}</span></button></li>`).join("") || `<li><button type="button" disabled><span>No useful evidence came through.</span><span>missing</span></button></li>`}</ul></section>`;
+        <section class="mode-panel"><h2>Evidence</h2>${factRows(evidence, "No useful evidence came through.")}</section>`;
       if (section === "timeline") return `
-        <section class="mode-panel"><h2>What changed</h2><p>${esc(changeNarrative(project))}</p><ul class="task-list" style="margin-top:12px">${changes.map((item) => `<li><button type="button" data-project-prompt="${esc(project.id)}" data-prompt="${esc(item.prompt)}"><span>${esc(item.label)}</span><span>${esc(item.tag)}</span></button></li>`).join("")}</ul></section>`;
+        <section class="mode-panel"><h2>What changed</h2><p>${esc(changeNarrative(project))}</p>${factRows(changes, "No useful change summary is attached.")}</section>`;
       if (section === "memory") return `
         <section class="mode-panel"><h2>Project memory</h2><p>${esc(project.objective || "No durable project outcome is attached to this snapshot.")}</p></section>
         <section class="mode-panel"><h2>Source quality</h2><p>${esc(`${project.basis}. ${project.counts || "No count returned"}.`)}</p></section>`;
       return `
         <section class="mode-panel"><h2>What happened</h2><p>${esc(changeNarrative(project))}</p></section>
-        <section class="mode-panel"><h2>What you need to check</h2><ul class="task-list">${actions.map((item) => `<li><button type="button" data-project-prompt="${esc(project.id)}" data-prompt="${esc(item.prompt)}"><span>${esc(item.label)}</span><span>${esc(item.tag)}</span></button></li>`).join("")}</ul></section>
+        <section class="mode-panel"><h2>What you need to check</h2><p class="action-note">These start a conversation with Marcus, they do not change anything by themselves.</p><ul class="task-list">${actions.map((item) => `<li><button type="button" data-project-prompt="${esc(project.id)}" data-prompt="${esc(item.prompt)}"><span>${esc(item.label)}</span><span>${esc(item.tag)}</span></button></li>`).join("")}</ul></section>
         <section class="mode-panel"><h2>Plain-English read</h2><p>${esc(projectRead(project))}</p></section>
         ${command}`;
     }
@@ -2272,30 +2540,45 @@
       talkToProject(project.id, `${prompt} Task: ${task.title}. Status: ${task.status}. Evidence: ${arr(project.evidence).join("; ") || "none"}.`);
     }
 
+    function autoGrowComposer() {
+      els.composerInput.style.height = "auto";
+      els.composerInput.style.height = `${Math.min(els.composerInput.scrollHeight, 160)}px`;
+    }
+
+    function appendChatMessage(role, content, { pending = false } = {}) {
+      if (els.chatEmpty) els.chatEmpty.remove();
+      const node = document.createElement("div");
+      node.className = `chat-msg ${role}`;
+      if (pending) node.dataset.pending = "true";
+      node.innerHTML = `<span class="chat-meta">${role === "user" ? "You" : "MARCUS"} - ${esc(nowLabel())}</span><span>${esc(content)}</span>`;
+      els.chatThread.appendChild(node);
+      els.chatThread.scrollTop = els.chatThread.scrollHeight;
+      return node;
+    }
+
     function talkToProject(id, prompt = "") {
       const project = snapshot.projects.find((item) => item.id === id) || snapshot.projects[0];
       if (!project) return;
       els.composerInput.value = prompt || `Talk to me about ${project.name}. What is happening, what changed, what is blocked, and what should happen next?`;
+      autoGrowComposer();
       els.composerInput.focus();
     }
 
     async function sendToMarcus(message) {
       const context = activeProjectId ? snapshot.projects.find((project) => project.id === activeProjectId) : expandedId ? snapshot.projects.find((project) => project.id === expandedId) : null;
       const scoped = context ? `[Project context: ${context.name}; state: ${context.stateLabel}; evidence basis: ${context.basis}] ${message}` : message;
-      els.composerInput.value = "MARCUS is thinking...";
-      els.composerInput.disabled = true;
+      const pendingNode = appendChatMessage("assistant", "MARCUS is thinking...", { pending: true });
       try {
         const data = await api("/api/marcus/live/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message: scoped }),
+          body: JSON.stringify({ message: scoped, awarenessProjectId: context?.awarenessProjectId || "" }),
         });
-        els.composerInput.value = text(data.reply || data.message || "Marcus responded without text.");
+        pendingNode.remove();
+        appendChatMessage("assistant", text(data.reply || data.message || "Marcus responded without text."));
       } catch (error) {
-        els.composerInput.value = `Marcus chat failed: ${error.message}`;
-      } finally {
-        els.composerInput.disabled = false;
-        els.composerInput.focus();
+        pendingNode.remove();
+        appendChatMessage("assistant error", `Marcus chat failed: ${error.message}`);
       }
     }
 
@@ -2318,20 +2601,39 @@
     els.refreshButton.addEventListener("click", load);
     els.searchInput.addEventListener("input", () => { query = els.searchInput.value; renderTracker(); });
     els.askMarcusTop.addEventListener("click", () => { els.composerInput.focus(); });
+    els.archiveToggle.addEventListener("click", () => {
+      showArchived = !showArchived;
+      expandedId = "";
+      renderTracker();
+    });
     els.reviewPrimary.addEventListener("click", () => {
       const decision = snapshot.decisions[0];
       if (decision) talkToProject(decision.projectId, `Review this decision with me: ${decision.title}.`);
       else els.composerInput.focus();
     });
     els.captureButton.addEventListener("click", () => {
-      els.composerInput.value = `Capture this thought: ${els.composerInput.value}`;
-      els.composerInput.focus();
+      const note = text(els.composerInput.value);
+      if (!note) { els.composerInput.focus(); return; }
+      appendChatMessage("user", `Capture this thought: ${note}`);
+      els.composerInput.value = "";
+      autoGrowComposer();
+      sendToMarcus(`Capture this thought for later, do not act on it yet: ${note}`);
     });
     els.composer.addEventListener("submit", (event) => {
       event.preventDefault();
       const message = text(els.composerInput.value);
       if (!message) return;
+      appendChatMessage("user", message);
+      els.composerInput.value = "";
+      autoGrowComposer();
       sendToMarcus(message);
+    });
+    els.composerInput.addEventListener("input", autoGrowComposer);
+    els.composerInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        els.composer.requestSubmit();
+      }
     });
     els.voiceButton.addEventListener("mousedown", () => {
       voiceHeld = true;
