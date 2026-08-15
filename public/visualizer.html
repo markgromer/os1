@@ -2017,6 +2017,253 @@
       .replaceAll(">", "&gt;")
       .replaceAll('"', "&quot;");
     const text = (value) => String(value == null ? "" : value).trim();
+    const arr = (value) => Array.isArray(value) ? value : [];
+    const seedProjects = state.projects.map((project) => ({ ...project, work: arr(project.work).map((item) => [...item]), fallback: true }));
+
+    function firstText(...values) {
+      for (const value of values) {
+        const next = text(value);
+        if (next) return next;
+      }
+      return "";
+    }
+
+    function projectKey(name) {
+      return text(name).toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\b(v|version)\s*\d+\b/g, "").trim();
+    }
+
+    function basename(input) {
+      return text(input).split(/[\\/]+/).filter(Boolean).pop() || "";
+    }
+
+    function age(value) {
+      const time = Date.parse(value || "");
+      if (!Number.isFinite(time)) return "live now";
+      const diff = Math.max(0, Date.now() - time);
+      const minutes = Math.floor(diff / 60000);
+      if (minutes < 1) return "just now";
+      if (minutes < 60) return `${minutes}m ago`;
+      const hours = Math.floor(minutes / 60);
+      if (hours < 48) return `${hours}h ago`;
+      return `${Math.floor(hours / 24)}d ago`;
+    }
+
+    function stateFrom(raw) {
+      const value = text(raw).toLowerCase();
+      if (/blocked|recovery|failed|risk|stalled|at_risk/.test(value)) return "blocked";
+      if (/approval|needs|waiting|review|mark/.test(value)) return "needs";
+      if (/verify|testing|check|reviewing/.test(value)) return "verifying";
+      if (/complete|done|archived|parked|quiet/.test(value)) return "quiet";
+      return "moving";
+    }
+
+    function statusFrom(project) {
+      if (project.state === "blocked") return "Blocked";
+      if (project.state === "needs") return "Needs Mark";
+      if (project.state === "verifying") return "Verifying";
+      if (project.state === "quiet") return "Quiet";
+      return project.live > 0 ? "Running" : "Moving";
+    }
+
+    function stripMarcusPrefix(value) {
+      return text(value).replace(/^MARCUS:\s*/i, "");
+    }
+
+    function makeProject({ name, icon, state: projectState, status, live = 0, source = "live", brief, facts, note, work, updatedAt, awarenessProjectId, priority = 0 }) {
+      const finalName = firstText(name, "Untitled live project");
+      const finalState = projectState || stateFrom(status);
+      const finalWork = arr(work).filter(Boolean);
+      return {
+        awarenessProjectId: awarenessProjectId || "",
+        name: finalName,
+        icon: firstText(icon, finalName[0], "P").slice(0, 2).toUpperCase(),
+        state: finalState,
+        status: firstText(status, statusFrom({ state: finalState, live })),
+        workItems: Math.max(finalWork.length, 1),
+        live: Math.max(0, Number(live) || 0),
+        verifiedAge: age(updatedAt),
+        brief: firstText(brief, `${finalName} is reporting through ${source}.`),
+        facts: arr(facts).length ? facts : [source, firstText(status, "Live signal"), firstText(brief, "No additional detail")],
+        note: firstText(note, `${finalName}: ${source}`),
+        source,
+        updatedAt: updatedAt || "",
+        priority,
+        work: finalWork.length ? finalWork : [["Live signal", finalName, firstText(status, "Running"), source]],
+      };
+    }
+
+    function projectFromDesktopFocus(desktop) {
+      if (!desktop || !text(desktop.windowTitle)) return null;
+      const workspaceName = firstText(desktop.workspace?.projectName, desktop.workspace?.folderName, basename(desktop.workspace?.workspacePath));
+      const name = workspaceName || (/task tracker|visualizer|m\.a\.r\.c\.u\.s|marcus/i.test(desktop.windowTitle) ? "MARCUS / OS1" : desktop.windowTitle.replace(/\s+-\s+.*$/, ""));
+      const recentFiles = arr(desktop.workspace?.recentFiles).slice(0, 3);
+      return makeProject({
+        name,
+        icon: "PC",
+        state: Number(desktop.idleSeconds) < 90 ? "moving" : "quiet",
+        status: Number(desktop.idleSeconds) < 90 ? "Active on this PC" : "Observed",
+        live: Number(desktop.idleSeconds) < 90 ? 1 : 0,
+        source: `Desktop ${desktop.source || "context"}`,
+        priority: 90,
+        updatedAt: desktop.receivedAt || new Date().toISOString(),
+        brief: `Foreground PC activity: ${desktop.windowTitle}.`,
+        facts: [desktop.processName || "foreground app", desktop.windowTitle, workspaceName || "no workspace attached"],
+        note: `MARCUS: ${name} is active on this PC.`,
+        work: [
+          ["Desktop focus", name, Number(desktop.idleSeconds) < 90 ? "Running" : "Observed", desktop.windowTitle],
+          ...recentFiles.map((file) => ["Recent file", basename(file), "Observed", file]),
+        ],
+      });
+    }
+
+    function projectFromCodexWorkspace(item) {
+      const name = firstText(item?.projectName, item?.folderName, basename(item?.workspacePath), item?.gitBranch, item?.sessionId);
+      if (!name) return null;
+      const handoff = firstText(item?.handoffStatus, item?.handoffSummary);
+      const branch = firstText(item?.gitBranch, "workspace");
+      const blocked = /blocked|risk|failed/i.test(handoff);
+      const needs = /handoff|review|approval|needs/i.test(handoff);
+      return makeProject({
+        name,
+        icon: "C",
+        state: blocked ? "blocked" : needs ? "needs" : "moving",
+        status: blocked ? "Blocked" : needs ? "Needs Mark" : "Running",
+        live: 1,
+        source: "Desktop Codex workspace",
+        priority: 100,
+        updatedAt: firstText(item?.handoffObservedAt, item?.modifiedAt),
+        brief: firstText(item?.handoffSummary, `${name} has an active Codex workspace on ${branch}.`),
+        facts: [branch, `${Number(item?.gitStatusCount) || arr(item?.gitStatus).length} changed files`, firstText(item?.source, item?.originator, "desktop relay")],
+        note: `MARCUS: ${name} is active in Codex.`,
+        work: [
+          ["Codex session", firstText(item?.sessionId, `${name} session`), blocked ? "Blocked" : "Running", firstText(item?.handoffSummary, `Branch ${branch}`)],
+          ["Workspace", basename(item?.workspacePath), "Observed", firstText(item?.workspacePath, "local workspace")],
+          ...arr(item?.gitRecentCommits).slice(0, 2).map((commit) => ["Commit", commit, "Observed", "recent commit"]),
+        ],
+      });
+    }
+
+    function projectFromCodexJob(job) {
+      const name = firstText(job?.projectName, job?.project?.name, job?.metadata?.projectName, job?.title, job?.prompt);
+      if (!name) return null;
+      const status = firstText(job?.status, job?.state, "Running");
+      return makeProject({
+        name,
+        icon: "C",
+        state: stateFrom(status),
+        status,
+        live: /running|queued|active|in_progress/i.test(status) ? 1 : 0,
+        source: "Codex job",
+        priority: 80,
+        updatedAt: firstText(job?.updatedAt, job?.createdAt),
+        brief: firstText(job?.summary, job?.title, job?.prompt, `${name} has a tracked Codex job.`),
+        facts: [firstText(job?.jobId, job?.id, "codex job"), status, "direct job provider"],
+        note: `MARCUS: ${name} has a Codex job signal.`,
+        work: [["Codex job", firstText(job?.title, job?.jobId, name), status, firstText(job?.summary, job?.prompt, "tracked job")]],
+      });
+    }
+
+    function projectFromOperation(operation) {
+      const name = firstText(operation?.projectName, operation?.project?.name, operation?.title);
+      if (!name) return null;
+      const status = firstText(operation?.currentStep?.status, operation?.status, "Running");
+      const blocked = Number(operation?.activeBlockers) > 0 || operation?.needsRecovery;
+      const needs = Boolean(operation?.needsApproval || operation?.pendingApproval);
+      return makeProject({
+        name,
+        icon: "O",
+        state: blocked ? "blocked" : needs ? "needs" : stateFrom(status),
+        status: blocked ? "Blocked" : needs ? "Needs Mark" : status,
+        live: /running|queued|active|in_progress|codex/i.test(`${operation?.status} ${operation?.currentStep?.type} ${status}`) ? 1 : 0,
+        source: "Durable operation",
+        priority: 60,
+        updatedAt: operation?.updatedAt,
+        awarenessProjectId: operation?.projectRegistryId || "",
+        brief: firstText(operation?.title, `${name} has an active durable operation.`),
+        facts: [firstText(operation?.currentStep?.title, "current step"), `progress ${operation?.progress?.percent ?? 0}%`, firstText(operation?.riskLevel, "risk unknown")],
+        note: `MARCUS: ${name} operation is ${operation?.status || status}.`,
+        work: [
+          [firstText(operation?.currentStep?.type, "Operation"), firstText(operation?.currentStep?.title, operation?.title), status, firstText(operation?.status, "operation status")],
+          ["Progress", `${operation?.progress?.completed ?? 0}/${operation?.progress?.total ?? "?"} steps`, status, `${operation?.progress?.percent ?? 0}% complete`],
+        ],
+      });
+    }
+
+    function projectFromAwareness(project) {
+      const name = firstText(project?.canonicalName, project?.projectName, project?.name);
+      if (!name || project?.archived || project?.dashboardVisible === false) return null;
+      const activity = project?.activity || {};
+      const live = Math.max(0, Number(activity.activeOperations) || 0, Number(activity.codexJobs7d) || 0, Number(activity.desktopActiveMinutes7d) > 0 ? 1 : 0);
+      return makeProject({
+        name,
+        icon: "A",
+        state: stateFrom(firstText(project?.attentionState, activity.state, project?.operationalState)),
+        status: firstText(project?.status, project?.attentionState, activity.operationalState, "Observed"),
+        live,
+        source: "MARCUS awareness",
+        priority: live > 0 ? 45 : 20,
+        updatedAt: firstText(project?.updatedAt, activity.calculatedAt, project?.generatedAt),
+        awarenessProjectId: firstText(project?.awarenessProjectId, project?.id),
+        brief: firstText(project?.latestMeaningfulChange, project?.currentActivity, project?.suggestedAction, activity.suggestedAction, `${name} is in canonical awareness.`),
+        facts: [firstText(project?.currentActivity, "current activity unknown"), firstText(project?.likelyNextStep, "continue observing"), `confidence ${Math.round((Number(project?.confidence) || Number(activity.confidence) || 0) * 100)}%`],
+        note: `MARCUS: ${name} awareness state is ${firstText(project?.attentionState, "observed")}.`,
+        work: [
+          ["Awareness", firstText(project?.currentActivity, name), firstText(project?.attentionState, "Observed"), firstText(project?.likelyNextStep, "Continue observing")],
+          ...(project?.latestOperation ? [["Operation", project.latestOperation.title || name, project.latestOperation.status || "Observed", project.latestOperation.currentStep?.title || "latest operation"]] : []),
+        ],
+      });
+    }
+
+    function projectFromBriefItem(item) {
+      const name = firstText(item?.projectName, item?.project, item?.title, item?.name);
+      if (!name) return null;
+      return makeProject({
+        name,
+        icon: "B",
+        state: stateFrom(firstText(item?.state, item?.status, item?.category)),
+        status: firstText(item?.status, item?.category, "Briefed"),
+        live: /codex|active|running|changed|now/i.test(`${item?.source} ${item?.status} ${item?.category}`) ? 1 : 0,
+        source: firstText(item?.source, "ActiveBrief"),
+        priority: 35,
+        updatedAt: firstText(item?.changedAt, item?.updatedAt, item?.createdAt),
+        brief: firstText(item?.summary, item?.description, item?.title),
+        facts: [firstText(item?.source, "ActiveBrief"), firstText(item?.reason, item?.category, "brief signal"), firstText(item?.recommendedAction, item?.action, "review")],
+        note: `MARCUS: ${name} has an ActiveBrief signal.`,
+        work: [["Brief signal", firstText(item?.title, name), firstText(item?.status, "Observed"), firstText(item?.summary, item?.description, "brief signal")]],
+      });
+    }
+
+    function mergeLiveProjects(projects) {
+      const merged = [];
+      const byKey = new Map();
+      for (const project of projects.filter(Boolean)) {
+        const key = projectKey(project.name);
+        if (!key) continue;
+        const existing = byKey.get(key);
+        if (!existing) {
+          byKey.set(key, project);
+          merged.push(project);
+          continue;
+        }
+        existing.live = Math.max(existing.live || 0, project.live || 0);
+        existing.workItems = Math.max(existing.workItems || 0, project.workItems || 0);
+        existing.verifiedAge = existing.live >= project.live ? existing.verifiedAge : project.verifiedAge;
+        existing.brief = existing.live >= project.live ? existing.brief : project.brief;
+        existing.note = existing.live >= project.live ? existing.note : project.note;
+        existing.facts = [...arr(existing.facts), ...arr(project.facts)].filter(Boolean).slice(0, 3);
+        existing.work = [...arr(existing.work), ...arr(project.work)].slice(0, 8);
+        existing.source = `${existing.source}, ${project.source}`;
+        existing.priority = Math.max(Number(existing.priority) || 0, Number(project.priority) || 0);
+        if (project.state === "blocked" || (existing.state !== "blocked" && project.state === "needs") || (existing.state === "quiet" && project.state !== "quiet")) {
+          existing.state = project.state;
+          existing.status = project.status;
+        }
+        existing.awarenessProjectId = existing.awarenessProjectId || project.awarenessProjectId || "";
+      }
+      return merged.sort((a, b) => (b.live - a.live)
+        || ((Number(b.priority) || 0) - (Number(a.priority) || 0))
+        || (["blocked", "needs", "moving", "verifying", "quiet"].indexOf(a.state) - ["blocked", "needs", "moving", "verifying", "quiet"].indexOf(b.state)));
+    }
 
     function activeProject() {
       return state.projects[state.activeProject] || state.projects[0];
@@ -2028,10 +2275,10 @@
 
     function renderCounts() {
       const projects = state.projects;
-      $("projectCount").textContent = "12";
+      $("projectCount").textContent = projects.length;
       $("sessionCount").textContent = projects.reduce((sum, project) => sum + Number(project.live || 0), 0);
       $("needsCount").textContent = projects.filter((project) => project.state === "needs").length;
-      $("allCount").textContent = "12";
+      $("allCount").textContent = projects.length;
       $("activeCount").textContent = projects.filter((project) => ["moving", "active"].includes(project.state)).length;
       $("needsFilterCount").textContent = projects.filter((project) => project.state === "needs").length;
       $("verifyingCount").textContent = projects.filter((project) => project.state === "verifying").length;
@@ -2064,7 +2311,7 @@
       $("liveCount").textContent = project.live;
       $("verifiedAge").textContent = project.verifiedAge;
       $("projectBrief").textContent = project.brief;
-      $("globalBrief").innerHTML = `<strong>MARCUS:</strong> ${esc(project.note || project.brief)}`;
+      $("globalBrief").innerHTML = `<strong>MARCUS:</strong> ${esc(stripMarcusPrefix(project.note || project.brief))}`;
       $("studioScope").textContent = `${project.name} / ${work[1]}`;
       document.querySelector(".scope-icon").textContent = project.icon;
       document.querySelector(".project-icon").textContent = project.icon;
@@ -2131,7 +2378,7 @@
     }
 
     function note(message) {
-      $("globalBrief").innerHTML = `<strong>MARCUS:</strong> ${esc(message)}`;
+      $("globalBrief").innerHTML = `<strong>MARCUS:</strong> ${esc(stripMarcusPrefix(message))}`;
     }
 
     function selectProject(index) {
@@ -2188,24 +2435,59 @@
       }
     }
 
-    async function hydrateFromLiveData() {
+    function buildProjectsFromLiveSources({ awareness, brief, operations, jobs, desktop }) {
+      const desktopProjects = [
+        projectFromDesktopFocus(desktop),
+        ...arr(desktop?.codexWorkspaces).map(projectFromCodexWorkspace),
+      ];
+      const jobProjects = arr(jobs?.jobs).map(projectFromCodexJob);
+      const operationProjects = arr(operations?.operations).map(projectFromOperation);
+      const awarenessProjects = arr(awareness?.projects).map(projectFromAwareness);
+      const briefLists = [
+        ...arr(brief?.sessionContext?.changedSinceLastCheckIn),
+        ...arr(brief?.sessionContext?.changedSinceLastTime),
+        ...arr(brief?.controlledAttention?.items),
+        ...arr(brief?.activeActionQueue),
+        ...arr(brief?.projectActivities),
+        ...arr(brief?.projects),
+      ];
+      const briefProjects = briefLists.map(projectFromBriefItem);
+      return mergeLiveProjects([...desktopProjects, ...jobProjects, ...operationProjects, ...awarenessProjects, ...briefProjects]);
+    }
+
+    function isTyping() {
+      const active = document.activeElement;
+      return active && ["INPUT", "TEXTAREA", "SELECT"].includes(active.tagName);
+    }
+
+    async function hydrateFromLiveData({ quiet = false } = {}) {
       try {
-        const [awareness, brief, operations] = await Promise.all([
+        const [awareness, brief, operations, jobs, desktop] = await Promise.all([
           fetch(AWARENESS_ENDPOINT, { credentials: "include" }).then((r) => r.ok ? r.json() : null).catch(() => null),
           fetch("/api/marcus/active-brief", { credentials: "include" }).then((r) => r.ok ? r.json() : null).catch(() => null),
           fetch("/api/operations/summary", { credentials: "include" }).then((r) => r.ok ? r.json() : null).catch(() => null),
+          fetch("/api/codex/jobs", { credentials: "include" }).then((r) => r.ok ? r.json() : null).catch(() => null),
+          fetch("/api/desktop-context", { credentials: "include" }).then((r) => r.ok ? r.json() : null).catch(() => null),
         ]);
-        const projects = Array.isArray(awareness?.projects) ? awareness.projects : [];
-        if (projects.length) {
-          const first = projects.find((p) => /poopsites|poop sites/i.test(`${p.canonicalName || ""} ${p.name || ""}`))
-            || projects.find((p) => !p.archived)
-            || projects[0];
-          state.projects[0].awarenessProjectId = first.awarenessProjectId || first.id || state.projects[0].awarenessProjectId;
+        const liveProjects = buildProjectsFromLiveSources({ awareness, brief, operations, jobs, desktop });
+        if (liveProjects.length) {
+          const activeName = activeProject()?.name || "";
+          state.projects = liveProjects;
+          const preservedIndex = state.projects.findIndex((project) => projectKey(project.name) === projectKey(activeName));
+          state.activeProject = preservedIndex >= 0 ? preservedIndex : 0;
+          state.activeWork = Math.min(state.activeWork, Math.max(0, arr(activeProject()?.work).length - 1));
+          const desktopCount = arr(desktop?.codexWorkspaces).length;
+          const jobCount = arr(jobs?.jobs).length;
+          const opCount = arr(operations?.operations).length;
+          if (!quiet) note(`Live dashboard refreshed: ${liveProjects.length} projects, ${desktopCount} desktop Codex workspaces, ${jobCount} Codex jobs, ${opCount} operations.`);
+        } else if (!state.projects.length) {
+          state.projects = seedProjects;
+          state.activeProject = 0;
+          state.activeWork = 0;
         }
-        void brief;
-        void operations;
         renderAll();
       } catch {
+        if (!state.projects.length) state.projects = seedProjects;
         renderAll();
       }
     }
@@ -2346,6 +2628,9 @@
 
     renderAll();
     hydrateFromLiveData();
+    window.setInterval(() => {
+      if (document.visibilityState === "visible" && !isTyping()) hydrateFromLiveData({ quiet: true });
+    }, 30000);
   })();
   </script>
 </body>
