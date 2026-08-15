@@ -105,6 +105,8 @@ Until those gates exist, Skool remains `watch_and_draft_only`.
 
 Status: transcript/recording ingestion is the first safe implementation path. Autonomous live attendance is a later phase that requires meeting consent and clear participant disclosure.
 
+Personality modes are documented in [[personality-modes]]. The important product split is that serious external meetings default to Meeting Shadow or Public Assistant, while Demo and Roast Light are opt-in contexts for playful Zoom/OBS demonstrations with people who understand the bit. Snarky live-call behavior is allowed as a controlled demo surface, not as the default client-call posture. `/obs-marcus.html` now provides the local browser sidecar for that surface.
+
 Safe loop:
 
 1. Marcus is invited to the calendar event by email.
@@ -118,6 +120,12 @@ Live-response loop:
 `Mark asks Marcus during call -> local Marcus voice/chat session -> Marcus answers Mark -> Mark chooses whether to say it to the room`
 
 This avoids hidden live meeting automation while still letting Marcus sit beside Mark as a working assistant.
+
+Demo live-response loop:
+
+`Mark opens /obs-marcus.html -> Mark captures microphone or browser-supported display/system audio -> Mark enables Demo/Roast mode -> Marcus is visibly/audibly identified as Mark's AI assistant -> Marcus may make bounded jokes while tracking the call -> Mark can immediately switch to Public Assistant, Meeting Shadow, or Operator mode`
+
+This is a product/demo mode. It should not imply permission to join client calls undisclosed, post chat messages without approval, read Zoom chat automatically, or make jokes from private participant context. Zoom chat can be pasted into the OBS console as context; direct Zoom chat/transcript integration remains future work.
 
 Future live-attendance gate:
 
@@ -201,7 +209,7 @@ Not ready yet:
 - No Skool official integration is configured or verified.
 - No social/community opportunity watcher is deployed.
 - No Skool or social posting should be automated under current policy.
-- No Zoom bot/live meeting participant is configured or consent-audited.
+- No Zoom bot/live meeting participant is configured or consent-audited. The local OBS/browser sidecar exists, but direct Zoom integration and production acceptance are not complete.
 - No calendar connector is configured for automatic meeting prep in this repo.
 
 Next build slice:

@@ -62,6 +62,7 @@ This repo now includes a Render blueprint file: `render.yaml`.
 - `IMAP_HOST`, `IMAP_PORT`, `IMAP_SECURE`, `IMAP_USERNAME`, `IMAP_PASSWORD`
 - `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM_ADDRESS`
 - `OPENAI_API_KEY`, `OPENAI_MODEL`
+- `MARCUS_REALTIME_PERSONALITY_MODE` = optional default Realtime voice mode (`operator`, `dry`, `no_bullshit`, `meeting_shadow`, `public_assistant`, `demo`, or `roast_light`)
 - `ELEVENLABS_API_KEY` = ElevenLabs API key for Marcus voice output
 - `ELEVENLABS_VOICE_ID` = ElevenLabs voice ID to use for Marcus
 - `ELEVENLABS_MODEL_ID` = optional, defaults to `eleven_flash_v2_5`
@@ -140,6 +141,13 @@ Example search payload:
 ```
 
 When Qdrant is configured and enabled, Marcus chat will automatically pull a small set of knowledge-base hits into its context for the active business.
+
+## Marcus Realtime voice and OBS console
+
+- Mobile voice entry point: `/mobile.html`
+- OBS/demo sidecar: `/obs-marcus.html`
+
+The OBS console can use microphone capture or browser display/system-audio capture when the browser and selected source expose an audio track. It shares the same OpenAI Realtime bridge and approval boundaries as Marcus Mobile. Personality modes can be selected from the page or by spoken mode commands such as `demo mode`, `meeting shadow`, or `keep it professional`.
 
 ## Email integration (IMAP / SMTP)
 

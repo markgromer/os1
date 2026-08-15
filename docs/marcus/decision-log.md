@@ -2,6 +2,14 @@
 
 Status: active
 
+## 2026-08-15: Snark Is A Mode Permission, Not The Default Voice
+
+Context: Mark wants Marcus to eventually join or support Zoom/OBS sessions, including playful demos where Marcus can be more fun, edgy, and snarky. The existing Realtime voice personality already permits dry humor, but the same prompt currently applies across private and potentially external contexts.
+
+Decision: Define explicit communication modes in [[personality-modes]]. Keep Operator as the default private work mode. Treat Meeting Shadow and Public Assistant as the serious-call modes. Treat Demo and Roast Light as opt-in playful contexts for show-and-tell or friendly/internal sessions, not client-safe defaults. Snark may target broken workflows, vague strategy, meeting theater, tool chaos, and Mark-approved experiments, but not guests, clients, employees, private personal details, or protected/personal characteristics.
+
+Consequence: Marcus can become more entertaining in controlled demos without training the whole system to be casually risky everywhere. The runtime now has shared prompt fragments, an environment-selected default mode, per-session client mode selection, a Marcus Mobile selector, an OBS/demo sidecar, and a spoken-command mode tool. Future work should add direct Zoom chat/transcript integration beyond pasted context or browser-supported capture and continue testing that Demo/Roast language stays out of Public Assistant while preserving all approval boundaries.
+
 ## 2026-08-15: Archive Removes Attention, Not Knowledge
 
 Context: Mark needs a compact Visualizer that excludes inactive work while Marcus retains immediate access to every known project, including archived history.

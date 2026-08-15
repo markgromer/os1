@@ -202,6 +202,8 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     assert.match(mobileHtml, /marcus-operation-tracker\.js/);
     assert.match(mobileHtml, /Active durable work/);
     assert.match(mobileHtml, /Start voice/);
+    assert.match(mobileHtml, /Voice mode/);
+    assert.match(mobileHtml, /roast_light/);
     assert.match(mobileHtml, /Pairing code or admin token/);
     assert.match(mobileHtml, /Message providers/);
     assert.match(mobileHtml, /System acceptance/);
@@ -220,7 +222,15 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     assert.match(mobileHtml, /marcus_voice_acceptance_session/);
     const realtimeClient = await fetch(`${base}/marcus-realtime.js`);
     assert.equal(realtimeClient.status, 200);
-    assert.match(await realtimeClient.text(), /createMarcusRealtimeVoice/);
+    const realtimeClientText = await realtimeClient.text();
+    assert.match(realtimeClientText, /createMarcusRealtimeVoice/);
+    assert.match(realtimeClientText, /set_marcus_personality_mode/);
+    const obsPage = await fetch(`${base}/obs-marcus.html`);
+    const obsHtml = await obsPage.text();
+    assert.equal(obsPage.status, 200);
+    assert.match(obsHtml, /MARCUS OBS Console/);
+    assert.match(obsHtml, /Display or system audio/);
+    assert.match(obsHtml, /roast_light/);
     const manifestResponse = await fetch(`${base}/manifest.webmanifest`);
     const manifest = await manifestResponse.json();
     assert.equal(manifestResponse.status, 200);
@@ -235,7 +245,7 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     const serviceWorker = await fetch(`${base}/sw.js`);
     assert.equal(serviceWorker.status, 200);
     const serviceWorkerText = await serviceWorker.text();
-    assert.match(serviceWorkerText, /marcus-mobile-v22/);
+    assert.match(serviceWorkerText, /marcus-mobile-v23/);
     assert.match(serviceWorkerText, /marcus-maskable-512\.png/);
     const mobileIcon = await fetch(`${base}/icons/marcus.svg`);
     assert.equal(mobileIcon.status, 200);
@@ -406,6 +416,7 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     const voiceStatusBody = await voiceStatus.json();
     assert.equal(voiceStatusBody.realtime.provider, 'openai_realtime');
     assert.equal(voiceStatusBody.realtime.model, 'gpt-realtime-2.1');
+    assert.equal(voiceStatusBody.realtime.personalityMode, 'operator');
     const operatorHealth = await fetch(`${base}/api/marcus/operator-health`, { headers: liveHeaders });
     assert.equal(operatorHealth.status, 200);
     const operatorHealthBody = await operatorHealth.json();

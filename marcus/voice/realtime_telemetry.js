@@ -27,12 +27,14 @@ export const REALTIME_TELEMETRY_EVENT_TYPES = new Set([
   'network_online',
   'background_suspended',
   'background_resumed',
+  'personality_mode_changed',
   'physical_review_confirmed',
   'voice_error',
 ]);
 
 const VOICE_STATES = new Set(['offline', 'connecting', 'listening', 'thinking', 'speaking', 'reconnecting', 'paused', 'error']);
 const OUTCOMES = new Set(['success', 'failure']);
+const PERSONALITY_MODES = new Set(['operator', 'dry', 'no_bullshit', 'meeting_shadow', 'public_assistant', 'demo', 'roast_light']);
 const DISPLAY_MODES = new Set(['browser', 'standalone', 'minimal-ui', 'fullscreen', 'unknown']);
 const PLATFORMS = new Set(['android', 'ios', 'desktop', 'unknown']);
 const BROWSERS = new Set(['chromium', 'firefox', 'safari', 'other', 'unknown']);
@@ -96,6 +98,11 @@ export function normalizeRealtimeTelemetryEvent(input, { nowMs = Date.now() } = 
     event.outcome = enumValue(input.outcome, OUTCOMES, 'failure');
     const operationId = boundedToken(input.operationId, MAX_OPERATION_ID_LENGTH);
     if (operationId) event.operationId = operationId;
+  }
+  if (type === 'personality_mode_changed') {
+    event.mode = enumValue(input.mode, PERSONALITY_MODES, 'operator');
+    event.source = boundedToken(input.source, 40) || 'unknown';
+    event.changed = input.changed === true;
   }
   if (type === 'client_context') {
     event.displayMode = enumValue(input.displayMode, DISPLAY_MODES, 'unknown');

@@ -45,8 +45,10 @@ import { createHttpCodexAdapterFromEnv } from './marcus/providers/http_codex_ada
 import { RoutedCodexAdapter } from './marcus/providers/routed_codex_adapter.js';
 import {
   buildMarcusRealtimeClientSecretRequest,
+  DEFAULT_MARCUS_PERSONALITY_MODE,
   DEFAULT_MARCUS_REALTIME_MODEL,
   DEFAULT_MARCUS_REALTIME_VOICE,
+  normalizeMarcusPersonalityMode,
 } from './marcus/voice/realtime_session.js';
 import { RealtimeTelemetryStore } from './marcus/voice/realtime_telemetry.js';
 import {
@@ -657,6 +659,11 @@ const MARCUS_REALTIME_MODEL = typeof process.env.MARCUS_REALTIME_MODEL === 'stri
 const MARCUS_REALTIME_VOICE = typeof process.env.MARCUS_REALTIME_VOICE === 'string' && process.env.MARCUS_REALTIME_VOICE.trim()
   ? process.env.MARCUS_REALTIME_VOICE.trim()
   : DEFAULT_MARCUS_REALTIME_VOICE;
+const MARCUS_REALTIME_PERSONALITY_MODE = normalizeMarcusPersonalityMode(
+  typeof process.env.MARCUS_REALTIME_PERSONALITY_MODE === 'string' && process.env.MARCUS_REALTIME_PERSONALITY_MODE.trim()
+    ? process.env.MARCUS_REALTIME_PERSONALITY_MODE.trim()
+    : DEFAULT_MARCUS_PERSONALITY_MODE,
+);
 const AUTH_COOKIE_NAME = 'ops_admin_token';
 const AUTH_COOKIE_MAX_AGE_SEC = 60 * 60 * 24 * 30;
 const MOBILE_PAIRING_CODE_TTL_MS = 10 * 60 * 1000;
@@ -2791,6 +2798,7 @@ async function buildMarcusOperatorHealth() {
           provider: 'openai_realtime',
           model: MARCUS_REALTIME_MODEL,
           voice: MARCUS_REALTIME_VOICE,
+          personalityMode: MARCUS_REALTIME_PERSONALITY_MODE,
         },
       },
       openrouter: {
@@ -16001,6 +16009,7 @@ app.get('/api/marcus/live/voice/status', (req, res) => {
       provider: 'openai_realtime',
       model: MARCUS_REALTIME_MODEL,
       voice: MARCUS_REALTIME_VOICE,
+      personalityMode: MARCUS_REALTIME_PERSONALITY_MODE,
     },
   });
 });
@@ -16015,6 +16024,7 @@ app.post('/api/marcus/realtime/client-secret', async (req, res) => {
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 20_000);
+    const requestedPersonalityMode = normalizeMarcusPersonalityMode(req.body?.personalityMode || MARCUS_REALTIME_PERSONALITY_MODE);
     let upstream;
     let data;
     try {
@@ -16032,6 +16042,7 @@ app.post('/api/marcus/realtime/client-secret', async (req, res) => {
         body: JSON.stringify(buildMarcusRealtimeClientSecretRequest({
           model: MARCUS_REALTIME_MODEL,
           voice: MARCUS_REALTIME_VOICE,
+          personalityMode: requestedPersonalityMode,
         })),
         signal: controller.signal,
       });
@@ -16054,6 +16065,7 @@ app.post('/api/marcus/realtime/client-secret', async (req, res) => {
         provider: 'openai_realtime',
         model: MARCUS_REALTIME_MODEL,
         voice: MARCUS_REALTIME_VOICE,
+        personalityMode: requestedPersonalityMode,
       },
     });
   } catch (err) {

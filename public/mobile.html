@@ -148,6 +148,9 @@
   .voice-dot { width: 10px; height: 10px; border: 2px solid currentColor; border-radius: 50%; flex: 0 0 auto; }
   .voice-btn.active .voice-dot { background: currentColor; }
   .voice-status { min-width: 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+  .voice-mode-row { min-height: 38px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px; }
+  .voice-mode-row label { color: var(--muted); font-size: 12px; }
+  .voice-mode-row select { min-height: 34px; max-width: 190px; border-radius: 8px; padding: 6px 30px 6px 10px; color: var(--text); background: rgba(255,255,255,0.06); border: 1px solid var(--line); }
   .install { display: none; padding: 12px; align-items: center; justify-content: space-between; gap: 10px; }
   .install.visible { display: flex; }
   .install p { margin: 0; color: var(--muted); font-size: 13px; }
@@ -321,6 +324,18 @@
           <span id="voiceLabel">Start voice</span>
         </button>
         <span id="voiceStatus" class="voice-status" aria-live="polite">OpenAI Realtime ready</span>
+      </div>
+      <div class="voice-mode-row">
+        <label for="voiceModeSelect">Voice mode</label>
+        <select id="voiceModeSelect" aria-label="Voice mode">
+          <option value="operator">Operator</option>
+          <option value="dry">Dry</option>
+          <option value="no_bullshit">No-Bullshit</option>
+          <option value="meeting_shadow">Meeting Shadow</option>
+          <option value="public_assistant">Public Assistant</option>
+          <option value="demo">Demo</option>
+          <option value="roast_light">Roast Light</option>
+        </select>
       </div>
       <textarea id="messageInput" placeholder="Talk to Marcus..."></textarea>
       <button id="sendBtn" class="btn primary" type="submit">Send</button>
@@ -673,12 +688,29 @@
     voice: document.getElementById('voiceBtn'),
     voiceLabel: document.getElementById('voiceLabel'),
     voiceStatus: document.getElementById('voiceStatus'),
+    voiceMode: document.getElementById('voiceModeSelect'),
   };
   let liveToken = '';
   let adminToken = localStorage.getItem('marcus_mobile_admin_token') || '';
   let deferredInstall = null;
   let realtimeVoice = null;
   const ACCEPTANCE_SESSION_KEY = 'marcus_voice_acceptance_session';
+  const VOICE_MODE_KEY = 'marcus_voice_personality_mode';
+  const voiceModeLabels = {
+    operator: 'Operator',
+    dry: 'Dry',
+    no_bullshit: 'No-Bullshit',
+    meeting_shadow: 'Meeting Shadow',
+    public_assistant: 'Public Assistant',
+    demo: 'Demo',
+    roast_light: 'Roast Light',
+  };
+  function normalizeVoiceMode(value) {
+    const normalized = String(value || '').trim().toLowerCase().replace(/[-\s]+/g, '_');
+    return Object.prototype.hasOwnProperty.call(voiceModeLabels, normalized) ? normalized : 'operator';
+  }
+  let activeVoiceMode = normalizeVoiceMode(localStorage.getItem(VOICE_MODE_KEY));
+  els.voiceMode.value = activeVoiceMode;
   const voiceDiagnostics = { statuses: [], inputTranscripts: [], outputTranscripts: [] };
   window.__marcusVoiceDiagnostics = voiceDiagnostics;
   let telemetrySessionId = restoredAcceptanceSessionId() || createTelemetryId();
@@ -1689,7 +1721,8 @@
       error: 'Retry voice',
     };
     els.voiceLabel.textContent = labels[state] || 'Start voice';
-    els.voiceStatus.textContent = detail || (active ? 'OpenAI Realtime active' : 'OpenAI Realtime ready');
+    const modeLabel = voiceModeLabels[realtimeVoice?.getPersonalityMode?.() || activeVoiceMode] || 'Operator';
+    els.voiceStatus.textContent = `${detail || (active ? 'OpenAI Realtime active' : 'OpenAI Realtime ready')} - ${modeLabel}`;
     els.voice.classList.toggle('active', Boolean(active));
     els.voice.setAttribute('aria-pressed', active ? 'true' : 'false');
     els.acceptanceVoice.textContent = active ? 'Stop voice test' : 'Start voice test';
@@ -1697,6 +1730,7 @@
 
   if (typeof window.createMarcusRealtimeVoice === 'function') {
     realtimeVoice = window.createMarcusRealtimeVoice({
+      personalityMode: activeVoiceMode,
       getAuthToken: async () => {
         if (!(await ensureSession())) return '';
         return liveToken || adminToken;
@@ -1877,6 +1911,23 @@
       if (!(await ensureSession())) return;
       await realtimeVoice.start();
     } catch {}
+  });
+  els.voiceMode.addEventListener('change', async () => {
+    activeVoiceMode = normalizeVoiceMode(els.voiceMode.value);
+    els.voiceMode.value = activeVoiceMode;
+    localStorage.setItem(VOICE_MODE_KEY, activeVoiceMode);
+    queueVoiceTelemetry({ type: 'personality_mode_changed', mode: activeVoiceMode, source: 'mobile_ui', changed: true, occurredAt: new Date().toISOString() });
+    if (!realtimeVoice) return;
+    try {
+      const result = await realtimeVoice.setPersonalityMode(activeVoiceMode, { source: 'mobile_ui' });
+      updateVoiceUi({
+        state: realtimeVoice.getState(),
+        active: realtimeVoice.isActive(),
+        detail: result.changed ? `Switching to ${voiceModeLabels[activeVoiceMode]} mode` : '',
+      });
+    } catch (err) {
+      addMessage('system', err?.message || 'Voice mode change failed.');
+    }
   });
 
   window.addEventListener('beforeinstallprompt', (event) => {

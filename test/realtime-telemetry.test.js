@@ -56,6 +56,24 @@ test('realtime telemetry strips content and summarizes every acceptance gate', (
   assert.equal(summary.operationId, 'op_voice_acceptance');
 });
 
+test('realtime telemetry accepts bounded personality mode changes without content', () => {
+  const event = normalizeRealtimeTelemetryEvent({
+    eventId: 'mode-change',
+    sessionId: 'voice-session-1',
+    type: 'personality_mode_changed',
+    mode: 'demo',
+    source: 'mobile_ui',
+    changed: true,
+    text: 'do not store this',
+  }, { nowMs: Date.parse('2026-08-12T07:00:01.000Z') });
+
+  assert.equal(event.type, 'personality_mode_changed');
+  assert.equal(event.mode, 'demo');
+  assert.equal(event.source, 'mobile_ui');
+  assert.equal(event.changed, true);
+  assert.equal(Object.prototype.hasOwnProperty.call(event, 'text'), false);
+});
+
 test('realtime telemetry persists bounded, idempotent, content-free events', async () => {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'marcus-realtime-telemetry-'));
   try {

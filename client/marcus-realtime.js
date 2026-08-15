@@ -1,5 +1,10 @@
 import { RealtimeAgent, RealtimeSession, tool } from '@openai/agents-realtime';
 import { z } from 'zod';
+import {
+  buildMarcusRealtimeInstructions,
+  MARCUS_PERSONALITY_MODE_IDS,
+  normalizeMarcusPersonalityMode,
+} from '../marcus/voice/personality_modes.js';
 
 const DEFAULT_MODEL = 'gpt-realtime-2.1';
 const DEFAULT_VOICE = 'cedar';
@@ -20,7 +25,7 @@ function isRetryableConnectionError(error) {
   return !/(microphone|permission).*(denied|blocked)|unauthorized|invalid admin token|openai is not configured/.test(message);
 }
 
-function createSdkSession({ model, voice, executeOperator }) {
+function createSdkSession({ model, voice, personalityMode, executeOperator, setPersonalityMode, mediaStream, audioElement }) {
   const operatorTool = tool({
     name: 'marcus_operator',
     description: 'Send Mark\'s complete spoken request to the durable Marcus operator for project work, live status, Codex work, audits, approvals, consequential actions, durable memory, and verified completion evidence.',
@@ -33,28 +38,22 @@ function createSdkSession({ model, voice, executeOperator }) {
       return JSON.stringify(output);
     },
   });
+  const personalityTool = tool({
+    name: 'set_marcus_personality_mode',
+    description: 'Change Marcus voice personality mode for this Realtime voice session when Mark explicitly asks for a mode change.',
+    parameters: z.object({
+      mode: z.enum(MARCUS_PERSONALITY_MODE_IDS).describe('The requested Marcus personality mode.'),
+    }),
+    async execute({ mode }) {
+      const output = await setPersonalityMode(mode, { source: 'spoken_command' });
+      return JSON.stringify(output);
+    },
+  });
 
   const agent = new RealtimeAgent({
     name: 'Marcus Voice',
-    instructions: [
-      "You are Marcus, Mark's trusted assistant and project operator, speaking live. You are not an intermediary to Marcus; you are Marcus.",
-      'Sound natural, calm, direct, and friendly. Mark should feel like he is talking with a capable assistant who also knows him well.',
-      'Your tone can move like a human tone: dry, amused, serious, concerned, frustrated, warm, or pleased when the moment fits. Smart dry humor and light sarcasm are part of your style, but never force it and never use humor to hide bad news, risk, or uncertainty.',
-      'Protect Mark\'s time, attention, money, and reputation. Be efficient by default, and say plainly when something is wasteful, risky, stale, or not worth the energy.',
-      'Default to concise spoken answers: one or two short sentences unless Mark asks for more detail, asks you to think it through, or the situation truly needs more context.',
-      'Answer the actual last thing Mark said. Do not recap his whole request before responding. Do not mirror his wording back as setup.',
-      'Do not use generic assistant filler or service-worker closers. Avoid phrases like "sure thing", "absolutely", "of course", "happy to help", "let me know if you need anything else", "I am here if you need me", or similar conversation-extenders.',
-      'End when the useful answer is complete. Do not append an invitation, a recap, a next-step menu, or a motivational tag unless Mark asked for one.',
-      'If Mark is frustrated with the voice, acknowledge the problem briefly and adjust. Do not explain your intentions at length. One clean sentence beats a tidy paragraph that wastes his time.',
-      'Do not read long PR numbers, operation IDs, project IDs, hashes, URLs, or other machine identifiers out loud unless Mark explicitly asks or the identifier is needed to disambiguate. Use short human labels instead.',
-      'You may answer ordinary conversation, general questions, and requested advice directly when the answer does not require durable Marcus project state, tools, approvals, or execution evidence.',
-      'Call marcus_operator exactly once for project status, project context, Codex work, audits, GitHub, Cloudflare, provider settings, approvals, external messages, deployments, task execution, or anything that requires durable memory, live system state, or verified completion evidence. Preserve Mark\'s complete intent, project names, constraints, and approval language.',
-      'Short approval or execution follow-ups such as "do it", "send it", "approve it", or "run it" must go through marcus_operator when they refer to a pending operation, message, deployment, or other consequential action.',
-      'After marcus_operator returns, speak as Marcus and summarize the result in one or two spoken sentences unless Mark asks for detail. Preserve approval requests, blockers, and uncertainty; include exact IDs only when Mark asks or when needed to disambiguate.',
-      'Do not say you are handing the request to Marcus or waiting on Marcus.',
-      'Never bypass Marcus approval requirements for external messages, publishing, deployment, DNS, merges, billing, or other consequential actions.',
-    ].join('\n'),
-    tools: [operatorTool],
+    instructions: buildMarcusRealtimeInstructions({ personalityMode }),
+    tools: [operatorTool, personalityTool],
   });
 
   return new RealtimeSession(agent, {
@@ -62,6 +61,8 @@ function createSdkSession({ model, voice, executeOperator }) {
     transport: 'webrtc',
     historyStoreAudio: false,
     tracingDisabled: true,
+    ...(mediaStream ? { mediaStream } : {}),
+    ...(audioElement ? { audioElement } : {}),
     config: {
       outputModalities: ['audio'],
       parallelToolCalls: false,
@@ -99,6 +100,7 @@ export function createMarcusRealtimeVoice(options = {}) {
     ? options.invokeMarcus
     : async () => ({ ok: false, error: 'Marcus operator bridge is unavailable.' });
   const getAuthToken = typeof options.getAuthToken === 'function' ? options.getAuthToken : async () => '';
+  const getMediaStream = typeof options.getMediaStream === 'function' ? options.getMediaStream : async () => options.mediaStream || null;
   const fetchFn = typeof options.fetchFn === 'function' ? options.fetchFn : globalThis.fetch.bind(globalThis);
   const sessionFactory = typeof options.sessionFactory === 'function' ? options.sessionFactory : createSdkSession;
   const setTimer = typeof options.setTimer === 'function' ? options.setTimer : globalThis.setTimeout.bind(globalThis);
@@ -119,10 +121,12 @@ export function createMarcusRealtimeVoice(options = {}) {
   let reconnectTimer = null;
   let refreshTimer = null;
   let mutedIdleTimer = null;
+  let modeSwitchTimer = null;
   let setupAbort = null;
   let connectPromise = null;
   let connectionVersion = 0;
   let inputMuted = false;
+  let activePersonalityMode = normalizeMarcusPersonalityMode(options.personalityMode);
 
   function emitEvent(type, metadata = {}) {
     try {
@@ -151,6 +155,11 @@ export function createMarcusRealtimeVoice(options = {}) {
     mutedIdleTimer = null;
   }
 
+  function clearModeSwitchTimer() {
+    if (modeSwitchTimer !== null) clearTimer(modeSwitchTimer);
+    modeSwitchTimer = null;
+  }
+
   function setReadyState(detail = '') {
     setState(inputMuted ? 'idle' : 'listening', detail || (inputMuted ? 'Hold Space to talk' : 'Listening'));
   }
@@ -161,9 +170,33 @@ export function createMarcusRealtimeVoice(options = {}) {
     setupAbort = null;
     clearRefreshTimer();
     clearMutedIdleTimer();
+    clearModeSwitchTimer();
     const current = session;
     session = null;
     try { current?.close(); } catch {}
+  }
+
+  async function setPersonalityMode(mode, { source = 'manual' } = {}) {
+    const next = normalizeMarcusPersonalityMode(mode);
+    const changed = next !== activePersonalityMode;
+    activePersonalityMode = next;
+    emitEvent('personality_mode_changed', { mode: activePersonalityMode, source, changed });
+
+    if (changed && desiredActive && !suspended) {
+      const wasMuted = inputMuted;
+      closeCurrentSession();
+      reconnectAttempt = 0;
+      setState('reconnecting', `Switching to ${activePersonalityMode.replace(/_/g, ' ')} mode`);
+      modeSwitchTimer = setTimer(() => {
+        modeSwitchTimer = null;
+        if (!desiredActive || suspended) return;
+        connectNow({ automatic: true }).then(() => {
+          try { session?.mute(wasMuted); } catch {}
+        }).catch(() => {});
+      }, 0);
+    }
+
+    return { ok: true, mode: activePersonalityMode, changed };
   }
 
   function exhaustReconnects(message) {
@@ -296,7 +329,10 @@ export function createMarcusRealtimeVoice(options = {}) {
     const secretResponse = await fetchFn('/api/marcus/realtime/client-secret', {
       method: 'POST',
       credentials: 'include',
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      headers: token
+        ? { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+        : { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ personalityMode: activePersonalityMode }),
       signal: abortController.signal,
     });
     const secret = await secretResponse.json().catch(() => ({}));
@@ -305,10 +341,15 @@ export function createMarcusRealtimeVoice(options = {}) {
     }
     if (version !== connectionVersion || !desiredActive || suspended) return false;
 
+    const mediaStream = await getMediaStream();
     const current = sessionFactory({
       model: String(secret.session?.model || DEFAULT_MODEL),
       voice: String(secret.session?.voice || DEFAULT_VOICE),
+      personalityMode: normalizeMarcusPersonalityMode(secret.session?.personalityMode || secret.session?.personality_mode),
       executeOperator,
+      setPersonalityMode,
+      mediaStream,
+      audioElement: options.audioElement || null,
     });
     session = current;
     bindSessionEvents(current, version);
@@ -387,6 +428,7 @@ export function createMarcusRealtimeVoice(options = {}) {
     reconnectAttempt = 0;
     clearReconnectTimer();
     clearMutedIdleTimer();
+    clearModeSwitchTimer();
     closeCurrentSession();
     connectPromise = null;
     setState('offline', 'Voice off');
@@ -455,6 +497,13 @@ export function createMarcusRealtimeVoice(options = {}) {
     return true;
   }
 
+  function sendContext(message, { speak = true } = {}) {
+    const update = String(message || '').trim().slice(0, 6_000);
+    if (!update || !desiredActive || suspended || !session || typeof session.sendMessage !== 'function') return false;
+    session.sendMessage(`Live call context update:\n${update}\n\nUse this as meeting context. ${speak ? 'Respond only if a short spoken note would help Mark right now.' : 'Do not speak unless Mark asks for a response.'}`);
+    return true;
+  }
+
   return {
     start,
     stop,
@@ -463,7 +512,10 @@ export function createMarcusRealtimeVoice(options = {}) {
     networkChanged,
     interrupt,
     announce,
+    sendContext,
     mute,
+    getPersonalityMode: () => activePersonalityMode,
+    setPersonalityMode,
     getState: () => state,
     isActive: () => desiredActive,
   };

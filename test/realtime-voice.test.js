@@ -3,8 +3,10 @@ import test from 'node:test';
 
 import {
   buildMarcusRealtimeClientSecretRequest,
+  DEFAULT_MARCUS_PERSONALITY_MODE,
   DEFAULT_MARCUS_REALTIME_MODEL,
   DEFAULT_MARCUS_REALTIME_VOICE,
+  normalizeMarcusPersonalityMode,
 } from '../marcus/voice/realtime_session.js';
 
 test('Marcus realtime voice is Marcus and delegates durable work to the operator', () => {
@@ -29,12 +31,25 @@ test('Marcus realtime voice is Marcus and delegates durable work to the operator
   assert.match(session.instructions, /ordinary conversation/i);
   assert.match(session.instructions, /Do not read long PR numbers/i);
   assert.match(session.instructions, /Never bypass Marcus approval requirements/i);
+  assert.match(session.instructions, /Mode: Operator/i);
+  assert.equal(session.metadata.personality_mode, DEFAULT_MARCUS_PERSONALITY_MODE);
   assert.equal(session.max_output_tokens, 480);
   assert.equal(session.tool_choice, 'auto');
-  assert.equal(session.tools.length, 1);
+  assert.equal(session.tools.length, 2);
   assert.equal(session.tools[0].name, 'marcus_operator');
   assert.deepEqual(session.tools[0].parameters.required, ['message']);
   assert.equal(session.tools[0].parameters.additionalProperties, false);
+  assert.equal(session.tools[1].name, 'set_marcus_personality_mode');
+  assert.deepEqual(session.tools[1].parameters.required, ['mode']);
+  assert.deepEqual(session.tools[1].parameters.properties.mode.enum, [
+    'operator',
+    'dry',
+    'no_bullshit',
+    'meeting_shadow',
+    'public_assistant',
+    'demo',
+    'roast_light',
+  ]);
 });
 
 test('Marcus realtime voice normalizes unsafe model and voice overrides', () => {
@@ -45,4 +60,27 @@ test('Marcus realtime voice normalizes unsafe model and voice overrides', () => 
 
   assert.equal(request.session.model, DEFAULT_MARCUS_REALTIME_MODEL);
   assert.equal(request.session.audio.output.voice, DEFAULT_MARCUS_REALTIME_VOICE);
+  assert.equal(request.session.metadata.personality_mode, DEFAULT_MARCUS_PERSONALITY_MODE);
+});
+
+test('Marcus realtime voice includes explicit mode fragments without weakening authority', () => {
+  const demo = buildMarcusRealtimeClientSecretRequest({ personalityMode: 'demo' }).session;
+  assert.equal(demo.metadata.personality_mode, 'demo');
+  assert.match(demo.instructions, /Mode: Demo/i);
+  assert.match(demo.instructions, /not a serious client-call default/i);
+  assert.match(demo.instructions, /set_marcus_personality_mode/i);
+  assert.match(demo.instructions, /Never bypass Marcus approval requirements/i);
+
+  const publicAssistant = buildMarcusRealtimeClientSecretRequest({ personalityMode: 'public-assistant' }).session;
+  assert.equal(publicAssistant.metadata.personality_mode, 'public_assistant');
+  assert.match(publicAssistant.instructions, /Mode: Public Assistant/i);
+  assert.match(publicAssistant.instructions, /No snark about clients/i);
+  assert.doesNotMatch(publicAssistant.instructions, /Mode: Demo/i);
+  assert.doesNotMatch(publicAssistant.instructions, /Mode: Roast Light/i);
+});
+
+test('Marcus realtime voice normalizes personality mode aliases safely', () => {
+  assert.equal(normalizeMarcusPersonalityMode('public-assistant'), 'public_assistant');
+  assert.equal(normalizeMarcusPersonalityMode('Roast Light'), 'roast_light');
+  assert.equal(normalizeMarcusPersonalityMode('../../demo'), DEFAULT_MARCUS_PERSONALITY_MODE);
 });

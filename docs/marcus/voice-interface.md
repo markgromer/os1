@@ -1,6 +1,6 @@
 # Voice Interface
 
-Status: primary architecture selected and deployed. The installed Android PWA now proves real signaling, recognized speech, durable operator completion, and spoken output. Physical interruption, network recovery, lock/background recovery, and same-session confirmation remain open.
+Status: primary architecture selected, deployed, and accepted on physical Android. The installed Android PWA proves real signaling, recognized speech, durable operator completion, spoken output, interruption, network recovery, lock/background recovery, and same-session confirmation.
 
 ## Objective
 
@@ -19,6 +19,8 @@ Voice should be the fastest way for Mark to talk to Marcus directly. It should n
 ## Spoken Persona
 
 Marcus voice is Marcus, not an intermediary. It may answer ordinary conversation, general questions, and requested advice directly when no durable project state, tool access, approval, or execution evidence is needed. Spoken answers should be concise by default: one or two short sentences unless Mark asks for more detail or the situation truly needs context. Marcus should answer the last thing Mark said without replaying the whole request first. It should not use generic assistant filler, customer-support closers, "let me know" tails, unnecessary next-step menus, or motivational padding. Machine identifiers such as PR numbers, operation IDs, project IDs, hashes, and URLs should not be read aloud unless Mark asks for them or they are needed to disambiguate.
+
+The current default Realtime prompt is [[personality-modes|Operator]] mode: concise, direct, lightly dry, and approval-aware. The runtime now has normalized prompt modes for Dry, No-Bullshit, Meeting Shadow, Public Assistant, Demo, and Roast Light through `MARCUS_REALTIME_PERSONALITY_MODE`, a per-session client-secret `personalityMode`, the Marcus Mobile Voice mode selector, `/obs-marcus.html`, and the `set_marcus_personality_mode` spoken-command tool. Snark should remain a mode permission, not a global behavior. Demo/Roast behavior is intended for opt-in show-and-tell or playful calls, while serious external calls should use Public Assistant or Meeting Shadow.
 
 OpenAI's current voice-agent guidance recommends Realtime speech-to-speech for low first-audio latency, barge-in, natural turn-taking, and realtime tool use. It recommends WebRTC for browser and mobile clients. Sources: [Voice agents](https://developers.openai.com/api/docs/guides/voice-agents), [Realtime WebRTC](https://developers.openai.com/api/docs/guides/realtime-webrtc), and [Realtime tools](https://developers.openai.com/api/docs/guides/realtime-mcp).
 
@@ -60,8 +62,11 @@ The Realtime voice layer may not independently:
 - `OPENAI_API_KEY`: standard server-side API key or the equivalent saved Marcus setting.
 - `MARCUS_REALTIME_MODEL`: optional model override.
 - `MARCUS_REALTIME_VOICE`: optional voice override.
+- `MARCUS_REALTIME_PERSONALITY_MODE`: optional default voice personality mode. Invalid values fall back to Operator.
 
-The browser receives a short-lived client secret from `POST /api/marcus/realtime/client-secret`. The standard API key is never returned to the browser.
+The browser receives a short-lived client secret from `POST /api/marcus/realtime/client-secret`. The request may include a normalized per-session `personalityMode`; the server returns the selected mode beside the model and voice. The standard API key is never returned to the browser.
+
+`/obs-marcus.html` reuses the same browser Realtime bundle with a caller-supplied `MediaStream`. It can capture microphone audio or browser-supported display/system audio, then send that audio to the Realtime session. It also provides a pasted context feed for Zoom chat or meeting notes. This is local/browser capability, not a direct Zoom provider integration.
 
 ## Session Lifecycle
 

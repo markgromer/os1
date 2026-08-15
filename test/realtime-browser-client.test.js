@@ -75,6 +75,7 @@ test('Marcus browser voice uses the SDK tool bridge and reports interruption lif
   assert.deepEqual(sessions[0].connectCalls, [{ apiKey: 'ek_test' }]);
   assert.equal(configs[0].model, 'gpt-realtime-2.1');
   assert.equal(configs[0].voice, 'marin');
+  assert.equal(configs[0].personalityMode, 'operator');
   assert.deepEqual(await configs[0].executeOperator('Audit Reggie'), { ok: true, reply: 'Durable result' });
   assert.deepEqual(requests, ['Audit Reggie']);
 
@@ -102,6 +103,74 @@ test('Marcus browser voice uses the SDK tool bridge and reports interruption lif
   assert.equal(voice.announce('This must not be spoken.'), false);
   assert.equal(voice.getState(), 'offline');
   assert.equal(voice.isActive(), false);
+});
+
+test('Marcus browser voice requests and switches personality mode per session', async () => {
+  const sessions = [];
+  const configs = [];
+  const fetchBodies = [];
+  const telemetry = [];
+  const voice = createMarcusRealtimeVoice({
+    personalityMode: 'demo',
+    fetchFn: async (_url, options) => {
+      const body = JSON.parse(options.body || '{}');
+      fetchBodies.push(body);
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ value: 'ek_test', session: { model: 'gpt-realtime-2.1', voice: 'marin', personalityMode: body.personalityMode } }),
+      };
+    },
+    sessionFactory: (config) => {
+      configs.push(config);
+      const session = new FakeSession();
+      sessions.push(session);
+      return session;
+    },
+    onEvent: (event) => telemetry.push(event),
+    sessionRefreshMs: 60_000,
+  });
+
+  try {
+    await voice.start();
+    assert.equal(voice.getPersonalityMode(), 'demo');
+    assert.equal(configs[0].personalityMode, 'demo');
+    assert.deepEqual(fetchBodies[0], { personalityMode: 'demo' });
+
+    const result = await voice.setPersonalityMode('public assistant', { source: 'test' });
+    assert.deepEqual(result, { ok: true, mode: 'public_assistant', changed: true });
+    assert.equal(voice.getState(), 'reconnecting');
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    assert.equal(voice.getPersonalityMode(), 'public_assistant');
+    assert.equal(configs.at(-1).personalityMode, 'public_assistant');
+    assert.deepEqual(fetchBodies.at(-1), { personalityMode: 'public_assistant' });
+    assert.ok(telemetry.some((event) => event.type === 'personality_mode_changed' && event.mode === 'public_assistant' && event.source === 'test'));
+  } finally {
+    voice.stop();
+  }
+});
+
+test('Marcus browser voice accepts supplied meeting audio stream and context updates', async () => {
+  const configs = [];
+  const mediaStream = { id: 'meeting-audio-stream' };
+  const voice = createMarcusRealtimeVoice({
+    getMediaStream: async () => mediaStream,
+    fetchFn: async () => secretResponse(),
+    sessionFactory: (config) => {
+      configs.push(config);
+      return new FakeSession();
+    },
+    sessionRefreshMs: 60_000,
+  });
+
+  try {
+    await voice.start();
+    assert.equal(configs[0].mediaStream, mediaStream);
+    assert.equal(voice.sendContext('Zoom chat: can we ship Friday?'), true);
+  } finally {
+    voice.stop();
+  }
 });
 
 test('Marcus browser voice reconnects after background and network recovery with fresh credentials', async () => {

@@ -425,6 +425,8 @@ The production paired-admin `Verify` dashboard starts a fresh acceptance session
 
 Status: the official SDK, recovery, acceptance telemetry, durable-work tracking, PWA install assets, exact-target operation approval, exact-draft messaging, and mobile deployment contract are deployed and accepted. Production cache `marcus-mobile-v22` and all required raster/maskable icons are live. Direct Live-token mutations return 401 and conversational Live-token approval requires durable reauthentication. Both provider credentials and approved sends pass. The accepted installed-Android session proves all eight lifecycle gates plus explicit physical confirmation; combined production acceptance passes 13/13.
 
+Personality mode foundation: implemented locally. `marcus/voice/personality_modes.js` defines Operator, Dry, No-Bullshit, Meeting Shadow, Public Assistant, Demo, and Roast Light prompt fragments. `MARCUS_REALTIME_PERSONALITY_MODE` selects the default server-side Realtime mode, status/client-secret responses expose the normalized mode, Marcus Mobile has a local persisted Voice mode selector, `/obs-marcus.html` provides an OBS/demo sidecar, and the Realtime agent exposes `set_marcus_personality_mode` for spoken mode-switch commands. Active voice reconnects after a mode change so the new prompt takes effect. Remaining work: direct Zoom chat/transcript integration beyond pasted context or browser-supported capture, and production verification. Tests should continue proving that Demo/Roast wording cannot leak into Public Assistant and that no mode changes external communication, publishing, deployment, or approval authority.
+
 Verified locally on 2026-08-12:
 
 - The configured OpenAI account minted a short-lived `gpt-realtime-2.1` client secret.

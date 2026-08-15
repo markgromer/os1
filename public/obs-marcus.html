@@ -1,0 +1,442 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#07111d">
+  <title>MARCUS OBS Console</title>
+  <link rel="icon" href="/icons/marcus.svg" type="image/svg+xml">
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #07111d;
+      --panel: rgba(17, 31, 48, 0.88);
+      --line: rgba(130, 166, 205, 0.25);
+      --text: #f3f7ff;
+      --muted: #a9bad0;
+      --accent: #48d27d;
+      --blue: #55a9ff;
+      --warn: #f6bd4f;
+      --danger: #ff6e84;
+      --shadow: 0 22px 70px rgba(0, 0, 0, 0.36);
+      --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --mono: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 18% -10%, rgba(72, 135, 224, 0.18), transparent 28%),
+        radial-gradient(circle at 88% 4%, rgba(72, 210, 125, 0.12), transparent 25%),
+        linear-gradient(180deg, #0c1b2b 0%, var(--bg) 54%, #06101a 100%);
+      font-family: var(--sans);
+      letter-spacing: 0;
+    }
+
+    button, input, textarea, select { font: inherit; letter-spacing: 0; }
+    button { cursor: pointer; }
+    button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible {
+      outline: 2px solid var(--blue);
+      outline-offset: 2px;
+    }
+
+    .app {
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+
+    header {
+      min-height: 62px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 12px 18px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(7, 17, 29, 0.76);
+      backdrop-filter: blur(18px);
+    }
+
+    .brand, .status-line, .controls, .capture-row, .mode-row, .actions {
+      display: flex;
+      align-items: center;
+    }
+
+    .brand { gap: 10px; min-width: 0; }
+    .brand img { width: 34px; height: 34px; }
+    .brand h1 { margin: 0; font-size: 17px; line-height: 1.1; }
+    .brand span, .status-line, label, .hint { color: var(--muted); font-size: 12px; }
+    .status-line { gap: 8px; white-space: nowrap; }
+    .dot { width: 10px; height: 10px; border-radius: 999px; background: var(--warn); box-shadow: 0 0 22px rgba(246, 189, 79, 0.35); }
+    .dot.on { background: var(--accent); box-shadow: 0 0 22px rgba(72, 210, 125, 0.42); }
+    .dot.bad { background: var(--danger); box-shadow: 0 0 22px rgba(255, 110, 132, 0.35); }
+
+    main {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: minmax(320px, 420px) minmax(420px, 1fr);
+      gap: 14px;
+      padding: 14px;
+    }
+
+    section {
+      min-height: 0;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      box-shadow: var(--shadow);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .panel-head {
+      min-height: 48px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 12px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .panel-head h2 { margin: 0; font-size: 14px; }
+    .panel-body { display: grid; gap: 12px; padding: 12px; }
+    .mode-row, .capture-row { justify-content: space-between; gap: 10px; }
+    select, input, textarea {
+      width: 100%;
+      color: var(--text);
+      background: rgba(255,255,255,0.06);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 9px 10px;
+    }
+    textarea { min-height: 150px; resize: vertical; line-height: 1.45; }
+    .mode-row select, .capture-row select { max-width: 220px; }
+
+    .btn {
+      min-height: 38px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px 12px;
+      color: var(--text);
+      background: rgba(255,255,255,0.07);
+    }
+    .btn.primary { color: #031b18; background: var(--accent); border-color: transparent; font-weight: 800; }
+    .btn.warn { color: #221904; background: var(--warn); border-color: transparent; font-weight: 800; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .actions { gap: 8px; flex-wrap: wrap; }
+
+    .transcript {
+      min-height: 0;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+
+    .log {
+      min-height: 0;
+      overflow: auto;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .entry {
+      max-width: 88%;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 9px 10px;
+      font-size: 13px;
+      line-height: 1.4;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    .entry.user { align-self: flex-end; color: #031b18; background: var(--accent); border-color: transparent; }
+    .entry.marcus { align-self: flex-start; background: rgba(255,255,255,0.06); }
+    .entry.system { align-self: center; max-width: 100%; color: var(--muted); background: transparent; border-style: dashed; font-size: 12px; }
+    .meter { height: 5px; overflow: hidden; background: rgba(255,255,255,0.08); border-radius: 999px; }
+    .meter span { display: block; width: 0; height: 100%; background: var(--accent); transition: width 120ms ease; }
+    video { width: 100%; max-height: 180px; border: 1px solid var(--line); border-radius: 8px; background: #02070d; }
+
+    @media (max-width: 840px) {
+      header { align-items: flex-start; flex-direction: column; }
+      main { grid-template-columns: 1fr; }
+      .mode-row, .capture-row { align-items: stretch; flex-direction: column; }
+      .mode-row select, .capture-row select { max-width: none; }
+    }
+  </style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div class="brand">
+      <img src="/icons/marcus.svg" alt="">
+      <div>
+        <h1>MARCUS OBS Console</h1>
+        <span>Live sidecar for demos, calls, and show-and-tell sessions</span>
+      </div>
+    </div>
+    <div class="status-line" aria-live="polite"><span id="statusDot" class="dot"></span><span id="statusText">Idle</span></div>
+  </header>
+
+  <main>
+    <section aria-labelledby="controlsTitle">
+      <div class="panel-head"><h2 id="controlsTitle">Controls</h2><span id="modeLabel">Operator</span></div>
+      <div class="panel-body">
+        <label for="tokenInput">Admin or Live token</label>
+        <input id="tokenInput" type="password" autocomplete="off" placeholder="Optional if this browser is already paired">
+
+        <div class="mode-row">
+          <label for="modeSelect">Personality mode</label>
+          <select id="modeSelect">
+            <option value="operator">Operator</option>
+            <option value="dry">Dry</option>
+            <option value="no_bullshit">No-Bullshit</option>
+            <option value="meeting_shadow">Meeting Shadow</option>
+            <option value="public_assistant">Public Assistant</option>
+            <option value="demo">Demo</option>
+            <option value="roast_light">Roast Light</option>
+          </select>
+        </div>
+
+        <div class="capture-row">
+          <label for="sourceSelect">Audio source</label>
+          <select id="sourceSelect">
+            <option value="microphone">Microphone</option>
+            <option value="display">Display or system audio</option>
+          </select>
+        </div>
+
+        <div class="actions">
+          <button id="captureBtn" class="btn" type="button">Capture source</button>
+          <button id="voiceBtn" class="btn primary" type="button">Start MARCUS</button>
+          <button id="stopBtn" class="btn" type="button">Stop</button>
+        </div>
+
+        <div class="meter" aria-hidden="true"><span id="levelMeter"></span></div>
+        <video id="previewVideo" muted autoplay playsinline hidden></video>
+        <p class="hint">For Zoom desktop audio, use display/system capture when the browser offers audio sharing. For a simple demo, microphone capture is enough.</p>
+      </div>
+    </section>
+
+    <section class="transcript" aria-labelledby="feedTitle">
+      <div class="panel-head">
+        <h2 id="feedTitle">Live Feed</h2>
+        <div class="actions">
+          <button id="sendContextBtn" class="btn" type="button">Send context</button>
+          <button id="clearBtn" class="btn" type="button">Clear</button>
+        </div>
+      </div>
+      <div class="panel-body">
+        <textarea id="contextInput" placeholder="Paste Zoom chat, meeting notes, or a prompt for MARCUS..."></textarea>
+      </div>
+      <div id="log" class="log" aria-live="polite"></div>
+    </section>
+  </main>
+</div>
+
+<script src="/marcus-realtime.js"></script>
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const els = {
+    token: $('tokenInput'),
+    mode: $('modeSelect'),
+    modeLabel: $('modeLabel'),
+    source: $('sourceSelect'),
+    capture: $('captureBtn'),
+    voice: $('voiceBtn'),
+    stop: $('stopBtn'),
+    sendContext: $('sendContextBtn'),
+    clear: $('clearBtn'),
+    context: $('contextInput'),
+    log: $('log'),
+    dot: $('statusDot'),
+    status: $('statusText'),
+    meter: $('levelMeter'),
+    preview: $('previewVideo'),
+  };
+  const MODE_KEY = 'marcus_obs_personality_mode';
+  const TOKEN_KEY = 'marcus_obs_token';
+  const labels = {
+    operator: 'Operator',
+    dry: 'Dry',
+    no_bullshit: 'No-Bullshit',
+    meeting_shadow: 'Meeting Shadow',
+    public_assistant: 'Public Assistant',
+    demo: 'Demo',
+    roast_light: 'Roast Light',
+  };
+  const normalizeMode = (value) => {
+    const normalized = String(value || '').trim().toLowerCase().replace(/[-\s]+/g, '_');
+    return Object.prototype.hasOwnProperty.call(labels, normalized) ? normalized : 'operator';
+  };
+
+  let stream = null;
+  let audioContext = null;
+  let analyser = null;
+  let meterFrame = 0;
+  let voice = null;
+
+  els.mode.value = normalizeMode(localStorage.getItem(MODE_KEY));
+  els.modeLabel.textContent = labels[els.mode.value];
+  els.token.value = localStorage.getItem(TOKEN_KEY) || '';
+
+  function log(kind, text) {
+    const entry = document.createElement('div');
+    entry.className = `entry ${kind}`;
+    entry.textContent = text;
+    els.log.appendChild(entry);
+    els.log.scrollTop = els.log.scrollHeight;
+  }
+
+  function setStatus(state, detail = '') {
+    els.status.textContent = detail || state;
+    els.dot.className = `dot ${state === 'listening' || state === 'speaking' ? 'on' : state === 'error' ? 'bad' : ''}`.trim();
+    els.voice.textContent = voice?.isActive?.() ? 'Stop MARCUS' : 'Start MARCUS';
+  }
+
+  function stopStream() {
+    if (meterFrame) cancelAnimationFrame(meterFrame);
+    meterFrame = 0;
+    analyser = null;
+    try { audioContext?.close(); } catch {}
+    audioContext = null;
+    for (const track of stream?.getTracks?.() || []) track.stop();
+    stream = null;
+    els.preview.hidden = true;
+    els.preview.srcObject = null;
+    els.meter.style.width = '0';
+  }
+
+  function startMeter(sourceStream) {
+    if (!window.AudioContext && !window.webkitAudioContext) return;
+    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    const source = audioContext.createMediaStreamSource(sourceStream);
+    analyser = audioContext.createAnalyser();
+    analyser.fftSize = 256;
+    source.connect(analyser);
+    const data = new Uint8Array(analyser.frequencyBinCount);
+    const tick = () => {
+      analyser.getByteFrequencyData(data);
+      const avg = data.reduce((sum, value) => sum + value, 0) / Math.max(1, data.length);
+      els.meter.style.width = `${Math.min(100, Math.round(avg))}%`;
+      meterFrame = requestAnimationFrame(tick);
+    };
+    tick();
+  }
+
+  async function captureSource() {
+    stopStream();
+    if (els.source.value === 'display') {
+      const display = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+      const audioTracks = display.getAudioTracks();
+      if (!audioTracks.length) {
+        for (const track of display.getTracks()) track.stop();
+        throw new Error('No audio track was shared. Choose a source with audio sharing enabled.');
+      }
+      stream = new MediaStream(audioTracks);
+      els.preview.srcObject = display;
+      els.preview.hidden = false;
+      display.getVideoTracks()[0]?.addEventListener('ended', () => {
+        if (voice?.isActive?.()) voice.stop();
+        stopStream();
+        setStatus('idle', 'Capture ended');
+      });
+    } else {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    }
+    startMeter(stream);
+    log('system', `${els.source.value === 'display' ? 'Display/system' : 'Microphone'} audio captured.`);
+  }
+
+  function ensureVoice() {
+    if (voice) return voice;
+    if (typeof window.createMarcusRealtimeVoice !== 'function') throw new Error('MARCUS Realtime bundle is unavailable.');
+    voice = window.createMarcusRealtimeVoice({
+      personalityMode: els.mode.value,
+      getMediaStream: async () => stream,
+      getAuthToken: async () => String(els.token.value || '').trim(),
+      invokeMarcus: async (message) => {
+        log('user', message);
+        const headers = { 'Content-Type': 'application/json' };
+        const token = String(els.token.value || '').trim();
+        if (token) headers.Authorization = `Bearer ${token}`;
+        const response = await fetch('/api/marcus/live/chat', {
+          method: 'POST',
+          credentials: 'include',
+          headers,
+          body: JSON.stringify({ message }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || `MARCUS request failed (${response.status}).`);
+        const reply = data.reply || data.message || data.error || 'MARCUS responded without text.';
+        log('marcus', reply);
+        return { ok: data.ok !== false, reply, operationId: data.operation?.id || '' };
+      },
+      onStatus: ({ state, detail }) => setStatus(state, detail),
+      onTranscript: (text) => log('user', text),
+      onAssistantText: (text) => log('marcus', text),
+      onEvent: (event) => {
+        if (event.type === 'personality_mode_changed') {
+          els.mode.value = normalizeMode(event.mode);
+          els.modeLabel.textContent = labels[els.mode.value];
+        }
+      },
+      onError: (error) => {
+        setStatus('error', error?.message || 'MARCUS voice failed.');
+        log('system', error?.message || 'MARCUS voice failed.');
+      },
+    });
+    return voice;
+  }
+
+  els.capture.addEventListener('click', () => captureSource().catch((error) => log('system', error.message || String(error))));
+  els.voice.addEventListener('click', async () => {
+    try {
+      const current = ensureVoice();
+      if (current.isActive()) {
+        current.stop();
+        return;
+      }
+      if (!stream) await captureSource();
+      if (String(els.token.value || '').trim()) localStorage.setItem(TOKEN_KEY, String(els.token.value).trim());
+      await current.setPersonalityMode(els.mode.value, { source: 'obs_ui' });
+      await current.start();
+    } catch (error) {
+      setStatus('error', error.message || String(error));
+      log('system', error.message || String(error));
+    }
+  });
+  els.stop.addEventListener('click', () => {
+    voice?.stop();
+    stopStream();
+    setStatus('idle', 'Stopped');
+  });
+  els.mode.addEventListener('change', async () => {
+    els.mode.value = normalizeMode(els.mode.value);
+    els.modeLabel.textContent = labels[els.mode.value];
+    localStorage.setItem(MODE_KEY, els.mode.value);
+    if (voice) await voice.setPersonalityMode(els.mode.value, { source: 'obs_ui' });
+  });
+  els.sendContext.addEventListener('click', () => {
+    const text = String(els.context.value || '').trim();
+    if (!text) return;
+    if (!voice?.sendContext?.(text)) {
+      log('system', 'Start MARCUS before sending live context.');
+      return;
+    }
+    log('system', `Context sent:\n${text}`);
+    els.context.value = '';
+  });
+  els.clear.addEventListener('click', () => { els.log.textContent = ''; });
+  window.addEventListener('beforeunload', () => {
+    try { voice?.stop(); } catch {}
+    stopStream();
+  });
+})();
+</script>
+</body>
+</html>
