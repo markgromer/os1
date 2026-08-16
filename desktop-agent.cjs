@@ -1605,14 +1605,15 @@ let lastTitle = '';
 async function tick() {
   await checkDesktopActions();
 
-  const ctx = await captureDesktop();
-  if (!ctx) {
+  const capturedDesktop = await captureDesktop();
+  if (!capturedDesktop) {
     if (++consecutive >= 3) {
       process.stdout.write('  [!] Desktop capture failing - is this Windows?\r');
     }
-    return;
+  } else {
+    consecutive = 0;
   }
-  consecutive = 0;
+  const ctx = capturedDesktop || { windowTitle: '', processName: '', idleSeconds: 0 };
 
   const brief = ctx.windowTitle.length > 60
     ? ctx.windowTitle.slice(0, 57) + '...'
