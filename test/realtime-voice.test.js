@@ -32,7 +32,7 @@ test('Marcus realtime voice is Marcus and delegates durable work to the operator
   assert.match(session.instructions, /Do not read long PR numbers/i);
   assert.match(session.instructions, /Never bypass Marcus approval requirements/i);
   assert.match(session.instructions, /Mode: Operator/i);
-  assert.equal(session.metadata.personality_mode, DEFAULT_MARCUS_PERSONALITY_MODE);
+  assert.equal(Object.hasOwn(session, 'metadata'), false);
   assert.equal(session.max_output_tokens, 480);
   assert.equal(session.tool_choice, 'auto');
   assert.equal(session.tools.length, 2);
@@ -60,19 +60,20 @@ test('Marcus realtime voice normalizes unsafe model and voice overrides', () => 
 
   assert.equal(request.session.model, DEFAULT_MARCUS_REALTIME_MODEL);
   assert.equal(request.session.audio.output.voice, DEFAULT_MARCUS_REALTIME_VOICE);
-  assert.equal(request.session.metadata.personality_mode, DEFAULT_MARCUS_PERSONALITY_MODE);
+  assert.match(request.session.instructions, /Mode: Operator/i);
+  assert.equal(Object.hasOwn(request.session, 'metadata'), false);
 });
 
 test('Marcus realtime voice includes explicit mode fragments without weakening authority', () => {
   const demo = buildMarcusRealtimeClientSecretRequest({ personalityMode: 'demo' }).session;
-  assert.equal(demo.metadata.personality_mode, 'demo');
+  assert.equal(Object.hasOwn(demo, 'metadata'), false);
   assert.match(demo.instructions, /Mode: Demo/i);
   assert.match(demo.instructions, /not a serious client-call default/i);
   assert.match(demo.instructions, /set_marcus_personality_mode/i);
   assert.match(demo.instructions, /Never bypass Marcus approval requirements/i);
 
   const publicAssistant = buildMarcusRealtimeClientSecretRequest({ personalityMode: 'public-assistant' }).session;
-  assert.equal(publicAssistant.metadata.personality_mode, 'public_assistant');
+  assert.equal(Object.hasOwn(publicAssistant, 'metadata'), false);
   assert.match(publicAssistant.instructions, /Mode: Public Assistant/i);
   assert.match(publicAssistant.instructions, /No snark about clients/i);
   assert.doesNotMatch(publicAssistant.instructions, /Mode: Demo/i);

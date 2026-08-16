@@ -23,9 +23,6 @@ export function buildMarcusRealtimeClientSecretRequest({ model, voice, personali
       type: 'realtime',
       model: realtimeModel,
       instructions: buildMarcusRealtimeInstructions({ personalityMode: mode }),
-      metadata: {
-        personality_mode: mode,
-      },
       audio: {
         input: {
           noise_reduction: { type: 'near_field' },
