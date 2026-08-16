@@ -3,6 +3,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import { exec, execFile } from 'node:child_process';
+import { createRequire } from 'node:module';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -33,6 +34,11 @@ import {
   isMarcusProjectActivityTool,
 } from './marcus/evidence/marcus_project_activity_tools.js';
 import { buildActiveBrief as buildOperationalActiveBrief } from './marcus/intelligence/active_brief.js';
+import {
+  buildLivePresenceStatus,
+  normalizeLivePresenceSettings,
+  patchLivePresenceSetup,
+} from './marcus/live/live_presence.js';
 import { formatMissionMemoryForPrompt, MissionMemoryStore } from './marcus/memory/mission_memory_store.js';
 import { createOperationsEngine } from './marcus/operations/operation_engine.js';
 import { discoverDurableBackupSources } from './marcus/operations/operation_backups.js';
@@ -45,10 +51,8 @@ import { createHttpCodexAdapterFromEnv } from './marcus/providers/http_codex_ada
 import { RoutedCodexAdapter } from './marcus/providers/routed_codex_adapter.js';
 import {
   buildMarcusRealtimeClientSecretRequest,
-  DEFAULT_MARCUS_PERSONALITY_MODE,
   DEFAULT_MARCUS_REALTIME_MODEL,
   DEFAULT_MARCUS_REALTIME_VOICE,
-  normalizeMarcusPersonalityMode,
 } from './marcus/voice/realtime_session.js';
 import { RealtimeTelemetryStore } from './marcus/voice/realtime_telemetry.js';
 import {
@@ -58,6 +62,9 @@ import {
   isMarcusOperationTool,
   shouldCreateDurableOperationForRequest,
 } from './marcus/operations/marcus_operation_tools.js';
+
+const require = createRequire(import.meta.url);
+const { discoverRecentCodexWorkspaces } = require('./desktop-codex-sessions.cjs');
 
 const app = express();
 app.use(compression());
@@ -659,11 +666,6 @@ const MARCUS_REALTIME_MODEL = typeof process.env.MARCUS_REALTIME_MODEL === 'stri
 const MARCUS_REALTIME_VOICE = typeof process.env.MARCUS_REALTIME_VOICE === 'string' && process.env.MARCUS_REALTIME_VOICE.trim()
   ? process.env.MARCUS_REALTIME_VOICE.trim()
   : DEFAULT_MARCUS_REALTIME_VOICE;
-const MARCUS_REALTIME_PERSONALITY_MODE = normalizeMarcusPersonalityMode(
-  typeof process.env.MARCUS_REALTIME_PERSONALITY_MODE === 'string' && process.env.MARCUS_REALTIME_PERSONALITY_MODE.trim()
-    ? process.env.MARCUS_REALTIME_PERSONALITY_MODE.trim()
-    : DEFAULT_MARCUS_PERSONALITY_MODE,
-);
 const AUTH_COOKIE_NAME = 'ops_admin_token';
 const AUTH_COOKIE_MAX_AGE_SEC = 60 * 60 * 24 * 30;
 const MOBILE_PAIRING_CODE_TTL_MS = 10 * 60 * 1000;
@@ -1158,6 +1160,7 @@ function normalizeSettingsShape(settings) {
     automationConfig: normalizeAutomationConfig(parsed.automationConfig),
     automationDigestQueue: normalizeAutomationDigestQueue(parsed.automationDigestQueue),
     externalActionDrafts: normalizeExternalActionDrafts(parsed.externalActionDrafts),
+    livePresenceSetup: normalizeLivePresenceSettings(parsed).livePresenceSetup,
   };
 }
 
@@ -2798,7 +2801,6 @@ async function buildMarcusOperatorHealth() {
           provider: 'openai_realtime',
           model: MARCUS_REALTIME_MODEL,
           voice: MARCUS_REALTIME_VOICE,
-          personalityMode: MARCUS_REALTIME_PERSONALITY_MODE,
         },
       },
       openrouter: {
@@ -14732,6 +14734,36 @@ let desktopContextCache = { at: 0, data: null };
 let desktopRelayCache = { at: 0, data: null };
 const DESKTOP_CONTEXT_TTL_MS = 4000;
 const DESKTOP_RELAY_TTL_MS = 30_000; // relay data valid for 30s (agent sends every 5s)
+let desktopCodexWorkspaceCache = { at: 0, data: [] };
+const DESKTOP_CODEX_WORKSPACE_TTL_MS = 30_000;
+
+function getRecentCodexWorkspacesForDesktopContext() {
+  const now = Date.now();
+  if ((now - desktopCodexWorkspaceCache.at) < DESKTOP_CODEX_WORKSPACE_TTL_MS) {
+    return desktopCodexWorkspaceCache.data;
+  }
+  let workspaces = [];
+  try {
+    workspaces = discoverRecentCodexWorkspaces({ maxResults: 12 }).map((item) => ({
+      sessionId: typeof item.sessionId === 'string' ? item.sessionId.slice(0, 160) : '',
+      workspacePath: typeof item.workspacePath === 'string' ? item.workspacePath.slice(0, 512) : '',
+      folderName: typeof item.folderName === 'string' ? item.folderName.slice(0, 128) : '',
+      projectName: typeof item.projectName === 'string' ? item.projectName.slice(0, 160) : '',
+      modifiedAt: typeof item.modifiedAt === 'string' ? item.modifiedAt.slice(0, 40) : '',
+      source: typeof item.source === 'string' ? item.source.slice(0, 80) : '',
+      originator: typeof item.originator === 'string' ? item.originator.slice(0, 120) : '',
+      handoffSummary: typeof item.handoffSummary === 'string' ? item.handoffSummary.slice(0, 1800) : '',
+      handoffStatus: typeof item.handoffStatus === 'string' ? item.handoffStatus.slice(0, 80) : '',
+      handoffObservedAt: typeof item.handoffObservedAt === 'string' ? item.handoffObservedAt.slice(0, 40) : '',
+      latestUserRequest: typeof item.latestUserRequest === 'string' ? item.latestUserRequest.slice(0, 800) : '',
+      latestUserRequestAt: typeof item.latestUserRequestAt === 'string' ? item.latestUserRequestAt.slice(0, 40) : '',
+    })).filter((item) => item.workspacePath && item.folderName);
+  } catch {
+    workspaces = [];
+  }
+  desktopCodexWorkspaceCache = { at: now, data: workspaces };
+  return workspaces;
+}
 
 // Write the helper script once to a temp file so we avoid quoting issues.
 const DESKTOP_SCRIPT_PATH = path.join(DATA_DIR, '.desktop-context.ps1');
@@ -14790,6 +14822,7 @@ app.get('/api/desktop-context', async (req, res) => {
         processName: (parts[1] || '').trim().toLowerCase(),
         idleSeconds: Math.max(0, Number(parts[2]) || 0),
         source: 'native',
+        codexWorkspaces: getRecentCodexWorkspacesForDesktopContext(),
       };
       desktopContextCache = { at: Date.now(), data };
       res.json(data);
@@ -14880,6 +14913,8 @@ app.post('/api/desktop-context/relay', (req, res) => {
         handoffSummary: typeof item.handoffSummary === 'string' ? item.handoffSummary.trim().slice(0, 1800) : '',
         handoffStatus: typeof item.handoffStatus === 'string' ? item.handoffStatus.trim().slice(0, 80) : '',
         handoffObservedAt: typeof item.handoffObservedAt === 'string' ? item.handoffObservedAt.trim().slice(0, 40) : '',
+        latestUserRequest: typeof item.latestUserRequest === 'string' ? item.latestUserRequest.trim().slice(0, 800) : '',
+        latestUserRequestAt: typeof item.latestUserRequestAt === 'string' ? item.latestUserRequestAt.trim().slice(0, 40) : '',
       };
     })
     .filter((item) => item.workspacePath && item.folderName);
@@ -16009,9 +16044,47 @@ app.get('/api/marcus/live/voice/status', (req, res) => {
       provider: 'openai_realtime',
       model: MARCUS_REALTIME_MODEL,
       voice: MARCUS_REALTIME_VOICE,
-      personalityMode: MARCUS_REALTIME_PERSONALITY_MODE,
     },
   });
+});
+
+app.get('/api/marcus/live-presence/status', async (req, res) => {
+  try {
+    const settings = await readSettings();
+    const openai = getOpenAiSecrets(settings);
+    const desktop = desktopRelayCache?.data || desktopContextCache?.data || null;
+    res.setHeader('Cache-Control', 'no-store');
+    res.json(buildLivePresenceStatus({
+      settings,
+      desktop,
+      voice: {
+        configured: Boolean(openai.apiKey),
+        telemetryReady: true,
+      },
+    }));
+  } catch (error) {
+    res.status(500).json({ ok: false, error: String(error?.message || error) });
+  }
+});
+
+app.put('/api/marcus/live-presence/setup', async (req, res) => {
+  try {
+    const current = await readSettings();
+    const next = patchLivePresenceSetup(current, req.body || {}, nowIso());
+    await writeSettings(next);
+    const openai = getOpenAiSecrets(next);
+    const desktop = desktopRelayCache?.data || desktopContextCache?.data || null;
+    res.json(buildLivePresenceStatus({
+      settings: next,
+      desktop,
+      voice: {
+        configured: Boolean(openai.apiKey),
+        telemetryReady: true,
+      },
+    }));
+  } catch (error) {
+    res.status(400).json({ ok: false, error: String(error?.message || error) });
+  }
 });
 
 app.post('/api/marcus/realtime/client-secret', async (req, res) => {
@@ -16024,7 +16097,6 @@ app.post('/api/marcus/realtime/client-secret', async (req, res) => {
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 20_000);
-    const requestedPersonalityMode = normalizeMarcusPersonalityMode(req.body?.personalityMode || MARCUS_REALTIME_PERSONALITY_MODE);
     let upstream;
     let data;
     try {
@@ -16042,7 +16114,6 @@ app.post('/api/marcus/realtime/client-secret', async (req, res) => {
         body: JSON.stringify(buildMarcusRealtimeClientSecretRequest({
           model: MARCUS_REALTIME_MODEL,
           voice: MARCUS_REALTIME_VOICE,
-          personalityMode: requestedPersonalityMode,
         })),
         signal: controller.signal,
       });
@@ -16065,7 +16136,6 @@ app.post('/api/marcus/realtime/client-secret', async (req, res) => {
         provider: 'openai_realtime',
         model: MARCUS_REALTIME_MODEL,
         voice: MARCUS_REALTIME_VOICE,
-        personalityMode: requestedPersonalityMode,
       },
     });
   } catch (err) {

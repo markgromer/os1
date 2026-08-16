@@ -1413,6 +1413,8 @@ async function scanCodexWorkspaceSummary(session) {
     gitStatusCount: parsedStatus.count,
     gitStatus: parsedStatus.entries,
     gitRecentCommits: recentCommitsRaw ? recentCommitsRaw.split('\n').map((line) => line.trim()).filter(Boolean) : [],
+    latestUserRequest: typeof session.latestUserRequest === 'string' ? session.latestUserRequest.slice(0, 800) : '',
+    latestUserRequestAt: typeof session.latestUserRequestAt === 'string' ? session.latestUserRequestAt.slice(0, 40) : '',
   };
 }
 

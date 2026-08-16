@@ -7,6 +7,7 @@ const DEFAULT_MAX_RESULTS = 12;
 const MAX_METADATA_BYTES = 64 * 1024;
 const MAX_HANDOFF_BYTES = 256 * 1024;
 const MAX_HANDOFF_TEXT = 1800;
+const MAX_REQUEST_TEXT = 800;
 
 function humanizeWorkspaceName(value) {
   return String(value || '')
@@ -97,6 +98,64 @@ function classifyHandoffSummary(summary) {
   return summary ? 'handoff' : '';
 }
 
+function eventLooksUserRequest(event) {
+  const payload = event?.payload && typeof event.payload === 'object' ? event.payload : {};
+  const role = String(payload.role || payload.author?.role || event?.role || '').toLowerCase();
+  if (role !== 'user') return false;
+  const type = String(event?.type || payload.type || '').toLowerCase();
+  if (type && !/message|response_item|event_msg/.test(type)) return false;
+  return true;
+}
+
+function cleanUserRequestText(value) {
+  const clean = compactText(value, MAX_REQUEST_TEXT);
+  if (!clean) return '';
+  const lower = clean.toLowerCase();
+  if (lower.startsWith('<environment_context') || lower.startsWith('<permissions instructions')) return '';
+  if (lower.startsWith('<recommended_plugins') || lower.startsWith('<collaboration_mode')) return '';
+  if (lower.includes('the following is the codex agent history')) return '';
+  if (lower.includes('>>> transcript') || lower.includes('>>> approval request')) return '';
+  if (lower.includes('planned action json') && lower.includes('sandbox_permissions')) return '';
+  if (/^<[^>]+>$/.test(clean)) return '';
+  return clean;
+}
+
+function readSessionLatestUserRequest(filePath) {
+  let stat;
+  try {
+    stat = fs.statSync(filePath);
+  } catch {
+    return null;
+  }
+  if (!stat.isFile()) return null;
+  let handle;
+  try {
+    handle = fs.openSync(filePath, 'r');
+    const bytes = Math.min(MAX_HANDOFF_BYTES, stat.size);
+    const buffer = Buffer.alloc(bytes);
+    fs.readSync(handle, buffer, 0, bytes, Math.max(0, stat.size - bytes));
+    const lines = buffer.toString('utf8').split(/\r?\n/).filter(Boolean);
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      let event;
+      try { event = JSON.parse(lines[index]); } catch { continue; }
+      if (!eventLooksUserRequest(event)) continue;
+      const request = cleanUserRequestText(extractTextParts(event.payload || event).join(' '));
+      if (!request) continue;
+      return {
+        request,
+        requestedAt: typeof event.timestamp === 'string' ? event.timestamp : stat.mtime.toISOString(),
+      };
+    }
+  } catch {
+    return null;
+  } finally {
+    if (handle !== undefined) {
+      try { fs.closeSync(handle); } catch {}
+    }
+  }
+  return null;
+}
+
 function readSessionHandoffSummary(filePath) {
   let stat;
   try {
@@ -159,6 +218,7 @@ function parseSessionMetadata(filePath, nowMs, maxAgeMs) {
 
   const folderName = path.basename(workspacePath);
   const handoff = readSessionHandoffSummary(filePath);
+  const latestUser = readSessionLatestUserRequest(filePath);
   return {
     sessionId: String(payload.id || '').trim().slice(0, 160),
     workspacePath,
@@ -172,6 +232,10 @@ function parseSessionMetadata(filePath, nowMs, maxAgeMs) {
       handoffStatus: handoff.status,
       handoffObservedAt: handoff.observedAt,
     } : {}),
+    ...(latestUser ? {
+      latestUserRequest: latestUser.request,
+      latestUserRequestAt: latestUser.requestedAt,
+    } : {}),
   };
 }
 
@@ -181,6 +245,7 @@ function discoverRecentCodexWorkspaces({
   maxAgeMs = DEFAULT_MAX_AGE_MS,
   maxResults = DEFAULT_MAX_RESULTS,
   days = 8,
+  maxPerWorkspace = 3,
 } = {}) {
   const sessionsRoot = path.join(codexHome, 'sessions');
   const candidates = [];
@@ -199,16 +264,21 @@ function discoverRecentCodexWorkspaces({
   }
 
   candidates.sort((left, right) => right.modifiedAt.localeCompare(left.modifiedAt));
-  const seen = new Set();
+  const seenSessions = new Set();
+  const workspaceCounts = new Map();
   const output = [];
   for (const candidate of candidates) {
-    const key = path.resolve(candidate.workspacePath).toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
+    const sessionKey = String(candidate.sessionId || '').trim();
+    if (sessionKey && seenSessions.has(sessionKey)) continue;
+    if (sessionKey) seenSessions.add(sessionKey);
+    const workspaceKey = path.resolve(candidate.workspacePath).toLowerCase();
+    const count = workspaceCounts.get(workspaceKey) || 0;
+    if (count >= Math.max(1, Math.min(10, Number(maxPerWorkspace) || 3))) continue;
+    workspaceCounts.set(workspaceKey, count + 1);
     output.push(candidate);
     if (output.length >= Math.max(1, Math.min(30, Number(maxResults) || DEFAULT_MAX_RESULTS))) break;
   }
   return output;
 }
 
-module.exports = { discoverRecentCodexWorkspaces, humanizeWorkspaceName, parseGitStatus, parseSessionMetadata, readSessionHandoffSummary };
+module.exports = { discoverRecentCodexWorkspaces, humanizeWorkspaceName, parseGitStatus, parseSessionMetadata, readSessionHandoffSummary, readSessionLatestUserRequest };

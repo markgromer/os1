@@ -9,6 +9,7 @@ param(
     [string]$NewProjectRoot = (Join-Path $env:USERPROFILE "OneDrive\Documents\Marcus Projects"),
     [string[]]$PcAccessRoots = @(),
     [switch]$FullPcAccess,
+    [switch]$WorkspaceRootsOnly,
     [ValidateSet("kiosk", "app")]
     [string]$CodexMonitorMode = "kiosk",
     [switch]$StartNow
@@ -42,7 +43,10 @@ $existingConfig = $null
 if (Test-Path -LiteralPath $configPath) {
     try { $existingConfig = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json } catch {}
 }
-$effectiveFullPcAccess = if ($FullPcAccess.IsPresent) { $true } elseif ($null -ne $existingConfig) { [bool]$existingConfig.fullPcAccess } else { $false }
+if ($FullPcAccess.IsPresent -and $WorkspaceRootsOnly.IsPresent) {
+    throw "Use either -FullPcAccess or -WorkspaceRootsOnly, not both."
+}
+$effectiveFullPcAccess = if ($FullPcAccess.IsPresent) { $true } elseif ($WorkspaceRootsOnly.IsPresent) { $false } elseif ($null -ne $existingConfig) { [bool]$existingConfig.fullPcAccess } else { $false }
 $effectivePcAccessRoots = @($PcAccessRoots | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 if ($effectiveFullPcAccess -and $effectivePcAccessRoots.Count -eq 0) {
     $effectivePcAccessRoots = @("$($env:SystemDrive)\")
