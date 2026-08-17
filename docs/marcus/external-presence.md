@@ -1,6 +1,6 @@
 # External Presence
 
-Status: architecture and rollout checklist. Email send, SMTP provider verification, IMAP fetch, inbox import, and approved outbound drafts already exist in `server.js`. Social/community monitoring is planned as an opportunity radar with copy/paste drafts for Mark, not autonomous posting. Live Zoom attendance is not implemented and is intentionally constrained until consent rules are satisfied.
+Status: architecture and rollout checklist. Email send, SMTP provider verification, IMAP fetch, inbox import, and approved outbound drafts already exist in `server.js`. Social/community monitoring is planned as an opportunity radar with copy/paste drafts for Mark, not autonomous posting. Live Zoom/Skool/stream participation now uses the local browser-presence architecture documented in [[live-presence]].
 
 ## Purpose
 
@@ -103,7 +103,7 @@ Until those gates exist, Skool remains `watch_and_draft_only`.
 
 ## Zoom Capability
 
-Status: transcript/recording ingestion is the first safe implementation path. Autonomous live attendance is a later phase that requires meeting consent and clear participant disclosure.
+Status: transcript/recording ingestion remains useful, but preferred live attendance is local browser presence on Mark's PC. Marcus uses a clearly identified browser/account session rather than joining through a hidden API bot. See [[live-presence]] for the implemented readiness model, setup console, and live modes.
 
 Personality modes are documented in [[personality-modes]]. The important product split is that serious external meetings default to Meeting Shadow or Public Assistant, while Demo and Roast Light are opt-in contexts for playful Zoom/OBS demonstrations with people who understand the bit. Snarky live-call behavior is allowed as a controlled demo surface, not as the default client-call posture. `/obs-marcus.html` now provides the local browser sidecar for that surface.
 
@@ -133,6 +133,14 @@ Future live-attendance gate:
 - Participants can see the assistant identity in the participant list.
 - Recording/transcription consent is honored.
 - Marcus records notes but does not speak or chat unless Mark directly asks and approves the exact response mode.
+
+Local browser-presence model:
+
+- Marcus uses Mark's PC, a dedicated browser profile, and a clearly labeled identity such as `Marcus - Mark's AI Assistant`.
+- Mark performs any first-time login, MFA, captcha, or account recovery step directly.
+- Marcus may open links, join through the normal browser UI, keep notes, read visible chat, and use OBS/voice sidecars from the local machine.
+- Marcus does not bypass platform controls, scrape restricted areas, or pretend to be a human user.
+- This model applies to Zoom, Skool, and similar sites where the intended behavior is an attended local assistant operating through the same visible UI Mark could use.
 
 ## Approval Matrix
 
@@ -186,6 +194,12 @@ Social/community:
 - Keep initial workflow watch-and-draft-only.
 - Store recommendations as internal opportunity artifacts, not provider sends.
 - Add manual-post confirmation before claiming anything was posted.
+
+Live presence:
+
+- Use `/live-presence.html` to complete and verify the local browser/audio checklist.
+- Start with `public_push_to_talk` before enabling `public_auto_reply`.
+- Keep `silent_shadow` and emergency mute available for every call.
 
 Zoom:
 

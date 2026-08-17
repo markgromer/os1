@@ -86,8 +86,85 @@ function createPcAccessPolicy({ fullPcAccess = false, pcAccessRoots = [], worksp
     capabilities: [
       'inventory', 'search_files', 'read_text_file', 'list_directory',
       'open_file_or_folder', 'open_http_url', 'list_applications', 'launch_installed_application',
+      'write_text_file', 'create_directory', 'move_item', 'delete_item', 'run_powershell',
     ],
   };
+}
+
+function validatePcDestination(value, policy) {
+  const candidate = String(value || '').trim();
+  if (!candidate || !path.isAbsolute(candidate)) return { ok: false, error: 'An absolute destination path is required' };
+  const resolved = path.resolve(candidate);
+  const roots = Array.isArray(policy?.roots) ? policy.roots : [];
+  if (!roots.length || !roots.some((root) => pathWithin(root, resolved))) return { ok: false, error: 'Destination is outside the authorized PC roots' };
+  if (isSensitivePath(resolved)) return { ok: false, sensitive: true, error: 'Credential and secret-bearing paths cannot be modified by Marcus' };
+  return { ok: true, path: resolved };
+}
+
+function writePcTextFile(payload, policy) {
+  const destination = validatePcDestination(payload?.path, policy);
+  if (!destination.ok) return destination;
+  const content = String(payload?.content ?? '');
+  if (Buffer.byteLength(content, 'utf8') > 1_000_000) return { ok: false, error: 'Text content exceeds the 1 MB action limit' };
+  if (fs.existsSync(destination.path) && payload?.overwrite !== true) return { ok: false, approvalRequired: true, error: 'The destination exists; overwrite must be explicitly authorized' };
+  try {
+    fs.mkdirSync(path.dirname(destination.path), { recursive: true });
+    const existed = fs.existsSync(destination.path);
+    fs.writeFileSync(destination.path, content, 'utf8');
+    const stat = fs.statSync(destination.path);
+    return { ok: true, path: destination.path, created: !existed, overwritten: existed, bytesWritten: stat.size, modifiedAt: stat.mtime.toISOString() };
+  } catch (error) { return { ok: false, error: String(error?.message || error) }; }
+}
+
+function createPcDirectory(payload, policy) {
+  const destination = validatePcDestination(payload?.path, policy);
+  if (!destination.ok) return destination;
+  try {
+    const existed = fs.existsSync(destination.path);
+    fs.mkdirSync(destination.path, { recursive: payload?.recursive !== false });
+    return { ok: true, path: destination.path, created: !existed, alreadyExisted: existed };
+  } catch (error) { return { ok: false, error: String(error?.message || error) }; }
+}
+
+function movePcItem(payload, policy) {
+  const source = validatePcPath(payload?.source, policy);
+  const destination = validatePcDestination(payload?.destination, policy);
+  if (!source.ok) return source;
+  if (!destination.ok) return destination;
+  if (fs.existsSync(destination.path) && payload?.overwrite !== true) return { ok: false, approvalRequired: true, error: 'The destination exists; overwrite must be explicitly authorized' };
+  try {
+    fs.mkdirSync(path.dirname(destination.path), { recursive: true });
+    if (fs.existsSync(destination.path)) fs.rmSync(destination.path, { recursive: true, force: false });
+    fs.renameSync(source.path, destination.path);
+    return { ok: true, source: source.path, destination: destination.path, overwritten: payload?.overwrite === true };
+  } catch (error) { return { ok: false, error: String(error?.message || error) }; }
+}
+
+function deletePcItem(payload, policy) {
+  const target = validatePcPath(payload?.path, policy);
+  if (!target.ok) return target;
+  if (isSensitivePath(target.path)) return { ok: false, sensitive: true, error: 'Credential and secret-bearing paths cannot be deleted by Marcus' };
+  try {
+    fs.rmSync(target.path, { recursive: target.stat.isDirectory(), force: false });
+    return { ok: true, path: target.path, deleted: true, type: target.stat.isDirectory() ? 'directory' : 'file' };
+  } catch (error) { return { ok: false, error: String(error?.message || error) }; }
+}
+
+function runPcPowerShell(payload, policy) {
+  const command = String(payload?.command || '').trim();
+  if (!command || command.length > 8_000) return Promise.resolve({ ok: false, error: 'A PowerShell command of at most 8,000 characters is required' });
+  const cwd = validatePcPath(payload?.cwd || policy?.roots?.[0], policy, { kind: 'directory' });
+  if (!cwd.ok) return Promise.resolve(cwd);
+  const timeoutMs = safeLimit(payload?.timeoutMs, 60_000, 300_000);
+  return new Promise((resolve) => {
+    execFile('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command], {
+      cwd: cwd.path, windowsHide: true, timeout: timeoutMs, maxBuffer: 512 * 1024,
+    }, (error, stdout, stderr) => resolve({
+      ok: !error, command, cwd: cwd.path, exitCode: Number.isInteger(error?.code) ? error.code : error ? 1 : 0,
+      stdout: String(stdout || '').slice(0, 40_000), stderr: String(stderr || '').slice(0, 20_000),
+      timedOut: Boolean(error?.killed), error: error ? String(error.message || error).slice(0, 4_000) : '',
+    }));
+  });
 }
 
 function validatePcPath(value, policy, { kind = 'any' } = {}) {
@@ -364,15 +441,20 @@ function toDesktopActionOutcome(raw = {}) {
 
 module.exports = {
   createPcAccessPolicy,
+  createPcDirectory,
+  deletePcItem,
   getPcInventory,
   isSensitivePath,
   launchInstalledApplication,
   listInstalledApplications,
   listPcDirectory,
   openPcItem,
+  movePcItem,
   pathWithin,
   readPcTextFile,
   searchPcFiles,
+  runPcPowerShell,
   toDesktopActionOutcome,
   validatePcPath,
+  writePcTextFile,
 };

@@ -8,12 +8,16 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const {
   createPcAccessPolicy,
+  createPcDirectory,
+  deletePcItem,
   isSensitivePath,
   listPcDirectory,
+  movePcItem,
   readPcTextFile,
   searchPcFiles,
   toDesktopActionOutcome,
   validatePcPath,
+  writePcTextFile,
 } = require('../desktop-pc-operator.cjs');
 
 async function withFixture(callback) {
@@ -90,5 +94,23 @@ test('PC operator outcomes preserve bounded evidence in the desktop result envel
     assert.equal(refused.details.sensitive, true);
     assert.equal(refused.details.approvalRequired, true);
     assert.doesNotMatch(JSON.stringify(refused), /never-relay/);
+  });
+});
+
+test('full PC policy permits bounded text creation, directory creation, moves, and exact deletion', async () => {
+  await withFixture(async ({ root, sibling }) => {
+    const policy = createPcAccessPolicy({ fullPcAccess: true, pcAccessRoots: [root] });
+    const folder = path.join(root, 'Work', 'Evidence');
+    assert.equal(createPcDirectory({ path: folder }, policy).ok, true);
+    const original = path.join(folder, 'note.txt');
+    const written = writePcTextFile({ path: original, content: 'Marcus was here.\n' }, policy);
+    assert.equal(written.ok, true);
+    assert.equal(await fs.readFile(original, 'utf8'), 'Marcus was here.\n');
+    assert.equal(writePcTextFile({ path: original, content: 'nope' }, policy).approvalRequired, true);
+    const moved = path.join(folder, 'receipt.txt');
+    assert.equal(movePcItem({ source: original, destination: moved }, policy).ok, true);
+    assert.equal(deletePcItem({ path: moved }, policy).deleted, true);
+    assert.equal(await fs.stat(moved).then(() => true, () => false), false);
+    assert.equal(writePcTextFile({ path: path.join(sibling, 'escape.txt'), content: 'blocked' }, policy).ok, false);
   });
 });

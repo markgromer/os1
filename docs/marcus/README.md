@@ -13,6 +13,7 @@ This folder is an Obsidian-compatible documentation space for Marcus.
 - [[decision-log]]
 - [[voice-interface]]
 - [[personality-modes]]
+- [[live-presence]]
 - [[context-memory]]
 - [[visualizer-operational-awareness]]
 - [[external-presence]]

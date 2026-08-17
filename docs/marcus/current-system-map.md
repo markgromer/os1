@@ -116,6 +116,8 @@ Current routes:
 - `GET /api/marcus/acceptance`
 - `POST /api/marcus/project-operator`
 - `POST /api/marcus/live/chat` for project operator requests
+- `GET /api/marcus/live-presence/status` for local browser-presence readiness
+- `PUT /api/marcus/live-presence/setup` for Mark-maintained live-presence setup state
 - `POST /api/chat` for project operator requests
 - `POST /api/operations/provider-action` to prepare a durable provider mutation without approving it
 - `GET /api/integrations/github/pull-request`
@@ -140,7 +142,7 @@ Email uses SMTP. Text uses Quo's message API. Every route in the external-action
 
 Inbound email uses IMAP primitives in `server.js`: `GET /api/integrations/email/status`, `POST /api/integrations/email/test`, `POST /api/integrations/email/sync`, and `POST /api/integrations/email/archive-to-qdrant`. These routes can fetch and normalize mailbox content, import unique inbox items, and optionally upsert bounded email knowledge to Qdrant. A deployed scheduled watcher and automatic reply-draft promotion are planned rather than verified.
 
-Skool and Zoom are not provider-integrated in this repo. The operating model in [[external-presence]] treats Skool and future social/community channels as a watch-and-draft opportunity radar: Marcus may monitor permitted sources, surface interaction opportunities, and prepare copy/paste options, while Mark remains the actor who posts unless a compliant integration is explicitly approved. Zoom starts from transcript/recording ingestion after consent; live assistant attendance is blocked until identity and consent gates are met.
+Skool and Zoom are not provider-integrated API bots in this repo. The operating model in [[external-presence]] and [[live-presence]] uses local browser presence on Mark's PC: a dedicated Marcus browser profile, visible assistant identity, virtual audio routing, Realtime voice, browser/chat observation, and durable note/action capture. Skool and future social/community channels remain watch-and-draft unless a compliant posting path is explicitly approved. Zoom live participation is allowed only through the local visible assistant model after identity, audio, and consent gates are met.
 
 ## Providers
 
@@ -250,6 +252,8 @@ It uses:
 - Active brief from `/api/marcus/active-brief`.
 - Live chat from `/api/marcus/live/chat`.
 - Voice status, transcription, and speech endpoints.
+
+`public/live-presence.html` is the local browser-presence setup console. It reads `/api/marcus/live-presence/status`, saves manual setup progress through `/api/marcus/live-presence/setup`, and shows readiness for private copilot and public voice modes. The model lives in `marcus/live/live_presence.js`.
 
 The existing Live voice path is a chained fallback: browser or recorded speech input, OpenAI transcription, Marcus text chat, and ElevenLabs or browser speech output.
 

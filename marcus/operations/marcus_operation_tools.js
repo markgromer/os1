@@ -5,7 +5,7 @@ import { withoutExplicitlyNegatedClauses } from '../core/request_intent.js';
 const TOOL_NAMES = new Set([
   'create_operation', 'get_operation', 'list_operations', 'plan_operation', 'start_operation', 'pause_operation',
   'resume_operation', 'cancel_operation', 'approve_operation_step', 'reject_operation_step',
-  'register_external_codex_job', 'resolve_project',
+  'register_external_codex_job', 'resolve_project', 'get_operation_evidence',
   'prepare_github_merge', 'prepare_cloudflare_dns_change', 'prepare_cloudflare_worker_deployment',
 ]);
 
@@ -68,6 +68,16 @@ export function getMarcusOperationToolDefinitions() {
     { type: 'function', function: { name: 'get_operation', description: 'Get a durable operation and its real current state.', parameters: idSchema } },
     {
       type: 'function', function: {
+        name: 'get_operation_evidence',
+        description: 'Show approval evidence and implementation evidence for a job. Resolves an exact operation ID or the latest operation matching a project/job name, and returns PRs, URLs, branches, commits, diffs, checks, artifacts, blockers, approvals, and verification. Use whenever Mark asks to see proof, evidence, a PR, a diff, checks, or what is awaiting approval.',
+        parameters: { type: 'object', properties: {
+          operationId: { type: 'string' },
+          projectName: { type: 'string', description: 'Project or job name when the operation ID is not known.' },
+        } },
+      },
+    },
+    {
+      type: 'function', function: {
         name: 'list_operations', description: 'List durable operations for the active business only.',
         parameters: { type: 'object', properties: { status: { type: 'string' }, projectId: { type: 'string' }, limit: { type: 'number' } } },
       },
@@ -127,6 +137,27 @@ export async function executeMarcusOperationTool({ name, args, engine, businessK
     });
   }
   if (name === 'get_operation') return { ok: true, operation: await engine.getOperation(businessKey, input.operationId) };
+  if (name === 'get_operation_evidence') {
+    let operation = input.operationId ? await engine.getOperation(businessKey, input.operationId) : null;
+    if (!operation) {
+      const query = safeString(input.projectName, 500).toLowerCase();
+      const operations = await engine.listOperations(businessKey, { limit: 100 });
+      operation = operations.find((item) => !query || [item.title, item.projectName, item.objective, item.id]
+        .some((value) => safeString(value, 2_000).toLowerCase().includes(query))) || null;
+    }
+    if (!operation) return { ok: false, error: 'No matching operation was found. Name the project/job or provide its operation ID.' };
+    const artifacts = (operation.artifacts || []).map((artifact) => ({
+      id: artifact.id, type: artifact.type, name: artifact.name, createdAt: artifact.createdAt,
+      content: safeString(artifact.content, 40_000), metadata: safeObject(artifact.metadata),
+    }));
+    const links = [...new Set(JSON.stringify(artifacts).match(/https?:\/\/[^\s"'<>]+/g) || [])];
+    const pullRequests = artifacts.filter((artifact) => /pull_request|github_pr/i.test(`${artifact.type} ${artifact.name}`));
+    return { ok: true, operation: {
+      id: operation.id, title: operation.title, projectName: operation.projectName, objective: operation.objective,
+      status: operation.status, currentStepId: operation.currentStepId, updatedAt: operation.updatedAt,
+    }, pullRequests, links, artifacts, approvals: operation.approvals || [], blockers: operation.blockers || [],
+    verification: operation.verification || [], steps: operation.steps || [], activityLog: (operation.activityLog || []).slice(-30) };
+  }
   if (name === 'list_operations') return { ok: true, operations: await engine.listOperations(businessKey, input) };
   if (name === 'plan_operation') return { ok: true, operation: await engine.planOperation(businessKey, input.operationId, input) };
   if (name === 'start_operation') return { ok: true, operation: await engine.startOperation(businessKey, input.operationId, { actor: 'marcus-chat', runCycle: true }) };

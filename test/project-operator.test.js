@@ -283,6 +283,8 @@ test('project operator detects website install and replace requests', async () =
       false,
     );
     assert.equal(service.shouldHandle('Audit the Reggie repository, but do not start Codex.'), true);
+    assert.equal(service.shouldHandle('Send this prompt into Codex on the Reggie project.'), true);
+    assert.equal(service.shouldHandle('Put my mobile checkout prompt through Codex for Royal Doody.'), true);
   });
 });
 

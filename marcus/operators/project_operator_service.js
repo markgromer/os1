@@ -1,7 +1,7 @@
 import { redactSecrets, safeBusinessKey, safeObject, safeString } from '../operations/operation_types.js';
 import { explicitlyDefersProjectAudit, withoutExplicitlyNegatedClauses } from '../core/request_intent.js';
 
-const PROJECT_OPERATOR_ACTION_RE = /\b(audit|inspect|review|check|fix|build|implement|install(?:ed|ing)?|replace|migrate|upgrade|deploy|publish|modify|change|create|add|prepare|write|set\s*up|get [^.!?\n]{0,80} (?:working|going)|start [^.!?\n]{0,80} session)\b/i;
+const PROJECT_OPERATOR_ACTION_RE = /\b(audit|inspect|review|check|fix|build|implement|install(?:ed|ing)?|replace|migrate|upgrade|deploy|publish|modify|change|create|add|prepare|write|set\s*up|get [^.!?\n]{0,80} (?:working|going)|start [^.!?\n]{0,80} session|(?:send|submit|put|pass|feed|run) [^.!?\n]{0,160} (?:into|to|through|with) codex|prompt codex)\b/i;
 const MAX_AUDIT_REPOSITORIES = 6;
 const MAX_AUDIT_FILES_PER_REPOSITORY = 10;
 const MAX_AUDIT_FILES_TOTAL = 36;

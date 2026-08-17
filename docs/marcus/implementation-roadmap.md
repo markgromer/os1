@@ -1,5 +1,17 @@
 # Implementation Roadmap
 
+## 2026-08-15: Local Live Presence Foundation
+
+Status: implemented locally and covered by focused tests. Production deployment and live PC setup still require Mark to complete the browser profile, platform logins, audio routing, and emergency-control checklist.
+
+- Added `marcus/live/live_presence.js` with live modes, platform targets, setup-item normalization, readiness scoring, and Mark-owned next-step reporting.
+- Added `GET /api/marcus/live-presence/status` and `PUT /api/marcus/live-presence/setup`.
+- Added `/live-presence.html` as the operator setup console for browser profile, visible identity, virtual audio, OBS, Realtime voice, and emergency controls.
+- Added [[live-presence]] as the source-of-truth runbook for Zoom, Skool, YouTube Live, TikTok Live, and similar local browser-presence work.
+- Added focused tests in `test/live-presence.test.js`.
+
+Remaining: desktop-agent device enumeration, dedicated Marcus browser-profile launcher, Zoom/Skool visible chat observers, OBS scene state, emergency mute indicators, and a second-machine/VM option for stronger echo isolation.
+
 ## 2026-08-15: Canonical Project Awareness And Memory Index
 
 Status: implemented locally and covered by focused tests. Production deployment was authorized on 2026-08-15 and requires exact live verification after the GitHub push.

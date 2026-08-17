@@ -218,7 +218,6 @@ function parseSessionMetadata(filePath, nowMs, maxAgeMs) {
 
   const folderName = path.basename(workspacePath);
   const handoff = readSessionHandoffSummary(filePath);
-  const latestUser = readSessionLatestUserRequest(filePath);
   return {
     sessionId: String(payload.id || '').trim().slice(0, 160),
     workspacePath,
@@ -232,10 +231,6 @@ function parseSessionMetadata(filePath, nowMs, maxAgeMs) {
       handoffStatus: handoff.status,
       handoffObservedAt: handoff.observedAt,
     } : {}),
-    ...(latestUser ? {
-      latestUserRequest: latestUser.request,
-      latestUserRequestAt: latestUser.requestedAt,
-    } : {}),
   };
 }
 
@@ -245,7 +240,7 @@ function discoverRecentCodexWorkspaces({
   maxAgeMs = DEFAULT_MAX_AGE_MS,
   maxResults = DEFAULT_MAX_RESULTS,
   days = 8,
-  maxPerWorkspace = 3,
+  maxPerWorkspace = 1,
 } = {}) {
   const sessionsRoot = path.join(codexHome, 'sessions');
   const candidates = [];
@@ -273,7 +268,7 @@ function discoverRecentCodexWorkspaces({
     if (sessionKey) seenSessions.add(sessionKey);
     const workspaceKey = path.resolve(candidate.workspacePath).toLowerCase();
     const count = workspaceCounts.get(workspaceKey) || 0;
-    if (count >= Math.max(1, Math.min(10, Number(maxPerWorkspace) || 3))) continue;
+    if (count >= Math.max(1, Math.min(10, Number(maxPerWorkspace) || 1))) continue;
     workspaceCounts.set(workspaceKey, count + 1);
     output.push(candidate);
     if (output.length >= Math.max(1, Math.min(30, Number(maxResults) || DEFAULT_MAX_RESULTS))) break;

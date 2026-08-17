@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0b0f14">
+<title>Marcus Live Presence Setup</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0b0f14;
+    --band: #111820;
+    --panel: #151f2a;
+    --panel-2: #10161d;
+    --line: #2d3b48;
+    --text: #e9eef4;
+    --muted: #9aa8b6;
+    --accent: #37c7a1;
+    --blue: #65a9ff;
+    --amber: #f2b84b;
+    --red: #ef6b73;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    font-size: 14px;
+    letter-spacing: 0;
+  }
+  header {
+    padding: 18px 22px;
+    border-bottom: 1px solid var(--line);
+    background: var(--band);
+    display: flex;
+    gap: 16px;
+    align-items: center;
+    justify-content: space-between;
+  }
+  h1 { margin: 0; font-size: 18px; font-weight: 760; }
+  .sub { color: var(--muted); margin-top: 4px; font-size: 12px; }
+  .status {
+    display: inline-flex;
+    align-items: center;
+    min-height: 34px;
+    border: 1px solid var(--line);
+    background: var(--panel-2);
+    border-radius: 6px;
+    padding: 6px 10px;
+    white-space: nowrap;
+    font-size: 12px;
+  }
+  main { display: grid; grid-template-columns: minmax(260px, 360px) minmax(0, 1fr); min-height: calc(100vh - 72px); }
+  aside {
+    border-right: 1px solid var(--line);
+    background: #0e141b;
+    padding: 18px;
+  }
+  section { padding: 18px 22px; }
+  h2 { margin: 0 0 12px; font-size: 13px; text-transform: uppercase; color: var(--muted); font-weight: 720; }
+  .meter {
+    height: 10px;
+    background: #0a0f14;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    overflow: hidden;
+    margin: 10px 0 14px;
+  }
+  .meter > span { display: block; height: 100%; width: 0; background: var(--accent); transition: width .2s ease; }
+  .mode-select, button, textarea {
+    font: inherit;
+  }
+  select, textarea {
+    width: 100%;
+    color: var(--text);
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+  }
+  select { min-height: 38px; padding: 7px 9px; }
+  textarea { min-height: 58px; padding: 8px; resize: vertical; }
+  button {
+    min-height: 36px;
+    padding: 7px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--line);
+    background: var(--panel);
+    color: var(--text);
+    cursor: pointer;
+  }
+  button.primary { background: #12392f; border-color: #27745f; color: #dbfff5; }
+  button:disabled { opacity: .55; cursor: not-allowed; }
+  .summary-list { display: grid; gap: 8px; margin-top: 14px; }
+  .summary-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    border-bottom: 1px solid rgba(45,59,72,.5);
+    padding-bottom: 7px;
+    color: var(--muted);
+  }
+  .summary-row strong { color: var(--text); font-weight: 720; }
+  .checklist { display: grid; gap: 10px; }
+  .item {
+    display: grid;
+    grid-template-columns: 30px minmax(0, 1fr);
+    gap: 10px;
+    border: 1px solid var(--line);
+    background: var(--panel);
+    border-radius: 8px;
+    padding: 12px;
+  }
+  .item.done { border-color: rgba(55,199,161,.72); }
+  .item input[type="checkbox"] { width: 20px; height: 20px; margin-top: 2px; accent-color: var(--accent); }
+  .item h3 { margin: 0; font-size: 14px; }
+  .item p { margin: 5px 0 9px; color: var(--muted); line-height: 1.45; }
+  .meta { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 9px; }
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    min-height: 22px;
+    padding: 3px 7px;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    color: var(--muted);
+    font-size: 11px;
+  }
+  .pill.required { color: var(--amber); border-color: rgba(242,184,75,.5); }
+  .pill.system { color: var(--blue); border-color: rgba(101,169,255,.45); }
+  .targets { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; margin-top: 16px; }
+  .target { border: 1px solid var(--line); background: var(--panel-2); border-radius: 8px; padding: 11px; }
+  .target h3 { margin: 0 0 6px; font-size: 13px; }
+  .target p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.4; }
+  .blocked { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 14px; }
+  .blocked ul { margin: 8px 0 0 18px; padding: 0; color: var(--muted); line-height: 1.55; }
+  .error { color: var(--red); }
+  @media (max-width: 840px) {
+    header { align-items: flex-start; flex-direction: column; }
+    main { grid-template-columns: 1fr; }
+    aside { border-right: 0; border-bottom: 1px solid var(--line); }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Marcus Live Presence Setup</h1>
+    <div class="sub">Local browser identity, audio routing, voice, chat, OBS, and live discussion readiness.</div>
+  </div>
+  <div id="topStatus" class="status">Loading</div>
+</header>
+<main>
+  <aside>
+    <h2>Readiness</h2>
+    <div id="readinessText">Checking setup...</div>
+    <div class="meter"><span id="meter"></span></div>
+    <label for="mode">Default live mode</label>
+    <select id="mode" class="mode-select"></select>
+    <div class="summary-list">
+      <div class="summary-row"><span>Desktop</span><strong id="desktopState">unknown</strong></div>
+      <div class="summary-row"><span>Private copilot</span><strong id="privateState">unknown</strong></div>
+      <div class="summary-row"><span>Public voice</span><strong id="publicState">unknown</strong></div>
+    </div>
+    <div class="blocked">
+      <h2>Mark's Next Steps</h2>
+      <ul id="nextSteps"></ul>
+    </div>
+  </aside>
+  <section>
+    <h2>Setup Checklist</h2>
+    <div id="checklist" class="checklist"></div>
+    <h2 style="margin-top:20px">Live Targets</h2>
+    <div id="targets" class="targets"></div>
+  </section>
+</main>
+<script>
+  const state = { data: null, saving: false };
+  const el = {
+    topStatus: document.getElementById('topStatus'),
+    readinessText: document.getElementById('readinessText'),
+    meter: document.getElementById('meter'),
+    mode: document.getElementById('mode'),
+    desktopState: document.getElementById('desktopState'),
+    privateState: document.getElementById('privateState'),
+    publicState: document.getElementById('publicState'),
+    nextSteps: document.getElementById('nextSteps'),
+    checklist: document.getElementById('checklist'),
+    targets: document.getElementById('targets'),
+  };
+  function esc(value) {
+    return String(value == null ? '' : value).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+  }
+  async function api(path, options = {}) {
+    const response = await fetch(path, {
+      credentials: 'include',
+      ...options,
+      headers: { 'content-type': 'application/json', ...(options.headers || {}) },
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.error || `Request failed (${response.status})`);
+    return body;
+  }
+  function yes(value) { return value ? 'ready' : 'not ready'; }
+  function render(data) {
+    state.data = data;
+    const pct = data.requiredTotal ? Math.round((data.requiredCompleted / data.requiredTotal) * 100) : 0;
+    el.topStatus.textContent = data.readyForPublicVoice ? 'Public voice ready' : data.readyForPrivateCopilot ? 'Private copilot ready' : 'Setup required';
+    el.readinessText.textContent = `${data.requiredCompleted}/${data.requiredTotal} required items complete`;
+    el.meter.style.width = `${pct}%`;
+    el.desktopState.textContent = yes(data.desktopOnline);
+    el.privateState.textContent = yes(data.readyForPrivateCopilot);
+    el.publicState.textContent = yes(data.readyForPublicVoice);
+    el.mode.innerHTML = (data.modes || []).map((mode) => `<option value="${esc(mode)}"${mode === data.defaultMode ? ' selected' : ''}>${esc(mode.replaceAll('_', ' '))}</option>`).join('');
+    el.nextSteps.innerHTML = (data.nextHumanSteps || []).map((item) => `<li><strong>${esc(item.label)}</strong><br>${esc(item.description)}</li>`).join('') || '<li>No required Mark-owned setup steps remain.</li>';
+    el.checklist.innerHTML = (data.items || []).map((item) => `
+      <article class="item ${item.done ? 'done' : ''}" data-id="${esc(item.id)}">
+        <input type="checkbox" ${item.done ? 'checked' : ''} ${item.source === 'system' ? 'disabled' : ''} aria-label="${esc(item.label)}">
+        <div>
+          <h3>${esc(item.label)}</h3>
+          <div class="meta">
+            <span class="pill ${item.required ? 'required' : ''}">${item.required ? 'required' : 'optional'}</span>
+            <span class="pill">${esc(item.owner)}</span>
+            ${item.source === 'system' ? '<span class="pill system">system verified</span>' : ''}
+          </div>
+          <p>${esc(item.description)}</p>
+          <textarea placeholder="Notes for this setup item">${esc(item.note || '')}</textarea>
+        </div>
+      </article>`).join('');
+    el.targets.innerHTML = (data.platformTargets || []).map((target) => `
+      <article class="target">
+        <h3>${esc(target.label)}</h3>
+        <p>${esc(target.joinModel.replaceAll('_', ' '))}</p>
+        <p>${esc((target.requiredCapabilities || []).join(', '))}</p>
+      </article>`).join('');
+  }
+  async function refresh() {
+    try {
+      render(await api('/api/marcus/live-presence/status'));
+    } catch (error) {
+      el.topStatus.innerHTML = `<span class="error">${esc(error.message)}</span>`;
+    }
+  }
+  async function savePatch(patch) {
+    if (state.saving) return;
+    state.saving = true;
+    el.topStatus.textContent = 'Saving';
+    try {
+      render(await api('/api/marcus/live-presence/setup', { method: 'PUT', body: JSON.stringify(patch) }));
+    } catch (error) {
+      el.topStatus.innerHTML = `<span class="error">${esc(error.message)}</span>`;
+    } finally {
+      state.saving = false;
+    }
+  }
+  el.mode.addEventListener('change', () => savePatch({ defaultMode: el.mode.value }));
+  el.checklist.addEventListener('change', (event) => {
+    const item = event.target.closest('.item');
+    if (!item || event.target.tagName !== 'INPUT') return;
+    savePatch({ completed: { [item.dataset.id]: event.target.checked } });
+  });
+  el.checklist.addEventListener('blur', (event) => {
+    const item = event.target.closest('.item');
+    if (!item || event.target.tagName !== 'TEXTAREA') return;
+    savePatch({ notes: { [item.dataset.id]: event.target.value } });
+  }, true);
+  refresh();
+  setInterval(refresh, 15000);
+</script>
+</body>
+</html>

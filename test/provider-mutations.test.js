@@ -40,6 +40,7 @@ async function addProject(engine, overrides = {}) {
 
 test('provider mutation tools are explicit durable preparation tools', () => {
   const names = getMarcusOperationToolDefinitions().map((tool) => tool.function.name);
+  assert.ok(names.includes('get_operation_evidence'));
   assert.ok(names.includes('prepare_github_merge'));
   assert.ok(names.includes('prepare_cloudflare_dns_change'));
   assert.ok(names.includes('prepare_cloudflare_worker_deployment'));

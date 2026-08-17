@@ -27,14 +27,19 @@ const { discoverRecentCodexWorkspaces, parseGitStatus } = require('./desktop-cod
 const { localPackageBinInvocation, npmCliInvocation } = require('./desktop-node-cli.cjs');
 const {
   createPcAccessPolicy,
+  createPcDirectory,
+  deletePcItem,
   getPcInventory,
   launchInstalledApplication,
   listInstalledApplications,
   listPcDirectory,
+  movePcItem,
   openPcItem,
   readPcTextFile,
+  runPcPowerShell,
   searchPcFiles,
   toDesktopActionOutcome,
+  writePcTextFile,
 } = require('./desktop-pc-operator.cjs');
 
 const SERVER_URL = (process.argv[2] || process.env.MARCUS_SERVER_URL || '').trim();
@@ -1285,6 +1290,16 @@ async function checkDesktopActions() {
         outcome = openPcItem(action?.payload || {}, PC_ACCESS_POLICY);
       } else if (type === 'pc-launch-application') {
         outcome = launchInstalledApplication(action?.payload || {});
+      } else if (type === 'pc-write-text-file') {
+        outcome = writePcTextFile(action?.payload || {}, PC_ACCESS_POLICY);
+      } else if (type === 'pc-create-directory') {
+        outcome = createPcDirectory(action?.payload || {}, PC_ACCESS_POLICY);
+      } else if (type === 'pc-move-item') {
+        outcome = movePcItem(action?.payload || {}, PC_ACCESS_POLICY);
+      } else if (type === 'pc-delete-item') {
+        outcome = deletePcItem(action?.payload || {}, PC_ACCESS_POLICY);
+      } else if (type === 'pc-run-powershell') {
+        outcome = await runPcPowerShell(action?.payload || {}, PC_ACCESS_POLICY);
       }
       if (type.startsWith('pc-')) outcome = toDesktopActionOutcome(outcome);
 
