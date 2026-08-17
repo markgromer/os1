@@ -105,6 +105,28 @@ test('MARCUS fill command targets a visible editor and inserts text without subm
   assert.deepEqual(calls[1], { method: 'Input.insertText', params: { text: 'Prepared post text.' } });
 });
 
+test('MARCUS fill command can open a named composer before inserting the draft', async () => {
+  const bridge = new MarcusBrowserBridge();
+  let runtimeCall = 0;
+  bridge.ensureBrowser = async () => true;
+  bridge.sensitiveFieldFocused = async () => false;
+  bridge.page = async () => ({
+    target: { id: 'skool-tab' },
+    session: {
+      send: async (method) => {
+        if (method === 'Input.insertText') return {};
+        runtimeCall += 1;
+        if (runtimeCall === 1) return { result: { value: { focused: false } } };
+        if (runtimeCall === 2) return { result: { value: { activated: true } } };
+        return { result: { value: { focused: true, tag: 'DIV', contentEditable: true, label: '' } } };
+      },
+    },
+  });
+  const result = await bridge.command({ command: 'fill', target: 'Write something', text: 'Prepared post text.' });
+  assert.equal(result.details.result.insertedChars, 19);
+  assert.equal(runtimeCall, 3);
+});
+
 test('MARCUS page reader scans approved viewports and restores the original position', async () => {
   const bridge = new MarcusBrowserBridge();
   bridge.sensitiveFieldFocused = async () => false;

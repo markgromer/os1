@@ -316,9 +316,9 @@ class MarcusBrowserBridge {
       if (await this.sensitiveFieldFocused(session)) {
         throw new Error('Password entry is blocked from the remote bridge. Type it in the visible MARCUS Chrome window.');
       }
-      const focused = await session.send('Runtime.evaluate', {
+      const focusEditor = (wantedLabel = '') => session.send('Runtime.evaluate', {
         expression: `(() => {
-          const wanted = ${JSON.stringify(targetLabel.toLowerCase())};
+          const wanted = ${JSON.stringify(String(wantedLabel || '').toLowerCase())};
           const candidates = [...document.querySelectorAll('textarea,input:not([type="password"]),[contenteditable="true"],[contenteditable="plaintext-only"],[role="textbox"]')]
             .filter((element) => {
               const rect = element.getBoundingClientRect();
@@ -354,6 +354,31 @@ class MarcusBrowserBridge {
         })()`,
         returnByValue: true,
       });
+      let focused = await focusEditor(targetLabel);
+      if (!focused?.result?.value?.focused && targetLabel && !/^(post|publish|send|submit)$/i.test(targetLabel)) {
+        const opened = await session.send('Runtime.evaluate', {
+          expression: `(() => {
+            const wanted = ${JSON.stringify(targetLabel.toLowerCase())};
+            const candidates = [...document.querySelectorAll('a,button,[role="button"],[role="link"]')]
+              .filter((element) => {
+                const text = String(element.innerText || element.textContent || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+                const rect = element.getBoundingClientRect();
+                const style = getComputedStyle(element);
+                return text.includes(wanted) && rect.width > 0 && rect.height > 0 && rect.bottom >= 0 && rect.top <= innerHeight
+                  && style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) !== 0;
+              })
+              .sort((left, right) => String(left.innerText || '').length - String(right.innerText || '').length);
+            if (!candidates[0]) return { activated: false };
+            candidates[0].click();
+            return { activated: true };
+          })()`,
+          returnByValue: true,
+        });
+        if (opened?.result?.value?.activated) {
+          await wait(600);
+          focused = await focusEditor('');
+        }
+      }
       if (!focused?.result?.value?.focused) {
         throw new Error(targetLabel ? `No visible editor matched: ${targetLabel}` : 'No visible browser editor is available.');
       }
