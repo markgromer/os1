@@ -773,16 +773,17 @@
 
     function projectStateFromStatus(rawStatus, handoffStatus = "") {
       const raw = `${text(rawStatus)} ${text(handoffStatus)}`.toLowerCase();
+      if (/archived|known_history|history/.test(raw)) return "archived";
       if (/needs|approval|ready_for_mark|waiting_for_mark/.test(raw)) return "needs_mark";
       if (/blocked|failed|error|recovery/.test(raw)) return "blocked";
       if (/verify|audit|test|review/.test(raw)) return "verifying";
-      if (/complete|done|accepted|ready_to_ship|ship/.test(raw)) return "complete";
+      if (/complete|completed|done|accepted|ready_to_ship|ship/.test(raw)) return "complete";
       if (/run|build|codex|moving|handoff|active|queued|progress/.test(raw)) return "moving";
       return "monitoring";
     }
 
     function stateLabel(state) {
-      return ({ needs_mark: "Needs you", blocked: "Blocked", verifying: "Verifying", complete: "Ready", moving: "Building", losing_thread: "Decaying", monitoring: "Watching" })[state] || "Watching";
+      return ({ needs_mark: "Needs you", blocked: "Blocked", verifying: "Verifying", complete: "Ready", moving: "Building", losing_thread: "Decaying", archived: "Closed", monitoring: "Watching" })[state] || "Watching";
     }
     function stateTone(state) {
       if (state === "complete") return "ok";
@@ -904,8 +905,8 @@
       };
     }
     function makeAwarenessProject(item, index) {
-      const state = projectStateFromStatus(text(item.state || item.status || item.lifecycle));
-      const name = text(item.name || item.title || "Project");
+      const state = projectStateFromStatus(text(item.attentionState || item.state || item.status || item.lifecycle));
+      const name = text(item.canonicalName || item.name || item.title || "Project");
       return {
         id: idFrom(item.id || `${name}-${index}`, "aware"),
         awarenessProjectId: text(item.awarenessProjectId || item.id),
@@ -915,11 +916,11 @@
         source: "awareness",
         state,
         label: stateLabel(state),
-        truth: text(item.summary || item.currentTruth || item.description || "Project is known to Marcus."),
-        current: text(item.currentOperation || item.nextAction || item.summary || "No live operation attached."),
-        next: text(item.nextAction || "Marcus watches for fresher evidence."),
-        request: text(item.objective || item.summary),
-        response: text(item.currentTruth || item.summary),
+        truth: text(item.latestMeaningfulChange || item.summary || item.currentTruth || item.description || "Project is known to Marcus."),
+        current: text(item.currentActivity || item.currentOperation || item.nextAction || item.summary || "No live operation attached."),
+        next: text(item.likelyNextStep || item.nextAction || "Marcus watches for fresher evidence."),
+        request: text(item.objectiveBelief || item.objective || item.summary),
+        response: text(item.latestMeaningfulChange || item.currentTruth || item.summary),
         updatedAt: item.updatedAt || item.lastSignalAt,
         branch: text(item.branch),
         statusCount: 0,
@@ -941,13 +942,28 @@
     function mergeProjects(projects) {
       const out = [];
       const seen = new Set();
+      const awareness = projects.filter((project) => project?.source === "awareness");
+      const awarenessByName = new Map(awareness.map((project) => [idFrom(project.name), project]));
       for (const project of projects.filter(Boolean)) {
+        if (project.source !== "awareness") {
+          const matched = awarenessByName.get(idFrom(project.name));
+          if (matched) {
+            if (matched.state === "archived" || matched.raw?.dashboardVisible === false) continue;
+            project.awarenessProjectId ||= matched.awarenessProjectId;
+            project.projectRegistryId ||= matched.projectRegistryId;
+            project.projectId ||= matched.projectId;
+          }
+        } else if (out.some((item) => idFrom(item.name) === idFrom(project.name))) {
+          continue;
+        }
         const key = idFrom(`${project.source}-${project.id}`);
         if (seen.has(key)) continue;
         seen.add(key);
         out.push(project);
       }
-      return out.sort((a, b) => rank(a) - rank(b) || Date.parse(b.updatedAt || 0) - Date.parse(a.updatedAt || 0));
+      return out
+        .filter((project) => project.state !== "archived" && project.raw?.dashboardVisible !== false)
+        .sort((a, b) => rank(a) - rank(b) || Date.parse(b.updatedAt || 0) - Date.parse(a.updatedAt || 0));
     }
     function visibleProjects() {
       const projects = snapshot.projects;
@@ -981,7 +997,7 @@
           ...arr(desktop.codexWorkspaces).map((item, index) => makeCodexProject(item, index, desktop)),
           ...arr(operations.operations).map(makeOperationProject),
           ...arr(jobs.jobs).filter((job) => text(job.status).toLowerCase() !== "cancelled").map(makeJobProject),
-          ...arr(awareness.projects).slice(0, 12).map(makeAwarenessProject),
+          ...arr(awareness.projects).map(makeAwarenessProject),
         ]);
         snapshot = { projects, operations: arr(operations.operations), jobs: arr(jobs.jobs), desktop, awareness, settings, github, cloudflare, google };
         if (!selectedId || !projects.some((p) => p.id === selectedId)) selectedId = projects[0]?.id || "";
@@ -1149,6 +1165,13 @@
       if (project.state === "verifying") return "Verification is underway. Failed findings should become a correction pass, not a vague follow-up.";
       return "The project has live movement or context. Marcus should keep watching and only interrupt when evidence changes or Mark is required.";
     }
+    function primaryAuditAction(project) {
+      if (project.state === "needs_mark") return { label: "Approve next step", command: "approve" };
+      if (project.state === "blocked") return { label: "Ask for recovery", command: "fix" };
+      if (project.state === "verifying") return { label: "Review evidence", command: "evidence" };
+      if (project.state === "complete") return { label: "Close out", command: "close" };
+      return { label: "Keep watching", command: "watch" };
+    }
     function auditHtml(project) {
       const criteria = auditCriteria(project);
       const passed = criteria.filter((c) => c.ok).length;
@@ -1165,9 +1188,9 @@
         <div>
           <div class="finding"><strong>MARCUS FINDING</strong>${esc(auditFinding(project))}</div>
           <div class="audit-actions">
-            <button class="btn primary" type="button" data-add-correction="${esc(project.id)}">Add to correction</button>
-            <button class="btn" type="button" data-accept-project="${esc(project.id)}">Accept visible result</button>
-            <button class="btn" type="button" data-reasoning="${esc(project.id)}">See reasoning</button>
+            <button class="btn primary" type="button" data-project-command="${esc(primaryAuditAction(project).command)}" data-project-id="${esc(project.id)}">${esc(primaryAuditAction(project).label)}</button>
+            <button class="btn" type="button" data-project-command="close" data-project-id="${esc(project.id)}">Mark complete & archive</button>
+            <button class="btn" type="button" data-project-command="why" data-project-id="${esc(project.id)}">Why this?</button>
           </div>
         </div>`;
     }
@@ -1203,7 +1226,7 @@
         <div class="row" style="gap:6px"><button class="btn" type="button" data-pause-current>Pause</button><button class="btn bad" type="button" data-stop-current>Stop</button><button class="btn primary" type="button" data-control-current>${markHasControl ? "Return" : "Take control"}</button></div>`;
       els.dockPipeline.innerHTML = `<span class="eyebrow">2 Pipeline</span><div class="pipeline">${pipelineHtml(project)}</div><p>Current stage: ${esc(currentStage(project))}</p>`;
       els.dockEvidence.innerHTML = `<span class="eyebrow">3 Evidence</span><div>${project.evidence.slice(0, 4).map((item) => `<div class="evidence-row"><span class="state-pill ${stateTone(project.state)}">E</span><span>${esc(compact(item, 110))}</span></div>`).join("")}</div><button class="btn" type="button" data-open-tab="evidence">Open evidence</button>`;
-      els.dockNext.innerHTML = `<span class="eyebrow">4 Next</span><div><div class="next-row"><span class="state-pill warn">1</span><span>${esc(project.next)}</span></div><div class="next-row"><span class="state-pill">2</span><span>Review live evidence before closing or shipping.</span></div></div><div class="row" style="gap:6px"><button class="btn" type="button" data-review-next>Ask why</button><button class="btn" type="button" data-open-tab="codex">Open Codex</button></div>`;
+      els.dockNext.innerHTML = `<span class="eyebrow">4 Next</span><div><div class="next-row"><span class="state-pill warn">1</span><span>${esc(project.next)}</span></div><div class="next-row"><span class="state-pill">2</span><span>${project.state === "needs_mark" ? "Approve continuation, request a fix, or close it out if the outcome is already accepted." : "Review live evidence before closing or shipping."}</span></div></div><div class="row" style="gap:6px"><button class="btn" type="button" data-project-command="why" data-project-id="${esc(project.id)}">Why</button><button class="btn primary" type="button" data-project-command="${esc(primaryAuditAction(project).command)}" data-project-id="${esc(project.id)}">${esc(primaryAuditAction(project).label)}</button></div>`;
     }
     function actionLabel(project) {
       if (project.state === "needs_mark") return "Review";
@@ -1260,9 +1283,7 @@
         activeTab = button.dataset.openTab;
         renderWorkspace();
       });
-      document.querySelectorAll("[data-add-correction]").forEach((button) => button.onclick = () => addCorrection(button.dataset.addCorrection));
-      document.querySelectorAll("[data-accept-project]").forEach((button) => button.onclick = () => addMessage("marcus", "Acceptance records Mark's visible review, but it does not ship or merge anything by itself."));
-      document.querySelectorAll("[data-reasoning]").forEach((button) => button.onclick = () => explainReasoning(button.dataset.reasoning));
+      document.querySelectorAll("[data-project-command]").forEach((button) => button.onclick = () => runProjectCommand(button.dataset.projectCommand, button.dataset.projectId));
       document.querySelectorAll("[data-review-next]").forEach((button) => button.onclick = () => explainReasoning(selectedId));
       document.querySelectorAll("[data-control-current]").forEach((button) => button.onclick = toggleControl);
       document.querySelectorAll("[data-pause-current]").forEach((button) => button.onclick = () => addMessage("marcus", "Pause is recorded locally in this display slice. A backend operation pause requires an exact operation binding."));
@@ -1281,9 +1302,16 @@
       selectedId = id;
       const project = selectedProject();
       if (!project) return;
-      activeTab = project.state === "verifying" ? "tests" : project.state === "complete" ? "evidence" : "preview";
-      addMessage("marcus", `${actionLabel(project)} selected for ${project.name}. ${project.next}`);
-      render();
+      runProjectCommand(primaryAuditAction(project).command, id);
+    }
+    function projectByAnyId(id) {
+      return snapshot.projects.find((p) => p.id === id || p.awarenessProjectId === id || p.projectRegistryId === id) || selectedProject();
+    }
+    function awarenessIdForProject(project) {
+      if (!project) return "";
+      if (project.awarenessProjectId || project.projectRegistryId) return project.awarenessProjectId || project.projectRegistryId;
+      const matched = snapshot.projects.find((p) => p.source === "awareness" && idFrom(p.name) === idFrom(project.name));
+      return matched?.awarenessProjectId || matched?.projectRegistryId || "";
     }
     function addCorrection(id) {
       const project = snapshot.projects.find((p) => p.id === id);
@@ -1294,6 +1322,57 @@
       const project = snapshot.projects.find((p) => p.id === id) || selectedProject();
       if (!project) return;
       addMessage("marcus", `${project.name}: observed source is ${sourceLabels[project.source] || project.source}. Current read: ${project.current}. Evidence: ${project.evidence.join(" | ")}. Recommendation: ${project.next}`);
+    }
+    async function closeOutProject(project) {
+      const awarenessId = awarenessIdForProject(project);
+      if (!awarenessId) {
+        await sendToMarcus(`Close out ${project.name} as accepted/resolved and remove it from active attention if there is no open operation requiring Mark. Evidence: ${project.evidence.join("; ")}`);
+        return;
+      }
+      const confirmed = window.confirm(`Close out ${project.name} and remove it from active attention?`);
+      if (!confirmed) return;
+      try {
+        await api(`/api/marcus/awareness/projects/${encodeURIComponent(awarenessId)}/lifecycle`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            lifecycle: "archived",
+            reason: `Marked complete and archived from MARCUS dedicated display. Visible result: ${compact(project.truth || project.current, 240)}`,
+          }),
+        });
+        addMessage("marcus", `${project.name} is closed out and removed from active attention. Its history and evidence remain searchable.`);
+        selectedId = snapshot.projects.find((p) => p.id !== project.id)?.id || "";
+        if (chatContextId === project.id || chatContextId === awarenessId) chatContextId = "";
+        await load();
+      } catch (error) {
+        addMessage("marcus error", `Close-out failed: ${error.message}`);
+      }
+    }
+    async function runProjectCommand(command, id) {
+      const project = projectByAnyId(id);
+      if (!project) return;
+      selectedId = project.id;
+      if (command === "close") return closeOutProject(project);
+      if (command === "why") return explainReasoning(project.id);
+      if (command === "evidence") {
+        activeTab = "evidence";
+        addMessage("marcus", `${project.name}: evidence opened. Close it out if the visible result is accepted; ask for recovery if evidence does not prove the outcome.`);
+        render();
+        return;
+      }
+      if (command === "approve") {
+        setChatContext(project.id);
+        await sendToMarcus(`I approve the next safe step for ${project.name}. Continue only if the action is reversible or already authorized; if the work is actually done, tell me what evidence supports closing it out.`);
+        return;
+      }
+      if (command === "fix") {
+        setChatContext(project.id);
+        await sendToMarcus(`Prepare the smallest recovery or correction for ${project.name}. Explain what is wrong, what Codex should change, and what verification will prove it.`);
+        return;
+      }
+      activeTab = "preview";
+      addMessage("marcus", `${project.name} stays under watch. ${project.next}`);
+      render();
     }
     function addMessage(role, content) {
       const div = document.createElement("div");
