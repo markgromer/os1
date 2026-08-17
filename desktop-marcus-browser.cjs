@@ -309,6 +309,56 @@ class MarcusBrowserBridge {
       const sensitive = await this.sensitiveFieldFocused(session);
       if (sensitive) throw new Error('Password entry is blocked from the remote bridge. Type it in the visible MARCUS Chrome window.');
       result = await session.send('Input.insertText', { text });
+    } else if (command === 'fill') {
+      const targetLabel = String(payload.target || '').replace(/\s+/g, ' ').trim().slice(0, 240);
+      const text = String(payload.text || '').slice(0, 4_000);
+      if (!text) throw new Error('Text is required.');
+      if (await this.sensitiveFieldFocused(session)) {
+        throw new Error('Password entry is blocked from the remote bridge. Type it in the visible MARCUS Chrome window.');
+      }
+      const focused = await session.send('Runtime.evaluate', {
+        expression: `(() => {
+          const wanted = ${JSON.stringify(targetLabel.toLowerCase())};
+          const candidates = [...document.querySelectorAll('textarea,input:not([type="password"]),[contenteditable="true"],[contenteditable="plaintext-only"],[role="textbox"]')]
+            .filter((element) => {
+              const rect = element.getBoundingClientRect();
+              const style = getComputedStyle(element);
+              if (element.disabled || element.readOnly || rect.width <= 0 || rect.height <= 0 || rect.bottom < 0 || rect.top > innerHeight) return false;
+              if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return false;
+              if (!wanted) return true;
+              const details = [
+                element.getAttribute('aria-label'), element.getAttribute('placeholder'), element.getAttribute('name'),
+                element.getAttribute('data-placeholder'), element.closest('form,[role="dialog"],section')?.innerText,
+              ].filter(Boolean).join(' ').replace(/\\s+/g, ' ').toLowerCase();
+              return details.includes(wanted) || wanted.includes(details.slice(0, 120));
+            })
+            .sort((left, right) => left.getBoundingClientRect().top - right.getBoundingClientRect().top);
+          const target = candidates[0];
+          if (!target) return { focused: false };
+          target.scrollIntoView({ block: 'center', inline: 'nearest' });
+          target.focus();
+          if (typeof target.select === 'function') target.select();
+          else {
+            const selection = window.getSelection();
+            const range = document.createRange();
+            range.selectNodeContents(target);
+            selection.removeAllRanges();
+            selection.addRange(range);
+          }
+          return {
+            focused: true,
+            tag: target.tagName,
+            contentEditable: target.isContentEditable,
+            label: String(target.getAttribute('aria-label') || target.getAttribute('placeholder') || target.getAttribute('data-placeholder') || '').slice(0, 240)
+          };
+        })()`,
+        returnByValue: true,
+      });
+      if (!focused?.result?.value?.focused) {
+        throw new Error(targetLabel ? `No visible editor matched: ${targetLabel}` : 'No visible browser editor is available.');
+      }
+      await session.send('Input.insertText', { text });
+      result = { ...focused.result.value, insertedChars: text.length };
     } else if (command === 'key') {
       const key = String(payload.key || '').slice(0, 40);
       const keys = {

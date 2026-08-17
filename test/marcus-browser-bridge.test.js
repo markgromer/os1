@@ -81,6 +81,30 @@ test('MARCUS activate command matches bounded visible controls without script in
   assert.match(expression, /a,button/);
 });
 
+test('MARCUS fill command targets a visible editor and inserts text without submitting', async () => {
+  const bridge = new MarcusBrowserBridge();
+  const calls = [];
+  bridge.ensureBrowser = async () => true;
+  bridge.sensitiveFieldFocused = async () => false;
+  bridge.page = async () => ({
+    target: { id: 'skool-tab' },
+    session: {
+      send: async (method, params) => {
+        calls.push({ method, params });
+        if (method === 'Runtime.evaluate') {
+          return { result: { value: { focused: true, tag: 'DIV', contentEditable: true, label: 'Write something' } } };
+        }
+        return {};
+      },
+    },
+  });
+  const result = await bridge.command({ command: 'fill', target: 'Write something', text: 'Prepared post text.' });
+  assert.equal(result.ok, true);
+  assert.match(calls[0].params.expression, /contenteditable/);
+  assert.match(calls[0].params.expression, /write something/i);
+  assert.deepEqual(calls[1], { method: 'Input.insertText', params: { text: 'Prepared post text.' } });
+});
+
 test('MARCUS page reader scans approved viewports and restores the original position', async () => {
   const bridge = new MarcusBrowserBridge();
   bridge.sensitiveFieldFocused = async () => false;

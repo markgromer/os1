@@ -1,0 +1,27 @@
+const BROWSER_SURFACE_PATTERN = /\b(browser|chrome|web\s?page|website|skool|gmail|google mail|zoom|youtube|tik\s?tok)\b/i;
+const COMPOSITION_PATTERN = /\b(post|comment|reply|response|message|caption)\b/i;
+const APPROVAL_PATTERN = /\b(approve|approved|go ahead|do it|post it|publish it|send it|submit it|reply now|comment now)\b/i;
+
+export function classifyMarcusBrowserIntent(message, { pendingDraft = false } = {}) {
+  const text = String(message || '').replace(/\s+/g, ' ').trim();
+  if (!text) return '';
+
+  const approvedSubmit = APPROVAL_PATTERN.test(text)
+    && /\b(post|publish|send|submit|reply|comment)\b/i.test(text);
+  if (pendingDraft && approvedSubmit && !/\b(email|e-mail|text|sms)\b/i.test(text)) return 'marcus_browser_submit';
+  if (!BROWSER_SURFACE_PATTERN.test(text)) return '';
+  if (approvedSubmit) return 'marcus_browser_submit';
+
+  if (/\b(read|review|inspect|analy[sz]e|browse|browsing|scan|summari[sz]e|feedback|look(?:ing)? at)\b|\blook through\b/i.test(text)) {
+    return 'marcus_browser_read';
+  }
+  if (COMPOSITION_PATTERN.test(text) && /\b(write|draft|compose|type|fill|prepare|create|make|respond)\b/i.test(text)) {
+    return 'marcus_browser_fill';
+  }
+  if (/\b(click|press|activate|choose|select|follow)\b/i.test(text)) return 'marcus_browser_activate';
+  if (/\bhttps?:\/\//i.test(text) && /\b(open|show|navigate|go to|pull up|visit)\b/i.test(text)) {
+    return 'marcus_browser_open';
+  }
+  if (/\b(can(?:not|'t)?|unable|access|connected|control|see)\b/i.test(text)) return 'marcus_browser_status';
+  return '';
+}

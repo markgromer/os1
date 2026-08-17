@@ -1775,7 +1775,6 @@
     }
     async function sendToMarcus(message, { rethrow = false, echoUser = true } = {}) {
       const project = chatContextId ? snapshot.projects.find((p) => p.id === chatContextId) : null;
-      const context = project ? `Context: ${project.name}. Current: ${project.current}. Next: ${project.next}. ` : "";
       const projectId = project?.awarenessProjectId || project?.projectRegistryId || project?.projectId || project?.id || "";
       if (echoUser) addMessage("user", message);
       try {
@@ -1783,7 +1782,7 @@
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            message: `${context}${message}`,
+            message,
             surface: "dedicated_visualizer",
             awarenessProjectId: projectId || "",
             projectId: projectId || "",

@@ -193,6 +193,11 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     assert.match(liveHtml, /<body class="live-focus">/);
     assert.match(liveHtml, /class="live-focus-hero"/);
     assert.match(liveHtml, /body\.live-focus \.command-stage/);
+    const visualizerPage = await fetch(`${base}/visualizer.html`);
+    const visualizerHtml = await visualizerPage.text();
+    assert.equal(visualizerPage.status, 200);
+    assert.match(visualizerHtml, /body: JSON\.stringify\(\{\s*message,/);
+    assert.doesNotMatch(visualizerHtml, /message: `\$\{context\}\$\{message\}`/);
     const mobilePage = await fetch(`${base}/mobile.html`);
     const mobileHtml = await mobilePage.text();
     assert.equal(mobilePage.status, 200);
