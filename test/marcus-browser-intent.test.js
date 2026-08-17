@@ -33,6 +33,21 @@ test('compound thread reply requests open the thread before preparing the reply'
     classifyMarcusBrowserIntent('Open the Tanya post on Skool and draft a reply.'),
     'marcus_browser_prepare_reply',
   );
+  assert.equal(
+    classifyMarcusBrowserIntent('Head to the Skool community and prepare your introduction reply in the introduction thread. Do not post it.'),
+    'marcus_browser_prepare_reply',
+  );
+});
+
+test('submission negation never becomes browser publication approval', () => {
+  assert.notEqual(
+    classifyMarcusBrowserIntent('Prepare the Skool reply, but do not post it.', { pendingDraft: true }),
+    'marcus_browser_submit',
+  );
+  assert.notEqual(
+    classifyMarcusBrowserIntent("Draft the Skool comment without publishing it.", { pendingDraft: true }),
+    'marcus_browser_submit',
+  );
 });
 
 test('ordinary project requests do not become browser operations', () => {

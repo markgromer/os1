@@ -2,12 +2,14 @@ const BROWSER_SURFACE_PATTERN = /\b(browser|chrome|web\s?page|website|skool|gmai
 const COMPOSITION_PATTERN = /\b(post|comment|reply|response|message|caption)\b/i;
 const APPROVAL_PATTERN = /\b(approve|approved|go ahead|do it|post it|publish it|send it|submit it|reply now|comment now)\b/i;
 const THREAD_NAVIGATION_PATTERN = /\b(head to|go to|find|open|visit|navigate to|in(?:side)? (?:the )?(?:thread|post|tab))\b/i;
+const SUBMISSION_NEGATION_PATTERN = /\b(do not|don't|never|not yet|without)\b[^.!?\n]{0,60}\b(post|publish|send|submit|reply|comment)\b/i;
 
 export function classifyMarcusBrowserIntent(message, { pendingDraft = false } = {}) {
   const text = String(message || '').replace(/\s+/g, ' ').trim();
   if (!text) return '';
 
-  const approvedSubmit = APPROVAL_PATTERN.test(text)
+  const approvedSubmit = !SUBMISSION_NEGATION_PATTERN.test(text)
+    && APPROVAL_PATTERN.test(text)
     && /\b(post|publish|send|submit|reply|comment)\b/i.test(text);
   if (pendingDraft && approvedSubmit && !/\b(email|e-mail|text|sms)\b/i.test(text)) return 'marcus_browser_submit';
   if (!BROWSER_SURFACE_PATTERN.test(text)) return '';
