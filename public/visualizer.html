@@ -840,6 +840,24 @@
     const businessKey = () => { try { return text(localStorage.getItem("opsBusinessKey"), "personal"); } catch { return "personal"; } };
     const nowLabel = () => new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 
+    async function promptForAdminToken(reason = "") {
+      try { localStorage.removeItem("opsAdminToken"); } catch {}
+      const entered = text(window.prompt(`${reason ? `${reason}\n\n` : ""}Paste this app's ADMIN_TOKEN to view live MARCUS data:`) || "");
+      if (!entered) return "";
+      const login = await fetch("/api/auth/login", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: entered, remember: true }),
+      });
+      const data = await login.json().catch(() => null);
+      if (!login.ok || data?.authenticated !== true) {
+        throw new Error(text(data?.error || "Invalid admin token"));
+      }
+      try { localStorage.setItem("opsAdminToken", entered); } catch {}
+      return entered;
+    }
+
     function age(value) {
       const time = Date.parse(value || "");
       if (!Number.isFinite(time)) return "unknown";
@@ -858,17 +876,10 @@
       const key = businessKey();
       if (key) headers.set("X-Business-Key", key);
       let response = await fetch(url, { ...options, headers, credentials: "include" });
-      if ((response.status === 401 || response.status === 403) && !token) {
-        const entered = text(window.prompt("Paste ADMIN_TOKEN to view live MARCUS data:") || "");
+      if (response.status === 401 || response.status === 403) {
+        const entered = await promptForAdminToken(token ? "The saved admin token was rejected." : "");
         if (entered) {
-          try { localStorage.setItem("opsAdminToken", entered); } catch {}
           headers.set("Authorization", `Bearer ${entered}`);
-          await fetch("/api/auth/login", {
-            method: "POST",
-            credentials: "include",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ token: entered, remember: true }),
-          }).catch(() => {});
           response = await fetch(url, { ...options, headers, credentials: "include" });
         }
       }
