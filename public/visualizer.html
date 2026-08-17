@@ -400,7 +400,8 @@
     .portfolio-line { display: flex; gap: 16px; margin-top: 7px; font-size: 11px; color: var(--muted); }
     .portfolio-line button { border: 0; background: transparent; color: inherit; padding: 0; }
     .portfolio-line strong { color: var(--text); }
-    .control-actions { display: flex; gap: 5px; }
+    .control-actions { display: flex; gap: 5px; align-items: center; }
+    .control-actions #voiceButton { min-width: 96px; }
     .builds {
       min-height: 0;
       overflow: hidden;
@@ -617,7 +618,7 @@
           </div>
         </div>
         <div class="control-actions">
-          <button class="btn icon-btn" type="button" id="voiceButton" title="Voice">m</button>
+          <button class="btn" type="button" id="voiceButton" aria-pressed="false">Hold Space</button>
           <button class="btn icon-btn" type="button" id="expandButton" title="Expand">[]</button>
           <button class="btn icon-btn" type="button" id="settingsButton" title="Settings">%</button>
         </div>
@@ -645,8 +646,8 @@
           <button class="toggle" type="button" id="autoToggle" aria-pressed="true"><span></span></button>
         </div>
         <form class="composer" id="composer">
-          <select id="contextSelect" aria-label="Chat context"><option value="">All</option></select>
-          <textarea id="composerInput" placeholder="Tell Marcus what to change..."></textarea>
+          <select id="contextSelect" aria-label="Chat context"><option value="">All projects</option></select>
+          <textarea id="composerInput" placeholder="Ask Marcus anything, create or find a project, or steer current work..."></textarea>
           <button class="btn icon-btn" type="button" id="micButton" title="Microphone">m</button>
           <button class="btn primary icon-btn" type="submit" title="Send">&gt;</button>
         </form>
@@ -659,6 +660,7 @@
     </aside>
   </div>
 
+  <script src="/marcus-realtime.js"></script>
   <script>
     const els = {
       clock: document.getElementById("clock"),
@@ -694,6 +696,8 @@
       contextSelect: document.getElementById("contextSelect"),
       composer: document.getElementById("composer"),
       composerInput: document.getElementById("composerInput"),
+      voiceButton: document.getElementById("voiceButton"),
+      micButton: document.getElementById("micButton"),
       relayDot: document.getElementById("relayDot"),
       relayState: document.getElementById("relayState"),
       syncState: document.getElementById("syncState"),
@@ -707,9 +711,15 @@
     let selectedId = "";
     let activeTab = "preview";
     let activeFilter = "";
+    let chatContextId = "";
     let loading = false;
     let markHasControl = false;
     let autoContinue = true;
+    let voiceHeld = false;
+    let realtimeVoice = null;
+    let voiceStartInFlight = null;
+    let voiceTelemetryInFlight = false;
+    const voiceTelemetrySessionId = `dedicated-visualizer-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
     const autoRefreshMs = 3000;
 
     const text = (value, fallback = "") => String(value ?? fallback ?? "").replace(/\s+/g, " ").trim();
@@ -1222,10 +1232,10 @@
       bindDynamicButtons();
     }
     function renderContextOptions() {
-      const current = els.contextSelect.value;
-      els.contextSelect.innerHTML = `<option value="">All</option>${snapshot.projects.slice(0, 20).map((p) => `<option value="${esc(p.id)}">${esc(compact(p.name, 28))}</option>`).join("")}`;
-      els.contextSelect.value = current && snapshot.projects.some((p) => p.id === current) ? current : selectedId || "";
-      const project = snapshot.projects.find((p) => p.id === els.contextSelect.value);
+      if (chatContextId && !snapshot.projects.some((p) => p.id === chatContextId)) chatContextId = "";
+      els.contextSelect.innerHTML = `<option value="">All projects</option>${snapshot.projects.slice(0, 20).map((p) => `<option value="${esc(p.id)}">${esc(compact(p.name, 28))}</option>`).join("")}`;
+      els.contextSelect.value = chatContextId;
+      const project = snapshot.projects.find((p) => p.id === chatContextId);
       els.chatContext.textContent = project ? project.name : "All projects";
     }
     function bindDynamicButtons() {
@@ -1259,11 +1269,12 @@
       document.querySelectorAll("[data-stop-current]").forEach((button) => button.onclick = () => addMessage("marcus", "Stop requires a confirmation that names what will stop and what will continue. No stop was executed."));
     }
     function setChatContext(id) {
-      selectedId = id || selectedId;
-      els.contextSelect.value = selectedId;
-      const project = selectedProject();
+      chatContextId = id || "";
+      if (chatContextId) selectedId = chatContextId;
+      els.contextSelect.value = chatContextId;
+      const project = snapshot.projects.find((p) => p.id === chatContextId);
       els.chatContext.textContent = project?.name || "All projects";
-      addMessage("marcus", `Context set to ${project?.name || "all projects"}. I attached the current operation, evidence, and next action.`);
+      addMessage("marcus", project ? `Context set to ${project.name}. I attached its current operation, evidence, and next action.` : "Context set to all projects. Ask me to find work, create a project, or reason across the whole system.");
       render();
     }
     function projectAction(id) {
@@ -1291,11 +1302,11 @@
       els.chatFeed.appendChild(div);
       els.chatFeed.scrollTop = els.chatFeed.scrollHeight;
     }
-    async function sendToMarcus(message) {
-      const project = selectedProject();
+    async function sendToMarcus(message, { rethrow = false, echoUser = true } = {}) {
+      const project = chatContextId ? snapshot.projects.find((p) => p.id === chatContextId) : null;
       const context = project ? `Context: ${project.name}. Current: ${project.current}. Next: ${project.next}. ` : "";
       const projectId = project?.awarenessProjectId || project?.projectRegistryId || project?.projectId || project?.id || "";
-      addMessage("user", message);
+      if (echoUser) addMessage("user", message);
       try {
         const data = await api("/api/marcus/live/chat", {
           method: "POST",
@@ -1303,15 +1314,138 @@
           body: JSON.stringify({
             message: `${context}${message}`,
             surface: "dedicated_visualizer",
-            awarenessProjectId: projectId,
-            projectId,
+            awarenessProjectId: projectId || "",
+            projectId: projectId || "",
           }),
         });
         addMessage("marcus", text(data.reply || data.message || "I recorded that and will reconcile the next safe action."));
         await load();
+        return data;
       } catch (error) {
         addMessage("marcus error", `Marcus chat failed: ${error.message}`);
+        if (rethrow) throw error;
+        return null;
       }
+    }
+    function updateVoiceUi(status = {}) {
+      const state = text(status.state, realtimeVoice?.getState?.() || "offline");
+      const detail = text(status.detail);
+      const active = Boolean(status.active || realtimeVoice?.isActive?.());
+      const labels = {
+        offline: "Hold Space",
+        connecting: "Connecting",
+        reconnecting: "Reconnecting",
+        listening: voiceHeld ? "Listening" : "Hold Space",
+        idle: "Hold Space",
+        thinking: "Processing",
+        speaking: "MARCUS speaking",
+        paused: "Paused",
+        error: "Retry voice",
+      };
+      els.voiceButton.textContent = labels[state] || (voiceHeld ? "Listening" : "Hold Space");
+      els.voiceButton.setAttribute("aria-pressed", active && voiceHeld ? "true" : "false");
+      els.voiceButton.classList.toggle("primary", active && voiceHeld);
+      els.voiceButton.title = detail || (active ? "MARCUS voice is connected. Hold Space to talk." : "Hold Space to talk to MARCUS.");
+    }
+    function queueVoiceTelemetry(event = {}) {
+      if (voiceTelemetryInFlight) return;
+      voiceTelemetryInFlight = true;
+      const headers = new Headers({ "Content-Type": "application/json" });
+      const token = adminToken();
+      if (token) headers.set("Authorization", `Bearer ${token}`);
+      const key = businessKey();
+      if (key) headers.set("X-Business-Key", key);
+      fetch("/api/marcus/realtime/telemetry", {
+        method: "POST",
+        credentials: "include",
+        headers,
+        body: JSON.stringify({
+          events: [{
+            ...event,
+            eventId: `${voiceTelemetrySessionId}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+            sessionId: voiceTelemetrySessionId,
+            surface: "dedicated_visualizer",
+            occurredAt: event.occurredAt || new Date().toISOString(),
+          }],
+        }),
+      }).catch(() => {}).finally(() => {
+        voiceTelemetryInFlight = false;
+      });
+    }
+    async function ensureVoiceAuth() {
+      await api("/api/marcus/live/voice/status");
+      return adminToken();
+    }
+    async function startVoiceIfNeeded() {
+      if (!realtimeVoice) throw new Error("Realtime voice is unavailable on this page.");
+      if (realtimeVoice.isActive()) return true;
+      if (!voiceStartInFlight) {
+        voiceStartInFlight = (async () => {
+          await ensureVoiceAuth();
+          await realtimeVoice.start();
+          return true;
+        })().finally(() => {
+          voiceStartInFlight = null;
+        });
+      }
+      return voiceStartInFlight;
+    }
+    async function beginVoiceHold() {
+      if (voiceHeld) return;
+      voiceHeld = true;
+      updateVoiceUi({ state: realtimeVoice?.getState?.() || "connecting", active: realtimeVoice?.isActive?.() });
+      try {
+        await startVoiceIfNeeded();
+        realtimeVoice?.mute(false);
+        updateVoiceUi({ state: "listening", active: true, detail: "Listening" });
+      } catch (error) {
+        voiceHeld = false;
+        updateVoiceUi({ state: "error", active: false, detail: error?.message || "Marcus voice failed." });
+        addMessage("marcus error", `Voice failed: ${error?.message || "setup failed"}`);
+      }
+    }
+    function endVoiceHold() {
+      if (!voiceHeld) return;
+      voiceHeld = false;
+      try { realtimeVoice?.mute(true); } catch {}
+      updateVoiceUi({ state: realtimeVoice?.getState?.() || "idle", active: realtimeVoice?.isActive?.(), detail: "Hold Space to talk" });
+    }
+    if (typeof window.createMarcusRealtimeVoice === "function") {
+      realtimeVoice = window.createMarcusRealtimeVoice({
+        getAuthToken: ensureVoiceAuth,
+        invokeMarcus: async (message) => {
+          const data = await sendToMarcus(message, { rethrow: true, echoUser: false });
+          return {
+            ok: data?.ok !== false,
+            reply: text(data?.reply || data?.message || ""),
+            operationId: text(data?.operation?.id || data?.operationId || ""),
+            operationStatus: text(data?.operation?.status || data?.status || ""),
+          };
+        },
+        onStatus: updateVoiceUi,
+        onTranscript: (transcript) => {
+          const spoken = text(transcript);
+          if (spoken) addMessage("user", spoken);
+        },
+        onAssistantText: (transcript) => {
+          const spoken = text(transcript);
+          if (spoken) addMessage("marcus", spoken);
+        },
+        onEvent: queueVoiceTelemetry,
+        onError: (error) => {
+          const message = error?.message || "Marcus voice failed.";
+          updateVoiceUi({ state: "error", active: false, detail: message });
+          addMessage("marcus error", `Voice failed: ${message}`);
+        },
+      });
+      try { realtimeVoice.mute(true); } catch {}
+      updateVoiceUi({ state: "offline", active: false });
+    } else {
+      els.voiceButton.disabled = true;
+      els.voiceButton.textContent = "Voice unavailable";
+      els.micButton.disabled = true;
+      els.voiceButton.title = "The MARCUS realtime client did not load.";
+      els.micButton.title = "The MARCUS realtime client did not load.";
     }
     function toggleControl() {
       markHasControl = !markHasControl;
@@ -1342,7 +1476,8 @@
       addMessage("marcus", `Automatic continuation is now ${autoContinue ? "on for reversible work" : "off"}. High-impact actions still require approval.`);
     });
     els.contextSelect.addEventListener("change", () => {
-      if (els.contextSelect.value) selectedId = els.contextSelect.value;
+      chatContextId = els.contextSelect.value;
+      if (chatContextId) selectedId = chatContextId;
       render();
     });
     els.composer.addEventListener("submit", (event) => {
@@ -1359,7 +1494,31 @@
       }
     });
     document.getElementById("captureButton").addEventListener("click", () => addMessage("marcus", "Capture is staged for this display slice. Desktop screenshot capture requires an explicit capture endpoint binding."));
-    document.getElementById("voiceButton").addEventListener("click", () => addMessage("marcus", "Voice control remains connected through the existing realtime voice path when configured."));
+    els.voiceButton.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+      beginVoiceHold();
+    });
+    els.micButton.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+      beginVoiceHold();
+    });
+    window.addEventListener("mouseup", endVoiceHold);
+    window.addEventListener("keydown", (event) => {
+      if (event.code === "Space" && event.target === document.body && !voiceHeld) {
+        event.preventDefault();
+        beginVoiceHold();
+      }
+    });
+    window.addEventListener("keyup", (event) => {
+      if (event.code === "Space") endVoiceHold();
+    });
+    document.addEventListener("visibilitychange", () => {
+      if (!realtimeVoice) return;
+      if (document.hidden) realtimeVoice.suspend("Voice paused while the dedicated display is in the background");
+      else realtimeVoice.resume().catch(() => {});
+    });
+    window.addEventListener("online", () => realtimeVoice?.networkChanged?.(true));
+    window.addEventListener("offline", () => realtimeVoice?.networkChanged?.(false));
     document.getElementById("expandButton").addEventListener("click", () => addMessage("marcus", "The right panel is permanent and will not cover the workspace."));
     document.getElementById("settingsButton").addEventListener("click", () => { activeTab = "evidence"; addMessage("marcus", "Integration details are visible through evidence until the dedicated settings surface is wired."); renderWorkspace(); });
     document.getElementById("openOps").addEventListener("click", () => { activeTab = "evidence"; renderWorkspace(); });
