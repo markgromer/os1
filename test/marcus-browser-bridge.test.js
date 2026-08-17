@@ -3,13 +3,24 @@ import { createRequire } from 'node:module';
 import test from 'node:test';
 
 const require = createRequire(import.meta.url);
-const { MarcusBrowserBridge, liveContextKind, safeHttpUrl } = require('../desktop-marcus-browser.cjs');
+const {
+  MarcusBrowserBridge, liveContextKind, safeHttpUrl, safeObservableUrl,
+} = require('../desktop-marcus-browser.cjs');
 
 test('MARCUS browser bridge accepts only HTTP(S) navigation', () => {
   assert.equal(safeHttpUrl('https://www.skool.com'), 'https://www.skool.com/');
   assert.equal(safeHttpUrl('http://127.0.0.1:3030/live-presence.html'), 'http://127.0.0.1:3030/live-presence.html');
   assert.equal(safeHttpUrl('javascript:alert(1)'), '');
   assert.equal(safeHttpUrl('file:///C:/Users/markg/secret.txt'), '');
+});
+
+test('MARCUS browser observations redact credential-like URL parameters', () => {
+  const observed = safeObservableUrl('https://app.zoom.us/wc/123/start?fromPWA=1&pwd=meeting-secret&token=private');
+  assert.equal(observed, 'https://app.zoom.us/wc/123/start?fromPWA=1');
+  assert.equal(
+    safeObservableUrl('https://www.skool.com/localgiants/drop-your-intro?view=latest'),
+    'https://www.skool.com/localgiants/drop-your-intro?view=latest',
+  );
 });
 
 test('MARCUS browser bridge uses the dedicated non-conflicting localhost port', () => {

@@ -37,6 +37,21 @@ function safeHttpUrl(value, fallback = '') {
   }
 }
 
+function safeObservableUrl(value) {
+  const safe = safeHttpUrl(value);
+  if (!safe) return '';
+  const parsed = new URL(safe);
+  for (const key of [...parsed.searchParams.keys()]) {
+    if (/(?:^|_)(?:pwd|password|passcode|token|code|secret|api_?key|auth|authorization|signature|zak|obf)(?:$|_)/i.test(key)) {
+      parsed.searchParams.delete(key);
+    }
+  }
+  if (/\b(?:pwd|password|passcode|token|code|secret|auth|signature|zak|obf)\b/i.test(parsed.hash)) {
+    parsed.hash = '';
+  }
+  return parsed.toString();
+}
+
 function chromeExecutable() {
   const candidates = [
     path.join(process.env.ProgramFiles || '', 'Google', 'Chrome', 'Application', 'chrome.exe'),
@@ -654,7 +669,7 @@ class MarcusBrowserBridge {
           connected: true,
           sensitive: true,
           title: String(target.title || '').slice(0, 300),
-          url: safeHttpUrl(target.url),
+          url: safeObservableUrl(target.url),
           viewportWidth: Math.max(1, Math.round(Number(viewport.clientWidth) || 1280)),
           viewportHeight: Math.max(1, Math.round(Number(viewport.clientHeight) || 720)),
           frameBase64: '',
@@ -680,7 +695,7 @@ class MarcusBrowserBridge {
         connected: true,
         sensitive: false,
         title: String(target.title || '').slice(0, 300),
-        url: safeHttpUrl(target.url),
+        url: safeObservableUrl(target.url),
         viewportWidth: Math.max(1, Math.round(Number(viewport.clientWidth) || 1280)),
         viewportHeight: Math.max(1, Math.round(Number(viewport.clientHeight) || 720)),
         frameBase64,
@@ -700,4 +715,5 @@ module.exports = {
   MarcusBrowserBridge,
   liveContextKind,
   safeHttpUrl,
+  safeObservableUrl,
 };
