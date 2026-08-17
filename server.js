@@ -31,6 +31,7 @@ import {
   classifyMarcusBrowserIntent,
   validateMarcusIntroductionDraft,
 } from './marcus/browser_intent.js';
+import { BrowserPublicationStore } from './marcus/browser_publication_store.js';
 import { ProjectEvidenceService } from './marcus/evidence/project_evidence_service.js';
 import {
   executeMarcusProjectActivityTool,
@@ -263,6 +264,10 @@ const DATA_DIR = resolveDirFromEnv(process.env.TASK_TRACKER_DATA_DIR || process.
 const DATA_FILE = path.join(DATA_DIR, 'tasks.json');
 const MARCUS_OPERATIONAL_CONTROLS_FILE = path.join(DATA_DIR, 'marcus-operational-controls.json');
 const MARCUS_SESSION_STATE_FILE = path.join(DATA_DIR, 'marcus-session-state.json');
+const browserPublicationStore = new BrowserPublicationStore({
+  dataDir: DATA_DIR,
+  normalize: (value) => normalizeBrowserPublicationDrafts(value),
+});
 const realtimeTelemetryStore = new RealtimeTelemetryStore({ dataDir: DATA_DIR });
 const missionMemoryStore = new MissionMemoryStore({ dataDir: DATA_DIR });
 
@@ -2505,19 +2510,27 @@ function normalizeBrowserPublicationDrafts(input) {
     .slice(-200);
 }
 
+async function readBrowserPublicationDrafts() {
+  return browserPublicationStore.list({
+    legacyLoader: async () => {
+      const settings = await readSettings();
+      return normalizeBrowserPublicationDrafts(settings.browserPublicationDrafts);
+    },
+  });
+}
+
 async function createBrowserPublicationDraft(input = {}) {
   const draft = normalizeBrowserPublicationDraft(input);
   let created = null;
   writeLock = writeLock.catch(() => {}).then(async () => {
-    const settings = await readSettings();
-    const drafts = normalizeBrowserPublicationDrafts(settings.browserPublicationDrafts);
+    const drafts = await readBrowserPublicationDrafts();
     const duplicate = drafts.find((item) => item.status === 'pending_approval'
       && item.sourceUrl === draft.sourceUrl && item.target === draft.target && item.text === draft.text);
     if (duplicate) {
       created = duplicate;
       return;
     }
-    await writeSettings({ ...settings, browserPublicationDrafts: [...drafts, draft].slice(-200), updatedAt: nowIso() });
+    await browserPublicationStore.replace([...drafts, draft].slice(-200));
     created = draft;
   });
   await writeLock;
@@ -2527,13 +2540,12 @@ async function createBrowserPublicationDraft(input = {}) {
 async function updateBrowserPublication(id, updater) {
   let updated = null;
   writeLock = writeLock.catch(() => {}).then(async () => {
-    const settings = await readSettings();
-    const drafts = normalizeBrowserPublicationDrafts(settings.browserPublicationDrafts);
+    const drafts = await readBrowserPublicationDrafts();
     const index = drafts.findIndex((item) => item.id === id);
     if (index < 0) throw Object.assign(new Error('Browser publication draft not found.'), { statusCode: 404 });
     const next = await updater(drafts[index]);
     drafts[index] = { ...(next || drafts[index]), updatedAt: nowIso() };
-    await writeSettings({ ...settings, browserPublicationDrafts: drafts, updatedAt: nowIso() });
+    await browserPublicationStore.replace(drafts);
     updated = drafts[index];
   });
   await writeLock;
@@ -15550,8 +15562,7 @@ app.get('/api/marcus/browser/status', (req, res) => {
 
 app.get('/api/marcus/browser/publications', async (req, res) => {
   try {
-    const settings = await readSettings();
-    const publications = normalizeBrowserPublicationDrafts(settings.browserPublicationDrafts).slice(-100).reverse();
+    const publications = (await readBrowserPublicationDrafts()).slice(-100).reverse();
     res.setHeader('Cache-Control', 'no-store');
     res.json({ ok: true, publications });
   } catch (error) {
