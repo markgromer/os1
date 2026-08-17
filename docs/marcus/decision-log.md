@@ -2,6 +2,14 @@
 
 Status: active
 
+## 2026-08-17: Meeting Notes Persist Summaries, Not Transcript Dumps
+
+Context: MARCUS could hear Realtime audio and read bounded live-page context, but stopping the sidecar discarded the recognized conversation. Mark requires every call to contribute useful notes to the Obsidian brain.
+
+Decision: Keep at most 20,000 characters of recognized participant/MARCUS speech in OBS page memory. Every five minutes and on stop, send that bounded window to the existing transcript analyzer. Queue only the redacted derived summary, decisions, commitments, follow-ups, source, timing, and confidence to a dedicated desktop action. Confine atomic note writes to `docs/marcus/conversations/` and overwrite the same session note as checkpoints improve it.
+
+Consequence: Live sessions create concise durable Obsidian conversation notes even when they are not tied to a project, while raw transcript text stays out of the vault and durable desktop queue. Important commitments remain reviewable AI-derived facts; entity linking and the first physical call remain acceptance work. Related: [[live-presence]], [[conversation-index]], [[context-memory]].
+
 ## 2026-08-17: Relay Bounded Visible Context, Not Browser Secrets
 
 Context: Browser viewport control let Mark watch MARCUS navigate, but MARCUS Realtime could not automatically read live Zoom/Skool page text. The original `Open` command also navigated the active tab and displaced Gmail.

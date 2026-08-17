@@ -1,6 +1,6 @@
 # Live Presence
 
-Status: local browser viewport and visible-context bridge implemented and verified on 2026-08-17. Marcus has a dedicated Chrome profile, a live browser view in `/visualizer.html`, Mark/MARCUS control ownership, bounded navigation/input commands, approved-site visible-text observation, automatic silent live-context forwarding to Realtime, the live-presence readiness model, setup API, setup console, OpenAI Realtime voice path, and desktop-context awareness. Platform login/MFA, virtual audio routing, visible Zoom identity, durable meeting-note writing, and first live-call acceptance still require completion.
+Status: local browser viewport, visible-context bridge, and bounded automatic meeting-note checkpoints implemented on 2026-08-17. Marcus has a dedicated Chrome profile, a live browser view in `/visualizer.html`, Mark/MARCUS control ownership, bounded navigation/input commands, approved-site visible-text observation, automatic silent live-context forwarding to Realtime, the live-presence readiness model, setup API, setup console, OpenAI Realtime voice path, desktop-context awareness, and concise Obsidian conversation-note writes through the desktop agent. Platform login/MFA, virtual audio routing, visible Zoom identity, and first live-call acceptance still require completion.
 
 ## Purpose
 
@@ -22,6 +22,7 @@ Live presence is Marcus operating from Mark's PC as a visible assistant in norma
 - Browser relay intake: `/api/marcus/browser/relay`
 - Marcus chat tools: `marcus_browser_status`, `marcus_browser_open`, and non-consequential exact-visible-control `marcus_browser_activate`
 - Visible-context allowlist: Gmail for explicit browser inspection; Zoom, Skool, Google Meet, Teams, YouTube, and TikTok for live Realtime context
+- Automatic meeting-note checkpoint: `/api/marcus/meeting-notes/checkpoint` to the local `docs/marcus/conversations/` writer
 
 ## Operating Model
 
@@ -32,6 +33,8 @@ The durable runtime is:
 `dedicated Marcus browser profile -> virtual audio route -> Marcus Realtime voice -> Marcus operator tools -> meeting memory and follow-up actions`
 
 OBS is a stage surface. It can show Marcus visually, but it is not the source of truth. Notes, decisions, action items, and follow-up drafts must land in Marcus memory.
+
+The OBS sidecar now keeps a bounded transcript in page memory, checkpoints every five minutes, and sends a final checkpoint when stopped. The server uses the existing transcript analyzer and queues only concise derived notes to the desktop agent. Raw transcript dumps are not written to the vault or durable action queue.
 
 ## Modes
 
@@ -142,7 +145,7 @@ Public voice is acceptable when:
 
 - Add platform-specific page adapters if generic rendered-text observation misses virtualized or iframe-hosted chat.
 - Add real device enumeration from the desktop agent so setup can verify audio routes instead of relying only on manual checklist items.
-- Add durable meeting-summary and action-item writes to the Obsidian context graph without storing transcript dumps.
+- Link automatically created meeting summaries to known project, person, and client notes after entity resolution.
 - Add OBS scene state and emergency mute indicators.
 
 Related: [[external-presence]], [[voice-interface]], [[access-model]], [[execution-loop]], [[context-memory]].

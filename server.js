@@ -19001,6 +19001,105 @@ app.post('/api/projects/:id/transcript/analyze', async (req, res) => {
   }
 });
 
+function meetingNoteText(value, maxLength = 4_000) {
+  return String(value || '')
+    .replace(/\b(?:sk|ghp|github_pat|xox[baprs]|AIza)[-_A-Za-z0-9]{12,}\b/g, '[REDACTED]')
+    .replace(/((?:api[_ -]?key|token|password|secret|private[_ -]?key)\s*[:=]\s*)[^\s,;]+/gi, '$1[REDACTED]')
+    .trim()
+    .slice(0, maxLength);
+}
+
+function meetingNoteMarkdown({ title, source, startedAt, endedAt, proposal, final }) {
+  const decisions = (Array.isArray(proposal?.decisions) ? proposal.decisions : []).map((item) => meetingNoteText(item, 800)).filter(Boolean).slice(0, 12);
+  const actions = (Array.isArray(proposal?.actionItems) ? proposal.actionItems : []).slice(0, 20);
+  const lines = [
+    `# ${meetingNoteText(title, 160) || 'MARCUS meeting notes'}`,
+    '',
+    `Status: ${final ? 'complete' : 'active'}`,
+    'Tags: #conversation #meeting',
+    '',
+    `Date: ${meetingNoteText(startedAt, 40)}`,
+    '',
+    'Participants:',
+    '- Not identified automatically',
+    '',
+    'Projects:',
+    '- TBD',
+    '',
+    'People:',
+    '- TBD',
+    '',
+    'Clients:',
+    '- TBD',
+    '',
+    '## Summary',
+    '',
+    meetingNoteText(proposal?.summary, 4_000) || 'No reliable summary was produced.',
+    '',
+    '## Decisions',
+    '',
+    ...(decisions.length ? decisions.map((item) => `- ${item}`) : ['- None identified']),
+    '',
+    '## Promises Or Commitments',
+    '',
+    ...(actions.length ? actions.map((item) => {
+      const detail = meetingNoteText(item?.title, 800);
+      const owner = meetingNoteText(item?.owner, 120);
+      const due = safeYmd(item?.dueDate) || '';
+      return `- ${detail}${owner ? ` (owner: ${owner})` : ''}${due ? ` (due: ${due})` : ''}`;
+    }).filter((item) => item !== '- ') : ['- None identified']),
+    '',
+    '## Relationship Or Preference Signals',
+    '',
+    '- Not inferred automatically from a raw transcript',
+    '',
+    '## Follow-Ups',
+    '',
+    ...(actions.length ? actions.map((item) => `- ${meetingNoteText(item?.title, 800)}`).filter((item) => item !== '- ') : ['- None identified']),
+    '',
+    '## Sensitivity',
+    '',
+    '- Level: private',
+    '- Notes: Concise derived notes only; raw transcript is not stored in this file.',
+    '',
+    '## Source',
+    '',
+    `- Captured from: ${meetingNoteText(source, 120) || 'MARCUS live meeting sidecar'}`,
+    `- Verified by: automatic checkpoint${final ? ' at session end' : ''}`,
+    `- Confidence: ${proposal?.meta?.source === 'heuristic' ? 'low' : 'AI-derived; review important commitments'}`,
+    `- Session: ${meetingNoteText(startedAt, 40)} to ${meetingNoteText(endedAt, 40)}`,
+    '',
+  ];
+  return `${lines.join('\n')}\n`;
+}
+
+app.post('/api/marcus/meeting-notes/checkpoint', async (req, res) => {
+  try {
+    const sessionId = typeof req.body?.sessionId === 'string' ? req.body.sessionId.trim().toLowerCase() : '';
+    const transcript = normalizeTranscript(req.body?.transcript).slice(0, 20_000);
+    if (!/^[a-z0-9][a-z0-9-]{5,100}$/.test(sessionId)) return res.status(400).json({ ok: false, error: 'A valid meeting session id is required.' });
+    if (transcript.length < 40) return res.status(400).json({ ok: false, error: 'More meeting speech is required before a note checkpoint.' });
+    const title = meetingNoteText(req.body?.title, 160) || 'MARCUS live meeting';
+    const source = meetingNoteText(req.body?.source, 120) || 'MARCUS live meeting sidecar';
+    const startedAt = typeof req.body?.startedAt === 'string' ? req.body.startedAt.trim().slice(0, 40) : new Date().toISOString();
+    const endedAt = typeof req.body?.endedAt === 'string' ? req.body.endedAt.trim().slice(0, 40) : new Date().toISOString();
+    const final = req.body?.final === true;
+    const analyzed = await aiTranscriptProposal({ project: { name: title, type: 'meeting' }, transcript, tasks: [], noteEntries: [] });
+    if (!analyzed.ok) return res.status(502).json({ ok: false, error: analyzed.error || 'Meeting-note analysis failed.' });
+    const date = safeYmd(startedAt.slice(0, 10)) || new Date().toISOString().slice(0, 10);
+    const filename = `${date}-${sessionId}.md`;
+    const content = meetingNoteMarkdown({ title, source, startedAt, endedAt, proposal: analyzed.proposal, final });
+    const action = await queueDesktopAction({
+      type: 'marcus-meeting-note',
+      payload: { filename, content },
+      requestedBy: 'marcus-meeting-sidecar',
+    });
+    res.status(202).json({ ok: true, queued: true, actionId: action.id, filename, final, summary: meetingNoteText(analyzed.proposal?.summary, 1_000) });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error?.message || 'Meeting-note checkpoint failed.' });
+  }
+});
+
 app.post('/api/projects/:id/transcript/apply', async (req, res) => {
   const projectId = req.params.id;
   const baseRevision = Number(req.body?.baseRevision);

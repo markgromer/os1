@@ -281,6 +281,14 @@
   let voice = null;
   let lastBrowserContextVersion = '';
   const LIVE_BROWSER_CONTEXT_KINDS = new Set(['zoom', 'skool', 'google-meet', 'teams', 'youtube', 'tiktok']);
+  let meetingSessionId = `live-${crypto.randomUUID()}`;
+  let meetingStartedAt = new Date().toISOString();
+  let meetingTranscript = [];
+  let meetingTitle = 'MARCUS live meeting';
+  let meetingSource = 'OBS meeting sidecar';
+  let lastMeetingCheckpoint = '';
+  let meetingCheckpointInFlight = null;
+  let meetingFinalized = false;
 
   els.mode.value = normalizeMode(localStorage.getItem(MODE_KEY));
   els.modeLabel.textContent = labels[els.mode.value];
@@ -298,6 +306,56 @@
     els.status.textContent = detail || state;
     els.dot.className = `dot ${state === 'listening' || state === 'speaking' ? 'on' : state === 'error' ? 'bad' : ''}`.trim();
     els.voice.textContent = voice?.isActive?.() ? 'Stop MARCUS' : 'Start MARCUS';
+  }
+
+  function resetMeetingCapture() {
+    meetingSessionId = `live-${crypto.randomUUID()}`;
+    meetingStartedAt = new Date().toISOString();
+    meetingTranscript = [];
+    lastMeetingCheckpoint = '';
+    meetingCheckpointInFlight = null;
+    meetingFinalized = false;
+  }
+
+  function recordMeetingSpeech(speaker, value) {
+    const text = String(value || '').replace(/\s+/g, ' ').trim().slice(0, 2_000);
+    if (!text) return;
+    meetingTranscript.push(`[${new Date().toISOString()}] ${speaker}: ${text}`);
+    while (meetingTranscript.join('\n').length > 20_000 && meetingTranscript.length > 1) meetingTranscript.shift();
+  }
+
+  async function checkpointMeetingNotes({ final = false, keepalive = false } = {}) {
+    const transcript = meetingTranscript.join('\n').slice(-20_000);
+    if (transcript.length < 40 || (meetingFinalized && final)) return false;
+    const signature = `${transcript.length}:${transcript.slice(-160)}`;
+    if (!final && signature === lastMeetingCheckpoint) return false;
+    if (meetingCheckpointInFlight) return meetingCheckpointInFlight;
+    const headers = { 'Content-Type': 'application/json' };
+    const token = String(els.token.value || '').trim();
+    if (token) headers.Authorization = `Bearer ${token}`;
+    meetingCheckpointInFlight = fetch('/api/marcus/meeting-notes/checkpoint', {
+      method: 'POST', credentials: 'include', headers, keepalive,
+      body: JSON.stringify({
+        sessionId: meetingSessionId,
+        title: meetingTitle,
+        source: meetingSource,
+        startedAt: meetingStartedAt,
+        endedAt: new Date().toISOString(),
+        transcript,
+        final,
+      }),
+    }).then(async (response) => {
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || `Meeting-note checkpoint failed (${response.status}).`);
+      lastMeetingCheckpoint = signature;
+      meetingFinalized = final;
+      log('system', `${final ? 'Final meeting notes' : 'Meeting-note checkpoint'} queued for Obsidian.`);
+      return true;
+    }).catch((error) => {
+      if (!keepalive) log('system', error.message || String(error));
+      return false;
+    }).finally(() => { meetingCheckpointInFlight = null; });
+    return meetingCheckpointInFlight;
   }
 
   function stopStream() {
@@ -379,8 +437,8 @@
         return { ok: data.ok !== false, reply, operationId: data.operation?.id || '' };
       },
       onStatus: ({ state, detail }) => setStatus(state, detail),
-      onTranscript: (text) => log('user', text),
-      onAssistantText: (text) => log('marcus', text),
+      onTranscript: (text) => { log('user', text); recordMeetingSpeech('Participant', text); },
+      onAssistantText: (text) => { log('marcus', text); recordMeetingSpeech('MARCUS', text); },
       onEvent: (event) => {
         if (event.type === 'personality_mode_changed') {
           els.mode.value = normalizeMode(event.mode);
@@ -406,6 +464,8 @@
       const browser = await response.json();
       const version = String(browser.contextVersion || '');
       const visibleText = String(browser.visibleText || '').trim();
+      if (browser.online && browser.title) meetingTitle = String(browser.title).slice(0, 160);
+      if (browser.online && browser.contextKind) meetingSource = `MARCUS ${browser.contextKind} browser session`;
       if (!browser.online || browser.sensitive || !LIVE_BROWSER_CONTEXT_KINDS.has(browser.contextKind) || !version || !visibleText || version === lastBrowserContextVersion) return;
       if (voice.sendContext(`Visible ${browser.contextKind} page (${browser.title || browser.url}):\n${visibleText}`, { speak: false })) {
         lastBrowserContextVersion = version;
@@ -418,9 +478,11 @@
     try {
       const current = ensureVoice();
       if (current.isActive()) {
+        await checkpointMeetingNotes({ final: true });
         current.stop();
         return;
       }
+      if (meetingFinalized) resetMeetingCapture();
       if (!stream) await captureSource();
       if (String(els.token.value || '').trim()) localStorage.setItem(TOKEN_KEY, String(els.token.value).trim());
       await current.setPersonalityMode(els.mode.value, { source: 'obs_ui' });
@@ -430,7 +492,8 @@
       log('system', error.message || String(error));
     }
   });
-  els.stop.addEventListener('click', () => {
+  els.stop.addEventListener('click', async () => {
+    await checkpointMeetingNotes({ final: true });
     voice?.stop();
     stopStream();
     setStatus('idle', 'Stopped');
@@ -453,7 +516,9 @@
   });
   els.clear.addEventListener('click', () => { els.log.textContent = ''; });
   setInterval(forwardVisibleBrowserContext, 1500);
+  setInterval(() => checkpointMeetingNotes(), 300_000);
   window.addEventListener('beforeunload', () => {
+    checkpointMeetingNotes({ final: true, keepalive: true });
     try { voice?.stop(); } catch {}
     stopStream();
   });

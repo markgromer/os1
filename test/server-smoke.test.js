@@ -181,7 +181,7 @@ test('isolated server startup succeeds only for explicit loopback development or
 });
 
 test('server auth, business scope, existing reads, Marcus routing, and Live operation summary regressions', async () => {
-  const server = await spawnServer();
+  const server = await spawnServer({ extraEnv: { OPENAI_API_KEY: '', OPENROUTER_API_KEY: '' } });
   const base = `http://127.0.0.1:${server.port}`;
   const adminHeaders = { authorization: 'Bearer test-admin-token', 'content-type': 'application/json' };
   try {
@@ -231,6 +231,29 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     assert.match(obsHtml, /MARCUS OBS Console/);
     assert.match(obsHtml, /Display or system audio/);
     assert.match(obsHtml, /roast_light/);
+    assert.match(obsHtml, /meeting-notes\/checkpoint/);
+    const meetingCheckpoint = await fetch(`${base}/api/marcus/meeting-notes/checkpoint`, {
+      method: 'POST',
+      headers: adminHeaders,
+      body: JSON.stringify({
+        sessionId: 'live-acceptance-123',
+        title: 'ScoopOS acceptance call',
+        source: 'test meeting',
+        startedAt: '2026-08-17T12:00:00.000Z',
+        endedAt: '2026-08-17T12:05:00.000Z',
+        transcript: 'We reviewed the launch.\nWe need to publish the checklist tomorrow.\npassword=supersecret',
+        final: true,
+      }),
+    });
+    const meetingCheckpointBody = await meetingCheckpoint.json();
+    assert.equal(meetingCheckpoint.status, 202);
+    assert.equal(meetingCheckpointBody.filename, '2026-08-17-live-acceptance-123.md');
+    const claimedMeetingActions = await (await fetch(`${base}/api/desktop-context/actions?agentId=meeting-test-agent`, { headers: adminHeaders })).json();
+    const meetingAction = claimedMeetingActions.actions.find((action) => action.id === meetingCheckpointBody.actionId);
+    assert.equal(meetingAction.type, 'marcus-meeting-note');
+    assert.match(meetingAction.payload.content, /publish the checklist tomorrow/i);
+    assert.doesNotMatch(meetingAction.payload.content, /We reviewed the launch/i);
+    assert.doesNotMatch(meetingAction.payload.content, /supersecret/i);
     const manifestResponse = await fetch(`${base}/manifest.webmanifest`);
     const manifest = await manifestResponse.json();
     assert.equal(manifestResponse.status, 200);

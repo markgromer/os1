@@ -26,6 +26,7 @@ const readline = require('readline');
 const { discoverRecentCodexWorkspaces, parseGitStatus } = require('./desktop-codex-sessions.cjs');
 const { localPackageBinInvocation, npmCliInvocation } = require('./desktop-node-cli.cjs');
 const { MarcusBrowserBridge } = require('./desktop-marcus-browser.cjs');
+const { writeMarcusMeetingNote } = require('./desktop-meeting-notes.cjs');
 const {
   createPcAccessPolicy,
   createPcDirectory,
@@ -1314,6 +1315,8 @@ async function checkDesktopActions() {
         outcome = await runPcPowerShell(action?.payload || {}, PC_ACCESS_POLICY);
       } else if (type === 'marcus-browser-open' || type === 'marcus-browser-command') {
         outcome = await marcusBrowser.command(action?.payload || {});
+      } else if (type === 'marcus-meeting-note') {
+        outcome = writeMarcusMeetingNote(action?.payload || {});
       }
       if (type.startsWith('pc-')) outcome = toDesktopActionOutcome(outcome);
 
