@@ -142,5 +142,7 @@ test('desktop visualizer uses canonical awareness instead of browser-local proje
   assert.match(html, /\/api\/marcus\/browser\/publications/);
   assert.match(html, /data-publication-approve/);
   assert.match(html, /data-publication-deny/);
+  assert.match(html, /\["pending_approval", "failed"\]\.includes\(item\.status\)/);
+  assert.match(html, /action required/);
   assert.doesNotMatch(html, /direct browser control is bound/);
 });

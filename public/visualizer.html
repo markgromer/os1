@@ -1222,9 +1222,9 @@
       els.countNeeds.textContent = counts.needs;
       els.countDecaying.textContent = counts.decaying;
       els.orchestrationLine.textContent = `Orchestrating ${counts.building + counts.auditing} live build${counts.building + counts.auditing === 1 ? "" : "s"}`;
-      const pendingPublications = snapshot.publications.filter((item) => item.status === "pending_approval").length;
-      els.publicationApprovalCount.hidden = pendingPublications === 0;
-      els.publicationApprovalCount.textContent = pendingPublications;
+      const actionablePublications = snapshot.publications.filter((item) => ["pending_approval", "failed"].includes(item.status)).length;
+      els.publicationApprovalCount.hidden = actionablePublications === 0;
+      els.publicationApprovalCount.textContent = actionablePublications;
       els.clock.textContent = nowLabel();
     }
     function renderWorkspace() {
@@ -1271,10 +1271,14 @@
     function renderPublicationApprovals() {
       const publications = snapshot.publications.filter((item) => ["pending_approval", "publishing", "failed", "published"].includes(item.status));
       const pending = publications.filter((item) => item.status === "pending_approval").length;
+      const failed = publications.filter((item) => item.status === "failed").length;
+      const actionable = pending + failed;
       els.workspaceCrumb.textContent = "MARCUS publication approvals";
       els.workspaceUrl.value = "marcus://approvals/browser-publications";
-      els.workspaceStatus.textContent = pending ? `${pending} browser publication${pending === 1 ? "" : "s"} waiting for your decision.` : "No browser publications are waiting for approval.";
-      els.scenarioStatus.textContent = pending ? "Approval required" : "Queue clear";
+      els.workspaceStatus.textContent = actionable
+        ? `${actionable} browser publication${actionable === 1 ? "" : "s"} need${actionable === 1 ? "s" : ""} your attention.`
+        : "No browser publications need attention.";
+      els.scenarioStatus.textContent = actionable ? "Action required" : "Queue clear";
       if (!publications.length) {
         els.workspaceSurface.innerHTML = `<div class="approval-empty"><div><strong>No posts waiting for approval</strong><br><span>MARCUS drafts will appear here before anything is posted.</span></div></div>`;
         return;
@@ -1283,7 +1287,7 @@
         <section class="approval-page">
           <header class="approval-head">
             <div><h2>Posts and replies</h2><p>Approve publishes the exact text below through MARCUS Chrome. Deny makes no change on the external site.</p></div>
-            <span class="state-pill ${pending ? "warn" : "ok"}">${pending ? `${pending} waiting` : "Up to date"}</span>
+            <span class="state-pill ${actionable ? "warn" : "ok"}">${actionable ? `${actionable} action required` : "Up to date"}</span>
           </header>
           <div class="approval-list">
             ${publications.map((item) => {
