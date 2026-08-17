@@ -25,7 +25,7 @@ const os = require('os');
 const readline = require('readline');
 const { discoverRecentCodexWorkspaces, parseGitStatus } = require('./desktop-codex-sessions.cjs');
 const { localPackageBinInvocation, npmCliInvocation } = require('./desktop-node-cli.cjs');
-const { MarcusBrowserBridge } = require('./desktop-marcus-browser.cjs');
+const { MarcusBrowserBridge, isMarcusBrowserActionType } = require('./desktop-marcus-browser.cjs');
 const { writeMarcusMeetingNote } = require('./desktop-meeting-notes.cjs');
 const {
   createPcAccessPolicy,
@@ -1332,7 +1332,7 @@ async function checkDesktopActions() {
         outcome = deletePcItem(action?.payload || {}, PC_ACCESS_POLICY);
       } else if (type === 'pc-run-powershell') {
         outcome = await runPcPowerShell(action?.payload || {}, PC_ACCESS_POLICY);
-      } else if (type === 'marcus-browser-open' || type === 'marcus-browser-command') {
+      } else if (isMarcusBrowserActionType(type)) {
         outcome = await marcusBrowser.command(action?.payload || {});
       } else if (type === 'marcus-meeting-note') {
         outcome = writeMarcusMeetingNote(action?.payload || {});

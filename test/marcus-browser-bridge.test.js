@@ -4,8 +4,15 @@ import test from 'node:test';
 
 const require = createRequire(import.meta.url);
 const {
-  MarcusBrowserBridge, liveContextKind, safeHttpUrl, safeObservableUrl,
+  MarcusBrowserBridge, isMarcusBrowserActionType, liveContextKind, safeHttpUrl, safeObservableUrl,
 } = require('../desktop-marcus-browser.cjs');
+
+test('desktop dispatcher recognizes every MARCUS browser action type', () => {
+  assert.equal(isMarcusBrowserActionType('marcus-browser-open'), true);
+  assert.equal(isMarcusBrowserActionType('marcus-browser-command'), true);
+  assert.equal(isMarcusBrowserActionType('marcus-browser-publish'), true);
+  assert.equal(isMarcusBrowserActionType('marcus-meeting-note'), false);
+});
 
 test('MARCUS browser bridge accepts only HTTP(S) navigation', () => {
   assert.equal(safeHttpUrl('https://www.skool.com'), 'https://www.skool.com/');

@@ -10,6 +10,15 @@ const DEFAULT_DEBUG_PORT = 9333;
 const DEFAULT_URL = 'https://mail.google.com/';
 const MAX_FRAME_BASE64_LENGTH = 390_000;
 const MAX_VISIBLE_TEXT_LENGTH = 6_000;
+const MARCUS_BROWSER_ACTION_TYPES = new Set([
+  'marcus-browser-open',
+  'marcus-browser-command',
+  'marcus-browser-publish',
+]);
+
+function isMarcusBrowserActionType(value) {
+  return MARCUS_BROWSER_ACTION_TYPES.has(String(value || '').trim());
+}
 
 function liveContextKind(value) {
   const url = safeHttpUrl(value);
@@ -848,6 +857,7 @@ class MarcusBrowserBridge {
 
 module.exports = {
   MarcusBrowserBridge,
+  isMarcusBrowserActionType,
   liveContextKind,
   safeHttpUrl,
   safeObservableUrl,
