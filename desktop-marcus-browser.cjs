@@ -325,6 +325,10 @@ class MarcusBrowserBridge {
               const style = getComputedStyle(element);
               if (element.disabled || element.readOnly || rect.width <= 0 || rect.height <= 0 || rect.bottom < 0 || rect.top > innerHeight) return false;
               if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return false;
+              const fieldPurpose = [
+                element.getAttribute('aria-label'), element.getAttribute('placeholder'), element.getAttribute('name'),
+              ].filter(Boolean).join(' ').toLowerCase();
+              if (!wanted && element.tagName === 'INPUT' && (fieldPurpose.includes('search') || fieldPurpose.includes('filter'))) return false;
               if (!wanted) return true;
               const details = [
                 element.getAttribute('aria-label'), element.getAttribute('placeholder'), element.getAttribute('name'),
@@ -332,7 +336,11 @@ class MarcusBrowserBridge {
               ].filter(Boolean).join(' ').replace(/\\s+/g, ' ').toLowerCase();
               return details.includes(wanted) || wanted.includes(details.slice(0, 120));
             })
-            .sort((left, right) => left.getBoundingClientRect().top - right.getBoundingClientRect().top);
+            .sort((left, right) => {
+              const leftEditor = left.matches('textarea,[contenteditable="true"],[contenteditable="plaintext-only"],[role="textbox"]:not(input)') ? 0 : 1;
+              const rightEditor = right.matches('textarea,[contenteditable="true"],[contenteditable="plaintext-only"],[role="textbox"]:not(input)') ? 0 : 1;
+              return leftEditor - rightEditor || right.getBoundingClientRect().top - left.getBoundingClientRect().top;
+            });
           const target = candidates[0];
           if (!target) return { focused: false };
           target.scrollIntoView({ block: 'center', inline: 'nearest' });
@@ -384,6 +392,10 @@ class MarcusBrowserBridge {
       }
       await session.send('Input.insertText', { text });
       result = { ...focused.result.value, insertedChars: text.length };
+    } else if (command === 'prepare-reply') {
+      const thread = String(payload.thread || '').replace(/\s+/g, ' ').trim().slice(0, 240);
+      const text = String(payload.text || '').slice(0, 4_000);
+      result = await this.prepareReply(session, target, { thread, text });
     } else if (command === 'key') {
       const key = String(payload.key || '').slice(0, 40);
       const keys = {
@@ -404,6 +416,144 @@ class MarcusBrowserBridge {
     }
     this.lastError = '';
     return { ok: true, details: { command, targetId: target.id, result } };
+  }
+
+  async prepareReply(session, target, { thread, text }) {
+    if (!thread) throw new Error('A visible thread title or distinctive title fragment is required.');
+    if (!text) throw new Error('Text is required.');
+    if (liveContextKind(target.url) !== 'skool') {
+      throw new Error('Thread reply preparation is available only on the approved Skool page.');
+    }
+    if (await this.sensitiveFieldFocused(session)) {
+      throw new Error('Password entry is blocked from the remote bridge. Type it in the visible MARCUS Chrome window.');
+    }
+
+    const wantedThread = thread.toLowerCase();
+    const surfaceExpression = [
+      '(() => {',
+      "  const editor = [...document.querySelectorAll('textarea,[contenteditable=true],[contenteditable=plaintext-only],[role=textbox]:not(input)')]",
+      "    .some((element) => { const rect = element.getBoundingClientRect(); const style = getComputedStyle(element); return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden'; });",
+      "  const latest = [...document.querySelectorAll('a,button,[role=button],[role=link]')]",
+      "    .some((element) => String(element.innerText || element.textContent || '').replace(/\\s+/g, ' ').trim().toLowerCase().includes('jump to latest comment'));",
+      '  return editor || latest;',
+      '})()',
+    ].join('\n');
+    const surface = await session.send('Runtime.evaluate', { expression: surfaceExpression, returnByValue: true }, 4_000);
+    const openExpression = [
+      '(() => {',
+      '  const wanted = ' + JSON.stringify(wantedThread) + ';',
+      '  const introRequest = /\\bintro(?:duction)?\\b/.test(wanted) || /\\bdrop your intro\\b/.test(wanted);',
+      "  const candidates = [...document.querySelectorAll('a[href]')]",
+      '    .filter((element) => {',
+      "      const label = String(element.innerText || element.textContent || '').replace(/\\s+/g, ' ').trim().toLowerCase();",
+      '      const rect = element.getBoundingClientRect();',
+      '      const style = getComputedStyle(element);',
+      "      const matches = label.includes(wanted) || (introRequest && (/\\bdrop your intro\\b/.test(label) || /\\bintroduction\\b/.test(label)));",
+      "      return matches && rect.width > 0 && rect.height > 0 && style.display !== 'none'",
+      "        && style.visibility !== 'hidden' && Number(style.opacity) !== 0;",
+      '    })',
+      '    .sort((left, right) => {',
+      "      const leftText = String(left.innerText || left.textContent || '').replace(/\\s+/g, ' ').trim().toLowerCase();",
+      "      const rightText = String(right.innerText || right.textContent || '').replace(/\\s+/g, ' ').trim().toLowerCase();",
+      '      return (leftText === wanted ? 0 : 1) - (rightText === wanted ? 0 : 1) || leftText.length - rightText.length;',
+      '    });',
+      '  const link = candidates[0];',
+      '  if (!link) return { activated: false };',
+      "  link.scrollIntoView({ block: 'center', inline: 'nearest' });",
+      '  link.click();',
+      '  return {',
+      '    activated: true,',
+      "    text: String(link.innerText || link.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 240),",
+      "    href: link.tagName === 'A' && /^https?:/i.test(String(link.href || '')) ? String(link.href).slice(0, 4000) : '',",
+      '  };',
+      '})()',
+    ].join('\n');
+    let opened = { current: true, text: thread, href: String(target.url || '') };
+    if (!surface?.result?.value) {
+      const currentUrl = new URL(String(target.url || ''));
+      const pathParts = currentUrl.pathname.split('/').filter(Boolean);
+      if (pathParts.length > 1) {
+        await session.send('Page.navigate', { url: currentUrl.origin + '/' + pathParts[0] }, 4_000);
+        await wait(900);
+      }
+      const located = await session.send('Runtime.evaluate', { expression: openExpression, returnByValue: true }, 4_000);
+      const candidate = located?.result?.value || {};
+      if (!candidate.activated || (candidate.href && liveContextKind(candidate.href) !== 'skool')) {
+        throw new Error('No visible Skool thread matched: ' + thread);
+      }
+      opened = candidate;
+      await wait(1_000);
+    }
+
+    const focusReplyEditor = () => session.send('Runtime.evaluate', {
+      expression: [
+        '(() => {',
+        "  const candidates = [...document.querySelectorAll('textarea,[contenteditable=true],[contenteditable=plaintext-only],[role=textbox]:not(input)')]",
+        '    .filter((element) => {',
+        '      const rect = element.getBoundingClientRect();',
+        '      const style = getComputedStyle(element);',
+        '      return !element.disabled && !element.readOnly && rect.width > 0 && rect.height > 0',
+        "        && style.display !== 'none'",
+        "        && style.visibility !== 'hidden' && Number(style.opacity) !== 0;",
+        '    })',
+        '    .sort((left, right) => right.getBoundingClientRect().top - left.getBoundingClientRect().top);',
+        '  const editor = candidates[0];',
+        '  if (!editor) return { focused: false };',
+        "  editor.scrollIntoView({ block: 'center', inline: 'nearest' });",
+        '  editor.focus();',
+        "  if (typeof editor.select === 'function') editor.select();",
+        '  else {',
+        '    const selection = window.getSelection();',
+        '    const range = document.createRange();',
+        '    range.selectNodeContents(editor);',
+        '    selection.removeAllRanges();',
+        '    selection.addRange(range);',
+        '  }',
+        '  return {',
+        '    focused: true,',
+        '    tag: editor.tagName,',
+        '    contentEditable: editor.isContentEditable,',
+        "    label: String(editor.getAttribute('aria-label') || editor.getAttribute('placeholder') || editor.getAttribute('data-placeholder') || '').slice(0, 240),",
+        '  };',
+        '})()',
+      ].join('\n'),
+      returnByValue: true,
+    });
+
+    let focused = await focusReplyEditor();
+    let movedToLatest = false;
+    if (!focused?.result?.value?.focused) {
+      const latestExpression = [
+        '(() => {',
+        "  const button = [...document.querySelectorAll('a,button,[role=button],[role=link]')].find((element) => {",
+        "    const label = String(element.innerText || element.textContent || '').replace(/\\s+/g, ' ').trim().toLowerCase();",
+        '    const rect = element.getBoundingClientRect();',
+        '    const style = getComputedStyle(element);',
+        "    return label.includes('jump to latest comment') && rect.width > 0 && rect.height > 0",
+        "      && style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) !== 0;",
+        '  });',
+        '  if (!button) return { activated: false };',
+        "  button.scrollIntoView({ block: 'center', inline: 'nearest' });",
+        '  button.click();',
+        '  return { activated: true };',
+        '})()',
+      ].join('\n');
+      const latest = await session.send('Runtime.evaluate', { expression: latestExpression, returnByValue: true });
+      movedToLatest = Boolean(latest?.result?.value?.activated);
+      if (movedToLatest) await wait(900);
+      focused = await focusReplyEditor();
+    }
+    if (!focused?.result?.value?.focused) {
+      throw new Error('The ' + thread + ' thread opened, but its visible reply editor was not available.');
+    }
+    await session.send('Input.insertText', { text });
+    return {
+      thread: opened.text || thread,
+      href: opened.href || '',
+      movedToLatest,
+      editor: focused.result.value,
+      insertedChars: text.length,
+    };
   }
 
   async sensitiveFieldFocused(session) {

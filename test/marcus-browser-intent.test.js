@@ -24,6 +24,17 @@ test('browser composition is prepared separately from explicitly approved submis
   assert.equal(classifyMarcusBrowserIntent('Approve and send the email', { pendingDraft: true }), '');
 });
 
+test('compound thread reply requests open the thread before preparing the reply', () => {
+  assert.equal(
+    classifyMarcusBrowserIntent('Head to the Skool community and make your introduction reply in the introduction tab.'),
+    'marcus_browser_prepare_reply',
+  );
+  assert.equal(
+    classifyMarcusBrowserIntent('Open the Tanya post on Skool and draft a reply.'),
+    'marcus_browser_prepare_reply',
+  );
+});
+
 test('ordinary project requests do not become browser operations', () => {
   assert.equal(classifyMarcusBrowserIntent('Build the Scoop GPT settings page and deploy it.'), '');
   assert.equal(classifyMarcusBrowserIntent('Reply to the client by email.'), '');

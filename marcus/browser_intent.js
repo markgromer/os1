@@ -1,6 +1,7 @@
 const BROWSER_SURFACE_PATTERN = /\b(browser|chrome|web\s?page|website|skool|gmail|google mail|zoom|youtube|tik\s?tok)\b/i;
 const COMPOSITION_PATTERN = /\b(post|comment|reply|response|message|caption)\b/i;
 const APPROVAL_PATTERN = /\b(approve|approved|go ahead|do it|post it|publish it|send it|submit it|reply now|comment now)\b/i;
+const THREAD_NAVIGATION_PATTERN = /\b(head to|go to|find|open|visit|navigate to|in(?:side)? (?:the )?(?:thread|post|tab))\b/i;
 
 export function classifyMarcusBrowserIntent(message, { pendingDraft = false } = {}) {
   const text = String(message || '').replace(/\s+/g, ' ').trim();
@@ -16,6 +17,7 @@ export function classifyMarcusBrowserIntent(message, { pendingDraft = false } = 
     return 'marcus_browser_read';
   }
   if (COMPOSITION_PATTERN.test(text) && /\b(write|draft|compose|type|fill|prepare|create|make|respond)\b/i.test(text)) {
+    if (THREAD_NAVIGATION_PATTERN.test(text)) return 'marcus_browser_prepare_reply';
     return 'marcus_browser_fill';
   }
   if (/\b(click|press|activate|choose|select|follow)\b/i.test(text)) return 'marcus_browser_activate';

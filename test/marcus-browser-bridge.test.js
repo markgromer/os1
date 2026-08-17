@@ -102,6 +102,7 @@ test('MARCUS fill command targets a visible editor and inserts text without subm
   assert.equal(result.ok, true);
   assert.match(calls[0].params.expression, /contenteditable/);
   assert.match(calls[0].params.expression, /write something/i);
+  assert.match(calls[0].params.expression, /fieldPurpose\.includes\('search'\)/);
   assert.deepEqual(calls[1], { method: 'Input.insertText', params: { text: 'Prepared post text.' } });
 });
 
@@ -125,6 +126,47 @@ test('MARCUS fill command can open a named composer before inserting the draft',
   const result = await bridge.command({ command: 'fill', target: 'Write something', text: 'Prepared post text.' });
   assert.equal(result.details.result.insertedChars, 19);
   assert.equal(runtimeCall, 3);
+});
+
+test('MARCUS thread reply workflow opens the thread and current comment editor before filling', async () => {
+  const bridge = new MarcusBrowserBridge();
+  const calls = [];
+  let runtimeCall = 0;
+  bridge.ensureBrowser = async () => true;
+  bridge.sensitiveFieldFocused = async () => false;
+  bridge.page = async () => ({
+    target: { id: 'skool-tab', url: 'https://www.skool.com/localgiants' },
+    session: {
+      send: async (method, params) => {
+        calls.push({ method, params });
+        if (method === 'Input.insertText') return {};
+        runtimeCall += 1;
+        if (runtimeCall === 1) return { result: { value: false } };
+        if (runtimeCall === 2) {
+          return { result: { value: {
+            activated: true,
+            text: "Drop Your Intro (We're Not Here to Lurk)",
+            href: 'https://www.skool.com/localgiants/drop-your-intro-were-not-here-to-lurk',
+          } } };
+        }
+        if (runtimeCall === 3) return { result: { value: { focused: false } } };
+        if (runtimeCall === 4) return { result: { value: { activated: true } } };
+        return { result: { value: { focused: true, tag: 'DIV', contentEditable: true, label: '' } } };
+      },
+    },
+  });
+
+  const result = await bridge.command({
+    command: 'prepare-reply',
+    thread: 'Drop Your Intro',
+    text: 'MARCUS introduction draft.',
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.details.result.movedToLatest, true);
+  assert.equal(result.details.result.insertedChars, 26);
+  assert.match(calls[1].params.expression, /drop your intro/i);
+  assert.match(calls[3].params.expression, /jump to latest comment/i);
+  assert.deepEqual(calls.at(-1), { method: 'Input.insertText', params: { text: 'MARCUS introduction draft.' } });
 });
 
 test('MARCUS page reader scans approved viewports and restores the original position', async () => {

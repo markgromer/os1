@@ -55,6 +55,11 @@ const DEFAULT_DESKTOP_CONFIG_FILE = path.join(
   'M.A.R.C.U.S',
   'desktop-agent.json',
 );
+const DEFAULT_DESKTOP_STATUS_FILE = path.join(
+  process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'),
+  'M.A.R.C.U.S',
+  'desktop-agent-status.json',
+);
 
 function desktopAgentConfigFile() {
   return String(process.env.MARCUS_DESKTOP_CONFIG_FILE || DEFAULT_DESKTOP_CONFIG_FILE).trim();
@@ -84,6 +89,20 @@ function listSetting(environmentName, configValue) {
 }
 
 const DESKTOP_CONFIG = readDesktopAgentConfig();
+
+function writeDesktopAgentStatus(patch = {}) {
+  const statusFile = String(process.env.MARCUS_DESKTOP_STATUS_FILE || DEFAULT_DESKTOP_STATUS_FILE).trim();
+  if (!statusFile) return;
+  try {
+    fs.mkdirSync(path.dirname(statusFile), { recursive: true });
+    let current = {};
+    try { current = JSON.parse(fs.readFileSync(statusFile, 'utf8')); } catch {}
+    const next = { ...current, ...patch, updatedAt: new Date().toISOString() };
+    const tmpFile = `${statusFile}.tmp`;
+    fs.writeFileSync(tmpFile, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
+    fs.renameSync(tmpFile, statusFile);
+  } catch {}
+}
 
 function readAdminTokenFile() {
   const tokenFile = String(process.env.MARCUS_ADMIN_TOKEN_FILE || DEFAULT_ADMIN_TOKEN_FILE).trim();
@@ -1781,12 +1800,40 @@ async function relayMarcusBrowser() {
   browserRelayInFlight = true;
   try {
     const browser = await marcusBrowser.capture();
-    await relay({
+    const result = await relay({
       agentId: DESKTOP_AGENT_ID,
       ...browser,
       observedAt: new Date().toISOString(),
     }, '/api/marcus/browser/relay');
-  } catch {
+    writeDesktopAgentStatus({
+      browserRelay: {
+        ok: result.status === 200,
+        status: Number(result.status || 0),
+        response: result.status === 200 ? 'ok' : String(result.body || '').slice(0, 240),
+        captureOk: Boolean(browser.ok),
+        connected: Boolean(browser.connected),
+        sensitive: Boolean(browser.sensitive),
+        title: String(browser.title || '').slice(0, 200),
+        url: String(browser.url || '').slice(0, 2_000),
+        error: String(browser.error || '').slice(0, 240),
+        checkedAt: new Date().toISOString(),
+      },
+    });
+  } catch (error) {
+    writeDesktopAgentStatus({
+      browserRelay: {
+        ok: false,
+        status: 0,
+        response: '',
+        captureOk: false,
+        connected: false,
+        sensitive: false,
+        title: '',
+        url: '',
+        error: String(error?.message || error).slice(0, 240),
+        checkedAt: new Date().toISOString(),
+      },
+    });
     // The regular desktop relay stays online when Chrome is closed or restarting.
   } finally {
     browserRelayInFlight = false;
