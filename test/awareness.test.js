@@ -135,4 +135,8 @@ test('desktop visualizer uses canonical awareness instead of browser-local proje
   assert.match(html, /\/api\/marcus\/awareness\?includeArchived=true/);
   assert.match(html, /awarenessProjectId/);
   assert.doesNotMatch(html, /opsDismissedProjects/);
+  assert.match(html, /data-tab="browser"/);
+  assert.match(html, /\/api\/marcus\/browser\/status/);
+  assert.match(html, /\/api\/marcus\/browser\/actions/);
+  assert.doesNotMatch(html, /direct browser control is bound/);
 });

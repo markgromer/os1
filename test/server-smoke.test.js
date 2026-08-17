@@ -559,6 +559,61 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     assert.equal(relayedContext.desktopAuthorization.scope, 'full_pc');
     assert.equal(relayedContext.desktopAuthorization.fullPcAccess, true);
     assert.deepEqual(relayedContext.desktopAuthorization.capabilities, ['inventory', 'search_files', 'read_text_file', 'open_file_or_folder', 'launch_installed_application']);
+    const browserJpeg = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
+    const browserRelay = await fetch(`${base}/api/marcus/browser/relay`, {
+      method: 'POST', headers: agencyHeaders, body: JSON.stringify({
+        agentId: 'agent-smoke', connected: true, sensitive: false, title: 'Skool - MARCUS', url: 'https://www.skool.com/',
+        viewportWidth: 1280, viewportHeight: 720, frameBase64: browserJpeg.toString('base64'), observedAt: new Date().toISOString(),
+      }),
+    });
+    assert.equal(browserRelay.status, 200);
+    assert.equal((await browserRelay.json()).frameAccepted, true);
+    const browserStatus = await (await fetch(`${base}/api/marcus/browser/status`, { headers: agencyHeaders })).json();
+    assert.equal(browserStatus.online, true);
+    assert.equal(browserStatus.frameAvailable, true);
+    assert.equal(browserStatus.control.owner, 'marcus');
+    assert.equal(browserStatus.url, 'https://www.skool.com/');
+    const browserFrameResponse = await fetch(`${base}/api/marcus/browser/frame`, { headers: agencyHeaders });
+    assert.equal(browserFrameResponse.status, 200);
+    assert.deepEqual(Buffer.from(await browserFrameResponse.arrayBuffer()), browserJpeg);
+    const blockedMarkBrowserAction = await fetch(`${base}/api/marcus/browser/actions`, {
+      method: 'POST', headers: agencyHeaders, body: JSON.stringify({ actor: 'mark', command: 'refresh' }),
+    });
+    assert.equal(blockedMarkBrowserAction.status, 409);
+    const markBrowserControl = await fetch(`${base}/api/marcus/browser/control`, {
+      method: 'POST', headers: agencyHeaders, body: JSON.stringify({ owner: 'mark' }),
+    });
+    assert.equal(markBrowserControl.status, 200);
+    const unsafeBrowserNavigation = await fetch(`${base}/api/marcus/browser/actions`, {
+      method: 'POST', headers: agencyHeaders, body: JSON.stringify({ actor: 'mark', command: 'navigate', url: 'javascript:alert(1)' }),
+    });
+    assert.equal(unsafeBrowserNavigation.status, 400);
+    const browserActionResponse = await fetch(`${base}/api/marcus/browser/actions`, {
+      method: 'POST', headers: agencyHeaders, body: JSON.stringify({ actor: 'mark', command: 'open', url: 'https://mail.google.com/' }),
+    });
+    assert.equal(browserActionResponse.status, 202);
+    const browserAction = (await browserActionResponse.json()).actionId;
+    const browserActions = await (await fetch(`${base}/api/desktop-context/actions?agentId=agent-smoke`, { headers: agencyHeaders })).json();
+    const queuedBrowserAction = browserActions.actions.find((item) => item.id === browserAction);
+    assert.equal(queuedBrowserAction.type, 'marcus-browser-open');
+    assert.equal(queuedBrowserAction.payload.url, 'https://mail.google.com/');
+    const browserActionResult = await fetch(`${base}/api/desktop-context/action-results`, {
+      method: 'POST', headers: agencyHeaders, body: JSON.stringify({ agentId: 'agent-smoke', results: [{
+        id: queuedBrowserAction.id, type: queuedBrowserAction.type, ok: true, details: { command: 'open' },
+      }] }),
+    });
+    assert.equal(browserActionResult.status, 200);
+    const sensitiveBrowserRelay = await fetch(`${base}/api/marcus/browser/relay`, {
+      method: 'POST', headers: agencyHeaders, body: JSON.stringify({
+        agentId: 'agent-smoke', connected: true, sensitive: true, title: 'Sign in', url: 'https://accounts.google.com/',
+        viewportWidth: 1280, viewportHeight: 720, observedAt: new Date().toISOString(),
+      }),
+    });
+    assert.equal(sensitiveBrowserRelay.status, 200);
+    const sensitiveBrowserStatus = await (await fetch(`${base}/api/marcus/browser/status`, { headers: agencyHeaders })).json();
+    assert.equal(sensitiveBrowserStatus.sensitive, true);
+    assert.equal(sensitiveBrowserStatus.frameAvailable, false);
+    assert.equal((await fetch(`${base}/api/marcus/browser/frame`, { headers: agencyHeaders })).status, 404);
     const pcCapabilities = await (await fetch(`${base}/api/marcus/pc/capabilities`, { headers: agencyHeaders })).json();
     assert.equal(pcCapabilities.relayOnline, true);
     assert.equal(pcCapabilities.authorization.scope, 'full_pc');

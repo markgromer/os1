@@ -2,6 +2,12 @@
 
 Status: active
 
+## Visible Browser Loop
+
+`Mark request or visualizer input -> authenticated browser route -> durable desktop action queue -> local desktop agent -> localhost-only MARCUS Chrome CDP -> compressed viewport relay -> /visualizer.html`
+
+The browser status loop runs independently from the heavier desktop-awareness scan so click and navigation commands are claimed quickly. The page frame is observational evidence, not proof that a consequential action completed. Provider receipts, page read-back, or the existing durable operation verification rules remain required before Marcus claims an external result.
+
 Before a project operation is created, Marcus selects a job-priming manifest and checks relevant mission-memory decisions for a locked conflict. A conflict stops operation creation until Mark identifies a permanent change or one-time exception. Completed operations that previously failed or entered recovery may bank the verified winning method.
 
 Realtime voice receives a bounded continuity brief at session creation. Durable operator results pass through a speech-safe projection before the Realtime model sees them, retaining approval, blocker, and uncertainty signals while omitting machine identifiers. See [[operator-intelligence-layer]].

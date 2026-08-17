@@ -1,6 +1,6 @@
 # Live Presence
 
-Status: local foundation implemented in the app. Marcus has a live-presence readiness model, setup API, setup console, OpenAI Realtime voice path, and desktop-context awareness. Platform logins, MFA, virtual audio routing, and first live-call acceptance still require Mark's hands-on setup on the PC.
+Status: local browser viewport bridge implemented and verified on 2026-08-17. Marcus has a dedicated logged-in Chrome profile, a live browser view in `/visualizer.html`, Mark/MARCUS control ownership, bounded navigation/input commands, the live-presence readiness model, setup API, setup console, OpenAI Realtime voice path, and desktop-context awareness. Platform MFA, virtual audio routing, visible Zoom identity, and first live-call acceptance still require Mark's hands-on setup on the PC.
 
 ## Purpose
 
@@ -17,6 +17,10 @@ Live presence is Marcus operating from Mark's PC as a visible assistant in norma
 - Marcus Live shell: `/live.html`
 - Desktop context relay: existing desktop agent relay and dashboard APIs
 - Local browser launcher: `scripts/launch-marcus-browser.ps1`
+- Local browser controller: `desktop-marcus-browser.cjs`
+- Browser status/frame/control/actions: `/api/marcus/browser/status`, `/api/marcus/browser/frame`, `/api/marcus/browser/control`, and `/api/marcus/browser/actions`
+- Browser relay intake: `/api/marcus/browser/relay`
+- Marcus chat tools: `marcus_browser_status` and `marcus_browser_open`
 
 ## Operating Model
 
@@ -69,6 +73,12 @@ The launcher opens Chrome with Marcus's isolated local browser profile. It uses 
 ```text
 %LOCALAPPDATA%\M.A.R.C.U.S\MarcusBrowserProfile
 ```
+
+The launcher binds Chrome DevTools Protocol to `127.0.0.1:9333`. The port is localhost-only and the bridge refuses a reachable endpoint unless it identifies itself as Chrome or Chromium. Port `9229` is intentionally not used because the current PC uses it for a Cloudflare Worker debugger.
+
+The desktop agent captures a compressed page viewport, not Chrome profile storage, and relays it to the authenticated server. Password fields suspend the frame and reject remote typing; Mark completes password, MFA, captcha, recovery, camera, and microphone permission steps in the visible MARCUS Chrome window. The server never receives cookies, saved passwords, browser storage, or raw DOM content.
+
+`/visualizer.html` starts in Browser mode. `Take control` gives Mark the remote click, scroll, typing, address, back, forward, and refresh channel. `Return control` gives the channel back to Marcus. Marcus can inspect browser status and open an exact HTTP(S) URL only from Mark's direct current request. Consequential page actions and external communication retain their existing approval rules.
 
 Use only that Chrome window for `markgromermarcus@gmail.com`, Gmail, Skool, Zoom, YouTube, and TikTok sessions. Do not paste passwords into chat or store them in the repo. Mark should do the first login, MFA, captcha, and account recovery steps directly in the browser.
 
@@ -127,9 +137,8 @@ Public voice is acceptable when:
 
 ## Open Work
 
-- Add a dedicated local desktop presence host that can launch the Marcus browser profile and manage platform windows.
+- Add visible-page and Zoom/Skool chat observers that produce bounded evidence without relaying credentials or unrestricted DOM content.
 - Add real device enumeration from the desktop agent so setup can verify audio routes instead of relying only on manual checklist items.
-- Add Zoom chat and visible-page observers.
 - Add meeting memory routes for active live sessions if not present in the current deployment branch.
 - Add OBS scene state and emergency mute indicators.
 

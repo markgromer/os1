@@ -1,5 +1,11 @@
 # Access Model
 
+## Dedicated Browser Boundary
+
+Marcus browser control is isolated from Mark's normal Chrome data by `%LOCALAPPDATA%\M.A.R.C.U.S\MarcusBrowserProfile`. Chrome debugging listens only on `127.0.0.1:9333`, and the desktop bridge verifies the endpoint identifies itself as Chrome before use. The Render service receives only bounded page metadata and compressed viewport frames. It does not receive cookies, saved passwords, browser storage, profile files, or unrestricted DOM content.
+
+When a password input has focus, frame relay stops and remote typing is rejected. Mark performs password, MFA, captcha, account recovery, and browser permission prompts in the visible local Chrome window. Browser commands accept only HTTP(S) navigation plus bounded click, scroll, text, and approved key events. `marcusBrowserControl.owner` is explicit: Mark and Marcus cannot issue browser input concurrently. This control handoff does not expand authority to send external messages, publish, purchase, change permissions, or perform another consequential page action.
+
 ## Desired Access
 
 Marcus should have full operational read access to:

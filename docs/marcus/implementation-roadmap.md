@@ -1,5 +1,18 @@
 # Implementation Roadmap
 
+## 2026-08-17: Browser Presence Slice
+
+Status: implemented and locally verified
+
+- Dedicated Chrome profile launcher with localhost-only debugging.
+- Continuous browser viewport relay into `/visualizer.html`.
+- Mark/MARCUS control ownership and bounded remote input.
+- Password-field frame and typing suppression.
+- Direct-request Marcus tools for browser status and exact URL opening.
+- Authenticated server routes and durable desktop action delivery tests.
+
+Next: visible chat observation, Zoom/Skool page adapters, audio-device verification, meeting memory capture, and first consented live-call acceptance.
+
 ## 2026-08-17: Operator Intelligence Layer
 
 Status: implemented locally; automated validation and demo required before production claim

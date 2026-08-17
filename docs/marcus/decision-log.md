@@ -2,6 +2,14 @@
 
 Status: active
 
+## 2026-08-17: Use the Existing PC Bridge for Visible MARCUS Chrome
+
+Context: Marcus needs to operate a normal, visible Chrome profile on Mark's PC while Mark watches and can take control from the hosted visualizer.
+
+Decision: Extend `desktop-agent.cjs` with a localhost-only Chrome DevTools Protocol bridge in `desktop-marcus-browser.cjs`. Use the isolated MARCUS profile, stream compressed page viewports to the authenticated server, queue a narrow command set through the durable desktop action queue, and maintain one explicit Mark/MARCUS control owner. Suppress password-field frames and remote password typing. Use port `9333` because `9229` is already occupied by a Cloudflare Worker debugger on this PC.
+
+Consequence: The hosted visualizer can display and steer the real MARCUS Chrome session without receiving cookies or profile storage. This is the browser foundation for Gmail, Skool, Zoom, YouTube, and TikTok, but it does not by itself complete audio routing, consent, visible chat observation, or live-call acceptance. Related: [[live-presence]], [[access-model]], [[execution-loop]], [[current-system-map]].
+
 ## 2026-08-17: Separate Machine Evidence From Spoken References
 
 Decision: Durable results retain exact identifiers, while Realtime voice receives a speech-safe human projection. Relationship continuity is bounded and filtered from public modes. Recurring work loads request-specific priming manifests. Deliberate decisions may be marked locked and require an explicit permanent-change or one-time-exception choice before conflicting operations are created.

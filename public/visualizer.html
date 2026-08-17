@@ -196,7 +196,8 @@
       font-size: 12px;
       flex: 0 0 auto;
     }
-    .url-box { padding: 0 10px; color: var(--text); font-size: 12px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    .url-box { padding: 0 10px; color: var(--text); font-size: 12px; overflow: hidden; }
+    .url-box input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--text); font: inherit; }
     .browser-controls { display: flex; align-items: center; justify-content: flex-end; gap: 8px; color: var(--muted); }
     .browser-controls button { width: 30px; height: 30px; border-radius: 7px; border: 0; background: transparent; color: var(--text); }
     .managed { justify-content: center; color: var(--muted); font-size: 11px; }
@@ -209,6 +210,8 @@
       gap: 4px;
       padding: 4px;
     }
+    .workspace-body.browser-mode { grid-template-columns: minmax(0, 1fr); }
+    .workspace-body.browser-mode .audit-panel { display: none; }
     .surface {
       min-height: 0;
       overflow: hidden;
@@ -219,6 +222,21 @@
       display: grid;
       grid-template-rows: 52px minmax(0, 1fr);
     }
+    .surface.browser-surface {
+      display: block;
+      position: relative;
+      background: #090d12;
+      color: var(--text);
+    }
+    .browser-viewport { position: absolute; inset: 0; display: grid; place-items: center; overflow: hidden; background: #090d12; }
+    .browser-frame { width: 100%; height: 100%; object-fit: contain; display: none; outline: none; cursor: default; user-select: none; }
+    .browser-frame.live { display: block; }
+    .browser-frame.mark-control { cursor: crosshair; }
+    .browser-placeholder { display: grid; place-items: center; gap: 12px; padding: 28px; text-align: center; color: var(--muted); }
+    .browser-placeholder strong { color: var(--text); font-size: 17px; }
+    .browser-placeholder .status-dot { width: 10px; height: 10px; }
+    .browser-focus-ring { position: absolute; inset: 0; border: 2px solid transparent; pointer-events: none; }
+    .browser-frame:focus + .browser-focus-ring { border-color: rgba(53, 200, 235, 0.72); }
     .preview-nav {
       display: flex;
       align-items: center;
@@ -643,7 +661,8 @@
           </div>
         </div>
         <nav class="tabs" aria-label="Workspace tabs">
-          <button class="tab active" type="button" data-tab="preview">Preview</button>
+          <button class="tab active" type="button" data-tab="browser">Browser</button>
+          <button class="tab" type="button" data-tab="preview">Preview</button>
           <button class="tab" type="button" data-tab="github">GitHub PR</button>
           <button class="tab" type="button" data-tab="codex">Codex</button>
           <button class="tab" type="button" data-tab="tests">Tests</button>
@@ -659,12 +678,11 @@
 
       <section class="browser-bar">
         <button class="profile-chip" type="button" id="profileButton"><span class="avatar">M</span><span>Marcus</span></button>
-        <div class="url-box" id="workspaceUrl">marcus://workspace/overview</div>
+        <form class="url-box" id="browserAddressForm"><input id="workspaceUrl" aria-label="MARCUS browser address" autocomplete="off" spellcheck="false" value="https://mail.google.com/"></form>
         <div class="browser-controls">
           <button type="button" data-browser="back" title="Back">&lt;</button>
           <button type="button" data-browser="forward" title="Forward">&gt;</button>
           <button type="button" data-browser="refresh" title="Refresh">r</button>
-          <button type="button" data-browser="bookmark" title="Bookmark">*</button>
           <span class="managed">Managed profile</span>
         </div>
       </section>
@@ -776,6 +794,8 @@
       cloudflareStatus: document.getElementById("cloudflareStatus"),
       workspaceCrumb: document.getElementById("workspaceCrumb"),
       workspaceUrl: document.getElementById("workspaceUrl"),
+      browserAddressForm: document.getElementById("browserAddressForm"),
+      workspaceBody: document.querySelector(".workspace-body"),
       workspaceSurface: document.getElementById("workspaceSurface"),
       auditPanel: document.getElementById("auditPanel"),
       workspaceStatus: document.getElementById("workspaceStatus"),
@@ -811,9 +831,9 @@
 
     const stages = ["Brief", "Codex", "GitHub", "Preview", "Audit", "Correct", "Ship"];
     const sourceLabels = { codex: "Codex", operation: "Operation", job: "Codex job", awareness: "Awareness" };
-    let snapshot = { projects: [], operations: [], jobs: [], desktop: null, awareness: null, settings: null };
+    let snapshot = { projects: [], operations: [], jobs: [], desktop: null, awareness: null, settings: null, browser: null };
     let selectedId = "";
-    let activeTab = "preview";
+    let activeTab = "browser";
     let activeFilter = "";
     let chatContextId = "";
     let loading = false;
@@ -826,6 +846,10 @@
     const voiceTelemetrySessionId = `dedicated-visualizer-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
     let lastLiveReadKey = "";
     let lastLiveReadAt = 0;
+    let browserTypingBuffer = "";
+    let browserTypingTimer = null;
+    let lastBrowserFrameVersion = 0;
+    let browserStatusLoading = false;
     const autoRefreshMs = 3000;
 
     const text = (value, fallback = "") => String(value ?? fallback ?? "").replace(/\s+/g, " ").trim();
@@ -1100,7 +1124,7 @@
       loading = true;
       els.syncState.textContent = "Syncing";
       try {
-        const [operations, jobs, desktop, awareness, settings, github, cloudflare, google] = await Promise.all([
+        const [operations, jobs, desktop, awareness, settings, github, cloudflare, google, browser] = await Promise.all([
           api("/api/operations/summary?limit=50").catch((error) => ({ ok: false, error: error.message, operations: [] })),
           api("/api/codex/jobs").catch((error) => ({ ok: false, error: error.message, jobs: [] })),
           api("/api/desktop-context").catch((error) => ({ ok: false, error: error.message, codexWorkspaces: [] })),
@@ -1109,6 +1133,7 @@
           api("/api/integrations/github/status").catch((error) => ({ ok: false, error: error.message })),
           api("/api/integrations/cloudflare/status").catch((error) => ({ ok: false, error: error.message })),
           api("/api/integrations/google/status").catch((error) => ({ ok: false, error: error.message })),
+          api("/api/marcus/browser/status").catch((error) => ({ ok: false, online: false, error: error.message, control: { owner: "marcus" } })),
         ]);
         const projects = mergeProjects([
           ...arr(desktop.codexWorkspaces).map((item, index) => makeCodexProject(item, index, desktop)),
@@ -1116,7 +1141,8 @@
           ...arr(jobs.jobs).filter((job) => text(job.status).toLowerCase() !== "cancelled").map(makeJobProject),
           ...arr(awareness.projects).map(makeAwarenessProject),
         ]);
-        snapshot = { projects, operations: arr(operations.operations), jobs: arr(jobs.jobs), desktop, awareness, settings, github, cloudflare, google };
+        snapshot = { projects, operations: arr(operations.operations), jobs: arr(jobs.jobs), desktop, awareness, settings, github, cloudflare, google, browser };
+        markHasControl = browser?.control?.owner === "mark";
         if (!selectedId || !projects.some((p) => p.id === selectedId)) selectedId = projects[0]?.id || "";
         render();
         maybePostLiveRead();
@@ -1166,21 +1192,146 @@
     }
     function renderWorkspace() {
       const project = selectedProject();
+      const browserMode = activeTab === "browser";
+      els.workspaceBody.classList.toggle("browser-mode", browserMode);
+      els.workspaceSurface.classList.toggle("browser-surface", browserMode);
+      document.querySelectorAll(".tab").forEach((tab) => tab.classList.toggle("active", tab.dataset.tab === activeTab));
+      if (browserMode) {
+        renderBrowserSurface();
+        return;
+      }
       if (!project) {
         els.workspaceCrumb.textContent = "No live project selected";
-        els.workspaceUrl.textContent = "marcus://workspace/empty";
+        els.workspaceUrl.value = "marcus://workspace/empty";
         els.workspaceSurface.innerHTML = `<div style="display:grid;place-items:center;height:100%;color:#333"><strong>No live project evidence is available yet.</strong></div>`;
         els.auditPanel.innerHTML = emptyAudit("No selected project");
         return;
       }
       els.workspaceCrumb.textContent = `${project.name} / ${project.current || "Live operation"} / ${sourceLabels[project.source] || project.source}`;
-      els.workspaceUrl.textContent = project.workspacePath || project.raw?.previewUrl || `marcus://workspace/${project.id}`;
+      els.workspaceUrl.value = project.workspacePath || project.raw?.previewUrl || `marcus://workspace/${project.id}`;
       els.workspaceStatus.textContent = workspaceStatus(project);
       els.scenarioStatus.textContent = `${stateLabel(project.state)} - ${age(project.updatedAt)}`;
-      document.querySelectorAll(".tab").forEach((tab) => tab.classList.toggle("active", tab.dataset.tab === activeTab));
       els.workspaceSurface.innerHTML = surfaceHtml(project);
       els.auditPanel.innerHTML = auditHtml(project);
       bindDynamicButtons();
+    }
+    function browserSurfaceHtml() {
+      return `
+        <div class="browser-viewport">
+          <div class="browser-placeholder" id="browserPlaceholder"><span class="status-dot warn"></span><strong>Connecting to MARCUS Chrome</strong><span id="browserPlaceholderDetail">Waiting for the desktop bridge</span></div>
+          <img class="browser-frame" id="browserFrame" alt="Live MARCUS Chrome page" draggable="false" tabindex="0">
+          <span class="browser-focus-ring" aria-hidden="true"></span>
+        </div>`;
+    }
+    function renderBrowserSurface() {
+      const status = snapshot.browser || {};
+      els.workspaceCrumb.textContent = status.title || "MARCUS Chrome / dedicated profile";
+      if (document.activeElement !== els.workspaceUrl) els.workspaceUrl.value = status.url || els.workspaceUrl.value || "https://mail.google.com/";
+      els.workspaceStatus.textContent = status.sensitive
+        ? "Sensitive sign-in is hidden from the remote display."
+        : status.online ? "MARCUS Chrome is live through the PC bridge." : (status.error || "Waiting for the MARCUS browser relay.");
+      els.scenarioStatus.textContent = status.online ? `${markHasControl ? "Mark" : "MARCUS"} controls browser` : "Browser offline";
+      if (!document.getElementById("browserFrame")) els.workspaceSurface.innerHTML = browserSurfaceHtml();
+      updateBrowserSurfaceState();
+    }
+    function updateBrowserSurfaceState() {
+      if (activeTab !== "browser") return;
+      const status = snapshot.browser || {};
+      const frame = document.getElementById("browserFrame");
+      const placeholder = document.getElementById("browserPlaceholder");
+      const detail = document.getElementById("browserPlaceholderDetail");
+      if (!frame || !placeholder || !detail) return;
+      const hasFrame = Boolean(status.online && status.frameAvailable && !status.sensitive);
+      frame.classList.toggle("live", hasFrame);
+      frame.classList.toggle("mark-control", markHasControl);
+      placeholder.style.display = hasFrame ? "none" : "grid";
+      detail.textContent = status.sensitive ? "Use the visible MARCUS Chrome window for password entry" : (status.error || "Waiting for the desktop bridge");
+      if (hasFrame && Number(status.frameVersion) !== lastBrowserFrameVersion) {
+        lastBrowserFrameVersion = Number(status.frameVersion) || Date.now();
+        frame.src = `/api/marcus/browser/frame?v=${encodeURIComponent(lastBrowserFrameVersion)}`;
+      }
+      bindBrowserFrame(frame);
+    }
+    function browserPoint(event, frame) {
+      const status = snapshot.browser || {};
+      const viewportWidth = Number(status.viewportWidth) || frame.naturalWidth || 1;
+      const viewportHeight = Number(status.viewportHeight) || frame.naturalHeight || 1;
+      const rect = frame.getBoundingClientRect();
+      const scale = Math.min(rect.width / viewportWidth, rect.height / viewportHeight);
+      const width = viewportWidth * scale;
+      const height = viewportHeight * scale;
+      const left = rect.left + (rect.width - width) / 2;
+      const top = rect.top + (rect.height - height) / 2;
+      const x = (event.clientX - left) / scale;
+      const y = (event.clientY - top) / scale;
+      if (x < 0 || y < 0 || x > viewportWidth || y > viewportHeight) return null;
+      return { x, y };
+    }
+    async function sendBrowserAction(command, detail = {}, { quiet = false } = {}) {
+      try {
+        return await api("/api/marcus/browser/actions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ actor: "mark", command, ...detail }),
+        });
+      } catch (error) {
+        if (!quiet) addMessage("marcus error", `Browser command failed: ${error.message}`);
+        return null;
+      }
+    }
+    function flushBrowserTyping() {
+      clearTimeout(browserTypingTimer);
+      browserTypingTimer = null;
+      const value = browserTypingBuffer;
+      browserTypingBuffer = "";
+      if (value) sendBrowserAction("type", { text: value }, { quiet: true });
+    }
+    function bindBrowserFrame(frame) {
+      if (frame.dataset.bound === "true") return;
+      frame.dataset.bound = "true";
+      frame.addEventListener("click", (event) => {
+        if (!markHasControl) return;
+        const point = browserPoint(event, frame);
+        if (!point) return;
+        frame.focus();
+        sendBrowserAction("click", point, { quiet: true });
+      });
+      frame.addEventListener("wheel", (event) => {
+        if (!markHasControl) return;
+        const point = browserPoint(event, frame);
+        if (!point) return;
+        event.preventDefault();
+        sendBrowserAction("scroll", { ...point, deltaX: event.deltaX, deltaY: event.deltaY }, { quiet: true });
+      }, { passive: false });
+      frame.addEventListener("keydown", (event) => {
+        if (!markHasControl) return;
+        if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
+          event.preventDefault();
+          browserTypingBuffer += event.key;
+          clearTimeout(browserTypingTimer);
+          browserTypingTimer = setTimeout(flushBrowserTyping, 120);
+          return;
+        }
+        if (["Enter", "Tab", "Backspace", "Escape", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key)) {
+          event.preventDefault();
+          flushBrowserTyping();
+          sendBrowserAction("key", { key: event.key }, { quiet: true });
+        }
+      });
+    }
+    async function refreshBrowserStatus() {
+      if (browserStatusLoading || document.hidden) return;
+      browserStatusLoading = true;
+      try {
+        const browser = await api("/api/marcus/browser/status");
+        snapshot.browser = browser;
+        markHasControl = browser?.control?.owner === "mark";
+        els.takeControl.textContent = markHasControl ? "Return control" : "Take control";
+        els.controlState.textContent = markHasControl ? "Mark has control" : "MARCUS has control";
+        els.controlState.style.color = markHasControl ? "var(--amber)" : "var(--green)";
+        if (activeTab === "browser") renderBrowserSurface();
+      } catch {}
+      finally { browserStatusLoading = false; }
     }
     function workspaceStatus(project) {
       if (project.state === "needs_mark") return `${project.name} needs Mark before Marcus continues.`;
@@ -1758,13 +1909,36 @@
       els.voiceButton.title = "The MARCUS realtime client did not load.";
       els.micButton.title = "The MARCUS realtime client did not load.";
     }
-    function toggleControl() {
-      markHasControl = !markHasControl;
-      els.takeControl.textContent = markHasControl ? "Return control" : "Take control";
-      els.controlState.textContent = markHasControl ? "Mark has control" : "Marcus has control";
-      els.controlState.style.color = markHasControl ? "var(--amber)" : "var(--green)";
-      addMessage("marcus", markHasControl ? "You have control. I paused visible browser input and preserved the operation state." : "Control returned to Marcus for safe observation and reversible actions.");
-      renderDock();
+    async function setBrowserControl(owner, { announce = true } = {}) {
+      try {
+        const result = await api("/api/marcus/browser/control", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ owner }),
+        });
+        markHasControl = result?.control?.owner === "mark";
+        if (snapshot.browser) snapshot.browser.control = result.control;
+        els.takeControl.textContent = markHasControl ? "Return control" : "Take control";
+        els.controlState.textContent = markHasControl ? "Mark has control" : "MARCUS has control";
+        els.controlState.style.color = markHasControl ? "var(--amber)" : "var(--green)";
+        if (announce) addMessage("marcus", markHasControl ? "You have browser control. My browser input is paused." : "Browser control returned to MARCUS. I will keep visible actions inside the approved operating boundaries.");
+        renderDock();
+        updateBrowserSurfaceState();
+        return true;
+      } catch (error) {
+        addMessage("marcus error", `Control change failed: ${error.message}`);
+        return false;
+      }
+    }
+    async function toggleControl() {
+      await setBrowserControl(markHasControl ? "marcus" : "mark");
+    }
+    async function openBrowserUrl(url) {
+      activeTab = "browser";
+      if (!markHasControl && !await setBrowserControl("mark", { announce: false })) return;
+      renderWorkspace();
+      await sendBrowserAction("open", { url });
+      refreshBrowserStatus();
     }
 
     document.querySelectorAll(".tab").forEach((button) => button.addEventListener("click", () => {
@@ -1776,9 +1950,10 @@
       renderControlPanel();
     }));
     document.getElementById("clearFilter").addEventListener("click", () => { activeFilter = ""; renderControlPanel(); });
-    document.getElementById("homeButton").addEventListener("click", () => { activeFilter = ""; activeTab = "preview"; selectedId = snapshot.projects[0]?.id || ""; render(); });
+    document.getElementById("homeButton").addEventListener("click", () => { activeFilter = ""; activeTab = "browser"; selectedId = snapshot.projects[0]?.id || ""; render(); });
+    document.getElementById("profileButton").addEventListener("click", () => openBrowserUrl("https://mail.google.com/"));
     document.getElementById("takeControl").addEventListener("click", toggleControl);
-    document.getElementById("pauseButton").addEventListener("click", () => addMessage("marcus", "Visible operation pause requested. No backend operation was stopped without an exact operation binding."));
+    document.getElementById("pauseButton").addEventListener("click", () => setBrowserControl("mark"));
     document.getElementById("closeWorkspace").addEventListener("click", () => addMessage("marcus", "Workspace surface closed visually; active work remains visible in the dock and right panel."));
     document.getElementById("autoToggle").addEventListener("click", () => {
       autoContinue = !autoContinue;
@@ -1804,7 +1979,7 @@
         els.composer.requestSubmit();
       }
     });
-    document.getElementById("captureButton").addEventListener("click", () => addMessage("marcus", "Capture is staged for this display slice. Desktop screenshot capture requires an explicit capture endpoint binding."));
+    document.getElementById("captureButton").addEventListener("click", () => refreshBrowserStatus());
     els.voiceButton.addEventListener("mousedown", (event) => {
       event.preventDefault();
       beginVoiceHold();
@@ -1840,12 +2015,31 @@
         tiktok: "https://www.tiktok.com/",
       };
       const url = urls[button.dataset.mediaOpen];
-      if (url) window.open(url, `marcus_media_${button.dataset.mediaOpen}`, "noopener,noreferrer,width=920,height=720");
+      if (url) openBrowserUrl(url);
     }));
     document.querySelectorAll("[data-source]").forEach((button) => button.addEventListener("click", () => addMessage("marcus", `${button.dataset.source} status opened as evidence. Connected labels are based on the latest integration status endpoint, not saved credentials alone.`)));
-    document.querySelectorAll("[data-browser]").forEach((button) => button.addEventListener("click", () => addMessage("marcus", `Browser ${button.dataset.browser} is a controlled-profile command placeholder until direct browser control is bound.`)));
+    els.browserAddressForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      let url = text(els.workspaceUrl.value);
+      if (!/^https?:\/\//i.test(url)) url = `https://${url}`;
+      if (!markHasControl) {
+        addMessage("marcus", "Take browser control before navigating.");
+        return;
+      }
+      activeTab = "browser";
+      renderWorkspace();
+      await sendBrowserAction("navigate", { url });
+    });
+    document.querySelectorAll("[data-browser]").forEach((button) => button.addEventListener("click", () => {
+      if (!markHasControl) {
+        addMessage("marcus", "Take browser control before using navigation.");
+        return;
+      }
+      sendBrowserAction(button.dataset.browser);
+    }));
 
     setInterval(() => { els.clock.textContent = nowLabel(); }, 1000);
+    setInterval(refreshBrowserStatus, 900);
     setInterval(() => { if (!document.hidden && !["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName || "")) load(); }, autoRefreshMs);
     load();
   </script>

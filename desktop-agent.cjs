@@ -25,6 +25,7 @@ const os = require('os');
 const readline = require('readline');
 const { discoverRecentCodexWorkspaces, parseGitStatus } = require('./desktop-codex-sessions.cjs');
 const { localPackageBinInvocation, npmCliInvocation } = require('./desktop-node-cli.cjs');
+const { MarcusBrowserBridge } = require('./desktop-marcus-browser.cjs');
 const {
   createPcAccessPolicy,
   createPcDirectory,
@@ -234,11 +235,18 @@ if (!ADMIN_TOKEN && new URL(SERVER_URL).protocol === 'https:') {
 }
 
 const POLL_MS = 5000;
+const BROWSER_ACTION_POLL_MS = 350;
+const BROWSER_FRAME_INTERVAL_MS = 1200;
 const WORKSPACE_SCAN_INTERVAL_MS = 30_000; // full workspace scan every 30s
 const CODEX_WORKSPACE_SCAN_INTERVAL_MS = 30_000;
 const SYSTEM_HEALTH_INTERVAL_MS = 60_000; // system health check every 60s
 const RELAY_PATH = '/api/desktop-context/relay';
 const ALLOWED_NPM_SCRIPTS = new Set(['install', 'dev', 'build', 'test', 'lint', 'typecheck']);
+const marcusBrowser = new MarcusBrowserBridge({
+  debugPort: process.env.MARCUS_CHROME_DEBUG_PORT || DESKTOP_CONFIG.chromeDebugPort,
+  profileRoot: process.env.MARCUS_CHROME_PROFILE_ROOT || DESKTOP_CONFIG.chromeProfileRoot,
+  defaultUrl: process.env.MARCUS_CHROME_DEFAULT_URL || DESKTOP_CONFIG.chromeDefaultUrl,
+});
 
 // ── PowerShell capture script ──────────────────────────────────
 const SCRIPT_DIR = path.join(os.tmpdir(), 'marcus-agent');
@@ -1198,7 +1206,11 @@ function cancelLocalCodexJob(payload) {
   }
 }
 
+let desktopActionCheckInFlight = false;
+
 async function checkDesktopActions() {
+  if (desktopActionCheckInFlight) return;
+  desktopActionCheckInFlight = true;
   try {
     const result = await httpGet(`/api/desktop-context/actions?agentId=${encodeURIComponent(DESKTOP_AGENT_ID)}`);
     const actions = Array.isArray(result?.actions) ? result.actions : [];
@@ -1300,6 +1312,8 @@ async function checkDesktopActions() {
         outcome = deletePcItem(action?.payload || {}, PC_ACCESS_POLICY);
       } else if (type === 'pc-run-powershell') {
         outcome = await runPcPowerShell(action?.payload || {}, PC_ACCESS_POLICY);
+      } else if (type === 'marcus-browser-open' || type === 'marcus-browser-command') {
+        outcome = await marcusBrowser.command(action?.payload || {});
       }
       if (type.startsWith('pc-')) outcome = toDesktopActionOutcome(outcome);
 
@@ -1316,7 +1330,10 @@ async function checkDesktopActions() {
     if (responses.length) {
       await relay({ agentId: DESKTOP_AGENT_ID, results: responses }, '/api/desktop-context/action-results');
     }
-  } catch {}
+  } catch {
+  } finally {
+    desktopActionCheckInFlight = false;
+  }
 }
 
 async function checkFileRequests(wsPath) {
@@ -1754,11 +1771,31 @@ async function tick() {
   }
 }
 
+let browserRelayInFlight = false;
+
+async function relayMarcusBrowser() {
+  if (browserRelayInFlight) return;
+  browserRelayInFlight = true;
+  try {
+    const browser = await marcusBrowser.capture();
+    await relay({
+      agentId: DESKTOP_AGENT_ID,
+      ...browser,
+      observedAt: new Date().toISOString(),
+    }, '/api/marcus/browser/relay');
+  } catch {
+    // The regular desktop relay stays online when Chrome is closed or restarting.
+  } finally {
+    browserRelayInFlight = false;
+  }
+}
+
 console.log('');
 console.log('  M.A.R.C.U.S. Desktop Agent');
 console.log(`  Server: ${SERVER_URL}`);
 console.log(`  Auth:   ${ADMIN_TOKEN ? 'Bearer token set' : 'no token (local mode)'}`);
 console.log(`  Poll:   every ${POLL_MS / 1000}s`);
+console.log(`  Chrome: dedicated MARCUS profile bridge on 127.0.0.1:${marcusBrowser.debugPort}`);
 console.log(`  PC:     ${FULL_PC_ACCESS ? `full access (${PC_ACCESS_POLICY.roots.join(', ')})` : 'workspace roots only'}`);
 console.log('  Press Ctrl+C to stop.');
 console.log('');
@@ -1774,3 +1811,14 @@ async function runLoop() {
 }
 
 runLoop();
+
+async function runBrowserActionLoop() {
+  try { await checkDesktopActions(); } finally { setTimeout(runBrowserActionLoop, BROWSER_ACTION_POLL_MS); }
+}
+
+async function runBrowserRelayLoop() {
+  try { await relayMarcusBrowser(); } finally { setTimeout(runBrowserRelayLoop, BROWSER_FRAME_INTERVAL_MS); }
+}
+
+runBrowserActionLoop();
+runBrowserRelayLoop();

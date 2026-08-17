@@ -330,6 +330,16 @@ SMTP is configured through Resend's relay with `Marcus <marcus@gromore.media>`, 
 
 `desktop-agent.cjs` relays local context and executes queued desktop actions.
 
+The same desktop agent owns the MARCUS browser viewport loop. `desktop-marcus-browser.cjs` launches or attaches only to the isolated `%LOCALAPPDATA%\M.A.R.C.U.S\MarcusBrowserProfile` Chrome instance through `127.0.0.1:9333`, captures bounded JPEG page frames, blocks password-field frames and typing, and executes the narrow `marcus-browser-open` and `marcus-browser-command` desktop actions. `/visualizer.html` renders the frame and maintains explicit Mark/MARCUS control ownership. See [[live-presence]] and [[access-model]].
+
+Browser bridge routes:
+
+- `POST /api/marcus/browser/relay`
+- `GET /api/marcus/browser/status`
+- `GET /api/marcus/browser/frame`
+- `POST /api/marcus/browser/control`
+- `POST /api/marcus/browser/actions`
+
 The Windows scheduled task `MARCUS-DesktopAgent` targets the canonical Render host. It reads the admin credential from `%APPDATA%/M.A.R.C.U.S/mobile-live-admin-token.txt`, so the secret is not present in Task Scheduler arguments or the `node.exe` command line. Polling is serialized and transient process-spawn failures do not terminate the relay.
 
 The matching VS Code task also targets the canonical Render host and relies on the same protected token file. Production operator health confirmed the relay online after the 2026-08-12 deployment restart.

@@ -38,9 +38,12 @@ $normalizedUrls = @(
 $args = @(
   "--user-data-dir=$profileRoot",
   "--profile-directory=Default",
+  "--remote-debugging-port=9333",
+  "--remote-debugging-address=127.0.0.1",
   "--no-first-run",
   "--disable-features=Translate",
-  "--new-window"
+  "--new-window",
+  "--window-size=1280,800"
 ) + $normalizedUrls
 
 Start-Process -FilePath $browser -ArgumentList $args
