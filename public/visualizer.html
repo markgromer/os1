@@ -142,6 +142,19 @@
       font-size: 13px;
     }
     .tab.active { color: var(--text); border-bottom-color: var(--violet-2); }
+    .tab-count {
+      min-width: 18px;
+      height: 18px;
+      margin-left: 4px;
+      padding: 0 5px;
+      border-radius: 999px;
+      background: var(--amber);
+      color: #1b1302;
+      display: inline-grid;
+      place-items: center;
+      font-size: 10px;
+      font-weight: 800;
+    }
     .top-actions { justify-content: flex-end; gap: 8px; }
     .control-state { color: var(--green); font-size: 12px; white-space: nowrap; }
 
@@ -237,6 +250,21 @@
     .browser-placeholder .status-dot { width: 10px; height: 10px; }
     .browser-focus-ring { position: absolute; inset: 0; border: 2px solid transparent; pointer-events: none; }
     .browser-frame:focus + .browser-focus-ring { border-color: rgba(53, 200, 235, 0.72); }
+    .surface.approvals-surface { display: block; overflow: auto; background: #0b1118; color: var(--text); }
+    .approval-page { max-width: 980px; margin: 0 auto; padding: 24px; }
+    .approval-head { display: flex; align-items: end; justify-content: space-between; gap: 18px; margin-bottom: 18px; }
+    .approval-head h2 { margin: 0 0 4px; font-size: 22px; }
+    .approval-head p { margin: 0; color: var(--muted); font-size: 13px; }
+    .approval-list { display: grid; gap: 12px; }
+    .approval-item { border: 1px solid var(--line-strong); border-radius: 8px; background: var(--raised); overflow: hidden; }
+    .approval-item-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+    .approval-source { min-width: 0; }
+    .approval-source strong { display: block; margin-top: 4px; font-size: 15px; }
+    .approval-source span { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; }
+    .approval-draft { margin: 0; padding: 16px; color: #ece8f4; white-space: pre-wrap; font: 13px/1.5 var(--font); }
+    .approval-item-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 16px; border-top: 1px solid var(--line); }
+    .approval-item-actions { display: flex; gap: 8px; }
+    .approval-empty { min-height: 260px; display: grid; place-items: center; color: var(--muted); text-align: center; }
     .preview-nav {
       display: flex;
       align-items: center;
@@ -662,6 +690,7 @@
         </div>
         <nav class="tabs" aria-label="Workspace tabs">
           <button class="tab active" type="button" data-tab="browser">Browser</button>
+          <button class="tab" type="button" data-tab="approvals">Approvals <span class="tab-count" id="publicationApprovalCount" hidden>0</span></button>
           <button class="tab" type="button" data-tab="preview">Preview</button>
           <button class="tab" type="button" data-tab="github">GitHub PR</button>
           <button class="tab" type="button" data-tab="codex">Codex</button>
@@ -827,11 +856,12 @@
       syncState: document.getElementById("syncState"),
       takeControl: document.getElementById("takeControl"),
       controlState: document.getElementById("controlState"),
+      publicationApprovalCount: document.getElementById("publicationApprovalCount"),
     };
 
     const stages = ["Brief", "Codex", "GitHub", "Preview", "Audit", "Correct", "Ship"];
     const sourceLabels = { codex: "Codex", operation: "Operation", job: "Codex job", awareness: "Awareness" };
-    let snapshot = { projects: [], operations: [], jobs: [], desktop: null, awareness: null, settings: null, browser: null };
+    let snapshot = { projects: [], operations: [], jobs: [], desktop: null, awareness: null, settings: null, browser: null, publications: [] };
     let selectedId = "";
     let activeTab = "browser";
     let activeFilter = "";
@@ -852,6 +882,7 @@
     let lastBrowserContextVersion = "";
     const LIVE_BROWSER_CONTEXT_KINDS = new Set(["zoom", "skool", "google-meet", "teams", "youtube", "tiktok"]);
     let browserStatusLoading = false;
+    const publicationRequests = new Set();
     const autoRefreshMs = 3000;
 
     const text = (value, fallback = "") => String(value ?? fallback ?? "").replace(/\s+/g, " ").trim();
@@ -1126,7 +1157,7 @@
       loading = true;
       els.syncState.textContent = "Syncing";
       try {
-        const [operations, jobs, desktop, awareness, settings, github, cloudflare, google, browser] = await Promise.all([
+        const [operations, jobs, desktop, awareness, settings, github, cloudflare, google, browser, publications] = await Promise.all([
           api("/api/operations/summary?limit=50").catch((error) => ({ ok: false, error: error.message, operations: [] })),
           api("/api/codex/jobs").catch((error) => ({ ok: false, error: error.message, jobs: [] })),
           api("/api/desktop-context").catch((error) => ({ ok: false, error: error.message, codexWorkspaces: [] })),
@@ -1136,6 +1167,7 @@
           api("/api/integrations/cloudflare/status").catch((error) => ({ ok: false, error: error.message })),
           api("/api/integrations/google/status").catch((error) => ({ ok: false, error: error.message })),
           api("/api/marcus/browser/status").catch((error) => ({ ok: false, online: false, error: error.message, control: { owner: "marcus" } })),
+          api("/api/marcus/browser/publications").catch((error) => ({ ok: false, error: error.message, publications: [] })),
         ]);
         const projects = mergeProjects([
           ...arr(desktop.codexWorkspaces).map((item, index) => makeCodexProject(item, index, desktop)),
@@ -1143,7 +1175,7 @@
           ...arr(jobs.jobs).filter((job) => text(job.status).toLowerCase() !== "cancelled").map(makeJobProject),
           ...arr(awareness.projects).map(makeAwarenessProject),
         ]);
-        snapshot = { projects, operations: arr(operations.operations), jobs: arr(jobs.jobs), desktop, awareness, settings, github, cloudflare, google, browser };
+        snapshot = { projects, operations: arr(operations.operations), jobs: arr(jobs.jobs), desktop, awareness, settings, github, cloudflare, google, browser, publications: arr(publications.publications) };
         markHasControl = browser?.control?.owner === "mark";
         if (!selectedId || !projects.some((p) => p.id === selectedId)) selectedId = projects[0]?.id || "";
         render();
@@ -1190,16 +1222,25 @@
       els.countNeeds.textContent = counts.needs;
       els.countDecaying.textContent = counts.decaying;
       els.orchestrationLine.textContent = `Orchestrating ${counts.building + counts.auditing} live build${counts.building + counts.auditing === 1 ? "" : "s"}`;
+      const pendingPublications = snapshot.publications.filter((item) => item.status === "pending_approval").length;
+      els.publicationApprovalCount.hidden = pendingPublications === 0;
+      els.publicationApprovalCount.textContent = pendingPublications;
       els.clock.textContent = nowLabel();
     }
     function renderWorkspace() {
       const project = selectedProject();
       const browserMode = activeTab === "browser";
-      els.workspaceBody.classList.toggle("browser-mode", browserMode);
+      const fullSurfaceMode = browserMode || activeTab === "approvals";
+      els.workspaceBody.classList.toggle("browser-mode", fullSurfaceMode);
       els.workspaceSurface.classList.toggle("browser-surface", browserMode);
+      els.workspaceSurface.classList.toggle("approvals-surface", activeTab === "approvals");
       document.querySelectorAll(".tab").forEach((tab) => tab.classList.toggle("active", tab.dataset.tab === activeTab));
       if (browserMode) {
         renderBrowserSurface();
+        return;
+      }
+      if (activeTab === "approvals") {
+        renderPublicationApprovals();
         return;
       }
       if (!project) {
@@ -1216,6 +1257,91 @@
       els.workspaceSurface.innerHTML = surfaceHtml(project);
       els.auditPanel.innerHTML = auditHtml(project);
       bindDynamicButtons();
+    }
+    function publicationStatusLabel(status) {
+      return ({
+        pending_approval: "Needs approval",
+        approved: "Approved",
+        publishing: "Posting",
+        rejected: "Denied",
+        published: "Posted",
+        failed: "Needs retry",
+      })[status] || "Unknown";
+    }
+    function renderPublicationApprovals() {
+      const publications = snapshot.publications.filter((item) => ["pending_approval", "publishing", "failed", "published"].includes(item.status));
+      const pending = publications.filter((item) => item.status === "pending_approval").length;
+      els.workspaceCrumb.textContent = "MARCUS publication approvals";
+      els.workspaceUrl.value = "marcus://approvals/browser-publications";
+      els.workspaceStatus.textContent = pending ? `${pending} browser publication${pending === 1 ? "" : "s"} waiting for your decision.` : "No browser publications are waiting for approval.";
+      els.scenarioStatus.textContent = pending ? "Approval required" : "Queue clear";
+      if (!publications.length) {
+        els.workspaceSurface.innerHTML = `<div class="approval-empty"><div><strong>No posts waiting for approval</strong><br><span>MARCUS drafts will appear here before anything is posted.</span></div></div>`;
+        return;
+      }
+      els.workspaceSurface.innerHTML = `
+        <section class="approval-page">
+          <header class="approval-head">
+            <div><h2>Posts and replies</h2><p>Approve publishes the exact text below through MARCUS Chrome. Deny makes no change on the external site.</p></div>
+            <span class="state-pill ${pending ? "warn" : "ok"}">${pending ? `${pending} waiting` : "Up to date"}</span>
+          </header>
+          <div class="approval-list">
+            ${publications.map((item) => {
+              const busy = publicationRequests.has(item.id) || item.status === "publishing";
+              const canApprove = ["pending_approval", "failed"].includes(item.status);
+              const canDeny = item.status === "pending_approval";
+              return `<article class="approval-item">
+                <header class="approval-item-head">
+                  <div class="approval-source">
+                    <span class="eyebrow">${esc(text(item.platform, "browser"))} ${esc(text(item.mode, "post"))}</span>
+                    <strong>${esc(text(item.target || item.sourceTitle, "Browser publication"))}</strong>
+                    <span>${esc(text(item.sourceTitle || item.sourceUrl))}</span>
+                  </div>
+                  <span class="state-pill ${item.status === "published" ? "ok" : item.status === "failed" ? "bad" : "warn"}">${esc(publicationStatusLabel(item.status))}</span>
+                </header>
+                <pre class="approval-draft">${esc(item.text)}</pre>
+                <footer class="approval-item-foot">
+                  <button class="btn ghost" type="button" data-publication-source="${esc(item.id)}">View source</button>
+                  <div class="approval-item-actions">
+                    ${canDeny ? `<button class="btn bad" type="button" data-publication-deny="${esc(item.id)}" ${busy ? "disabled" : ""}>Deny</button>` : ""}
+                    ${canApprove ? `<button class="btn good" type="button" data-publication-approve="${esc(item.id)}" ${busy ? "disabled" : ""}>${item.status === "failed" ? "Retry post" : `Approve and ${esc(text(item.submitLabel, "Post"))}`}</button>` : ""}
+                  </div>
+                </footer>
+                ${item.error ? `<div class="message error" style="margin:0 16px 14px">${esc(item.error)}</div>` : ""}
+              </article>`;
+            }).join("")}
+          </div>
+        </section>`;
+      document.querySelectorAll("[data-publication-source]").forEach((button) => button.addEventListener("click", () => {
+        const item = snapshot.publications.find((entry) => entry.id === button.dataset.publicationSource);
+        if (item?.sourceUrl) openBrowserUrl(item.sourceUrl);
+      }));
+      document.querySelectorAll("[data-publication-approve]").forEach((button) => button.addEventListener("click", () => decidePublication(button.dataset.publicationApprove, "approve")));
+      document.querySelectorAll("[data-publication-deny]").forEach((button) => button.addEventListener("click", () => decidePublication(button.dataset.publicationDeny, "reject")));
+    }
+    async function decidePublication(id, decision) {
+      if (!id || publicationRequests.has(id)) return;
+      publicationRequests.add(id);
+      renderPublicationApprovals();
+      try {
+        const result = await api(`/api/marcus/browser/publications/${encodeURIComponent(id)}/${decision}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+        });
+        addMessage("marcus", decision === "approve"
+          ? "Approved. MARCUS is posting that exact draft through his Chrome session."
+          : "Denied. Nothing was posted and the draft was removed from the approval queue.");
+        if (result?.publication) {
+          const index = snapshot.publications.findIndex((item) => item.id === result.publication.id);
+          if (index >= 0) snapshot.publications[index] = result.publication;
+        }
+      } catch (error) {
+        addMessage("marcus error", `Publication ${decision} failed: ${error.message}`);
+      } finally {
+        publicationRequests.delete(id);
+        await load();
+      }
     }
     function browserSurfaceHtml() {
       return `

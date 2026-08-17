@@ -53,7 +53,11 @@ function createSdkSession({ model, voice, personalityMode, continuityBrief, exec
 
   const agent = new RealtimeAgent({
     name: 'Marcus Voice',
-    instructions: buildMarcusRealtimeInstructions({ personalityMode, continuityBrief }),
+    instructions: [
+      buildMarcusRealtimeInstructions({ personalityMode, continuityBrief }),
+      'Browser work is durable operator work. For any request to inspect, navigate, write, reply, comment, or post in MARCUS Chrome, Skool, Gmail, Zoom, or the visible thread or page, call marcus_operator exactly once. Never claim that you lack a browser before the operator reports the live browser status.',
+      'A request to write or reply on a site should prepare the draft through MARCUS Chrome and place it in Mark\'s publication approval queue. Do not claim it was posted until the operator confirms the approved browser publication.',
+    ].join('\n'),
     tools: [operatorTool, personalityTool],
   });
 

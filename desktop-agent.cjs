@@ -1342,6 +1342,7 @@ async function checkDesktopActions() {
       responses.push({
         id, type, jobId: String(action?.payload?.jobId || ''), businessKey: String(action?.payload?.businessKey || ''), operationId: String(action?.payload?.operationId || ''),
         stepId: String(action?.payload?.stepId || ''), projectRegistryId: String(action?.payload?.projectRegistryId || ''),
+        publicationId: String(action?.payload?.publicationId || ''),
         desktopAgentId: DESKTOP_AGENT_ID, idempotencyKey: String(action?.payload?.idempotencyKey || ''),
         attemptNumber: Number(action?.payload?.attemptNumber ?? 0), ...outcome,
       });

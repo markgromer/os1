@@ -248,12 +248,41 @@ class MarcusBrowserBridge {
     return { target: selected, session: this.session };
   }
 
+  async pageForUrl(value) {
+    const requestedUrl = safeHttpUrl(value);
+    if (!requestedUrl) throw new Error('A valid approved publication URL is required.');
+    await this.ensureBrowser(requestedUrl);
+    const requested = new URL(requestedUrl);
+    const pages = await this.pages();
+    const exact = pages.find((target) => {
+      const candidate = safeHttpUrl(target.url);
+      if (!candidate) return false;
+      const parsed = new URL(candidate);
+      return parsed.origin === requested.origin
+        && parsed.pathname.replace(/\/$/, '') === requested.pathname.replace(/\/$/, '')
+        && parsed.search === requested.search;
+    });
+    const sameSite = pages.find((target) => liveContextKind(target.url) === liveContextKind(requestedUrl));
+    const selected = exact || sameSite;
+    if (!selected) throw new Error('No controllable MARCUS Chrome tab is available for this approved publication.');
+    this.activeTargetId = selected.id;
+    const page = await this.page(liveContextKind(requestedUrl));
+    if (!exact) {
+      await page.session.send('Page.navigate', { url: requestedUrl });
+      await wait(1_200);
+      page.target.url = requestedUrl;
+    }
+    return page;
+  }
+
   async command(payload = {}) {
     const command = String(payload.command || '').trim().toLowerCase();
     const requestedUrl = safeHttpUrl(payload.url);
     await this.ensureBrowser(requestedUrl || undefined);
     const preferredContextKind = command === 'prepare-reply' ? 'skool' : '';
-    const { target, session } = await this.page(preferredContextKind);
+    const { target, session } = command === 'publish-approved-draft'
+      ? await this.pageForUrl(requestedUrl)
+      : await this.page(preferredContextKind);
     let result = {};
     if (command === 'open') {
       if (!requestedUrl) throw new Error('A valid http or https URL is required.');
@@ -415,6 +444,8 @@ class MarcusBrowserBridge {
       const thread = String(payload.thread || '').replace(/\s+/g, ' ').trim().slice(0, 240);
       const text = String(payload.text || '').slice(0, 4_000);
       result = await this.prepareReply(session, target, { thread, text });
+    } else if (command === 'publish-approved-draft') {
+      result = await this.publishApprovedDraft(session, target, payload);
     } else if (command === 'key') {
       const key = String(payload.key || '').slice(0, 40);
       const keys = {
@@ -435,6 +466,110 @@ class MarcusBrowserBridge {
     }
     this.lastError = '';
     return { ok: true, details: { command, targetId: target.id, result } };
+  }
+
+  async replaceVisibleEditor(session, text) {
+    const focused = await session.send('Runtime.evaluate', {
+      expression: `(() => {
+        const candidates = [...document.querySelectorAll('textarea,[contenteditable=true],[contenteditable=plaintext-only],[role=textbox]:not(input)')]
+          .filter((element) => {
+            const rect = element.getBoundingClientRect();
+            const style = getComputedStyle(element);
+            return !element.disabled && !element.readOnly && rect.width > 0 && rect.height > 0
+              && style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) !== 0;
+          })
+          .sort((left, right) => right.getBoundingClientRect().top - left.getBoundingClientRect().top);
+        const editor = candidates[0];
+        if (!editor) return { focused: false };
+        editor.scrollIntoView({ block: 'center', inline: 'nearest' });
+        editor.focus();
+        if (typeof editor.select === 'function') editor.select();
+        else {
+          const selection = window.getSelection();
+          const range = document.createRange();
+          range.selectNodeContents(editor);
+          selection.removeAllRanges();
+          selection.addRange(range);
+        }
+        return { focused: true };
+      })()`,
+      returnByValue: true,
+    });
+    if (!focused?.result?.value?.focused) throw new Error('The approved publication editor is not visible.');
+    await session.send('Input.insertText', { text });
+  }
+
+  async publishApprovedDraft(session, target, payload = {}) {
+    const publicationId = String(payload.publicationId || '').trim().slice(0, 120);
+    const mode = payload.mode === 'reply' ? 'reply' : 'post';
+    const thread = String(payload.thread || payload.target || '').replace(/\s+/g, ' ').trim().slice(0, 240);
+    const text = String(payload.text || '').slice(0, 4_000);
+    const submitLabel = String(payload.submitLabel || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+    if (!publicationId || !text || !/^(post|publish|send|submit|reply|comment)(\b|\s)/i.test(submitLabel)) {
+      throw new Error('The approved publication payload is incomplete.');
+    }
+    if (await this.sensitiveFieldFocused(session)) {
+      throw new Error('Approved publication is blocked while a password field is focused.');
+    }
+    if (mode === 'reply') await this.prepareReply(session, target, { thread, text });
+    else await this.replaceVisibleEditor(session, text);
+
+    const verified = await session.send('Runtime.evaluate', {
+      expression: `(() => {
+        const expected = ${JSON.stringify(text.replace(/\r\n/g, '\n'))};
+        const editor = document.activeElement;
+        if (!editor || !editor.matches('textarea,[contenteditable=true],[contenteditable=plaintext-only],[role=textbox]:not(input)')) {
+          return { matches: false, chars: 0 };
+        }
+        const actual = String(editor.value ?? editor.innerText ?? editor.textContent ?? '').replace(/\\r\\n/g, '\\n');
+        return { matches: actual === expected, chars: actual.length };
+      })()`,
+      returnByValue: true,
+    });
+    if (!verified?.result?.value?.matches) {
+      throw new Error('The visible editor did not exactly match the approved draft. Nothing was published.');
+    }
+
+    const activated = await session.send('Runtime.evaluate', {
+      expression: `(() => {
+        const wanted = ${JSON.stringify(submitLabel.toLowerCase())};
+        const editor = document.activeElement;
+        const editorRect = editor?.getBoundingClientRect?.() || { left: 0, top: 0, width: 0, height: 0 };
+        const candidates = [...document.querySelectorAll('button,[role=button],input[type=submit]')]
+          .filter((element) => {
+            const label = String(element.innerText || element.value || element.textContent || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+            const rect = element.getBoundingClientRect();
+            const style = getComputedStyle(element);
+            return (label === wanted || label.startsWith(wanted + ' ')) && !element.disabled
+              && element.getAttribute('aria-disabled') !== 'true' && rect.width > 0 && rect.height > 0
+              && style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) !== 0;
+          })
+          .sort((left, right) => {
+            const a = left.getBoundingClientRect();
+            const b = right.getBoundingClientRect();
+            const distanceA = Math.abs(a.left - editorRect.left) + Math.abs(a.top - editorRect.top);
+            const distanceB = Math.abs(b.left - editorRect.left) + Math.abs(b.top - editorRect.top);
+            return distanceA - distanceB;
+          });
+        const button = candidates[0];
+        if (!button) return { activated: false };
+        button.click();
+        return { activated: true, label: String(button.innerText || button.value || button.textContent || '').replace(/\\s+/g, ' ').trim() };
+      })()`,
+      returnByValue: true,
+    });
+    if (!activated?.result?.value?.activated) {
+      throw new Error(`The approved ${submitLabel} control is not visible. Nothing was published.`);
+    }
+    await wait(700);
+    return {
+      publicationId,
+      published: true,
+      mode,
+      submitLabel: activated.result.value.label || submitLabel,
+      chars: text.length,
+      url: safeObservableUrl(target.url || payload.url),
+    };
   }
 
   async prepareReply(session, target, { thread, text }) {

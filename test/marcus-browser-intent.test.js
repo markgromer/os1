@@ -40,6 +40,10 @@ test('compound thread reply requests open the thread before preparing the reply'
     classifyMarcusBrowserIntent('Head to the Skool community and prepare your introduction reply in the introduction thread. Do not post it.'),
     'marcus_browser_prepare_reply',
   );
+  assert.equal(
+    classifyMarcusBrowserIntent('Make a reply post to the thread.', { contextKind: 'skool' }),
+    'marcus_browser_prepare_reply',
+  );
 });
 
 test('submission negation never becomes browser publication approval', () => {

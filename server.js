@@ -272,7 +272,11 @@ const desktopActionQueue = new DesktopActionQueue({
   leaseMs: process.env.MARCUS_DESKTOP_ACTION_LEASE_MS,
 });
 const desktopCodexFlag = String(process.env.MARCUS_DESKTOP_CODEX_ENABLED || '').trim().toLowerCase();
-const desktopCodexEnabled = desktopCodexFlag === 'true' || (IS_HOSTED_RUNTIME && desktopCodexFlag !== 'false');
+// The desktop relay is Marcus's primary execution layer in both local and hosted
+// runtimes. Requiring an opt-in locally silently downgraded implementation
+// requests to inert external handoffs even while the desktop agent was present.
+// Keep an explicit kill switch, but otherwise make execution available.
+const desktopCodexEnabled = desktopCodexFlag !== 'false';
 const desktopCodexAdapter = desktopCodexEnabled ? new DesktopCodexAdapter({
   dataDir: DATA_DIR,
   queueAction: async (action) => queueDesktopAction(action),
@@ -1166,6 +1170,7 @@ function normalizeSettingsShape(settings) {
     automationConfig: normalizeAutomationConfig(parsed.automationConfig),
     automationDigestQueue: normalizeAutomationDigestQueue(parsed.automationDigestQueue),
     externalActionDrafts: normalizeExternalActionDrafts(parsed.externalActionDrafts),
+    browserPublicationDrafts: normalizeBrowserPublicationDrafts(parsed.browserPublicationDrafts),
     livePresenceSetup: normalizeLivePresenceSettings(parsed).livePresenceSetup,
   };
 }
@@ -2422,6 +2427,129 @@ function normalizeExternalActionDrafts(input) {
     }))
     .filter((item) => item.to && item.body)
     .slice(-200);
+}
+
+function normalizeBrowserPublicationDraft(input = {}) {
+  const raw = input && typeof input === 'object' ? input : {};
+  const sourceUrl = safeMarcusBrowserUrl(raw.sourceUrl || raw.url);
+  const text = String(raw.text || raw.body || '').trim().slice(0, 4_000);
+  const mode = raw.mode === 'reply' ? 'reply' : 'post';
+  const submitLabel = String(raw.submitLabel || (mode === 'reply' ? 'Comment' : 'Post'))
+    .replace(/\s+/g, ' ').trim().slice(0, 80);
+  if (!sourceUrl) throw new Error('A valid publication source URL is required.');
+  if (!text) throw new Error('Publication draft text is required.');
+  if (!/^(post|publish|send|submit|reply|comment)(\b|\s)/i.test(submitLabel)) {
+    throw new Error('Publication approval requires an exact Post, Publish, Send, Submit, Reply, or Comment control.');
+  }
+  const now = nowIso();
+  return {
+    id: String(raw.id || '').trim().slice(0, 120) || makeId(),
+    type: 'browser_publication',
+    platform: safeMarcusBrowserContextKind(raw.platform) || safeMarcusBrowserContextKind((() => {
+      const host = new URL(sourceUrl).hostname.toLowerCase();
+      if (host.includes('skool.com')) return 'skool';
+      if (host.includes('mail.google.com')) return 'gmail';
+      if (host.includes('zoom.us')) return 'zoom';
+      if (host.includes('youtube.com')) return 'youtube';
+      if (host.includes('tiktok.com')) return 'tiktok';
+      return '';
+    })()),
+    mode,
+    sourceUrl,
+    sourceTitle: String(raw.sourceTitle || '').replace(/\s+/g, ' ').trim().slice(0, 300),
+    sourceExcerpt: String(raw.sourceExcerpt || '').replace(/\s+/g, ' ').trim().slice(0, 1_200),
+    target: String(raw.target || raw.thread || '').replace(/\s+/g, ' ').trim().slice(0, 240),
+    text,
+    submitLabel,
+    status: 'pending_approval',
+    requiresApproval: true,
+    createdAt: now,
+    updatedAt: now,
+    createdBy: 'marcus',
+    approvedAt: '',
+    approvedBy: '',
+    rejectedAt: '',
+    rejectedBy: '',
+    publishedAt: '',
+    actionId: '',
+    error: '',
+    publishResult: {},
+  };
+}
+
+function normalizeBrowserPublicationDrafts(input) {
+  return (Array.isArray(input) ? input : [])
+    .map((raw) => {
+      try {
+        const base = normalizeBrowserPublicationDraft(raw);
+        return {
+          ...base,
+          status: safeEnum(raw.status, ['pending_approval', 'approved', 'publishing', 'rejected', 'published', 'failed'], 'pending_approval'),
+          createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : base.createdAt,
+          updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : base.updatedAt,
+          createdBy: String(raw.createdBy || 'marcus').trim().slice(0, 100),
+          approvedAt: typeof raw.approvedAt === 'string' ? raw.approvedAt : '',
+          approvedBy: String(raw.approvedBy || '').trim().slice(0, 100),
+          rejectedAt: typeof raw.rejectedAt === 'string' ? raw.rejectedAt : '',
+          rejectedBy: String(raw.rejectedBy || '').trim().slice(0, 100),
+          publishedAt: typeof raw.publishedAt === 'string' ? raw.publishedAt : '',
+          actionId: String(raw.actionId || '').trim().slice(0, 120),
+          error: String(raw.error || '').trim().slice(0, 1_000),
+          publishResult: raw.publishResult && typeof raw.publishResult === 'object' ? raw.publishResult : {},
+        };
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean)
+    .slice(-200);
+}
+
+async function createBrowserPublicationDraft(input = {}) {
+  const draft = normalizeBrowserPublicationDraft(input);
+  let created = null;
+  writeLock = writeLock.catch(() => {}).then(async () => {
+    const settings = await readSettings();
+    const drafts = normalizeBrowserPublicationDrafts(settings.browserPublicationDrafts);
+    const duplicate = drafts.find((item) => item.status === 'pending_approval'
+      && item.sourceUrl === draft.sourceUrl && item.target === draft.target && item.text === draft.text);
+    if (duplicate) {
+      created = duplicate;
+      return;
+    }
+    await writeSettings({ ...settings, browserPublicationDrafts: [...drafts, draft].slice(-200), updatedAt: nowIso() });
+    created = draft;
+  });
+  await writeLock;
+  return created;
+}
+
+async function updateBrowserPublication(id, updater) {
+  let updated = null;
+  writeLock = writeLock.catch(() => {}).then(async () => {
+    const settings = await readSettings();
+    const drafts = normalizeBrowserPublicationDrafts(settings.browserPublicationDrafts);
+    const index = drafts.findIndex((item) => item.id === id);
+    if (index < 0) throw Object.assign(new Error('Browser publication draft not found.'), { statusCode: 404 });
+    const next = await updater(drafts[index]);
+    drafts[index] = { ...(next || drafts[index]), updatedAt: nowIso() };
+    await writeSettings({ ...settings, browserPublicationDrafts: drafts, updatedAt: nowIso() });
+    updated = drafts[index];
+  });
+  await writeLock;
+  return updated;
+}
+
+async function reconcileBrowserPublicationResult(result) {
+  const publicationId = String(result?.publicationId || result?.details?.result?.publicationId || '').trim();
+  if (!publicationId) return null;
+  return updateBrowserPublication(publicationId, (draft) => {
+    if (draft.status === 'published') return draft;
+    if (result.ok && result?.details?.result?.published === true) {
+      return { ...draft, status: 'published', publishedAt: nowIso(), error: '', publishResult: result.details.result };
+    }
+    return { ...draft, status: 'failed', error: result.error || 'MARCUS Chrome did not confirm publication.', publishResult: result.details || {} };
+  });
 }
 
 async function createExternalActionDraft(input = {}) {
@@ -14723,10 +14851,34 @@ async function executeMarcusBrowserTool(toolName, args = {}, {
     requestedBy,
   }, { timeoutMs: 10_000 });
   if ((toolName === 'marcus_browser_fill' || toolName === 'marcus_browser_prepare_reply') && result.ok) {
+    const publication = await createBrowserPublicationDraft({
+      platform: status.contextKind,
+      mode: toolName === 'marcus_browser_prepare_reply' ? 'reply' : 'post',
+      sourceUrl: result?.details?.result?.href || status.url || payload.url,
+      sourceTitle: status.title,
+      sourceExcerpt: status.visibleText,
+      target: payload.thread || payload.target || '',
+      text: payload.text,
+      submitLabel: toolName === 'marcus_browser_prepare_reply'
+        ? 'Comment'
+        : (status.contextKind === 'gmail' ? 'Send' : 'Post'),
+    });
     marcusBrowserDraftCache = {
-      at: Date.now(), url: status.url || '', target: payload.thread || payload.target || '', chars: payload.text.length,
+      at: Date.now(), id: publication.id, url: publication.sourceUrl,
+      target: payload.thread || payload.target || '', chars: payload.text.length,
     };
   } else if (toolName === 'marcus_browser_submit' && result.ok) {
+    if (marcusBrowserDraftCache?.id) {
+      await updateBrowserPublication(marcusBrowserDraftCache.id, (draft) => ({
+        ...draft,
+        status: 'published',
+        approvedAt: draft.approvedAt || nowIso(),
+        approvedBy: draft.approvedBy || 'mark',
+        publishedAt: nowIso(),
+        error: '',
+        publishResult: result.details || {},
+      })).catch(() => {});
+    }
     marcusBrowserDraftCache = null;
   }
   return {
@@ -14927,6 +15079,7 @@ app.post('/api/desktop-context/action-results', async (req, res) => {
       operationId: typeof raw.operationId === 'string' ? raw.operationId.trim().slice(0, 120) : '',
       stepId: typeof raw.stepId === 'string' ? raw.stepId.trim().slice(0, 120) : '',
       projectRegistryId: typeof raw.projectRegistryId === 'string' ? raw.projectRegistryId.trim().slice(0, 160) : '',
+      publicationId: typeof raw.publicationId === 'string' ? raw.publicationId.trim().slice(0, 120) : '',
       desktopAgentId: relayAgentId || (typeof raw.desktopAgentId === 'string' ? raw.desktopAgentId.trim().slice(0, 200) : ''),
       idempotencyKey: typeof raw.idempotencyKey === 'string' ? raw.idempotencyKey.trim().slice(0, 240) : '',
       attemptNumber: Number.isFinite(Number(raw.attemptNumber)) ? Number(raw.attemptNumber) : null,
@@ -15007,6 +15160,13 @@ app.post('/api/desktop-context/action-results', async (req, res) => {
       accepted = true;
     }
     if (accepted) {
+      if (type === 'marcus-browser-publish') {
+        try {
+          await reconcileBrowserPublicationResult(result);
+        } catch (error) {
+          rejected.push({ id, code: error?.code || 'BROWSER_PUBLICATION_RECONCILE_FAILED' });
+        }
+      }
       if (businessKey && result.projectRegistryId && type !== 'validate-workspace' && !LOCAL_CODEX_DESKTOP_ACTIONS.has(type)) {
         try {
           await projectEvidenceService.recordDesktopActionResult(businessKey, result);
@@ -15386,6 +15546,94 @@ app.post('/api/marcus/browser/relay', (req, res) => {
 app.get('/api/marcus/browser/status', (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   res.json(marcusBrowserStatus());
+});
+
+app.get('/api/marcus/browser/publications', async (req, res) => {
+  try {
+    const settings = await readSettings();
+    const publications = normalizeBrowserPublicationDrafts(settings.browserPublicationDrafts).slice(-100).reverse();
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ ok: true, publications });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: String(error?.message || error) });
+  }
+});
+
+app.post('/api/marcus/browser/publications/draft', async (req, res) => {
+  try {
+    const publication = await createBrowserPublicationDraft(req.body || {});
+    marcusBrowserDraftCache = {
+      at: Date.now(), id: publication.id, url: publication.sourceUrl,
+      target: publication.target, chars: publication.text.length,
+    };
+    res.status(201).json({ ok: true, publication });
+  } catch (error) {
+    res.status(Number(error?.statusCode) || 400).json({ ok: false, error: String(error?.message || error) });
+  }
+});
+
+app.post('/api/marcus/browser/publications/:id/approve', async (req, res) => {
+  const id = String(req.params.id || '').trim().slice(0, 120);
+  if (!id) return res.status(400).json({ ok: false, error: 'Publication id is required.' });
+  try {
+    const approved = await updateBrowserPublication(id, (draft) => {
+      if (draft.status === 'published') return draft;
+      if (!['pending_approval', 'failed'].includes(draft.status)) {
+        throw Object.assign(new Error(`Browser publication cannot be approved from ${draft.status}.`), { statusCode: 409 });
+      }
+      return { ...draft, status: 'approved', approvedAt: nowIso(), approvedBy: 'mark', error: '' };
+    });
+    if (approved.status === 'published') return res.json({ ok: true, publication: approved, reused: true });
+    marcusBrowserControl = { owner: 'marcus', updatedAt: nowIso() };
+    let action;
+    try {
+      action = await queueDesktopAction({
+        type: 'marcus-browser-publish',
+        payload: {
+          command: 'publish-approved-draft',
+          publicationId: approved.id,
+          url: approved.sourceUrl,
+          mode: approved.mode,
+          thread: approved.target,
+          target: approved.target,
+          text: approved.text,
+          submitLabel: approved.submitLabel,
+          desktopAgentId: marcusBrowserStatus().agentId || desktopRelayCache?.data?.desktopAuthorization?.agentId || '',
+        },
+        requestedBy: `browser-publication:${approved.id}`,
+      });
+    } catch (error) {
+      await updateBrowserPublication(id, (draft) => ({ ...draft, status: 'failed', error: 'The MARCUS browser publication could not be queued.' }));
+      throw Object.assign(error, { statusCode: 503 });
+    }
+    const publication = await updateBrowserPublication(id, (draft) => ({ ...draft, status: 'publishing', actionId: action.id }));
+    return res.status(202).json({ ok: true, queued: true, actionId: action.id, publication });
+  } catch (error) {
+    return res.status(Number(error?.statusCode) || 400).json({ ok: false, error: String(error?.message || error) });
+  }
+});
+
+app.post('/api/marcus/browser/publications/:id/reject', async (req, res) => {
+  const id = String(req.params.id || '').trim().slice(0, 120);
+  if (!id) return res.status(400).json({ ok: false, error: 'Publication id is required.' });
+  try {
+    const publication = await updateBrowserPublication(id, (draft) => {
+      if (draft.status !== 'pending_approval') {
+        throw Object.assign(new Error(`Browser publication cannot be rejected from ${draft.status}.`), { statusCode: 409 });
+      }
+      return {
+        ...draft,
+        status: 'rejected',
+        rejectedAt: nowIso(),
+        rejectedBy: 'mark',
+        error: '',
+      };
+    });
+    if (marcusBrowserDraftCache?.id === id) marcusBrowserDraftCache = null;
+    res.json({ ok: true, publication });
+  } catch (error) {
+    res.status(Number(error?.statusCode) || 400).json({ ok: false, error: String(error?.message || error) });
+  }
 });
 
 app.get('/api/marcus/browser/frame', (req, res) => {
@@ -18170,7 +18418,10 @@ app.post('/api/marcus/live/chat', async (req, res) => {
     }
     const approvalAuthorized = hasDurableAdminAuthentication(req);
     const browserDraftPending = Boolean(marcusBrowserDraftCache && (Date.now() - marcusBrowserDraftCache.at) < 30 * 60_000);
-    const browserIntent = classifyMarcusBrowserIntent(message, { pendingDraft: browserDraftPending });
+    const browserIntent = classifyMarcusBrowserIntent(message, {
+      pendingDraft: browserDraftPending,
+      contextKind: marcusBrowserStatus().contextKind,
+    });
 
     const sentExternalAction = browserIntent ? null : await maybeApproveAndSendExternalActionFromMessage(message, { approvalAuthorized });
     if (sentExternalAction) {
@@ -20017,8 +20268,9 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
     const effectiveProjectId = effectiveProject?.id || projectId || null;
     const browserIntent = typeof options?.browserIntent === 'string'
       ? options.browserIntent
-      : classifyMarcusBrowserIntent(message, {
+        : classifyMarcusBrowserIntent(message, {
           pendingDraft: Boolean(marcusBrowserDraftCache && (Date.now() - marcusBrowserDraftCache.at) < 30 * 60_000),
+          contextKind: marcusBrowserStatus().contextKind,
         });
 
     if (effectiveThreadId !== 'operator_bio' && !browserIntent && shouldCreateDurableOperationForRequest(message)) {
@@ -21672,6 +21924,7 @@ app.post('/api/chat', async (req, res) => {
 
       const browserIntent = classifyMarcusBrowserIntent(message, {
         pendingDraft: Boolean(marcusBrowserDraftCache && (Date.now() - marcusBrowserDraftCache.at) < 30 * 60_000),
+        contextKind: marcusBrowserStatus().contextKind,
       });
 
       if (!browserIntent && projectOperatorService.shouldHandle(message) && /\b(codex|audit|repo|repository|fix|build|implement|prompt|send|submit|pass|put|get .* working|start .* session)\b/i.test(message)) {

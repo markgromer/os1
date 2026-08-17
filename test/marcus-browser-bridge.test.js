@@ -193,6 +193,50 @@ test('MARCUS thread reply workflow opens the thread and current comment editor b
   assert.deepEqual(calls.at(-1), { method: 'Input.insertText', params: { text: 'MARCUS introduction draft.' } });
 });
 
+test('approved browser publication verifies the exact draft before activating Comment', async () => {
+  const bridge = new MarcusBrowserBridge();
+  bridge.sensitiveFieldFocused = async () => false;
+  let prepared = null;
+  bridge.prepareReply = async (_session, _target, input) => {
+    prepared = input;
+    return { insertedChars: input.text.length };
+  };
+  let runtimeCall = 0;
+  const session = {
+    send: async (method, params) => {
+      assert.equal(method, 'Runtime.evaluate');
+      runtimeCall += 1;
+      if (runtimeCall === 1) {
+        assert.match(params.expression, /actual === expected/);
+        return { result: { value: { matches: true, chars: 22 } } };
+      }
+      assert.match(params.expression, /button\.click/);
+      return { result: { value: { activated: true, label: 'COMMENT' } } };
+    },
+  };
+  const result = await bridge.publishApprovedDraft(session, { url: 'https://www.skool.com/localgiants/thread' }, {
+    publicationId: 'publication-1',
+    mode: 'reply',
+    thread: 'Drop Your Intro',
+    text: 'MARCUS approved reply.',
+    submitLabel: 'Comment',
+  });
+  assert.deepEqual(prepared, { thread: 'Drop Your Intro', text: 'MARCUS approved reply.' });
+  assert.equal(result.published, true);
+  assert.equal(result.publicationId, 'publication-1');
+  assert.equal(result.submitLabel, 'COMMENT');
+});
+
+test('approved browser publication refuses to click when visible text differs', async () => {
+  const bridge = new MarcusBrowserBridge();
+  bridge.sensitiveFieldFocused = async () => false;
+  bridge.prepareReply = async () => ({});
+  const session = { send: async () => ({ result: { value: { matches: false, chars: 8 } } }) };
+  await assert.rejects(() => bridge.publishApprovedDraft(session, { url: 'https://www.skool.com/localgiants/thread' }, {
+    publicationId: 'publication-2', mode: 'reply', thread: 'Intro', text: 'Exact approved text.', submitLabel: 'Comment',
+  }), /exactly match the approved draft/i);
+});
+
 test('MARCUS page reader scans approved viewports and restores the original position', async () => {
   const bridge = new MarcusBrowserBridge();
   bridge.sensitiveFieldFocused = async () => false;
