@@ -54,7 +54,7 @@
       width: 100vw;
       height: 100vh;
       display: grid;
-      grid-template-columns: minmax(0, calc(100vw - 456px)) 456px;
+      grid-template-columns: minmax(0, calc(100vw - 560px)) 560px;
       grid-template-rows: 32px minmax(0, 1fr) 224px;
       grid-template-areas:
         "os os"
@@ -509,7 +509,7 @@
       min-height: 0;
       background: rgba(7, 11, 16, 0.98);
       display: grid;
-      grid-template-rows: 80px minmax(330px, 0.85fr) minmax(360px, 1.15fr) 32px;
+      grid-template-rows: 80px minmax(500px, 1fr) minmax(260px, 0.7fr) 32px;
       gap: 8px;
       padding: 8px;
     }
@@ -539,7 +539,7 @@
     .section-title { display: flex; justify-content: space-between; align-items: center; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; }
     .build-list { min-height: 0; overflow: auto; display: grid; align-content: start; gap: 6px; padding-right: 2px; }
     .build-card {
-      min-height: 82px;
+      min-height: 78px;
       padding: 9px;
       display: grid;
       grid-template-columns: minmax(0, 1fr) 76px;
@@ -588,7 +588,7 @@
       border: 1px solid var(--line);
       border-radius: 8px;
       background: rgba(17, 25, 35, 0.72);
-      padding: 8px;
+      padding: 7px;
     }
     .mini-row {
       width: 100%;
@@ -653,14 +653,14 @@
     .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 
     @media (max-width: 1500px) {
-      .display { grid-template-columns: minmax(0, calc(100vw - 392px)) 392px; }
+      .display { grid-template-columns: minmax(0, calc(100vw - 456px)) 456px; }
       .workspace-header { grid-template-columns: 300px 1fr 252px; }
       .workspace-body { grid-template-columns: minmax(0, 1fr) 250px; }
       .preview-main { padding: 22px 32px; gap: 16px; }
       .brief-surface { grid-template-columns: minmax(0, 1fr); padding: 20px; }
       .brief-title { font-size: 32px; }
       .dock-body { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-      .control-panel { grid-template-rows: 80px minmax(310px, 0.8fr) minmax(340px, 1.2fr) 32px; }
+      .control-panel { grid-template-rows: 80px minmax(450px, 1fr) minmax(240px, 0.7fr) 32px; }
     }
   </style>
 </head>
