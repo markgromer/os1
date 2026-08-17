@@ -5,6 +5,7 @@ import {
   MARCUS_PERSONALITY_MODE_IDS,
   normalizeMarcusPersonalityMode,
 } from '../marcus/voice/personality_modes.js';
+import { sanitizeOperatorResultForSpeech } from '../marcus/voice/spoken_reference.js';
 
 const DEFAULT_MODEL = 'gpt-realtime-2.1';
 const DEFAULT_VOICE = 'cedar';
@@ -25,7 +26,7 @@ function isRetryableConnectionError(error) {
   return !/(microphone|permission).*(denied|blocked)|unauthorized|invalid admin token|openai is not configured/.test(message);
 }
 
-function createSdkSession({ model, voice, personalityMode, executeOperator, setPersonalityMode, mediaStream, audioElement }) {
+function createSdkSession({ model, voice, personalityMode, continuityBrief, executeOperator, setPersonalityMode, mediaStream, audioElement }) {
   const operatorTool = tool({
     name: 'marcus_operator',
     description: 'Send Mark\'s complete spoken request to the durable Marcus operator for project work, live status, Codex work, audits, approvals, consequential actions, durable memory, and verified completion evidence.',
@@ -52,7 +53,7 @@ function createSdkSession({ model, voice, personalityMode, executeOperator, setP
 
   const agent = new RealtimeAgent({
     name: 'Marcus Voice',
-    instructions: buildMarcusRealtimeInstructions({ personalityMode }),
+    instructions: buildMarcusRealtimeInstructions({ personalityMode, continuityBrief }),
     tools: [operatorTool, personalityTool],
   });
 
@@ -315,7 +316,7 @@ export function createMarcusRealtimeVoice(options = {}) {
         outcome: result?.ok === false ? 'failure' : 'success',
         operationId: String(result?.operationId || '').trim().slice(0, 120),
       });
-      return result;
+      return sanitizeOperatorResultForSpeech(result);
     } catch (error) {
       emitEvent('operator_completed', { outcome: 'failure' });
       return { ok: false, error: errorMessage(error, 'Marcus could not process the voice request.') };
@@ -346,6 +347,7 @@ export function createMarcusRealtimeVoice(options = {}) {
       model: String(secret.session?.model || DEFAULT_MODEL),
       voice: String(secret.session?.voice || DEFAULT_VOICE),
       personalityMode: normalizeMarcusPersonalityMode(secret.session?.personalityMode || secret.session?.personality_mode),
+      continuityBrief: String(secret.session?.continuityBrief || '').slice(0, 3_500),
       executeOperator,
       setPersonalityMode,
       mediaStream,

@@ -40,6 +40,7 @@ import {
   patchLivePresenceSetup,
 } from './marcus/live/live_presence.js';
 import { formatMissionMemoryForPrompt, MissionMemoryStore } from './marcus/memory/mission_memory_store.js';
+import { buildVoiceContinuityBrief } from './marcus/voice/continuity_brief.js';
 import { createOperationsEngine } from './marcus/operations/operation_engine.js';
 import { discoverDurableBackupSources } from './marcus/operations/operation_backups.js';
 import { DesktopActionQueue } from './marcus/operations/desktop_action_queue.js';
@@ -54,7 +55,7 @@ import {
   DEFAULT_MARCUS_REALTIME_MODEL,
   DEFAULT_MARCUS_REALTIME_VOICE,
 } from './marcus/voice/realtime_session.js';
-import { DEFAULT_MARCUS_PERSONALITY_MODE } from './marcus/voice/personality_modes.js';
+import { DEFAULT_MARCUS_PERSONALITY_MODE, normalizeMarcusPersonalityMode } from './marcus/voice/personality_modes.js';
 import { RealtimeTelemetryStore } from './marcus/voice/realtime_telemetry.js';
 import {
   executeMarcusOperationTool,
@@ -15412,7 +15413,8 @@ function buildMarcusLiveProjectRequest(conversation, message, targetProject = co
 function parseMissionMemoryCommand(message) {
   const text = String(message || '').replace(/\s+/g, ' ').trim();
   if (!text) return null;
-  const queryMatch = text.match(/^(?:what|which|show|list|tell me)\b.{0,45}\b(?:remember|memory|mission|standing instructions?|preferences?)\b(?:\s+(?:about|for|on)\s+(.+))?[?.!]*$/i);
+  const directRecallMatch = text.match(/^(?:what|which|show|list|tell me)\s+(?:do\s+you\s+)?(?:remember|know|have in memory)(?:\s+(?:about|for|on)\s+(.+?))?[?.!]*$/i);
+  const queryMatch = directRecallMatch || text.match(/^(?:what|which|show|list|tell me)\b.{0,45}\b(?:memory|mission|standing instructions?|preferences?)\b(?:\s+(?:about|for|on)\s+(.+))?[?.!]*$/i);
   if (queryMatch) return { action: 'list', query: String(queryMatch[1] || '').trim() };
 
   let content = '';
@@ -16237,6 +16239,12 @@ app.post('/api/marcus/realtime/client-secret', async (req, res) => {
         .createHash('sha256')
         .update(`marcus:${getBusinessKeyFromContext()}:owner`)
         .digest('hex');
+      const personalityMode = normalizeMarcusPersonalityMode(req.body?.personalityMode || DEFAULT_MARCUS_PERSONALITY_MODE);
+      const [voiceMemories, voiceConversation] = await Promise.all([
+        missionMemoryStore.relevant(getBusinessKeyFromContext(), 'voice relationship priorities working style', { limit: 12 }).catch(() => []),
+        readMarcusLiveConversation().catch(() => ({})),
+      ]);
+      const continuityBrief = buildVoiceContinuityBrief({ memories: voiceMemories, conversation: voiceConversation, personalityMode });
       upstream = await fetch('https://api.openai.com/v1/realtime/client_secrets', {
         method: 'POST',
         headers: {
@@ -16247,6 +16255,8 @@ app.post('/api/marcus/realtime/client-secret', async (req, res) => {
         body: JSON.stringify(buildMarcusRealtimeClientSecretRequest({
           model: MARCUS_REALTIME_MODEL,
           voice: MARCUS_REALTIME_VOICE,
+          personalityMode,
+          continuityBrief,
         })),
         signal: controller.signal,
       });
@@ -16269,6 +16279,12 @@ app.post('/api/marcus/realtime/client-secret', async (req, res) => {
         provider: 'openai_realtime',
         model: MARCUS_REALTIME_MODEL,
         voice: MARCUS_REALTIME_VOICE,
+        personalityMode: normalizeMarcusPersonalityMode(req.body?.personalityMode || DEFAULT_MARCUS_PERSONALITY_MODE),
+        continuityBrief: buildVoiceContinuityBrief({
+          memories: await missionMemoryStore.relevant(getBusinessKeyFromContext(), 'voice relationship priorities working style', { limit: 12 }).catch(() => []),
+          conversation: await readMarcusLiveConversation().catch(() => ({})),
+          personalityMode: normalizeMarcusPersonalityMode(req.body?.personalityMode || DEFAULT_MARCUS_PERSONALITY_MODE),
+        }),
       },
     });
   } catch (err) {

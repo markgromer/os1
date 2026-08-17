@@ -2,6 +2,12 @@
 
 Status: active
 
+## 2026-08-17: Separate Machine Evidence From Spoken References
+
+Decision: Durable results retain exact identifiers, while Realtime voice receives a speech-safe human projection. Relationship continuity is bounded and filtered from public modes. Recurring work loads request-specific priming manifests. Deliberate decisions may be marked locked and require an explicit permanent-change or one-time-exception choice before conflicting operations are created.
+
+Consequence: Marcus can speak naturally without weakening evidence, authority, privacy, or approval boundaries. See [[operator-intelligence-layer]].
+
 ## 2026-08-15: Snark Is A Mode Permission, Not The Default Voice
 
 Context: Mark wants Marcus to eventually join or support Zoom/OBS sessions, including playful demos where Marcus can be more fun, edgy, and snarky. The existing Realtime voice personality already permits dry humor, but the same prompt currently applies across private and potentially external contexts.

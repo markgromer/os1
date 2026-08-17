@@ -14,7 +14,8 @@
     "pretest": "npm run build:mobile",
     "test": "node --test",
     "lint": "node scripts/lint.mjs",
-    "lint:obsidian": "node scripts/check-obsidian-links.mjs"
+    "lint:obsidian": "node scripts/check-obsidian-links.mjs",
+    "demo:marcus": "node scripts/demo-marcus-intelligence.mjs"
   },
   "dependencies": {
     "@openai/agents-realtime": "^0.15.0",

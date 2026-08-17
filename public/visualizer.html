@@ -898,6 +898,9 @@
       const name = text(item.name || item.title || "Project");
       return {
         id: idFrom(item.id || `${name}-${index}`, "aware"),
+        awarenessProjectId: text(item.awarenessProjectId || item.id),
+        projectRegistryId: text(item.projectRegistryId),
+        projectId: text(item.projectId),
         name,
         source: "awareness",
         state,
@@ -1291,12 +1294,18 @@
     async function sendToMarcus(message) {
       const project = selectedProject();
       const context = project ? `Context: ${project.name}. Current: ${project.current}. Next: ${project.next}. ` : "";
+      const projectId = project?.awarenessProjectId || project?.projectRegistryId || project?.projectId || project?.id || "";
       addMessage("user", message);
       try {
         const data = await api("/api/marcus/live/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message: `${context}${message}`, surface: "dedicated_visualizer", projectId: project?.id || "" }),
+          body: JSON.stringify({
+            message: `${context}${message}`,
+            surface: "dedicated_visualizer",
+            awarenessProjectId: projectId,
+            projectId,
+          }),
         });
         addMessage("marcus", text(data.reply || data.message || "I recorded that and will reconcile the next safe action."));
         await load();

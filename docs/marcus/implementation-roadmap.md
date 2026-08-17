@@ -1,5 +1,17 @@
 # Implementation Roadmap
 
+## 2026-08-17: Operator Intelligence Layer
+
+Status: implemented locally; automated validation and demo required before production claim
+
+- Human spoken-reference projection
+- Bounded relationship continuity with public-mode privacy filtering
+- Recurring-job priming manifests in project execution briefs
+- Semantic post-interruption alignment audit
+- Verified recovered-method memory
+- Locked-decision conflict enforcement
+- Runnable `npm run demo:marcus` evidence harness
+
 ## 2026-08-15: Local Live Presence Foundation
 
 Status: implemented locally and covered by focused tests. Production deployment and live PC setup still require Mark to complete the browser profile, platform logins, audio routing, and emergency-control checklist.

@@ -15,6 +15,7 @@ import { OperationService } from './operation_service.js';
 import { OperationStore } from './operation_store.js';
 import { OperationVerification } from './operation_verification.js';
 import { CodexResultReviewer } from './codex_result_reviewer.js';
+import { WinningMethodStore } from '../memory/winning_method_store.js';
 import { makeOperationId, nowIso, safeBusinessKey, safeObject, safeString, sanitizeStructured, summarizeOperationProgress } from './operation_types.js';
 
 function objectiveFromRequest(request) {
@@ -151,13 +152,14 @@ export function createOperationsEngine({
   const policy = new ApprovalPolicy();
   const approvalService = new ApprovalService({ store });
   const verification = new OperationVerification({ queueDesktopAction, store });
+  const winningMethodStore = new WinningMethodStore({ dataDir });
   const codex = new CodexProvider({ mode: directCodexAdapter ? 'direct' : 'external_handoff', directAdapter: directCodexAdapter });
   const desktop = new DesktopProvider({ queueAction: queueDesktopAction });
   const githubRead = new GitHubReadProvider({ readAdapter: githubReadAdapter });
   const githubWrite = new GitHubWriteProvider({ writeAdapter: githubWriteAdapter });
   const cloudflareWrite = new CloudflareWriteProvider({ writeAdapter: cloudflareWriteAdapter });
   const codexResultReviewer = typeof reviewCodexResult === 'function' ? new CodexResultReviewer({ complete: reviewCodexResult }) : null;
-  const service = new OperationService({ store, registry, resolver, policy, approvalService, verification });
+  const service = new OperationService({ store, registry, resolver, policy, approvalService, verification, winningMethodStore });
   const runner = new OperationRunner({
     store, registry, service, policy, approvalService, verification,
     providers: { codex, desktop, github_read: githubRead, github_write: githubWrite, cloudflare_write: cloudflareWrite },

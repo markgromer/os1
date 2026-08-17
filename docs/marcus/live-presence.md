@@ -16,6 +16,7 @@ Live presence is Marcus operating from Mark's PC as a visible assistant in norma
 - Voice acceptance: `/api/marcus/realtime/acceptance`
 - Marcus Live shell: `/live.html`
 - Desktop context relay: existing desktop agent relay and dashboard APIs
+- Local browser launcher: `scripts/launch-marcus-browser.ps1`
 
 ## Operating Model
 
@@ -42,6 +43,9 @@ Default initial mode: `public_push_to_talk`.
 Mark owns these first-time setup items:
 
 - Create a dedicated Chrome or Edge profile named `Marcus`.
+- Use `scripts/launch-marcus-browser.ps1` to open the isolated Marcus browser profile.
+- Sign into `markgromermarcus@gmail.com` in the Marcus Chrome window.
+- Verify Marcus can read, compose, and send a Gmail test message from that browser session.
 - Log into Zoom, Skool, YouTube, TikTok, and other platforms in that profile.
 - Handle MFA, captcha, recovery, and identity-sensitive prompts directly.
 - Set the visible display name to `Marcus - Mark's AI Assistant` where possible.
@@ -51,6 +55,22 @@ Mark owns these first-time setup items:
 - Rehearse emergency controls: mute Marcus, stop speaking, private-only mode, and leave meeting.
 
 The setup console at `/live-presence.html` is the checklist Mark should use while configuring the PC.
+
+## Marcus Browser Profile
+
+Run this from the repo root:
+
+```powershell
+.\scripts\launch-marcus-browser.ps1
+```
+
+The launcher opens Chrome with Marcus's isolated local browser profile. It uses this profile directory:
+
+```text
+%LOCALAPPDATA%\M.A.R.C.U.S\MarcusBrowserProfile
+```
+
+Use only that Chrome window for `markgromermarcus@gmail.com`, Gmail, Skool, Zoom, YouTube, and TikTok sessions. Do not paste passwords into chat or store them in the repo. Mark should do the first login, MFA, captcha, and account recovery steps directly in the browser.
 
 ## Audio Architecture
 

@@ -26,6 +26,8 @@ test('live presence setup patch saves checklist and enables public voice when re
     defaultMode: 'public_auto_reply',
     completed: {
       browser_profile: true,
+      google_account: true,
+      gmail_access: true,
       assistant_identity: true,
       platform_login: true,
       audio_router: true,

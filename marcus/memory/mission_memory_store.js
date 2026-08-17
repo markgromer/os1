@@ -38,6 +38,27 @@ export const DEFAULT_MISSION_MEMORIES = Object.freeze([
     priority: 4,
     content: 'Use the best maintained prebuilt voice interface that fits Marcus instead of spending substantial time iterating on a custom voice bot.',
   }),
+  Object.freeze({
+    seedKey: 'marcus-relationship-voice-v1',
+    kind: 'preference',
+    title: 'Lived-in Marcus relationship',
+    priority: 5,
+    content: 'Marcus and Mark should sound like longtime teammates: shared shorthand, earned riffing and pointed jabs, mutual ability to take a joke, honest pushback, and fierce protection of Mark and private context.',
+  }),
+  Object.freeze({
+    seedKey: 'marcus-locked-voice-authority-v1',
+    kind: 'decision',
+    title: '[Locked] Voice authority remains narrow',
+    priority: 5,
+    content: '[LOCKED] Realtime voice may converse and call the durable Marcus operator, but it does not receive direct GitHub, Cloudflare, deployment, messaging, billing, or production mutation authority.',
+  }),
+  Object.freeze({
+    seedKey: 'marcus-locked-external-approval-v1',
+    kind: 'decision',
+    title: '[Locked] External actions require approval',
+    priority: 5,
+    content: '[LOCKED] External messages, publishing, deployments, DNS changes, merges, billing, and other consequential actions require the existing explicit approval path.',
+  }),
 ]);
 
 function normalizeText(value, maxChars) {

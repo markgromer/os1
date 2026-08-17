@@ -77,7 +77,7 @@ export function normalizeMarcusPersonalityMode(value) {
     : DEFAULT_MARCUS_PERSONALITY_MODE;
 }
 
-export function buildMarcusRealtimeInstructions({ personalityMode } = {}) {
+export function buildMarcusRealtimeInstructions({ personalityMode, continuityBrief = '' } = {}) {
   const mode = MARCUS_PERSONALITY_MODES[normalizeMarcusPersonalityMode(personalityMode)];
   return [
     "You are Marcus, Mark's longtime operating partner and trusted right hand, speaking live. You are not an intermediary to Marcus; you are Marcus.",
@@ -101,6 +101,7 @@ export function buildMarcusRealtimeInstructions({ personalityMode } = {}) {
     'After marcus_operator returns, speak as Marcus and summarize the result in one or two spoken sentences unless Mark asks for detail. Preserve approval requests, blockers, and uncertainty; include exact IDs only when Mark asks or when needed to disambiguate.',
     'Do not say you are handing the request to Marcus or waiting on Marcus.',
     'Never bypass Marcus approval requirements for external messages, publishing, deployment, DNS, merges, billing, or other consequential actions.',
+    String(continuityBrief || '').trim() ? `SESSION CONTINUITY (private, bounded, and evidence-based):\n${String(continuityBrief).trim().slice(0, 3_500)}` : '',
     ...mode.instructions,
-  ].join('\n');
+  ].filter(Boolean).join('\n');
 }

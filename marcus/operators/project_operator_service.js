@@ -1,5 +1,7 @@
 import { redactSecrets, safeBusinessKey, safeObject, safeString } from '../operations/operation_types.js';
 import { explicitlyDefersProjectAudit, withoutExplicitlyNegatedClauses } from '../core/request_intent.js';
+import { formatJobPrimingManifest, selectJobPriming } from '../jobs/job_priming.js';
+import { assessLockedDecisionConflict } from '../memory/locked_decisions.js';
 
 const PROJECT_OPERATOR_ACTION_RE = /\b(audit|inspect|review|check|fix|build|implement|install(?:ed|ing)?|replace|migrate|upgrade|deploy|publish|modify|change|create|add|prepare|write|set\s*up|get [^.!?\n]{0,80} (?:working|going)|start [^.!?\n]{0,80} session|(?:send|submit|put|pass|feed|run) [^.!?\n]{0,160} (?:into|to|through|with) codex|prompt codex)\b/i;
 const MAX_AUDIT_REPOSITORIES = 6;
@@ -901,8 +903,9 @@ export class ProjectOperatorService {
     ]);
     const repoFiles = audit.files || [];
     const legacyRows = selectLegacyRows(legacyStore, project);
-    const text = formatContextBrief({ request: message, project, resolution, legacyRows, evidence, activity, desktopContext, repoFiles, audit, missionMemory });
-    return { text, legacyRows, evidence, activity, desktopContext, repoFiles, audit, missionMemory };
+    const priming = selectJobPriming(message);
+    const text = `${formatJobPrimingManifest(message)}\n\n${formatContextBrief({ request: message, project, resolution, legacyRows, evidence, activity, desktopContext, repoFiles, audit, missionMemory })}`;
+    return { text, legacyRows, evidence, activity, desktopContext, repoFiles, audit, missionMemory, priming };
   }
 
   async prepareCodexOperation(businessKey, { message, projectId = '', projectRegistryId = '', currentProjectId = '', resolutionRequest = '', source = 'project_operator', autoStart = true } = {}) {
@@ -932,6 +935,8 @@ export class ProjectOperatorService {
       };
     }
     const brief = await this.buildExecutionBrief(key, request, resolution);
+    const lockedConflict = assessLockedDecisionConflict(request, brief.missionMemory);
+    if (lockedConflict) return { ok: true, ...lockedConflict, resolution, project: summarizeProject(resolution.registryRecord) };
     const codexPrompt = composeCodexPrompt({ request, project: resolution.registryRecord, executionBrief: brief.text });
     const coverage = safeObject(brief.audit?.coverage);
     const auditSummary = [
@@ -966,6 +971,7 @@ export class ProjectOperatorService {
           promptVersion: 3,
           promptLength: codexPrompt.length,
           executionBriefLength: brief.text.length,
+          jobPriming: brief.priming,
           missionMemory: (brief.missionMemory || []).slice(0, 20).map((memory) => ({
             id: memory.id,
             kind: memory.kind,

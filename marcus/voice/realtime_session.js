@@ -13,7 +13,7 @@ function normalizeId(value, fallback) {
   return /^[A-Za-z0-9._-]{1,120}$/.test(normalized) ? normalized : fallback;
 }
 
-export function buildMarcusRealtimeClientSecretRequest({ model, voice, personalityMode } = {}) {
+export function buildMarcusRealtimeClientSecretRequest({ model, voice, personalityMode, continuityBrief } = {}) {
   const realtimeModel = normalizeId(model, DEFAULT_MARCUS_REALTIME_MODEL);
   const realtimeVoice = normalizeId(voice, DEFAULT_MARCUS_REALTIME_VOICE);
   const mode = normalizeMarcusPersonalityMode(personalityMode);
@@ -22,7 +22,7 @@ export function buildMarcusRealtimeClientSecretRequest({ model, voice, personali
     session: {
       type: 'realtime',
       model: realtimeModel,
-      instructions: buildMarcusRealtimeInstructions({ personalityMode: mode }),
+      instructions: buildMarcusRealtimeInstructions({ personalityMode: mode, continuityBrief }),
       audio: {
         input: {
           noise_reduction: { type: 'near_field' },

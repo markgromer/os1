@@ -2,6 +2,8 @@
 
 Status: active
 
+The [[operator-intelligence-layer]] adds bounded voice continuity, speech-safe human references, request-specific job priming, semantic interruption alignment checks, recovered-method memory, and locked-decision enforcement. Raw identifiers remain in durable records while voice receives a reduced human-readable projection.
+
 ## Server
 
 `server.js` is the main Express app.

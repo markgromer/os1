@@ -12,7 +12,21 @@ export const LIVE_PRESENCE_SETUP_ITEMS = Object.freeze([
     label: 'Dedicated Marcus browser profile',
     owner: 'mark',
     required: true,
-    description: 'Create a Chrome or Edge profile named Marcus and keep Zoom, Skool, YouTube, and TikTok sessions separate from Mark personal browsing.',
+    description: 'Use scripts/launch-marcus-browser.ps1 to open the isolated Marcus browser profile and keep all Marcus sessions separate from Mark personal browsing.',
+  },
+  {
+    id: 'google_account',
+    label: 'Marcus Google account',
+    owner: 'mark',
+    required: true,
+    description: 'Sign into markgromermarcus@gmail.com in the isolated Marcus Chrome window and complete recovery, MFA, and trusted-device prompts manually.',
+  },
+  {
+    id: 'gmail_access',
+    label: 'Gmail access verified',
+    owner: 'mark',
+    required: true,
+    description: 'Open Gmail in the Marcus browser profile and confirm Marcus can read, compose, and send test email from the signed-in account.',
   },
   {
     id: 'assistant_identity',
@@ -23,10 +37,10 @@ export const LIVE_PRESENCE_SETUP_ITEMS = Object.freeze([
   },
   {
     id: 'platform_login',
-    label: 'First login and MFA complete',
+    label: 'Platform logins complete',
     owner: 'mark',
     required: true,
-    description: 'Mark handles first login, MFA, captcha, recovery, and any identity-sensitive account step directly.',
+    description: 'Log into Skool, Zoom, YouTube, TikTok, and other target platforms in the Marcus browser profile. Mark handles MFA, captcha, recovery, and identity-sensitive prompts directly.',
   },
   {
     id: 'audio_router',

@@ -74,13 +74,14 @@ function mergeVerificationResults(existing, incoming, operationId, stepId) {
 }
 
 export class OperationService {
-  constructor({ store, registry, resolver, policy, approvalService, verification }) {
+  constructor({ store, registry, resolver, policy, approvalService, verification, winningMethodStore = null }) {
     this.store = store;
     this.registry = registry;
     this.resolver = resolver;
     this.policy = policy;
     this.approvalService = approvalService;
     this.verification = verification;
+    this.winningMethodStore = winningMethodStore;
     this.runner = null;
   }
 
@@ -553,7 +554,7 @@ export class OperationService {
   }
 
   async completeOperation(businessKey, operationId, { actor = 'system' } = {}) {
-    return this.store.update(businessKey, operationId, (operation) => {
+    const completed = await this.store.update(businessKey, operationId, (operation) => {
       if (operation.status !== 'verifying') throw Object.assign(new Error(`Operation cannot complete from ${operation.status}.`), { code: 'INVALID_TRANSITION' });
       const incompleteStep = operation.steps.find((step) => !['completed', 'skipped'].includes(step.status));
       if (incompleteStep) {
@@ -573,6 +574,8 @@ export class OperationService {
       appendEvent(operation, { type: 'operation_completed', actor, message: 'Operation completed with required verification evidence.', data: {}, timestamp: nowIso() });
       return operation;
     });
+    await this.winningMethodStore?.recordRecoveredOperation(businessKey, completed).catch(() => {});
+    return completed;
   }
 
   async failOperation(businessKey, operationId, { actor = 'system', reason = 'Operation failed.' } = {}) {
