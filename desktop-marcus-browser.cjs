@@ -1,4 +1,5 @@
 const { spawn } = require('child_process');
+const crypto = require('crypto');
 const fs = require('fs');
 const http = require('http');
 const os = require('os');
@@ -8,6 +9,22 @@ const WebSocket = require('ws');
 const DEFAULT_DEBUG_PORT = 9333;
 const DEFAULT_URL = 'https://mail.google.com/';
 const MAX_FRAME_BASE64_LENGTH = 390_000;
+const MAX_VISIBLE_TEXT_LENGTH = 6_000;
+
+function liveContextKind(value) {
+  const url = safeHttpUrl(value);
+  if (!url) return '';
+  const parsed = new URL(url);
+  const host = parsed.hostname.toLowerCase();
+  if (host === 'mail.google.com') return 'gmail';
+  if (host === 'meet.google.com') return 'google-meet';
+  if (host === 'teams.microsoft.com' || host === 'teams.live.com') return 'teams';
+  if (host === 'www.skool.com' || host === 'skool.com') return 'skool';
+  if (host === 'app.zoom.us' || host.endsWith('.zoom.us')) return 'zoom';
+  if (host === 'www.youtube.com' || host === 'youtube.com') return 'youtube';
+  if (host === 'www.tiktok.com' || host === 'tiktok.com') return 'tiktok';
+  return '';
+}
 
 function safeHttpUrl(value, fallback = '') {
   const raw = String(value || '').trim();
@@ -219,7 +236,16 @@ class MarcusBrowserBridge {
     await this.ensureBrowser(requestedUrl || undefined);
     const { target, session } = await this.page();
     let result = {};
-    if (command === 'open' || command === 'navigate') {
+    if (command === 'open') {
+      if (!requestedUrl) throw new Error('A valid http or https URL is required.');
+      result = await session.send('Target.createTarget', { url: requestedUrl });
+      if (result?.targetId) {
+        this.activeTargetId = result.targetId;
+        this.session?.close();
+        this.session = null;
+        this.sessionTargetId = '';
+      }
+    } else if (command === 'navigate') {
       if (!requestedUrl) throw new Error('A valid http or https URL is required.');
       result = await session.send('Page.navigate', { url: requestedUrl });
     } else if (command === 'back' || command === 'forward') {
@@ -234,6 +260,39 @@ class MarcusBrowserBridge {
       const y = Math.max(0, Math.min(10_000, Number(payload.y) || 0));
       await session.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 });
       result = await session.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 });
+    } else if (command === 'activate') {
+      const label = String(payload.label || '').replace(/\s+/g, ' ').trim().slice(0, 240);
+      if (!label) throw new Error('Visible link or button text is required.');
+      if (await this.sensitiveFieldFocused(session)) throw new Error('Visible actions are blocked while a password field is focused.');
+      result = await session.send('Runtime.evaluate', {
+        expression: `(() => {
+          const wanted = ${JSON.stringify(label.toLowerCase())};
+          const candidates = [...document.querySelectorAll('a,button,[role="button"],[role="link"],tr')]
+            .filter((element) => {
+              const text = String(element.innerText || element.textContent || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+              const rect = element.getBoundingClientRect();
+              const style = getComputedStyle(element);
+              return text.includes(wanted) && rect.width > 0 && rect.height > 0 && rect.bottom >= 0 && rect.top <= innerHeight
+                && style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) !== 0;
+            })
+            .sort((left, right) => {
+              const leftControl = left.matches('a,button,[role="button"],[role="link"]') ? 0 : 1;
+              const rightControl = right.matches('a,button,[role="button"],[role="link"]') ? 0 : 1;
+              return leftControl - rightControl || String(left.innerText || '').length - String(right.innerText || '').length;
+            });
+          const target = candidates[0];
+          if (!target) return { activated: false };
+          target.click();
+          return {
+            activated: true,
+            tag: target.tagName,
+            text: String(target.innerText || target.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 240),
+            href: target.tagName === 'A' && /^https?:/i.test(String(target.href || '')) ? String(target.href).slice(0, 4_000) : ''
+          };
+        })()`,
+        returnByValue: true,
+      });
+      if (!result?.result?.value?.activated) throw new Error(`No visible link or button matched: ${label}`);
     } else if (command === 'scroll') {
       result = await session.send('Input.dispatchMouseEvent', {
         type: 'mouseWheel',
@@ -282,12 +341,47 @@ class MarcusBrowserBridge {
     }
   }
 
+  async visiblePageText(session) {
+    try {
+      const result = await session.send('Runtime.evaluate', {
+        expression: `(() => {
+          const blocked = 'SCRIPT,STYLE,NOSCRIPT,INPUT,TEXTAREA,SELECT,OPTION,[contenteditable="true"],[contenteditable="plaintext-only"]';
+          const walker = document.createTreeWalker(document.body || document.documentElement, NodeFilter.SHOW_TEXT);
+          const lines = [];
+          let total = 0;
+          for (let node = walker.nextNode(); node && total < ${MAX_VISIBLE_TEXT_LENGTH}; node = walker.nextNode()) {
+            const parent = node.parentElement;
+            if (!parent || parent.closest(blocked) || parent.getAttribute('aria-hidden') === 'true') continue;
+            const style = getComputedStyle(parent);
+            if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) continue;
+            const rect = parent.getBoundingClientRect();
+            if (rect.width <= 0 || rect.height <= 0 || rect.bottom < 0 || rect.top > innerHeight || rect.right < 0 || rect.left > innerWidth) continue;
+            const text = String(node.nodeValue || '').replace(/\\s+/g, ' ').trim();
+            if (!text) continue;
+            lines.push(text);
+            total += text.length + 1;
+          }
+          return lines.join('\\n').slice(0, ${MAX_VISIBLE_TEXT_LENGTH});
+        })()`,
+        returnByValue: true,
+      });
+      return String(result?.result?.value || '').trim().slice(0, MAX_VISIBLE_TEXT_LENGTH);
+    } catch {
+      return '';
+    }
+  }
+
   async capture() {
     try {
       const { target, session } = await this.page();
       const metrics = await session.send('Page.getLayoutMetrics');
       const viewport = metrics?.cssVisualViewport || metrics?.cssLayoutViewport || {};
       const sensitive = await this.sensitiveFieldFocused(session);
+      const contextKind = sensitive ? '' : liveContextKind(target.url);
+      const visibleText = contextKind ? await this.visiblePageText(session) : '';
+      const contextVersion = visibleText
+        ? crypto.createHash('sha256').update(`${contextKind}\n${visibleText}`).digest('hex').slice(0, 20)
+        : '';
       if (sensitive) {
         return {
           ok: true,
@@ -298,6 +392,9 @@ class MarcusBrowserBridge {
           viewportWidth: Math.max(1, Math.round(Number(viewport.clientWidth) || 1280)),
           viewportHeight: Math.max(1, Math.round(Number(viewport.clientHeight) || 720)),
           frameBase64: '',
+          contextKind: '',
+          visibleText: '',
+          contextVersion: '',
           error: '',
         };
       }
@@ -321,6 +418,9 @@ class MarcusBrowserBridge {
         viewportWidth: Math.max(1, Math.round(Number(viewport.clientWidth) || 1280)),
         viewportHeight: Math.max(1, Math.round(Number(viewport.clientHeight) || 720)),
         frameBase64,
+        contextKind,
+        visibleText,
+        contextVersion,
         error: '',
       };
     } catch (error) {
@@ -332,5 +432,6 @@ class MarcusBrowserBridge {
 
 module.exports = {
   MarcusBrowserBridge,
+  liveContextKind,
   safeHttpUrl,
 };

@@ -2,6 +2,14 @@
 
 Status: active
 
+## 2026-08-17: Relay Bounded Visible Context, Not Browser Secrets
+
+Context: Browser viewport control let Mark watch MARCUS navigate, but MARCUS Realtime could not automatically read live Zoom/Skool page text. The original `Open` command also navigated the active tab and displaced Gmail.
+
+Decision: Make `Open` create a new Chrome tab. On an explicit Gmail/live-platform allowlist, extract only rendered text nodes currently inside the viewport, capped at 6,000 characters. Exclude form controls, editable regions, hidden elements, and off-screen text. Clear context during password focus and retain it only in the short-lived authenticated relay cache. Automatically send changed context to active Realtime sessions only for live platforms, never Gmail.
+
+Consequence: MARCUS can retain concurrent Gmail, Zoom, and Skool tabs; inspect visible Gmail when explicitly requested; and read changing visible live-page context while listening through the existing OBS/Realtime audio path. Cookies, passwords, browser storage, form values, raw HTML, and unrestricted DOM remain outside the relay. Embedded/virtualized platform chat may still need dedicated adapters, and live-call consent plus physical audio acceptance remain required. Related: [[live-presence]], [[current-system-map]], [[access-model]].
+
 ## 2026-08-17: Use the Existing PC Bridge for Visible MARCUS Chrome
 
 Context: Marcus needs to operate a normal, visible Chrome profile on Mark's PC while Mark watches and can take control from the hosted visualizer.

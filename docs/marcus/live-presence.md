@@ -1,6 +1,6 @@
 # Live Presence
 
-Status: local browser viewport bridge implemented and verified on 2026-08-17. Marcus has a dedicated logged-in Chrome profile, a live browser view in `/visualizer.html`, Mark/MARCUS control ownership, bounded navigation/input commands, the live-presence readiness model, setup API, setup console, OpenAI Realtime voice path, and desktop-context awareness. Platform MFA, virtual audio routing, visible Zoom identity, and first live-call acceptance still require Mark's hands-on setup on the PC.
+Status: local browser viewport and visible-context bridge implemented and verified on 2026-08-17. Marcus has a dedicated Chrome profile, a live browser view in `/visualizer.html`, Mark/MARCUS control ownership, bounded navigation/input commands, approved-site visible-text observation, automatic silent live-context forwarding to Realtime, the live-presence readiness model, setup API, setup console, OpenAI Realtime voice path, and desktop-context awareness. Platform login/MFA, virtual audio routing, visible Zoom identity, durable meeting-note writing, and first live-call acceptance still require completion.
 
 ## Purpose
 
@@ -20,7 +20,8 @@ Live presence is Marcus operating from Mark's PC as a visible assistant in norma
 - Local browser controller: `desktop-marcus-browser.cjs`
 - Browser status/frame/control/actions: `/api/marcus/browser/status`, `/api/marcus/browser/frame`, `/api/marcus/browser/control`, and `/api/marcus/browser/actions`
 - Browser relay intake: `/api/marcus/browser/relay`
-- Marcus chat tools: `marcus_browser_status` and `marcus_browser_open`
+- Marcus chat tools: `marcus_browser_status`, `marcus_browser_open`, and non-consequential exact-visible-control `marcus_browser_activate`
+- Visible-context allowlist: Gmail for explicit browser inspection; Zoom, Skool, Google Meet, Teams, YouTube, and TikTok for live Realtime context
 
 ## Operating Model
 
@@ -76,7 +77,9 @@ The launcher opens Chrome with Marcus's isolated local browser profile. It uses 
 
 The launcher binds Chrome DevTools Protocol to `127.0.0.1:9333`. The port is localhost-only and the bridge refuses a reachable endpoint unless it identifies itself as Chrome or Chromium. Port `9229` is intentionally not used because the current PC uses it for a Cloudflare Worker debugger.
 
-The desktop agent captures a compressed page viewport, not Chrome profile storage, and relays it to the authenticated server. Password fields suspend the frame and reject remote typing; Mark completes password, MFA, captcha, recovery, camera, and microphone permission steps in the visible MARCUS Chrome window. The server never receives cookies, saved passwords, browser storage, or raw DOM content.
+The desktop agent captures a compressed page viewport, not Chrome profile storage, and relays it to the authenticated server. On an explicit site allowlist it also extracts at most 6,000 characters of rendered text currently inside the viewport. The extractor skips inputs, textareas, selects, editable regions, hidden elements, and off-screen text. Password fields suspend the frame, clear visible context, and reject remote typing; Mark completes password, MFA, captcha, recovery, camera, and microphone permission steps in the visible MARCUS Chrome window. The server never receives cookies, saved passwords, browser storage, raw HTML, unrestricted DOM content, or form values. Context exists only in the short-lived browser relay cache.
+
+`Open` creates a new Chrome tab and preserves the current page. `Navigate` replaces only the active MARCUS tab. Gmail context is available to explicit authenticated browser inspection but is never automatically injected into a live voice session. Visible Zoom, Skool, Google Meet, Teams, YouTube, and TikTok text is forwarded silently to an active Realtime session only when it changes.
 
 `/visualizer.html` starts in Browser mode. `Take control` gives Mark the remote click, scroll, typing, address, back, forward, and refresh channel. `Return control` gives the channel back to Marcus. Marcus can inspect browser status and open an exact HTTP(S) URL only from Mark's direct current request. Consequential page actions and external communication retain their existing approval rules.
 
@@ -137,9 +140,9 @@ Public voice is acceptable when:
 
 ## Open Work
 
-- Add visible-page and Zoom/Skool chat observers that produce bounded evidence without relaying credentials or unrestricted DOM content.
+- Add platform-specific page adapters if generic rendered-text observation misses virtualized or iframe-hosted chat.
 - Add real device enumeration from the desktop agent so setup can verify audio routes instead of relying only on manual checklist items.
-- Add meeting memory routes for active live sessions if not present in the current deployment branch.
+- Add durable meeting-summary and action-item writes to the Obsidian context graph without storing transcript dumps.
 - Add OBS scene state and emergency mute indicators.
 
 Related: [[external-presence]], [[voice-interface]], [[access-model]], [[execution-loop]], [[context-memory]].

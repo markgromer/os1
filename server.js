@@ -2625,14 +2625,14 @@ const PC_OPERATOR_TOOL_NAMES = new Set([
   'pc_list_applications', 'pc_open_item', 'pc_launch_application', 'pc_write_text_file',
   'pc_create_directory', 'pc_move_item', 'pc_delete_item', 'pc_run_powershell',
 ]);
-const MARCUS_BROWSER_TOOL_NAMES = new Set(['marcus_browser_status', 'marcus_browser_open']);
+const MARCUS_BROWSER_TOOL_NAMES = new Set(['marcus_browser_status', 'marcus_browser_open', 'marcus_browser_activate']);
 
 function getMarcusBrowserToolDefinitions() {
   return [
     {
       type: 'function', function: {
         name: 'marcus_browser_status',
-        description: 'Read the live MARCUS Chrome connection, visible page title and URL, and current control owner. Never returns cookies, passwords, browser storage, or DOM contents.',
+        description: 'Read the live MARCUS Chrome connection, visible page title and URL, bounded rendered text on approved sites, and current control owner. Never returns cookies, passwords, browser storage, hidden DOM, or form values.',
         parameters: { type: 'object', properties: {} },
       },
     },
@@ -2643,6 +2643,15 @@ function getMarcusBrowserToolDefinitions() {
         parameters: { type: 'object', properties: {
           url: { type: 'string', description: 'Exact HTTP(S) URL to open in MARCUS Chrome.' },
         }, required: ['url'] },
+      },
+    },
+    {
+      type: 'function', function: {
+        name: 'marcus_browser_activate',
+        description: 'Activate an exact visible link or button in MARCUS Chrome after Mark directly asks. Refuses send, post, purchase, delete, signup, join, and other consequential labels; those retain their normal approval paths.',
+        parameters: { type: 'object', properties: {
+          label: { type: 'string', description: 'Exact visible link or button text to activate.' },
+        }, required: ['label'] },
       },
     },
   ];
@@ -14575,20 +14584,34 @@ async function executeMarcusBrowserTool(toolName, args = {}, { requestMessage = 
   const status = marcusBrowserStatus();
   if (toolName === 'marcus_browser_status') return status;
   const directRequest = String(requestMessage || '').toLowerCase();
-  if (!/\b(open|show|navigate|go to|pull up|visit|browse)\b/.test(directRequest)) {
-    return { ok: false, approvalRequired: true, error: 'The current user message does not directly ask MARCUS to navigate the browser.' };
-  }
   if (marcusBrowserControl.owner !== 'marcus') {
     return { ok: false, controlRequired: true, error: 'Mark currently has browser control. Return control to MARCUS first.' };
   }
-  const url = safeMarcusBrowserUrl(args?.url);
-  if (!url) return { ok: false, error: 'A valid http or https URL is required.' };
+  let payload;
+  if (toolName === 'marcus_browser_open') {
+    if (!/\b(open|show|navigate|go to|pull up|visit|browse)\b/.test(directRequest)) {
+      return { ok: false, approvalRequired: true, error: 'The current user message does not directly ask MARCUS to navigate the browser.' };
+    }
+    const url = safeMarcusBrowserUrl(args?.url);
+    if (!url) return { ok: false, error: 'A valid http or https URL is required.' };
+    payload = { command: 'open', url, desktopAgentId: status.agentId || desktopRelayCache?.data?.desktopAuthorization?.agentId || '' };
+  } else {
+    if (!/\b(click|press|activate|choose|select)\b/.test(directRequest)) {
+      return { ok: false, approvalRequired: true, error: 'The current user message does not directly ask MARCUS to activate a visible browser control.' };
+    }
+    const label = typeof args?.label === 'string' ? args.label.replace(/\s+/g, ' ').trim().slice(0, 240) : '';
+    if (!label) return { ok: false, error: 'Visible link or button text is required.' };
+    if (/\b(send|post|publish|delete|remove|purchase|buy|pay|sign\s*up|join|subscribe|confirm|approve|authorize)\b/i.test(label)) {
+      return { ok: false, approvalRequired: true, error: 'That browser control can create an external or consequential action. Use the existing explicit approval path.' };
+    }
+    payload = { command: 'activate', label, desktopAgentId: status.agentId || desktopRelayCache?.data?.desktopAuthorization?.agentId || '' };
+  }
   const result = await queueDesktopActionAndWait({
-    type: 'marcus-browser-open',
-    payload: { command: 'open', url, desktopAgentId: status.agentId || desktopRelayCache?.data?.desktopAuthorization?.agentId || '' },
+    type: toolName === 'marcus_browser_open' ? 'marcus-browser-open' : 'marcus-browser-command',
+    payload,
     requestedBy,
   }, { timeoutMs: 10_000 });
-  return { ...result, url, control: { ...marcusBrowserControl } };
+  return { ...result, url: payload.url || '', label: payload.label || '', control: { ...marcusBrowserControl } };
 }
 
 async function executePcOperatorTool(toolName, args = {}, { requestMessage = '', requestedBy = 'marcus-chat' } = {}) {
@@ -15172,6 +15195,13 @@ function safeMarcusBrowserUrl(value) {
   }
 }
 
+const MARCUS_BROWSER_CONTEXT_KINDS = new Set(['gmail', 'zoom', 'skool', 'google-meet', 'teams', 'youtube', 'tiktok']);
+
+function safeMarcusBrowserContextKind(value) {
+  const kind = typeof value === 'string' ? value.trim().toLowerCase().slice(0, 40) : '';
+  return MARCUS_BROWSER_CONTEXT_KINDS.has(kind) ? kind : '';
+}
+
 function marcusBrowserStatus() {
   const recent = marcusBrowserRelayCache.data
     && (Date.now() - marcusBrowserRelayCache.at) < MARCUS_BROWSER_RELAY_TTL_MS;
@@ -15187,6 +15217,9 @@ function marcusBrowserStatus() {
     url: recent ? data.url : '',
     viewportWidth: recent ? data.viewportWidth : 0,
     viewportHeight: recent ? data.viewportHeight : 0,
+    contextKind: recent ? data.contextKind : '',
+    visibleText: recent && !data.sensitive ? data.visibleText : '',
+    contextVersion: recent && !data.sensitive ? data.contextVersion : '',
     error: recent ? data.error : 'The MARCUS browser relay is offline.',
     observedAt: recent ? data.observedAt : '',
     agentId: recent ? data.agentId : '',
@@ -15197,6 +15230,7 @@ function marcusBrowserStatus() {
 app.post('/api/marcus/browser/relay', (req, res) => {
   const connected = req.body?.connected === true;
   const sensitive = req.body?.sensitive === true;
+  const contextKind = safeMarcusBrowserContextKind(req.body?.contextKind);
   const frameBase64 = typeof req.body?.frameBase64 === 'string' ? req.body.frameBase64.trim() : '';
   let frame = null;
   if (connected && !sensitive && frameBase64 && frameBase64.length <= 400_000 && /^[A-Za-z0-9+/]+={0,2}$/.test(frameBase64)) {
@@ -15213,6 +15247,9 @@ app.post('/api/marcus/browser/relay', (req, res) => {
     url: safeMarcusBrowserUrl(req.body?.url),
     viewportWidth: Math.max(0, Math.min(10_000, Math.round(Number(req.body?.viewportWidth) || 0))),
     viewportHeight: Math.max(0, Math.min(10_000, Math.round(Number(req.body?.viewportHeight) || 0))),
+    contextKind,
+    visibleText: connected && !sensitive && contextKind && typeof req.body?.visibleText === 'string' ? req.body.visibleText.trim().slice(0, 6_000) : '',
+    contextVersion: connected && !sensitive && contextKind && typeof req.body?.contextVersion === 'string' && /^[a-f0-9]{20}$/.test(req.body.contextVersion) ? req.body.contextVersion : '',
     error: typeof req.body?.error === 'string' ? req.body.error.trim().slice(0, 500) : '',
     observedAt: typeof req.body?.observedAt === 'string' ? req.body.observedAt.trim().slice(0, 40) : new Date().toISOString(),
   };
@@ -15248,7 +15285,7 @@ app.post('/api/marcus/browser/actions', async (req, res) => {
     return res.status(409).json({ ok: false, error: `${marcusBrowserControl.owner === 'mark' ? 'Mark' : 'MARCUS'} currently has browser control.` });
   }
   const command = typeof req.body?.command === 'string' ? req.body.command.trim().toLowerCase().slice(0, 40) : '';
-  const allowed = new Set(['open', 'navigate', 'back', 'forward', 'refresh', 'click', 'scroll', 'type', 'key']);
+  const allowed = new Set(['open', 'navigate', 'back', 'forward', 'refresh', 'click', 'activate', 'scroll', 'type', 'key']);
   if (!allowed.has(command)) return res.status(400).json({ ok: false, error: 'Unsupported MARCUS browser command.' });
   const payload = { command, desktopAgentId: status.agentId || desktopRelayCache?.data?.desktopAuthorization?.agentId || '' };
   if (command === 'open' || command === 'navigate') {
@@ -15257,6 +15294,9 @@ app.post('/api/marcus/browser/actions', async (req, res) => {
   } else if (command === 'click') {
     payload.x = Math.max(0, Math.min(10_000, Number(req.body?.x) || 0));
     payload.y = Math.max(0, Math.min(10_000, Number(req.body?.y) || 0));
+  } else if (command === 'activate') {
+    payload.label = typeof req.body?.label === 'string' ? req.body.label.replace(/\s+/g, ' ').trim().slice(0, 240) : '';
+    if (!payload.label) return res.status(400).json({ ok: false, error: 'Visible link or button text is required.' });
   } else if (command === 'scroll') {
     payload.x = Math.max(0, Math.min(10_000, Number(req.body?.x) || 0));
     payload.y = Math.max(0, Math.min(10_000, Number(req.body?.y) || 0));

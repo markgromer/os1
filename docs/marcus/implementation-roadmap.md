@@ -10,8 +10,11 @@ Status: implemented and locally verified
 - Password-field frame and typing suppression.
 - Direct-request Marcus tools for browser status and exact URL opening.
 - Authenticated server routes and durable desktop action delivery tests.
+- New-tab `Open` behavior so Gmail, Zoom, and Skool sessions remain available concurrently.
+- Bounded rendered-text observation for approved sites with form, hidden-content, and off-screen redaction.
+- Automatic silent visible-context forwarding from live sites into active Visualizer or OBS Realtime sessions.
 
-Next: visible chat observation, Zoom/Skool page adapters, audio-device verification, meeting memory capture, and first consented live-call acceptance.
+Next: audio-device verification, durable meeting memory capture, platform-specific adapters where generic observation misses embedded chat, and first consented live-call acceptance.
 
 ## 2026-08-17: Operator Intelligence Layer
 

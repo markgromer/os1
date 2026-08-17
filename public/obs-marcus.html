@@ -279,6 +279,8 @@
   let analyser = null;
   let meterFrame = 0;
   let voice = null;
+  let lastBrowserContextVersion = '';
+  const LIVE_BROWSER_CONTEXT_KINDS = new Set(['zoom', 'skool', 'google-meet', 'teams', 'youtube', 'tiktok']);
 
   els.mode.value = normalizeMode(localStorage.getItem(MODE_KEY));
   els.modeLabel.textContent = labels[els.mode.value];
@@ -393,6 +395,24 @@
     return voice;
   }
 
+  async function forwardVisibleBrowserContext() {
+    if (!voice?.isActive?.() || document.hidden) return;
+    try {
+      const headers = {};
+      const token = String(els.token.value || '').trim();
+      if (token) headers.Authorization = `Bearer ${token}`;
+      const response = await fetch('/api/marcus/browser/status', { credentials: 'include', headers });
+      if (!response.ok) return;
+      const browser = await response.json();
+      const version = String(browser.contextVersion || '');
+      const visibleText = String(browser.visibleText || '').trim();
+      if (!browser.online || browser.sensitive || !LIVE_BROWSER_CONTEXT_KINDS.has(browser.contextKind) || !version || !visibleText || version === lastBrowserContextVersion) return;
+      if (voice.sendContext(`Visible ${browser.contextKind} page (${browser.title || browser.url}):\n${visibleText}`, { speak: false })) {
+        lastBrowserContextVersion = version;
+      }
+    } catch {}
+  }
+
   els.capture.addEventListener('click', () => captureSource().catch((error) => log('system', error.message || String(error))));
   els.voice.addEventListener('click', async () => {
     try {
@@ -432,6 +452,7 @@
     els.context.value = '';
   });
   els.clear.addEventListener('click', () => { els.log.textContent = ''; });
+  setInterval(forwardVisibleBrowserContext, 1500);
   window.addEventListener('beforeunload', () => {
     try { voice?.stop(); } catch {}
     stopStream();

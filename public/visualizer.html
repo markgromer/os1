@@ -849,6 +849,8 @@
     let browserTypingBuffer = "";
     let browserTypingTimer = null;
     let lastBrowserFrameVersion = 0;
+    let lastBrowserContextVersion = "";
+    const LIVE_BROWSER_CONTEXT_KINDS = new Set(["zoom", "skool", "google-meet", "teams", "youtube", "tiktok"]);
     let browserStatusLoading = false;
     const autoRefreshMs = 3000;
 
@@ -1330,6 +1332,13 @@
         els.controlState.textContent = markHasControl ? "Mark has control" : "MARCUS has control";
         els.controlState.style.color = markHasControl ? "var(--amber)" : "var(--green)";
         if (activeTab === "browser") renderBrowserSurface();
+        const contextVersion = text(browser?.contextVersion);
+        const visibleText = text(browser?.visibleText);
+        if (realtimeVoice?.isActive?.() && LIVE_BROWSER_CONTEXT_KINDS.has(browser?.contextKind) && contextVersion && contextVersion !== lastBrowserContextVersion && visibleText && !browser?.sensitive) {
+          if (realtimeVoice.sendContext(`Visible ${text(browser?.contextKind, "live")} page (${text(browser?.title || browser?.url)}):\n${visibleText}`, { speak: false })) {
+            lastBrowserContextVersion = contextVersion;
+          }
+        }
       } catch {}
       finally { browserStatusLoading = false; }
     }

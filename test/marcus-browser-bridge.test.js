@@ -3,7 +3,7 @@ import { createRequire } from 'node:module';
 import test from 'node:test';
 
 const require = createRequire(import.meta.url);
-const { MarcusBrowserBridge, safeHttpUrl } = require('../desktop-marcus-browser.cjs');
+const { MarcusBrowserBridge, liveContextKind, safeHttpUrl } = require('../desktop-marcus-browser.cjs');
 
 test('MARCUS browser bridge accepts only HTTP(S) navigation', () => {
   assert.equal(safeHttpUrl('https://www.skool.com'), 'https://www.skool.com/');
@@ -16,4 +16,67 @@ test('MARCUS browser bridge uses the dedicated non-conflicting localhost port', 
   const bridge = new MarcusBrowserBridge();
   assert.equal(bridge.debugPort, 9333);
   assert.match(bridge.profileRoot, /M\.A\.R\.C\.U\.S[\\/]MarcusBrowserProfile$/i);
+});
+
+test('MARCUS browser bridge observes only approved live-site pages', () => {
+  assert.equal(liveContextKind('https://app.zoom.us/wc/123'), 'zoom');
+  assert.equal(liveContextKind('https://www.skool.com/community'), 'skool');
+  assert.equal(liveContextKind('https://meet.google.com/abc-defg-hij'), 'google-meet');
+  assert.equal(liveContextKind('https://mail.google.com/mail/u/0/#inbox'), 'gmail');
+  assert.equal(liveContextKind('https://example.com/private'), '');
+});
+
+test('MARCUS visible-page observation is bounded and uses a redacting DOM expression', async () => {
+  const bridge = new MarcusBrowserBridge();
+  let expression = '';
+  const text = await bridge.visiblePageText({
+    send: async (method, params) => {
+      assert.equal(method, 'Runtime.evaluate');
+      expression = params.expression;
+      return { result: { value: 'x'.repeat(7_000) } };
+    },
+  });
+  assert.equal(text.length, 6_000);
+  assert.match(expression, /INPUT,TEXTAREA,SELECT/);
+  assert.match(expression, /contenteditable/);
+  assert.match(expression, /aria-hidden/);
+});
+
+test('MARCUS open command creates a new Chrome tab instead of replacing the active page', async () => {
+  const bridge = new MarcusBrowserBridge();
+  const calls = [];
+  bridge.ensureBrowser = async () => true;
+  bridge.page = async () => ({
+    target: { id: 'old-tab' },
+    session: {
+      send: async (method, params) => {
+        calls.push({ method, params });
+        return { targetId: 'new-tab' };
+      },
+    },
+  });
+  const result = await bridge.command({ command: 'open', url: 'https://mail.google.com/' });
+  assert.deepEqual(calls, [{ method: 'Target.createTarget', params: { url: 'https://mail.google.com/' } }]);
+  assert.equal(bridge.activeTargetId, 'new-tab');
+  assert.equal(result.ok, true);
+});
+
+test('MARCUS activate command matches bounded visible controls without script interpolation', async () => {
+  const bridge = new MarcusBrowserBridge();
+  let expression = '';
+  bridge.ensureBrowser = async () => true;
+  bridge.sensitiveFieldFocused = async () => false;
+  bridge.page = async () => ({
+    target: { id: 'gmail-tab' },
+    session: {
+      send: async (method, params) => {
+        assert.equal(method, 'Runtime.evaluate');
+        expression = params.expression;
+        return { result: { value: { activated: true, tag: 'TR', text: 'Invitation' } } };
+      },
+    },
+  });
+  await bridge.command({ command: 'activate', label: 'Invite "quoted" text' });
+  assert.match(expression, /Invite \\"quoted\\" text/i);
+  assert.match(expression, /a,button/);
 });
