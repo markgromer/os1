@@ -26,6 +26,14 @@ function Find-Browser {
 $browser = Find-Browser
 $profileRoot = Join-Path $env:LocalAppData "M.A.R.C.U.S\MarcusBrowserProfile"
 New-Item -ItemType Directory -Path $profileRoot -Force | Out-Null
+$normalizedUrls = @(
+  foreach ($url in $Urls) {
+    foreach ($part in ([string]$url -split ',')) {
+      $trimmed = $part.Trim()
+      if ($trimmed) { $trimmed }
+    }
+  }
+)
 
 $args = @(
   "--user-data-dir=$profileRoot",
@@ -33,7 +41,7 @@ $args = @(
   "--no-first-run",
   "--disable-features=Translate",
   "--new-window"
-) + $Urls
+) + $normalizedUrls
 
 Start-Process -FilePath $browser -ArgumentList $args
 
