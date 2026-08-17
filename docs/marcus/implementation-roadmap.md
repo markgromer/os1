@@ -14,8 +14,10 @@ Status: implemented and locally verified
 - Bounded rendered-text observation for approved sites with form, hidden-content, and off-screen redaction.
 - Automatic silent visible-context forwarding from live sites into active Visualizer or OBS Realtime sessions.
 - Five-minute and final OBS transcript checkpoints summarized into bounded Obsidian conversation notes without raw transcript persistence.
+- Dedicated Call Console output-device selector using `setSinkId()`, with automatic VB-CABLE preference and `/call-marcus.html` alias.
+- Bounded multi-viewport `marcus_browser_read` tool for reviewing the current approved page without requiring Mark to repeat its URL.
 
-Next: audio-device verification, entity-linking for meeting notes, platform-specific adapters where generic observation misses embedded chat, and first consented live-call acceptance.
+Next: reboot after the successful VB-CABLE installation, verify the endpoints again, select them in the Call Console and Zoom, link meeting notes to entities, and run the first consented live-call acceptance.
 
 ## 2026-08-17: Operator Intelligence Layer
 

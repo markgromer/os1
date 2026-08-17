@@ -228,9 +228,14 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     const obsPage = await fetch(`${base}/obs-marcus.html`);
     const obsHtml = await obsPage.text();
     assert.equal(obsPage.status, 200);
-    assert.match(obsHtml, /MARCUS OBS Console/);
+    assert.match(obsHtml, /MARCUS Call Console/);
     assert.match(obsHtml, /Display or system audio/);
     assert.match(obsHtml, /roast_light/);
+    assert.match(obsHtml, /marcusOutput/);
+    assert.match(obsHtml, /setSinkId/);
+    const callPage = await fetch(`${base}/call-marcus.html`);
+    assert.equal(callPage.status, 200);
+    assert.match(await callPage.text(), /MARCUS Call Console/);
     assert.match(obsHtml, /meeting-notes\/checkpoint/);
     const meetingCheckpoint = await fetch(`${base}/api/marcus/meeting-notes/checkpoint`, {
       method: 'POST',

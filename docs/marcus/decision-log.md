@@ -2,6 +2,22 @@
 
 Status: active
 
+## 2026-08-17: Current Visible Pages Do Not Require Mark To Repeat The URL
+
+Context: Mark asked MARCUS to look through the ScoopOS community while the live visualizer visibly showed that page. MARCUS incorrectly said he could not browse without an exact URL because his tools exposed only one viewport of status plus explicit navigation.
+
+Decision: Add `marcus_browser_read`, a direct-request tool that scans up to 12 rendered viewports on the current approved page, deduplicates bounded text, excludes hidden/form/editable content, and restores the original scroll position. Explicitly instruct MARCUS to call status/read before claiming he cannot inspect the page already open; exact URLs remain necessary only for opening a different page.
+
+Consequence: MARCUS can review the ScoopOS feed already in his window and answer content-strategy questions from real visible posts. The local acceptance read eight viewports and 17,412 characters. Page content remains untrusted context and does not grant action authority. Related: [[live-presence]], [[access-model]], [[current-system-map]].
+
+## 2026-08-17: Route Only MARCUS Speech Into Zoom's Virtual Microphone
+
+Context: MARCUS and Zoom run in the same dedicated Chrome profile. Sending all Chrome output to a virtual cable would feed incoming Zoom voices back into the meeting and create echo.
+
+Decision: Give the Call Console a dedicated Realtime audio element and select its output with `setSinkId()`. Keep Zoom output on Mark's headphones, capture the Zoom tab with shared audio for Realtime input, route only the MARCUS audio element to Pack45's `Speakers (VB-Audio Virtual Cable)` playback endpoint (or older `CABLE Input` labels), and configure Zoom's MARCUS microphone as `CABLE Output`. Serve the sidecar at `/call-marcus.html`; keep `/obs-marcus.html` for compatibility and reserve OBS Studio for streaming/scene work.
+
+Consequence: MARCUS can join the same Zoom meeting as a normal browser participant without the OBS desktop application or Zoom APIs, while maintaining a separable echo-resistant audio path. VB-CABLE still requires one administrator installation, reboot, and physical call acceptance. Related: [[live-presence]], [[current-system-map]], [[voice-interface]].
+
 ## 2026-08-17: Meeting Notes Persist Summaries, Not Transcript Dumps
 
 Context: MARCUS could hear Realtime audio and read bounded live-page context, but stopping the sidecar discarded the recognized conversation. Mark requires every call to contribute useful notes to the Obsidian brain.

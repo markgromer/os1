@@ -80,3 +80,28 @@ test('MARCUS activate command matches bounded visible controls without script in
   assert.match(expression, /Invite \\"quoted\\" text/i);
   assert.match(expression, /a,button/);
 });
+
+test('MARCUS page reader scans approved viewports and restores the original position', async () => {
+  const bridge = new MarcusBrowserBridge();
+  bridge.sensitiveFieldFocused = async () => false;
+  let visibleCall = 0;
+  bridge.visiblePageText = async () => `viewport ${++visibleCall}`;
+  const expressions = [];
+  const session = {
+    send: async (method, params) => {
+      assert.equal(method, 'Runtime.evaluate');
+      expressions.push(params.expression);
+      if (params.expression === 'Number(window.scrollY) || 0') return { result: { value: 450 } };
+      if (params.returnByValue && params.expression.includes('window.scrollBy')) {
+        return { result: { value: { before: 0, after: 800, max: 800 } } };
+      }
+      return { result: { value: null } };
+    },
+  };
+  const result = await bridge.readVisiblePage(session, 'https://www.skool.com/localgiants', { viewports: 4 });
+  assert.equal(result.contextKind, 'skool');
+  assert.equal(result.viewportsRead, 2);
+  assert.match(result.visibleText, /viewport 1[\s\S]*viewport 2/);
+  assert.equal(expressions.at(-1), 'window.scrollTo(0, 450)');
+  await assert.rejects(() => bridge.readVisiblePage(session, 'https://example.com/private'), /outside the approved/i);
+});

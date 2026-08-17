@@ -293,6 +293,8 @@ class MarcusBrowserBridge {
         returnByValue: true,
       });
       if (!result?.result?.value?.activated) throw new Error(`No visible link or button matched: ${label}`);
+    } else if (command === 'read') {
+      result = await this.readVisiblePage(session, target.url, { viewports: payload.viewports });
     } else if (command === 'scroll') {
       result = await session.send('Input.dispatchMouseEvent', {
         type: 'mouseWheel',
@@ -369,6 +371,41 @@ class MarcusBrowserBridge {
     } catch {
       return '';
     }
+  }
+
+  async readVisiblePage(session, url, { viewports = 8 } = {}) {
+    const contextKind = liveContextKind(url);
+    if (!contextKind) throw new Error('This page is outside the approved MARCUS visible-context sites.');
+    if (await this.sensitiveFieldFocused(session)) throw new Error('Page reading is blocked while a password field is focused.');
+    const count = Math.max(1, Math.min(12, Number(viewports) || 8));
+    const position = await session.send('Runtime.evaluate', { expression: 'Number(window.scrollY) || 0', returnByValue: true });
+    const originalY = Number(position?.result?.value) || 0;
+    const sections = [];
+    try {
+      await session.send('Runtime.evaluate', { expression: 'window.scrollTo(0, 0)' });
+      for (let index = 0; index < count; index += 1) {
+        await wait(index === 0 ? 150 : 300);
+        const visible = await this.visiblePageText(session);
+        if (visible && !sections.includes(visible)) sections.push(visible);
+        const movement = await session.send('Runtime.evaluate', {
+          expression: '(() => { const before = window.scrollY; window.scrollBy(0, Math.max(320, Math.floor(innerHeight * 0.82))); return { before, after: window.scrollY, max: Math.max(0, document.documentElement.scrollHeight - innerHeight) }; })()',
+          returnByValue: true,
+        });
+        const scroll = movement?.result?.value || {};
+        if (Number(scroll.after) <= Number(scroll.before) || Number(scroll.after) >= Number(scroll.max)) {
+          const finalVisible = await this.visiblePageText(session);
+          if (finalVisible && !sections.includes(finalVisible)) sections.push(finalVisible);
+          break;
+        }
+      }
+    } finally {
+      await session.send('Runtime.evaluate', { expression: `window.scrollTo(0, ${Math.max(0, originalY)})` }).catch(() => {});
+    }
+    return {
+      contextKind,
+      visibleText: sections.join('\n\n--- next viewport ---\n\n').slice(0, 16_000),
+      viewportsRead: sections.length,
+    };
   }
 
   async capture() {

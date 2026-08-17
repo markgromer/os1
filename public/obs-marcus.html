@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#07111d">
-  <title>MARCUS OBS Console</title>
+  <title>MARCUS Call Console</title>
   <link rel="icon" href="/icons/marcus.svg" type="image/svg+xml">
   <style>
     :root {
@@ -174,8 +174,8 @@
     <div class="brand">
       <img src="/icons/marcus.svg" alt="">
       <div>
-        <h1>MARCUS OBS Console</h1>
-        <span>Live sidecar for demos, calls, and show-and-tell sessions</span>
+        <h1>MARCUS Call Console</h1>
+        <span>Live audio, voice, context, and notes for MARCUS meetings</span>
       </div>
     </div>
     <div class="status-line" aria-live="polite"><span id="statusDot" class="dot"></span><span id="statusText">Idle</span></div>
@@ -209,6 +209,13 @@
           </select>
         </div>
 
+        <div class="capture-row">
+          <label for="outputSelect">MARCUS voice output</label>
+          <select id="outputSelect">
+            <option value="">System default</option>
+          </select>
+        </div>
+
         <div class="actions">
           <button id="captureBtn" class="btn" type="button">Capture source</button>
           <button id="voiceBtn" class="btn primary" type="button">Start MARCUS</button>
@@ -217,7 +224,8 @@
 
         <div class="meter" aria-hidden="true"><span id="levelMeter"></span></div>
         <video id="previewVideo" muted autoplay playsinline hidden></video>
-        <p class="hint">For Zoom desktop audio, use display/system capture when the browser offers audio sharing. For a simple demo, microphone capture is enough.</p>
+        <audio id="marcusOutput" autoplay hidden></audio>
+        <p class="hint">For Zoom, capture the Zoom tab with shared audio and route MARCUS voice to Speakers (VB-Audio Virtual Cable). In Zoom, use CABLE Output as MARCUS's microphone.</p>
       </div>
     </section>
 
@@ -246,6 +254,8 @@
     mode: $('modeSelect'),
     modeLabel: $('modeLabel'),
     source: $('sourceSelect'),
+    outputSelect: $('outputSelect'),
+    outputAudio: $('marcusOutput'),
     capture: $('captureBtn'),
     voice: $('voiceBtn'),
     stop: $('stopBtn'),
@@ -260,6 +270,7 @@
   };
   const MODE_KEY = 'marcus_obs_personality_mode';
   const TOKEN_KEY = 'marcus_obs_token';
+  const OUTPUT_KEY = 'marcus_call_output_device';
   const labels = {
     operator: 'Operator',
     dry: 'Dry',
@@ -388,6 +399,41 @@
     tick();
   }
 
+  async function applyOutputDevice({ quiet = false } = {}) {
+    const deviceId = String(els.outputSelect.value || '');
+    if (typeof els.outputAudio.setSinkId !== 'function') {
+      if (!quiet) log('system', 'This browser cannot select a dedicated audio output device.');
+      return false;
+    }
+    try {
+      await els.outputAudio.setSinkId(deviceId);
+      localStorage.setItem(OUTPUT_KEY, deviceId);
+      if (!quiet) log('system', `MARCUS voice output: ${els.outputSelect.selectedOptions[0]?.textContent || 'System default'}.`);
+      return true;
+    } catch (error) {
+      if (!quiet) log('system', `Could not select MARCUS voice output: ${error.message || error}`);
+      return false;
+    }
+  }
+
+  async function refreshOutputDevices() {
+    if (!navigator.mediaDevices?.enumerateDevices) return;
+    const devices = (await navigator.mediaDevices.enumerateDevices()).filter((device) => device.kind === 'audiooutput');
+    const saved = localStorage.getItem(OUTPUT_KEY) || '';
+    const preferred = devices.find((device) => /^speakers \(vb-audio virtual cable\)$/i.test(device.label))
+      || devices.find((device) => /cable input/i.test(device.label))
+      || devices.find((device) => /cable in|vb-audio/i.test(device.label));
+    els.outputSelect.innerHTML = '<option value="">System default</option>';
+    for (const device of devices) {
+      const option = document.createElement('option');
+      option.value = device.deviceId;
+      option.textContent = device.label || `Audio output ${els.outputSelect.options.length}`;
+      els.outputSelect.appendChild(option);
+    }
+    els.outputSelect.value = devices.some((device) => device.deviceId === saved) ? saved : (preferred?.deviceId || '');
+    await applyOutputDevice({ quiet: true });
+  }
+
   async function captureSource() {
     stopStream();
     if (els.source.value === 'display') {
@@ -409,6 +455,7 @@
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     }
     startMeter(stream);
+    await refreshOutputDevices();
     log('system', `${els.source.value === 'display' ? 'Display/system' : 'Microphone'} audio captured.`);
   }
 
@@ -417,6 +464,7 @@
     if (typeof window.createMarcusRealtimeVoice !== 'function') throw new Error('MARCUS Realtime bundle is unavailable.');
     voice = window.createMarcusRealtimeVoice({
       personalityMode: els.mode.value,
+      audioElement: els.outputAudio,
       getMediaStream: async () => stream,
       getAuthToken: async () => String(els.token.value || '').trim(),
       invokeMarcus: async (message) => {
@@ -484,6 +532,8 @@
       }
       if (meetingFinalized) resetMeetingCapture();
       if (!stream) await captureSource();
+      await refreshOutputDevices();
+      await applyOutputDevice({ quiet: true });
       if (String(els.token.value || '').trim()) localStorage.setItem(TOKEN_KEY, String(els.token.value).trim());
       await current.setPersonalityMode(els.mode.value, { source: 'obs_ui' });
       await current.start();
@@ -504,6 +554,7 @@
     localStorage.setItem(MODE_KEY, els.mode.value);
     if (voice) await voice.setPersonalityMode(els.mode.value, { source: 'obs_ui' });
   });
+  els.outputSelect.addEventListener('change', () => applyOutputDevice());
   els.sendContext.addEventListener('click', () => {
     const text = String(els.context.value || '').trim();
     if (!text) return;
@@ -522,6 +573,7 @@
     try { voice?.stop(); } catch {}
     stopStream();
   });
+  refreshOutputDevices().catch(() => {});
 })();
 </script>
 </body>

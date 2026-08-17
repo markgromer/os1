@@ -21,8 +21,10 @@ Live presence is Marcus operating from Mark's PC as a visible assistant in norma
 - Browser status/frame/control/actions: `/api/marcus/browser/status`, `/api/marcus/browser/frame`, `/api/marcus/browser/control`, and `/api/marcus/browser/actions`
 - Browser relay intake: `/api/marcus/browser/relay`
 - Marcus chat tools: `marcus_browser_status`, `marcus_browser_open`, and non-consequential exact-visible-control `marcus_browser_activate`
+- Current-page inspection tool: `marcus_browser_read` scans up to 12 rendered viewports on approved sites and restores the original page position
 - Visible-context allowlist: Gmail for explicit browser inspection; Zoom, Skool, Google Meet, Teams, YouTube, and TikTok for live Realtime context
 - Automatic meeting-note checkpoint: `/api/marcus/meeting-notes/checkpoint` to the local `docs/marcus/conversations/` writer
+- Call/audio console: `/call-marcus.html` (`/obs-marcus.html` remains a compatible legacy path)
 
 ## Operating Model
 
@@ -32,7 +34,7 @@ The durable runtime is:
 
 `dedicated Marcus browser profile -> virtual audio route -> Marcus Realtime voice -> Marcus operator tools -> meeting memory and follow-up actions`
 
-OBS is a stage surface. It can show Marcus visually, but it is not the source of truth. Notes, decisions, action items, and follow-up drafts must land in Marcus memory.
+OBS Studio is optional and only needed for scenes, streaming, avatars, overlays, or advanced mixing. `/call-marcus.html` is the normal Zoom audio/Realtime sidecar and does not require the OBS desktop application. Notes, decisions, action items, and follow-up drafts must land in Marcus memory.
 
 The OBS sidecar now keeps a bounded transcript in page memory, checkpoints every five minutes, and sends a final checkpoint when stopped. The server uses the existing transcript analyzer and queues only concise derived notes to the desktop agent. Raw transcript dumps are not written to the vault or durable action queue.
 
@@ -57,9 +59,11 @@ Mark owns these first-time setup items:
 - Log into Zoom, Skool, YouTube, TikTok, and other platforms in that profile.
 - Handle MFA, captcha, recovery, and identity-sensitive prompts directly.
 - Set the visible display name to `Marcus - Mark's AI Assistant` where possible.
-- Install and configure a virtual audio route such as VB-CABLE or VoiceMeeter.
+- Install VB-CABLE, reboot Windows, and confirm the VB-Audio playback endpoint plus `CABLE Output` appear.
 - Keep Mark microphone separate from Marcus output.
 - Select a dedicated Marcus microphone/input route in Zoom or the live platform.
+- In `/call-marcus.html`, select `Speakers (VB-Audio Virtual Cable)` for MARCUS voice output. Older driver packages may call this `CABLE Input`.
+- In Zoom, select `CABLE Output` as MARCUS's microphone and keep Zoom speakers on Mark's headphones.
 - Rehearse emergency controls: mute Marcus, stop speaking, private-only mode, and leave meeting.
 
 The setup console at `/live-presence.html` is the checklist Mark should use while configuring the PC.
@@ -86,6 +90,8 @@ The desktop agent captures a compressed page viewport, not Chrome profile storag
 
 `/visualizer.html` starts in Browser mode. `Take control` gives Mark the remote click, scroll, typing, address, back, forward, and refresh channel. `Return control` gives the channel back to Marcus. Marcus can inspect browser status and open an exact HTTP(S) URL only from Mark's direct current request. Consequential page actions and external communication retain their existing approval rules.
 
+When Mark asks Marcus to inspect, analyze, browse, scan, summarize, give feedback on, or look through the page already open, Marcus should call `marcus_browser_read`; an exact URL is not required. The tool reads bounded rendered text across up to 12 viewports, excludes form/editable/hidden content, and restores the original scroll position. It was locally verified against eight ScoopOS community viewports on 2026-08-17.
+
 Use only that Chrome window for `markgromermarcus@gmail.com`, Gmail, Skool, Zoom, YouTube, and TikTok sessions. Do not paste passwords into chat or store them in the repo. Mark should do the first login, MFA, captcha, and account recovery steps directly in the browser.
 
 ## Audio Architecture
@@ -98,6 +104,18 @@ Required channels:
 - Marcus voice output to the platform's microphone input.
 - Mark microphone to the platform as Mark.
 - Optional OBS monitor/mix route for demos.
+
+The one-PC Zoom route is deliberately split per audio element:
+
+`Zoom tab output -> Mark's headphones`
+
+`Zoom tab shared audio -> MARCUS Call Console -> Realtime input`
+
+`Realtime output audio element -> Speakers (VB-Audio Virtual Cable) -> CABLE Output -> Zoom microphone`
+
+This avoids routing the entire Chrome process through VB-CABLE, which would echo Zoom participants back into the call. The Call Console uses `HTMLMediaElement.setSinkId()` and automatically prefers Pack45's `Speakers (VB-Audio Virtual Cable)` stereo output, then older `CABLE Input` labels. Zoom must use `CABLE Output` as MARCUS's microphone while keeping its speaker on Mark's headphones.
+
+The official VB-CABLE package is available from [VB-Audio](https://vb-audio.com/Cable/index.htm). Signed Pack45 was installed successfully on 2026-08-17. `Speakers (VB-Audio Virtual Cable)`, `CABLE In 16 Ch`, and `CABLE Output` all reported `OK` before reboot. The vendor-required reboot and post-reboot audio acceptance remain pending until current work is saved.
 
 The first production setup can run on one PC with virtual devices, but a second machine or VM is the stronger long-term setup for bulletproof calls because it prevents echo, device contention, and browser focus conflicts.
 
