@@ -29,3 +29,22 @@ export function classifyMarcusBrowserIntent(message, { pendingDraft = false } = 
   if (/\b(can(?:not|'t)?|unable|access|connected|control|see)\b/i.test(text)) return 'marcus_browser_status';
   return '';
 }
+
+export function validateMarcusIntroductionDraft(text, { requestMessage = '' } = {}) {
+  const request = String(requestMessage || '').replace(/\s+/g, ' ').trim();
+  const draft = String(text || '').replace(/\s+/g, ' ').trim();
+  const marcusIntroduction = /\bmarcus\b/i.test(request)
+    || /\b(?:your|yourself|himself)\b[^.!?\n]{0,60}\bintro(?:duce|duction)?\b/i.test(request)
+    || /\bintro(?:duce|duction)?\b[^.!?\n]{0,60}\b(?:yourself|himself)\b/i.test(request);
+  if (!marcusIntroduction) return { ok: true };
+  if (/\b(?:i am|i'm)\s+mark\b/i.test(draft)) {
+    return { ok: false, error: 'MARCUS cannot introduce himself as Mark.' };
+  }
+  if (!/\bmarcus\b/i.test(draft)) {
+    return { ok: false, error: 'MARCUS must identify himself by name in his introduction.' };
+  }
+  if (!/\bAI\b/i.test(draft)) {
+    return { ok: false, error: 'MARCUS must identify himself openly as AI in his introduction.' };
+  }
+  return { ok: true };
+}

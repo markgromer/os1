@@ -27,7 +27,10 @@ import { ProjectMemoryIndexer } from './marcus/awareness/project_memory_index.js
 import { scopeAuthorizedPublishActions } from './marcus/approvals/publish_safeguard.js';
 import { buildMarcusSystemPrompt } from './marcus/core/build_system_prompt.js';
 import { explicitlyDefersCodexStart, explicitlyDefersProjectAudit, withoutProjectExecutionDeferrals } from './marcus/core/request_intent.js';
-import { classifyMarcusBrowserIntent } from './marcus/browser_intent.js';
+import {
+  classifyMarcusBrowserIntent,
+  validateMarcusIntroductionDraft,
+} from './marcus/browser_intent.js';
 import { ProjectEvidenceService } from './marcus/evidence/project_evidence_service.js';
 import {
   executeMarcusProjectActivityTool,
@@ -14665,6 +14668,8 @@ async function executeMarcusBrowserTool(toolName, args = {}, {
     const target = typeof args?.target === 'string' ? args.target.replace(/\s+/g, ' ').trim().slice(0, 240) : '';
     const text = typeof args?.text === 'string' ? args.text.trim().slice(0, 4_000) : '';
     if (!text) return { ok: false, error: 'Exact draft text is required.' };
+    const identityCheck = validateMarcusIntroductionDraft(text, { requestMessage });
+    if (!identityCheck.ok) return { ok: false, retryable: true, error: identityCheck.error };
     payload = {
       command: 'fill', target, text,
       desktopAgentId: status.agentId || desktopRelayCache?.data?.desktopAuthorization?.agentId || '',
@@ -14677,6 +14682,8 @@ async function executeMarcusBrowserTool(toolName, args = {}, {
     const text = typeof args?.text === 'string' ? args.text.trim().slice(0, 4_000) : '';
     if (!thread) return { ok: false, error: 'A visible thread title or distinctive title fragment is required.' };
     if (!text) return { ok: false, error: 'Exact draft text is required.' };
+    const identityCheck = validateMarcusIntroductionDraft(text, { requestMessage });
+    if (!identityCheck.ok) return { ok: false, retryable: true, error: identityCheck.error };
     payload = {
       command: 'prepare-reply', thread, text,
       desktopAgentId: status.agentId || desktopRelayCache?.data?.desktopAuthorization?.agentId || '',

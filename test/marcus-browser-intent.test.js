@@ -1,7 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { classifyMarcusBrowserIntent } from '../marcus/browser_intent.js';
+import {
+  classifyMarcusBrowserIntent,
+  validateMarcusIntroductionDraft,
+} from '../marcus/browser_intent.js';
 
 test('Skool inspection requests route to the live browser instead of project work', () => {
   assert.equal(
@@ -47,6 +50,33 @@ test('submission negation never becomes browser publication approval', () => {
   assert.notEqual(
     classifyMarcusBrowserIntent("Draft the Skool comment without publishing it.", { pendingDraft: true }),
     'marcus_browser_submit',
+  );
+});
+
+test('MARCUS public introduction drafts cannot impersonate Mark or hide their AI identity', () => {
+  assert.deepEqual(
+    validateMarcusIntroductionDraft("Hi everyone, I'm Mark.", {
+      requestMessage: 'Prepare your introduction reply on Skool.',
+    }),
+    { ok: false, error: 'MARCUS cannot introduce himself as Mark.' },
+  );
+  assert.deepEqual(
+    validateMarcusIntroductionDraft("Hi, I'm MARCUS and I help with projects.", {
+      requestMessage: 'Have MARCUS introduce himself on Skool.',
+    }),
+    { ok: false, error: 'MARCUS must identify himself openly as AI in his introduction.' },
+  );
+  assert.deepEqual(
+    validateMarcusIntroductionDraft("Hi, I'm MARCUS, Mark's AI Chief of Staff.", {
+      requestMessage: 'Prepare your introduction reply on Skool.',
+    }),
+    { ok: true },
+  );
+  assert.deepEqual(
+    validateMarcusIntroductionDraft("Hi, I'm Mark.", {
+      requestMessage: 'Help me write my introduction on Skool.',
+    }),
+    { ok: true },
   );
 });
 
