@@ -29,7 +29,10 @@ test('Marcus realtime voice is Marcus and delegates durable work to the operator
   assert.match(session.instructions, /Do not recap/i);
   assert.match(session.instructions, /let me know if you need anything else/i);
   assert.match(session.instructions, /ordinary conversation/i);
-  assert.match(session.instructions, /Do not read long PR numbers/i);
+  assert.match(session.instructions, /longtime operating partner/i);
+  assert.match(session.instructions, /riff, tease each other/i);
+  assert.match(session.instructions, /Reggie font pull request/i);
+  assert.match(session.instructions, /Never read file IDs/i);
   assert.match(session.instructions, /Never bypass Marcus approval requirements/i);
   assert.match(session.instructions, /Mode: Operator/i);
   assert.equal(Object.hasOwn(session, 'metadata'), false);
