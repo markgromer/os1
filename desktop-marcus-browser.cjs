@@ -214,11 +214,14 @@ class MarcusBrowserBridge {
     return (Array.isArray(targets) ? targets : []).filter((target) => target?.type === 'page' && target.webSocketDebuggerUrl);
   }
 
-  async page() {
+  async page(preferredContextKind = '') {
     await this.ensureBrowser();
     const pages = await this.pages();
     if (!pages.length) throw new Error('MARCUS Chrome has no controllable page.');
-    const selected = pages.find((target) => target.id === this.activeTargetId)
+    const active = pages.find((target) => target.id === this.activeTargetId);
+    const selected = (preferredContextKind && active && liveContextKind(active.url) === preferredContextKind ? active : null)
+      || (preferredContextKind ? pages.find((target) => liveContextKind(target.url) === preferredContextKind) : null)
+      || active
       || pages.find((target) => /^https?:/i.test(target.url || ''))
       || pages[0];
     this.activeTargetId = selected.id;
@@ -234,7 +237,8 @@ class MarcusBrowserBridge {
     const command = String(payload.command || '').trim().toLowerCase();
     const requestedUrl = safeHttpUrl(payload.url);
     await this.ensureBrowser(requestedUrl || undefined);
-    const { target, session } = await this.page();
+    const preferredContextKind = command === 'prepare-reply' ? 'skool' : '';
+    const { target, session } = await this.page(preferredContextKind);
     let result = {};
     if (command === 'open') {
       if (!requestedUrl) throw new Error('A valid http or https URL is required.');

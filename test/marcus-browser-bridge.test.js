@@ -26,6 +26,19 @@ test('MARCUS browser bridge observes only approved live-site pages', () => {
   assert.equal(liveContextKind('https://example.com/private'), '');
 });
 
+test('MARCUS browser bridge selects the requested signed-in site tab instead of Chrome list order', async () => {
+  const bridge = new MarcusBrowserBridge();
+  bridge.ensureBrowser = async () => true;
+  bridge.pages = async () => [
+    { id: 'zoom-tab', type: 'page', url: 'https://us05web.zoom.us/profile', webSocketDebuggerUrl: 'ws://127.0.0.1/zoom' },
+    { id: 'skool-tab', type: 'page', url: 'https://www.skool.com/localgiants', webSocketDebuggerUrl: 'ws://127.0.0.1/skool' },
+  ];
+  const selected = await bridge.page('skool');
+  assert.equal(selected.target.id, 'skool-tab');
+  assert.equal(bridge.activeTargetId, 'skool-tab');
+  bridge.session.close();
+});
+
 test('MARCUS visible-page observation is bounded and uses a redacting DOM expression', async () => {
   const bridge = new MarcusBrowserBridge();
   let expression = '';
