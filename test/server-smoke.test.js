@@ -708,9 +708,14 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
       method: 'POST', headers: agencyHeaders, body: JSON.stringify({ scope: 'full_pc' }),
     });
     const existingPcAccessBody = await existingPcAccess.json();
-    assert.equal(existingPcAccess.status, 200);
-    assert.equal(existingPcAccessBody.alreadyConfigured, true);
-    assert.equal(existingPcAccessBody.operation, null);
+    if (workspaceDrive) {
+      assert.equal(existingPcAccess.status, 200);
+      assert.equal(existingPcAccessBody.alreadyConfigured, true);
+      assert.equal(existingPcAccessBody.operation, null);
+    } else {
+      assert.equal(existingPcAccess.status, 400);
+      assert.match(existingPcAccessBody.error, /root|drive|target/i);
+    }
 
     const pcSearchRequest = fetch(`${base}/api/marcus/pc/actions`, {
       method: 'POST', headers: agencyHeaders, body: JSON.stringify({
