@@ -188,10 +188,16 @@ class MarcusBrowserBridge {
     debugPort = DEFAULT_DEBUG_PORT,
     profileRoot = path.join(process.env.LOCALAPPDATA || os.tmpdir(), 'M.A.R.C.U.S', 'MarcusBrowserProfile'),
     defaultUrl = DEFAULT_URL,
+    composerOpenTimeoutMs = 15_000,
+    composerFocusTimeoutMs = 10_000,
+    composerPollMs = 350,
   } = {}) {
     this.debugPort = Math.max(1024, Math.min(65535, Number(debugPort) || DEFAULT_DEBUG_PORT));
     this.profileRoot = path.resolve(String(profileRoot || '').trim());
     this.defaultUrl = safeHttpUrl(defaultUrl, DEFAULT_URL);
+    this.composerOpenTimeoutMs = Math.max(50, Math.min(30_000, Number(composerOpenTimeoutMs) || 15_000));
+    this.composerFocusTimeoutMs = Math.max(50, Math.min(30_000, Number(composerFocusTimeoutMs) || 10_000));
+    this.composerPollMs = Math.max(1, Math.min(2_000, Number(composerPollMs) || 350));
     this.activeTargetId = '';
     this.session = null;
     this.sessionTargetId = '';
@@ -519,16 +525,15 @@ class MarcusBrowserBridge {
     if (!pathParts.length) throw new Error('The Skool community could not be resolved from the visible page.');
     const communityUrl = `${currentUrl.origin}/${pathParts[0]}`;
     await session.send('Page.navigate', { url: communityUrl }, 4_000);
-    await wait(1_200);
 
-    const opened = await session.send('Runtime.evaluate', {
+    const opened = await this.evaluateUntil(session, {
       expression: `(() => {
         const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').trim().toLowerCase();
-        const wanted = /^(?:write something|start a post|create post|post something|what do you want to share)[.!…]?$/;
+        const wanted = /^(?:write something|start a post|create post|post something|what do you want to share)(?:\.{3}|[.!?])?$/;
         const candidates = [...document.querySelectorAll('button,[role="button"],textarea,[contenteditable="true"],[contenteditable="plaintext-only"]')]
           .map((element) => ({
             element,
-            label: normalize(element.getAttribute('aria-label') || element.getAttribute('placeholder') || element.getAttribute('data-placeholder') || element.innerText || element.textContent),
+            label: normalize(element.getAttribute('aria-label') || element.getAttribute('placeholder') || element.getAttribute('data-placeholder') || element.innerText || element.textContent).replace(/\u2026/g, '...'),
           }))
           .filter(({ element, label }) => {
             const rect = element.getBoundingClientRect();
@@ -548,13 +553,14 @@ class MarcusBrowserBridge {
         return { activated: true, label: candidates[0].label, href: location.href };
       })()`,
       returnByValue: true,
-    }, 4_000);
+    }, {
+      timeoutMs: this.composerOpenTimeoutMs,
+      accept: (value) => value?.result?.value?.activated === true,
+    });
     if (!opened?.result?.value?.activated) {
       throw new Error('The ScoopOS main feed is visible, but its standalone post composer could not be opened.');
     }
-    await wait(800);
-
-    const focus = await session.send('Runtime.evaluate', {
+    const focus = await this.evaluateUntil(session, {
       expression: `(() => {
         const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').trim().toLowerCase();
         const visible = (element) => {
@@ -606,7 +612,10 @@ class MarcusBrowserBridge {
         };
       })()`,
       returnByValue: true,
-    }, 4_000);
+    }, {
+      timeoutMs: this.composerFocusTimeoutMs,
+      accept: (value) => value?.result?.value?.focused === true && value?.result?.value?.communityRoot === true,
+    });
     if (!focus?.result?.value?.focused || !focus?.result?.value?.communityRoot) {
       throw new Error('The standalone Skool feed composer was not verified. No draft was inserted.');
     }
@@ -645,6 +654,26 @@ class MarcusBrowserBridge {
       insertedChars: text.length,
       href: verified.result.value.href || focus.result.value.href || communityUrl,
     };
+  }
+
+  async evaluateUntil(session, params, { timeoutMs = 10_000, accept = () => true } = {}) {
+    const deadline = Date.now() + Math.max(50, Number(timeoutMs) || 10_000);
+    let latest = null;
+    let latestError = null;
+    do {
+      try {
+        const remaining = Math.max(500, deadline - Date.now());
+        latest = await session.send('Runtime.evaluate', params, Math.min(4_000, remaining));
+        if (accept(latest)) return latest;
+      } catch (error) {
+        latestError = error;
+      }
+      if (Date.now() >= deadline) break;
+      await wait(Math.min(this.composerPollMs, Math.max(1, deadline - Date.now())));
+    } while (Date.now() < deadline);
+    if (latest) return latest;
+    if (latestError) throw latestError;
+    return null;
   }
 
   async replaceVisibleEditor(session, text) {

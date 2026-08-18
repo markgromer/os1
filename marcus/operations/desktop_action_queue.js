@@ -4,7 +4,17 @@ import path from 'node:path';
 
 const STORE_VERSION = 1;
 const DEFAULT_LEASE_MS = 15 * 60_000;
+const DEFAULT_INTERACTIVE_LEASE_MS = 90_000;
 const DEFAULT_MAX_ACTIONS = 2_000;
+const INTERACTIVE_ACTION_TYPES = new Set([
+  'marcus-browser-open',
+  'marcus-browser-command',
+  'marcus-browser-publish',
+]);
+
+function actionPriority(action) {
+  return INTERACTIVE_ACTION_TYPES.has(String(action?.type || '').trim()) ? 0 : 1;
+}
 
 function safeString(value, maxLength = 200) {
   return typeof value === 'string' ? value.trim().slice(0, maxLength) : '';
@@ -81,10 +91,14 @@ function targetAgentId(action) {
 }
 
 export class DesktopActionQueue {
-  constructor({ dataDir, leaseMs = DEFAULT_LEASE_MS, maxActions = DEFAULT_MAX_ACTIONS } = {}) {
+  constructor({
+    dataDir, leaseMs = DEFAULT_LEASE_MS, interactiveLeaseMs = DEFAULT_INTERACTIVE_LEASE_MS,
+    maxActions = DEFAULT_MAX_ACTIONS,
+  } = {}) {
     if (!dataDir) throw new Error('DesktopActionQueue requires dataDir.');
     this.file = path.join(path.resolve(dataDir), 'desktop-actions.json');
     this.leaseMs = safeInteger(leaseMs, DEFAULT_LEASE_MS, 30_000, 24 * 60 * 60_000);
+    this.interactiveLeaseMs = safeInteger(interactiveLeaseMs, DEFAULT_INTERACTIVE_LEASE_MS, 30_000, this.leaseMs);
     this.maxActions = safeInteger(maxActions, DEFAULT_MAX_ACTIONS, 1, 20_000);
     this.writeQueue = Promise.resolve();
   }
@@ -120,17 +134,23 @@ export class DesktopActionQueue {
     return this.withLock(async () => {
       const document = await this.readDocumentUnlocked();
       const claimed = [];
-      for (const action of document.actions) {
+      const availableActions = document.actions
+        .map((action, index) => ({ action, index }))
+        .filter(({ action }) => {
+          const target = targetAgentId(action);
+          if (target && target !== claimant) return false;
+          return action.status === 'queued'
+            || (action.status === 'delivered' && action.leaseExpiresAt <= claimedAt);
+        })
+        .sort((left, right) => actionPriority(left.action) - actionPriority(right.action)
+          || left.action.requestedAt - right.action.requestedAt
+          || left.index - right.index);
+      for (const { action } of availableActions) {
         if (claimed.length >= claimLimit) break;
-        const target = targetAgentId(action);
-        if (target && target !== claimant) continue;
-        const available = action.status === 'queued'
-          || (action.status === 'delivered' && action.leaseExpiresAt <= claimedAt);
-        if (!available) continue;
         action.status = 'delivered';
         action.deliveredTo = claimant;
         action.deliveredAt = claimedAt;
-        action.leaseExpiresAt = claimedAt + this.leaseMs;
+        action.leaseExpiresAt = claimedAt + (actionPriority(action) === 0 ? this.interactiveLeaseMs : this.leaseMs);
         action.deliveryAttempts += 1;
         claimed.push(structuredClone(action));
       }

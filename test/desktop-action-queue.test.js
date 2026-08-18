@@ -74,6 +74,27 @@ test('claimed actions use durable leases and remain available until valid acknow
   } finally { await fixture.close(); }
 });
 
+test('interactive browser actions jump the queue and recover on a short lease', async () => {
+  const fixture = await temporaryQueue({ leaseMs: 15 * 60_000, interactiveLeaseMs: 60_000 });
+  try {
+    await fixture.queue.enqueue({
+      id: 'background-action', type: 'run-project-script', payload: { desktopAgentId: 'agent-a' },
+    });
+    await fixture.queue.enqueue({
+      id: 'browser-action', type: 'marcus-browser-command', payload: { desktopAgentId: 'agent-a' },
+    });
+
+    const first = await fixture.queue.claim('agent-a', { limit: 1, now: 1_000 });
+    assert.equal(first[0].id, 'browser-action');
+    assert.equal(first[0].leaseExpiresAt, 61_000);
+    const background = await fixture.queue.claim('agent-a', { limit: 1, now: 60_999 });
+    assert.equal(background[0].id, 'background-action');
+    const recoveredBrowser = await fixture.queue.claim('agent-a', { limit: 1, now: 61_000 });
+    assert.equal(recoveredBrowser[0].id, 'browser-action');
+    assert.equal(recoveredBrowser[0].deliveryAttempts, 2);
+  } finally { await fixture.close(); }
+});
+
 test('desktop action queue recovers the last valid backup and preserves corruption evidence', async () => {
   const fixture = await temporaryQueue();
   try {

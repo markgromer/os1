@@ -14857,6 +14857,12 @@ async function queueDesktopAction(action) {
 }
 
 async function queueDesktopActionAndWait(action, { timeoutMs = 18_000 } = {}) {
+  pruneDesktopActionResults();
+  const idempotencyKey = String(action?.idempotencyKey || '').trim();
+  if (idempotencyKey) {
+    const completed = desktopActionResults.find((item) => item.idempotencyKey === idempotencyKey);
+    if (completed) return { ...completed, queued: true, reused: true, actionId: completed.id };
+  }
   const queued = await queueDesktopAction(action);
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
@@ -15021,13 +15027,20 @@ async function executeMarcusBrowserTool(toolName, args = {}, {
       desktopAgentId: status.agentId || desktopRelayCache?.data?.desktopAuthorization?.agentId || '',
     };
   }
-  const browserToolTimeoutMs = ['marcus_browser_fill', 'marcus_browser_prepare_post', 'marcus_browser_prepare_reply'].includes(toolName)
-    ? 30_000
-    : 12_000;
+  const browserToolTimeoutMs = toolName === 'marcus_browser_prepare_post'
+    ? 65_000
+    : ['marcus_browser_fill', 'marcus_browser_prepare_reply'].includes(toolName)
+      ? 45_000
+      : 12_000;
+  const browserActionIdempotencyKey = browserMission?.id
+    ? `browser:${browserMission.id}:${toolName}:${crypto.createHash('sha256').update(JSON.stringify(payload)).digest('hex').slice(0, 20)}`
+    : '';
+  if (browserActionIdempotencyKey) payload.idempotencyKey = browserActionIdempotencyKey;
   let result = await queueDesktopActionAndWait({
     type: toolName === 'marcus_browser_open' ? 'marcus-browser-open' : 'marcus-browser-command',
     payload,
     requestedBy,
+    idempotencyKey: browserActionIdempotencyKey,
   }, { timeoutMs: browserToolTimeoutMs });
   const skillVerification = verifyMarcusBrowserSkillResult(toolName, result, payload);
   if (result.ok && !skillVerification.ok) {
@@ -18940,6 +18953,7 @@ RULES:
 - Use marcus_browser_observe_community when Mark asks you to browse, learn from, remember, or build knowledge about a Skool community and its members. Use marcus_browser_inspect_notifications for the visible Skool notification surface. Those tools store bounded source-linked observations; they do not clear, react, reply, or publish. Use marcus_community_profiles and marcus_community_notifications when Mark asks what you remember about people, engagement, or pending community notifications.
 - Use marcus_browser_prepare_post for Mark's first, new, own, standalone, or main-feed Skool post. It is the only allowed tool for that task and must verify the standalone feed composer before you claim the draft is ready. Use marcus_browser_fill only for an editor already visible when the request is not a standalone Skool post. For a compound request to open a named Skool thread and draft a reply there, use marcus_browser_prepare_reply so the thread and its current comment editor are opened before filling. Preparation tools stop before submission; state clearly that the draft is visible and not posted. Use marcus_browser_submit only for that recent prepared draft after Mark explicitly approves posting it. Never type passwords; Mark completes credential fields visibly and the dedicated profile keeps the resulting login session.
 - When Mark returns browser control while an active browser mission is recovering, immediately resume that retained preparation or inspection mission. Do not ask him to repeat the request or use scripted wording. Returning control is never approval to publish, submit, send, delete, purchase, or perform another consequential action.
+- If a browser preparation action is still pending or times out, keep the browser mission active and retry it through the retained mission. Never tell Mark to copy and paste or post manually as the first recovery. Report the exact browser or relay blocker only after the retry returns a verified failure.
 - For Skool research, keep the current browser mission in mind across turns. If Mark says he moved your browser to the main feed, treat the visible page as the target and read it without demanding magic wording. If Mark asks to open each post, read comments, or always click "read more", use visible browser tools iteratively and report exact progress such as "read 6 posts and 18 comments so far"; never claim you read all posts/comments unless the tools actually traversed them. If a browser action times out, say it timed out and retry the same browser task; do not offer manual posting as the first recovery.
 - PC operator tools may create/edit/move/delete authorized files and run bounded PowerShell commands only from Mark's direct current request. Destructive or security-sensitive commands require explicit confirmation. Credentials are never relayed; financial actions, publishing, and representing Mark externally retain their specific durable approval paths.
 

@@ -1245,28 +1245,29 @@ async function checkDesktopActions() {
       if (!id || !type) continue;
 
       let outcome = { ok: false, error: `Unsupported desktop action: ${type}` };
-      const pathAction = [
-        'open-vscode', 'prepare-publish', 'publish-project-changes', 'run-project-script',
-        'validate-workspace', 'start-local-codex-job', 'followup-local-codex-job',
-        'connect-github-repository', 'deploy-cloudflare-project',
-      ].includes(type);
-      if (pathAction) {
-        const operationBound = String(action?.requestedBy || '').startsWith('operation:');
-        const valid = validateWorkspaceFolder(action?.payload?.path, { ...action?.payload, requireProjectBinding: operationBound || type === 'validate-workspace' });
-        if (!valid.ok) {
-          outcome = valid;
-          if (type === 'validate-workspace') outcome.details = { registeredPath: String(action?.payload?.registeredPath || ''), canonicalPath: '' };
-          responses.push({
-            id, type, jobId: String(action?.payload?.jobId || ''), businessKey: String(action?.payload?.businessKey || ''), operationId: String(action?.payload?.operationId || ''),
-            stepId: String(action?.payload?.stepId || ''), projectRegistryId: String(action?.payload?.projectRegistryId || ''),
-            desktopAgentId: DESKTOP_AGENT_ID, idempotencyKey: String(action?.payload?.idempotencyKey || ''),
-            attemptNumber: Number(action?.payload?.attemptNumber ?? 0), ...outcome,
-          });
-          continue;
+      try {
+        const pathAction = [
+          'open-vscode', 'prepare-publish', 'publish-project-changes', 'run-project-script',
+          'validate-workspace', 'start-local-codex-job', 'followup-local-codex-job',
+          'connect-github-repository', 'deploy-cloudflare-project',
+        ].includes(type);
+        if (pathAction) {
+          const operationBound = String(action?.requestedBy || '').startsWith('operation:');
+          const valid = validateWorkspaceFolder(action?.payload?.path, { ...action?.payload, requireProjectBinding: operationBound || type === 'validate-workspace' });
+          if (!valid.ok) {
+            outcome = valid;
+            if (type === 'validate-workspace') outcome.details = { registeredPath: String(action?.payload?.registeredPath || ''), canonicalPath: '' };
+            responses.push({
+              id, type, jobId: String(action?.payload?.jobId || ''), businessKey: String(action?.payload?.businessKey || ''), operationId: String(action?.payload?.operationId || ''),
+              stepId: String(action?.payload?.stepId || ''), projectRegistryId: String(action?.payload?.projectRegistryId || ''),
+              desktopAgentId: DESKTOP_AGENT_ID, idempotencyKey: String(action?.payload?.idempotencyKey || ''),
+              attemptNumber: Number(action?.payload?.attemptNumber ?? 0), ...outcome,
+            });
+            continue;
+          }
+          action.payload.path = valid.path;
         }
-        action.payload.path = valid.path;
-      }
-      if (type === 'open-vscode') {
+        if (type === 'open-vscode') {
         outcome = await openVsCode(action?.payload?.path);
       } else if (type === 'prepare-publish') {
         outcome = await preparePublish(action?.payload?.path);
@@ -1338,10 +1339,13 @@ async function checkDesktopActions() {
         outcome = await marcusBrowser.command(action?.payload || {});
       } else if (type === 'marcus-meeting-note') {
         outcome = writeMarcusMeetingNote(action?.payload || {});
-      } else if (type === 'marcus-community-profile-note') {
-        outcome = writeMarcusCommunityProfile(action?.payload || {});
+        } else if (type === 'marcus-community-profile-note') {
+          outcome = writeMarcusCommunityProfile(action?.payload || {});
+        }
+        if (type.startsWith('pc-')) outcome = toDesktopActionOutcome(outcome);
+      } catch (error) {
+        outcome = { ok: false, error: String(error?.message || error).slice(0, 4_000) };
       }
-      if (type.startsWith('pc-')) outcome = toDesktopActionOutcome(outcome);
 
       responses.push({
         id, type, jobId: String(action?.payload?.jobId || ''), businessKey: String(action?.payload?.businessKey || ''), operationId: String(action?.payload?.operationId || ''),

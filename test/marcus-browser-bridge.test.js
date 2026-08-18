@@ -294,7 +294,7 @@ test('MARCUS standalone post skill leaves an open thread and proves the main fee
 });
 
 test('MARCUS standalone post skill refuses a composer that is still inside a thread surface', async () => {
-  const bridge = new MarcusBrowserBridge();
+  const bridge = new MarcusBrowserBridge({ composerOpenTimeoutMs: 50, composerFocusTimeoutMs: 50, composerPollMs: 1 });
   let inserted = false;
   let runtimeCall = 0;
   bridge.ensureBrowser = async () => true;
@@ -320,6 +320,37 @@ test('MARCUS standalone post skill refuses a composer that is still inside a thr
     /standalone Skool feed composer was not verified/i,
   );
   assert.equal(inserted, false);
+});
+
+test('MARCUS standalone post waits for the main-feed composer to render', async () => {
+  const bridge = new MarcusBrowserBridge({ composerOpenTimeoutMs: 100, composerFocusTimeoutMs: 100, composerPollMs: 1 });
+  let runtimeCall = 0;
+  bridge.ensureBrowser = async () => true;
+  bridge.sensitiveFieldFocused = async () => false;
+  bridge.page = async () => ({
+    target: { id: 'skool-tab', url: 'https://www.skool.com/localgiants/drop-your-intro' },
+    session: {
+      send: async (method) => {
+        if (method === 'Page.navigate' || method === 'Input.insertText') return {};
+        runtimeCall += 1;
+        if (runtimeCall < 3) return { result: { value: { activated: false } } };
+        if (runtimeCall === 3) return { result: { value: { activated: true } } };
+        if (runtimeCall === 4) return { result: { value: { focused: false } } };
+        if (runtimeCall === 5) return { result: { value: {
+          focused: true, surface: 'standalone-feed-composer', communityRoot: true,
+          href: 'https://www.skool.com/localgiants',
+        } } };
+        return { result: { value: {
+          verified: true, chars: 21, communityRoot: true, inThread: false, hasPostControl: true,
+          href: 'https://www.skool.com/localgiants',
+        } } };
+      },
+    },
+  });
+
+  const result = await bridge.command({ command: 'prepare-post', text: 'Standalone post text.' });
+  assert.equal(result.details.result.verified, true);
+  assert.ok(runtimeCall >= 6);
 });
 
 test('MARCUS thread reply workflow opens the thread and current comment editor before filling', async () => {
