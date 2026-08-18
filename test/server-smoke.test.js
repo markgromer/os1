@@ -702,7 +702,8 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     assert.equal(pcCapabilities.authorization.scope, 'full_pc');
     assert.equal(pcCapabilities.authorization.fullPcAccess, true);
     assert.equal(pcCapabilities.boundaries.credentialContentBlocked, true);
-    assert.deepEqual(pcCapabilities.recommendedFullPcRoots, [path.parse(server.workspaceRoot).root]);
+    const workspaceDrive = server.workspaceRoot.match(/^([A-Za-z]):[\\/]/)?.[1]?.toUpperCase();
+    assert.deepEqual(pcCapabilities.recommendedFullPcRoots, workspaceDrive ? [`${workspaceDrive}:\\`] : []);
     const existingPcAccess = await fetch(`${base}/api/marcus/pc/access-request`, {
       method: 'POST', headers: agencyHeaders, body: JSON.stringify({ scope: 'full_pc' }),
     });
