@@ -438,7 +438,7 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     assert.equal(systemAcceptance.voice.session.acceptedOnPhysicalDevice, true);
     assert.equal(systemAcceptance.gates.missionMemoryReady, true);
     assert.equal(systemAcceptance.gates.physicalAndroidVoiceAccepted, true);
-    assert.equal(systemAcceptance.gates.projectOperatorReady, false);
+    assert.equal(systemAcceptance.gates.projectOperatorReady, true);
     assert.equal(systemAcceptance.gates.approvedTextSendAccepted, false);
     assert.equal(systemAcceptance.gates.approvedEmailSendAccepted, false);
     assert.equal(systemAcceptance.ready, false);
@@ -456,9 +456,9 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     assert.equal(operatorHealthBody.capabilities.projectOperator.available, true);
     assert.equal(operatorHealthBody.capabilities.missionMemory.available, true);
     assert.ok(operatorHealthBody.capabilities.missionMemory.activeCount >= 4);
-    assert.equal(operatorHealthBody.capabilities.projectOperator.mode, 'codex_handoff');
-    assert.equal(operatorHealthBody.capabilities.projectOperator.canStartCodexDirectly, false);
-    assert.ok(operatorHealthBody.blockers.some((item) => /direct Codex launch adapter/i.test(item)));
+    assert.equal(operatorHealthBody.capabilities.projectOperator.mode, 'direct_codex');
+    assert.equal(operatorHealthBody.capabilities.projectOperator.canStartCodexDirectly, true);
+    assert.equal(operatorHealthBody.capabilities.projectOperator.provider, 'desktop_codex');
     const savedProviderSettings = await fetch(`${base}/api/settings`, { method: 'PUT', headers: adminHeaders, body: JSON.stringify({
       githubToken: 'ghp_savedprovider1234567890',
       githubOwner: 'markgromer',
@@ -636,6 +636,48 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
       }] }),
     });
     assert.equal(browserActionResult.status, 200);
+    const publicationDraftResponse = await fetch(`${base}/api/marcus/browser/publications/draft`, {
+      method: 'POST', headers: agencyHeaders, body: JSON.stringify({
+        platform: 'skool', mode: 'reply', sourceUrl: 'https://www.skool.com/localgiants/drop-your-intro',
+        sourceTitle: 'Drop Your Intro', target: 'Drop Your Intro', text: "I'm MARCUS, Mark's AI Chief of Staff.", submitLabel: 'Comment',
+      }),
+    });
+    assert.equal(publicationDraftResponse.status, 201);
+    const publicationDraft = (await publicationDraftResponse.json()).publication;
+    assert.equal(publicationDraft.status, 'pending_approval');
+    const publicationList = await (await fetch(`${base}/api/marcus/browser/publications`, { headers: agencyHeaders })).json();
+    assert.equal(publicationList.publications[0].id, publicationDraft.id);
+    const approvePublication = await fetch(`${base}/api/marcus/browser/publications/${publicationDraft.id}/approve`, {
+      method: 'POST', headers: agencyHeaders, body: '{}',
+    });
+    assert.equal(approvePublication.status, 202);
+    const publicationActions = await (await fetch(`${base}/api/desktop-context/actions?agentId=agent-smoke`, { headers: agencyHeaders })).json();
+    const publicationAction = publicationActions.actions.find((item) => item.type === 'marcus-browser-publish');
+    assert.ok(publicationAction);
+    assert.equal(publicationAction.payload.publicationId, publicationDraft.id);
+    assert.equal(publicationAction.payload.command, 'publish-approved-draft');
+    assert.equal(publicationAction.payload.text, publicationDraft.text);
+    const publicationResult = await fetch(`${base}/api/desktop-context/action-results`, {
+      method: 'POST', headers: agencyHeaders, body: JSON.stringify({ agentId: 'agent-smoke', results: [{
+        id: publicationAction.id, type: publicationAction.type, publicationId: publicationDraft.id, ok: true,
+        details: { command: 'publish-approved-draft', result: { publicationId: publicationDraft.id, published: true, submitLabel: 'COMMENT' } },
+      }] }),
+    });
+    assert.equal(publicationResult.status, 200);
+    const publishedList = await (await fetch(`${base}/api/marcus/browser/publications`, { headers: agencyHeaders })).json();
+    assert.equal(publishedList.publications.find((item) => item.id === publicationDraft.id).status, 'published');
+    const deniedDraftResponse = await fetch(`${base}/api/marcus/browser/publications/draft`, {
+      method: 'POST', headers: agencyHeaders, body: JSON.stringify({
+        platform: 'skool', mode: 'post', sourceUrl: 'https://www.skool.com/localgiants',
+        sourceTitle: 'ScoopOS', target: 'Community post', text: 'Denied draft.', submitLabel: 'Post',
+      }),
+    });
+    const deniedDraft = (await deniedDraftResponse.json()).publication;
+    const denyPublication = await fetch(`${base}/api/marcus/browser/publications/${deniedDraft.id}/reject`, {
+      method: 'POST', headers: agencyHeaders, body: '{}',
+    });
+    assert.equal(denyPublication.status, 200);
+    assert.equal((await denyPublication.json()).publication.status, 'rejected');
     const sensitiveBrowserRelay = await fetch(`${base}/api/marcus/browser/relay`, {
       method: 'POST', headers: agencyHeaders, body: JSON.stringify({
         agentId: 'agent-smoke', connected: true, sensitive: true, title: 'Sign in', url: 'https://accounts.google.com/',
@@ -774,7 +816,8 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     assert.equal(operatorBody.status, 'codex_prepared');
     assert.match(operatorBody.codexPrompt, /Goal for Codex/);
     assert.match(operatorBody.auditBrief, /Operator Smoke/);
-    assert.equal(operatorBody.operation.status, 'blocked');
+    assert.equal(operatorBody.operation.status, 'failed');
+    assert.match(JSON.stringify(operatorBody.operation), /approved workspace path bound to a desktop agent/i);
     const freedomRegistryResponse = await fetch(`${base}/api/project-registry`, { method: 'POST', headers: agencyHeaders, body: JSON.stringify({
       canonicalName: 'Freedom Scoopers',
       aliases: ['Freedom Scoopers website', 'freedom scoopers website'],
@@ -893,7 +936,7 @@ test('mission memory survives a server restart, rejects secrets, and remains bus
 
 test('server enables direct Codex mode when HTTP adapter URL is configured', async () => {
   await withMockCodexAdapter(async (adapterUrl) => {
-    const server = await spawnServer({ extraEnv: { MARCUS_CODEX_ADAPTER_URL: adapterUrl, MARCUS_CODEX_ADAPTER_TOKEN: 'test-token' } });
+    const server = await spawnServer({ extraEnv: { MARCUS_DESKTOP_CODEX_ENABLED: 'false', MARCUS_CODEX_ADAPTER_URL: adapterUrl, MARCUS_CODEX_ADAPTER_TOKEN: 'test-token' } });
     const base = `http://127.0.0.1:${server.port}`;
     const adminHeaders = { authorization: 'Bearer test-admin-token', 'content-type': 'application/json' };
     try {
@@ -1277,6 +1320,7 @@ test('paired admin can configure, verify, and acceptance-test Quo and SMTP safel
 
 test('server enables Reggie-style GitHub Actions Codex mode when configured', async () => {
   const server = await spawnServer({ extraEnv: {
+    MARCUS_DESKTOP_CODEX_ENABLED: 'false',
     MARCUS_CODEX_GITHUB_ACTIONS_ENABLED: 'true',
     MARCUS_CODEX_GITHUB_TOKEN: 'ghp_testcodexactions1234567890',
     MARCUS_CODEX_RUNNER_REPO: 'markgromer/os1',

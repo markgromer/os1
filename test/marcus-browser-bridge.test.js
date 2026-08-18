@@ -394,6 +394,45 @@ test('MARCUS standalone post waits for the main-feed composer to render', async 
   assert.ok(runtimeCall >= 6);
 });
 
+test('MARCUS completes and verifies a rich standalone Skool post', async () => {
+  const bridge = new MarcusBrowserBridge();
+  const actions = [];
+  bridge.replaceSkoolInput = async (_session, input) => actions.push({ type: 'fill', ...input });
+  bridge.trustedClickVisible = async (_session, input) => actions.push({ type: 'click', ...input });
+  const session = {
+    send: async (method, params) => {
+      assert.equal(method, 'Runtime.evaluate');
+      assert.match(params.expression, /completeDraft/);
+      return { result: { value: {
+        completeDraft: true,
+        titleVerified: true,
+        categoryVerified: true,
+        pollVerified: true,
+        title: 'What should MARCUS automate next?',
+        category: 'Operations',
+        pollOptions: ['Lead follow-up', 'Route planning', 'Customer updates'],
+      } } };
+    },
+  };
+
+  const result = await bridge.completeSkoolPostComposition(session, {
+    title: 'What should MARCUS automate next?',
+    category: 'Operations',
+    pollOptions: ['Lead follow-up', 'Route planning', 'Customer updates'],
+  });
+
+  assert.equal(result.completeDraft, true);
+  assert.deepEqual(actions, [
+    { type: 'fill', placeholder: 'Title', text: 'What should MARCUS automate next?' },
+    { type: 'click', label: 'Select a category', selector: 'button' },
+    { type: 'click', label: 'Operations', selector: '.skool-ui-dropdown-option' },
+    { type: 'click', label: 'Add poll', selector: 'button[aria-label]' },
+    { type: 'fill', placeholder: 'Option 1', text: 'Lead follow-up' },
+    { type: 'fill', placeholder: 'Option 2', text: 'Route planning' },
+    { type: 'fill', placeholder: 'Option 3', text: 'Customer updates' },
+  ]);
+});
+
 test('MARCUS thread reply workflow opens the thread and current comment editor before filling', async () => {
   const bridge = new MarcusBrowserBridge();
   const calls = [];

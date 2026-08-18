@@ -356,6 +356,48 @@ test('project operator discovers an explicitly named recent Codex workspace and 
   });
 });
 
+test('project operator attaches a live desktop workspace before launching an existing project', async () => {
+  const launches = [];
+  await withProjectOperator(async ({ engine, service, dataDir }) => {
+    const project = await engine.createProjectRegistryRecord('personal', {
+      canonicalName: 'Sunrise Scoopers',
+      aliases: ['Sunrise'],
+      repo: { fullName: 'markgromer/sunrise-scoopers', defaultBranch: 'main' },
+    });
+
+    const result = await service.prepareCodexOperation('personal', {
+      message: 'Add a commercial services page to Sunrise Scoopers and build it for review.',
+      projectRegistryId: project.id,
+    });
+
+    assert.equal(result.status, 'codex_prepared');
+    assert.equal(launches.length, 1);
+    assert.equal(launches[0].workspacePath, path.join(dataDir, 'sunrise-scoopers'));
+    assert.equal(launches[0].desktopAgentId, 'desktop-mark');
+    assert.equal(result.operation.metadata.codexJobs[result.operation.steps.find((step) => step.type === 'codex').id].provider, 'desktop_codex');
+  }, {
+    directCodexAdapter: {
+      providerName: 'desktop_codex',
+      startJob: async (job) => {
+        launches.push(job);
+        return { provider: 'desktop_codex', jobId: 'desktop-sunrise-1', status: 'queued' };
+      },
+      getJobStatus: async (job) => job,
+    },
+    getDesktopContext: async (dataDir) => ({
+      desktopAuthorization: {
+        agentId: 'desktop-mark', scope: 'full_pc', broadWorkspaceRootsAllowed: true,
+      },
+      codexWorkspaces: [{
+        workspacePath: path.join(dataDir, 'sunrise-scoopers'),
+        folderName: 'sunrise-scoopers',
+        projectName: 'Sunrise Scoopers',
+        gitRemote: 'https://github.com/markgromer/sunrise-scoopers.git',
+      }],
+    }),
+  });
+});
+
 test('project operator does not register conversational slash phrases as GitHub repositories', async () => {
   await withProjectOperator(async ({ engine, service }) => {
     const context = await service.resolveProjectContext('personal', {

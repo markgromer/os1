@@ -3,6 +3,7 @@ import { formatJobPrimingManifest } from '../marcus/jobs/job_priming.js';
 import { assessLockedDecisionConflict } from '../marcus/memory/locked_decisions.js';
 import { sanitizeOperatorResultForSpeech, containsSpokenMachineReference } from '../marcus/voice/spoken_reference.js';
 import { assessPostInterruptionAlignment } from '../marcus/voice/conversation_alignment.js';
+import { evaluateMarcusVoiceStyle } from '../marcus/voice/voice_style_eval.js';
 
 const memories = [
   { id: 'mem_relationship_demo', status: 'active', kind: 'preference', title: 'Relationship voice', content: 'Marcus and Mark use earned teasing, shared shorthand, honest pushback, and fierce loyalty.' },
@@ -24,6 +25,8 @@ const continuity = buildVoiceContinuityBrief({
 const priming = formatJobPrimingManifest('Deploy the Marcus voice update and verify production.');
 const conflict = assessLockedDecisionConflict('Bypass the direct deployment authority boundary for realtime voice.', memories);
 const alignment = assessPostInterruptionAlignment({ interruptedRequest: 'Audit the Reggie font', nextRequest: 'Actually check Marcus voice latency', answer: 'Marcus voice latency is healthy.' });
+const trainingWheels = evaluateMarcusVoiceStyle("Got it, I'll verify the repo and get back to you, but first I'll make sure this doesn't duplicate anything.");
+const marcusDelivery = evaluateMarcusVoiceStyle('Repo is clean. Miraculously, we did not invent the same feature twice.');
 
 const checks = [
   ['Spoken references are human', spoken.reply.includes('Reggie font pull request') && !containsSpokenMachineReference(spoken)],
@@ -32,6 +35,8 @@ const checks = [
   ['Locked decisions fail closed', conflict?.status === 'locked_decision_conflict'],
   ['Interrupted turns stay aligned to the new request', alignment.aligned],
   ['Raw identifiers remain available outside speech', raw.operationId === 'op_NfHu37cdF1aSjQ'],
+  ['ChatGPT training wheels are rejected', !trainingWheels.passed && trainingWheels.violations.length >= 3],
+  ['Quick Marcus delivery passes', marcusDelivery.passed],
 ];
 
 console.log('\nMARCUS INTELLIGENCE DEMO\n');

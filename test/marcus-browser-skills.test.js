@@ -46,6 +46,41 @@ test('standalone post skill accepts exact root-composer read-back evidence', () 
   assert.equal(verification.skillId, 'skool.prepare-standalone-post');
 });
 
+test('standalone post skill requires exact rich-composition evidence when supplied', () => {
+  const input = {
+    title: 'What should MARCUS automate next?',
+    text: 'A developed standalone post body.',
+    category: 'Operations',
+    pollOptions: ['Lead follow-up', 'Route planning'],
+  };
+  const incomplete = verifyMarcusBrowserSkillResult('marcus_browser_prepare_post', {
+    ok: true,
+    details: { result: {
+      insertedChars: input.text.length,
+      surface: 'standalone-feed-composer',
+      verified: true,
+      communityRoot: true,
+    } },
+  }, input);
+  assert.equal(incomplete.ok, false);
+
+  const complete = verifyMarcusBrowserSkillResult('marcus_browser_prepare_post', {
+    ok: true,
+    details: { result: {
+      insertedChars: input.text.length,
+      surface: 'standalone-feed-composer',
+      verified: true,
+      communityRoot: true,
+      completeDraft: true,
+      title: input.title,
+      category: input.category,
+      pollOptions: input.pollOptions,
+    } },
+  }, input);
+  assert.equal(complete.ok, true);
+  assert.equal(complete.evidence.completeDraft, true);
+});
+
 test('publication skill rejects a generic successful click without publication proof', () => {
   const verification = verifyMarcusBrowserSkillResult('marcus_browser_submit', {
     ok: true,

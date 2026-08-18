@@ -500,8 +500,16 @@ class MarcusBrowserBridge {
       await session.send('Input.insertText', { text });
       result = { ...focused.result.value, insertedChars: text.length };
     } else if (command === 'prepare-post') {
+      const title = String(payload.title || '').replace(/\s+/g, ' ').trim().slice(0, 160);
       const text = String(payload.text || '').slice(0, 4_000);
-      result = await this.prepareStandalonePost(session, target, { text });
+      const category = String(payload.category || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+      const pollOptions = (Array.isArray(payload.pollOptions) ? payload.pollOptions : [])
+        .map((option) => String(option || '').replace(/\s+/g, ' ').trim().slice(0, 120))
+        .filter(Boolean)
+        .slice(0, 3);
+      result = await this.prepareStandalonePost(session, target, {
+        title, text, category, pollOptions,
+      });
     } else if (command === 'prepare-reply') {
       const thread = String(payload.thread || '').replace(/\s+/g, ' ').trim().slice(0, 240);
       const text = String(payload.text || '').slice(0, 4_000);
@@ -530,7 +538,9 @@ class MarcusBrowserBridge {
     return { ok: true, details: { command, targetId: target.id, result } };
   }
 
-  async prepareStandalonePost(session, target, { text }) {
+  async prepareStandalonePost(session, target, {
+    title = '', text, category = '', pollOptions = [],
+  }) {
     if (!text) throw new Error('Text is required.');
     if (liveContextKind(target.url) !== 'skool') {
       throw new Error('Standalone post preparation is available only on the approved Skool page.');
@@ -690,11 +700,15 @@ class MarcusBrowserBridge {
     if (!verified?.result?.value?.verified) {
       throw new Error('The standalone Skool draft failed exact composer read-back. MARCUS will not claim it is ready.');
     }
+    const composition = title && category
+      ? await this.completeSkoolPostComposition(session, { title, category, pollOptions })
+      : { completeDraft: false, title: '', category: '', pollOptions: [] };
     return {
       ...focus.result.value,
       verified: true,
       insertedChars: text.length,
       href: verified.result.value.href || focus.result.value.href || communityUrl,
+      ...composition,
     };
   }
 
@@ -716,6 +730,120 @@ class MarcusBrowserBridge {
     if (latest) return latest;
     if (latestError) throw latestError;
     return null;
+  }
+
+  async trustedClickVisible(session, { label, selector }) {
+    const located = await this.evaluateUntil(session, {
+      expression: `(() => {
+        const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+        const wanted = ${JSON.stringify(String(label || '').toLowerCase())};
+        const candidates = [...document.querySelectorAll(${JSON.stringify(selector)})]
+          .filter((element) => {
+            const rect = element.getBoundingClientRect();
+            const style = getComputedStyle(element);
+            const text = normalize(element.getAttribute('aria-label') || element.getAttribute('placeholder') || element.innerText || element.textContent);
+            return text === wanted && rect.width > 0 && rect.height > 0
+              && rect.bottom >= 0 && rect.top <= innerHeight
+              && style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) !== 0;
+          });
+        const element = candidates[0];
+        if (!element) return { located: false };
+        element.scrollIntoView({ block: 'center', inline: 'nearest' });
+        const rect = element.getBoundingClientRect();
+        return { located: true, x: rect.left + (rect.width / 2), y: rect.top + (rect.height / 2) };
+      })()`,
+      returnByValue: true,
+    }, {
+      timeoutMs: this.composerFocusTimeoutMs,
+      accept: (value) => value?.result?.value?.located === true,
+    });
+    const point = located?.result?.value;
+    if (!point?.located || !Number.isFinite(point.x) || !Number.isFinite(point.y)) {
+      throw new Error(`The Skool composer control "${label}" is not visible.`);
+    }
+    await session.send('Input.dispatchMouseEvent', {
+      type: 'mouseMoved', x: point.x, y: point.y, pointerType: 'mouse',
+    });
+    await session.send('Input.dispatchMouseEvent', {
+      type: 'mousePressed', x: point.x, y: point.y, button: 'left', buttons: 1, clickCount: 1, pointerType: 'mouse',
+    });
+    await session.send('Input.dispatchMouseEvent', {
+      type: 'mouseReleased', x: point.x, y: point.y, button: 'left', buttons: 0, clickCount: 1, pointerType: 'mouse',
+    });
+  }
+
+  async replaceSkoolInput(session, { placeholder, text }) {
+    const focused = await this.evaluateUntil(session, {
+      expression: `(() => {
+        const wanted = ${JSON.stringify(String(placeholder || '').toLowerCase())};
+        const input = [...document.querySelectorAll('input')].find((element) => {
+          const rect = element.getBoundingClientRect();
+          const style = getComputedStyle(element);
+          return String(element.getAttribute('placeholder') || '').trim().toLowerCase() === wanted
+            && !element.disabled && !element.readOnly && rect.width > 0 && rect.height > 0
+            && style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) !== 0;
+        });
+        if (!input) return { focused: false };
+        input.scrollIntoView({ block: 'center', inline: 'nearest' });
+        input.focus();
+        input.select();
+        return { focused: document.activeElement === input };
+      })()`,
+      returnByValue: true,
+    }, {
+      timeoutMs: this.composerFocusTimeoutMs,
+      accept: (value) => value?.result?.value?.focused === true,
+    });
+    if (!focused?.result?.value?.focused) throw new Error(`The Skool composer field "${placeholder}" is not visible.`);
+    await session.send('Input.insertText', { text });
+  }
+
+  async completeSkoolPostComposition(session, { title, category, pollOptions = [] }) {
+    await this.replaceSkoolInput(session, { placeholder: 'Title', text: title });
+    await this.trustedClickVisible(session, { label: 'Select a category', selector: 'button' });
+    await this.trustedClickVisible(session, { label: category, selector: '.skool-ui-dropdown-option' });
+
+    const options = pollOptions.slice(0, 3);
+    if (options.length >= 2) {
+      await this.trustedClickVisible(session, { label: 'Add poll', selector: 'button[aria-label]' });
+      for (let index = 0; index < options.length; index += 1) {
+        await this.replaceSkoolInput(session, { placeholder: `Option ${index + 1}`, text: options[index] });
+      }
+    }
+
+    const verified = await session.send('Runtime.evaluate', {
+      expression: `(() => {
+        const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
+        const expectedTitle = ${JSON.stringify(title)};
+        const expectedCategory = ${JSON.stringify(category)};
+        const expectedPoll = ${JSON.stringify(options)};
+        const titleInput = [...document.querySelectorAll('input')]
+          .find((input) => normalize(input.getAttribute('placeholder')).toLowerCase() === 'title');
+        const titleVerified = normalize(titleInput?.value) === expectedTitle;
+        const categoryVerified = [...document.querySelectorAll('button')]
+          .some((button) => normalize(button.innerText || button.textContent) === expectedCategory);
+        const pollValues = [...document.querySelectorAll('input')]
+          .filter((input) => /^Option \\d+$/i.test(normalize(input.getAttribute('placeholder'))))
+          .map((input) => normalize(input.value))
+          .filter(Boolean)
+          .slice(0, expectedPoll.length);
+        const pollVerified = expectedPoll.length < 2 || JSON.stringify(pollValues) === JSON.stringify(expectedPoll);
+        return {
+          completeDraft: titleVerified && categoryVerified && pollVerified,
+          titleVerified,
+          categoryVerified,
+          pollVerified,
+          title: normalize(titleInput?.value),
+          category: categoryVerified ? expectedCategory : '',
+          pollOptions: pollValues,
+        };
+      })()`,
+      returnByValue: true,
+    }, 4_000);
+    if (!verified?.result?.value?.completeDraft) {
+      throw new Error('The Skool post is not complete: title, category, or poll verification failed.');
+    }
+    return verified.result.value;
   }
 
   async replaceVisibleEditor(session, text) {
@@ -753,7 +881,13 @@ class MarcusBrowserBridge {
     const publicationId = String(payload.publicationId || '').trim().slice(0, 120);
     const mode = payload.mode === 'reply' ? 'reply' : 'post';
     const thread = String(payload.thread || payload.target || '').replace(/\s+/g, ' ').trim().slice(0, 240);
+    const title = String(payload.title || '').replace(/\s+/g, ' ').trim().slice(0, 160);
     const text = String(payload.text || '').slice(0, 4_000);
+    const category = String(payload.category || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+    const pollOptions = (Array.isArray(payload.pollOptions) ? payload.pollOptions : [])
+      .map((option) => String(option || '').replace(/\s+/g, ' ').trim().slice(0, 120))
+      .filter(Boolean)
+      .slice(0, 3);
     const submitLabel = String(payload.submitLabel || '').replace(/\s+/g, ' ').trim().slice(0, 80);
     if (!publicationId || !text || !/^(post|publish|send|submit|reply|comment)(\b|\s)/i.test(submitLabel)) {
       throw new Error('The approved publication payload is incomplete.');
@@ -762,7 +896,11 @@ class MarcusBrowserBridge {
       throw new Error('Approved publication is blocked while a password field is focused.');
     }
     if (mode === 'reply') await this.prepareReply(session, target, { thread, text });
-    else if (liveContextKind(target.url || payload.url) === 'skool') await this.prepareStandalonePost(session, target, { text });
+    else if (liveContextKind(target.url || payload.url) === 'skool') {
+      await this.prepareStandalonePost(session, target, {
+        title, text, category, pollOptions,
+      });
+    }
     else await this.replaceVisibleEditor(session, text);
 
     const verified = await session.send('Runtime.evaluate', {

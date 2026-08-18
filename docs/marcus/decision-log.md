@@ -2,6 +2,12 @@
 
 Status: active
 
+## 2026-08-17: Private Voice Does Not Narrate Its Safety Net
+
+Decision: Operator mode calls required tools silently and speaks after evidence exists. It does not pre-announce verification, safeguards, anti-duplication checks, or a later update. Private voice defaults to candid opinions, quick wit, and earned jabs; public modes retain their audience restrictions.
+
+Consequence: Execution discipline remains enforced in code and tools without becoming the conversational personality. Training-wheel language is covered by a deterministic voice-style evaluation.
+
 ## 2026-08-17: Current Visible Pages Do Not Require Mark To Repeat The URL
 
 Context: Mark asked MARCUS to look through the ScoopOS community while the live visualizer visibly showed that page. MARCUS incorrectly said he could not browse without an exact URL because his tools exposed only one viewport of status plus explicit navigation.

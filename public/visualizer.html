@@ -392,6 +392,18 @@
     .brief-list .bullet.ok { background: #e3f5e8; color: #1d7b3f; }
     .brief-list .bullet.warn { background: #fff0c7; color: #865700; }
     .brief-list .bullet.bad { background: #ffe4e7; color: #9c2631; }
+    .codex-workbench { height: 100%; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; background: #07111f; color: #d9e6f5; }
+    .codex-thread { min-height: 0; overflow: auto; padding: 26px clamp(22px, 5vw, 72px); display: grid; align-content: start; gap: 18px; }
+    .codex-turn { max-width: 900px; }
+    .codex-turn .message-meta { margin-bottom: 7px; color: #7f95ad; }
+    .codex-turn p { margin: 0; font: 15px/1.65 system-ui, sans-serif; white-space: pre-wrap; }
+    .codex-turn.user { padding-left: 18px; border-left: 3px solid #35c8eb; }
+    .codex-turn.assistant { padding-left: 18px; border-left: 3px solid #8d62f5; }
+    .codex-context { display: flex; flex-wrap: wrap; gap: 8px; color: #8fa1b5; font-size: 12px; }
+    .codex-context span { border: 1px solid #26364a; border-radius: 999px; padding: 4px 8px; background: #0d1928; }
+    .codex-compose { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; padding: 14px clamp(22px, 5vw, 72px) 18px; border-top: 1px solid #223247; background: #091523; }
+    .codex-compose textarea { min-height: 68px; max-height: 180px; resize: vertical; border: 1px solid #30445c; border-radius: 12px; padding: 12px 14px; background: #0d1b2b; color: #eef6ff; font: 14px/1.45 system-ui, sans-serif; }
+    .codex-compose-note { grid-column: 1 / -1; color: #7f95ad; font-size: 11px; }
 
     .audit-panel {
       min-width: 0;
@@ -1623,21 +1635,65 @@
         </div>`;
     }
     function codeSurface(project) {
+      const directJob = directCodexJob(project);
+      const routeLabel = directJob ? "Direct to this Codex job" : "MARCUS routes to this Codex workspace";
       return `
-        <header class="preview-nav" style="background:#0f1722;color:#f4f1ea;border-color:#202B38">
-          <div class="preview-brand" style="font-size:18px">${esc(project.name)}</div>
-          <nav class="preview-links" style="color:#AAB3C0"><span>Codex</span><span>${esc(project.label)}</span><span>${esc(age(project.updatedAt))}</span></nav>
-        </header>
-        <div style="min-height:0;overflow:auto;padding:24px;background:#0b1119;color:#d9e1ea;font-family:var(--mono);font-size:13px;line-height:1.55">
-          <p><strong style="color:#35C8EB">Request:</strong> ${esc(project.request)}</p>
-          <p><strong style="color:#8D62F5">Codex:</strong> ${esc(project.response)}</p>
-          <p><strong style="color:#F2B544">Next:</strong> ${esc(project.next)}</p>
-          <p><strong>Workspace:</strong> ${esc(project.workspacePath || "not reported")}</p>
-          <p><strong>Branch:</strong> ${esc(project.branch || "not reported")}</p>
-          <p><strong>Changed files:</strong> ${esc(String(project.statusCount || 0))}</p>
-          <hr style="border:0;border-top:1px solid #202B38;margin:18px 0">
-          ${project.recentCommits.map((commit) => `<p>${esc(commit)}</p>`).join("") || `<p>No recent commits reported by this session.</p>`}
+        <div class="codex-workbench">
+          <header class="preview-nav" style="background:#0b1725;color:#f4f1ea;border-color:#223247">
+            <div class="preview-brand" style="font-size:18px">${esc(project.name)} <span class="state-pill live">CODEX</span></div>
+            <nav class="preview-links" style="color:#AAB3C0"><span>${esc(project.label)}</span><span>${esc(age(project.updatedAt))}</span></nav>
+          </header>
+          <div class="codex-thread" aria-label="Codex conversation for ${esc(project.name)}">
+            <div class="codex-context"><span>${esc(project.workspacePath || "workspace not reported")}</span><span>${esc(project.branch || "branch not reported")}</span><span>${esc(String(project.statusCount || 0))} changed files</span></div>
+            <article class="codex-turn user"><span class="message-meta">MARK · REQUEST</span><p>${esc(project.request)}</p></article>
+            <article class="codex-turn assistant"><span class="message-meta">CODEX · LATEST UPDATE</span><p>${esc(project.response)}</p></article>
+            <article class="codex-turn assistant"><span class="message-meta">MARCUS · NEXT READ</span><p>${esc(project.next)}</p></article>
+          </div>
+          <form class="codex-compose" data-codex-compose="${esc(project.id)}">
+            <textarea aria-label="Message Codex" placeholder="Tell Codex what to inspect, change, test, or explain..." required></textarea>
+            <button class="btn primary" type="submit">Send</button>
+            <span class="codex-compose-note">${esc(routeLabel)}. MARCUS remains visible in the right panel and keeps the project context.</span>
+          </form>
         </div>`;
+    }
+
+    function directCodexJob(project) {
+      if (!project) return null;
+      if (project.source === "job" && project.raw?.id) return project.raw;
+      const workspace = text(project.workspacePath).toLowerCase();
+      const name = idFrom(project.name);
+      return snapshot.jobs.find((job) => {
+        if (!job?.id) return false;
+        const jobWorkspace = text(job.workspacePath || job.cwd || job.repositoryPath).toLowerCase();
+        return (workspace && jobWorkspace && workspace === jobWorkspace)
+          || (name && idFrom(job.projectName || job.repository || "") === name);
+      }) || null;
+    }
+
+    async function sendCodexFollowup(projectId, message, form) {
+      const project = snapshot.projects.find((item) => item.id === projectId);
+      if (!project || !message) return;
+      const submit = form?.querySelector('button[type="submit"]');
+      if (submit) { submit.disabled = true; submit.textContent = "Sending…"; }
+      try {
+        const job = directCodexJob(project);
+        if (job) {
+          await api(`/api/codex/jobs/${encodeURIComponent(job.id)}/followup`, {
+            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message }),
+          });
+          addMessage("marcus", `Sent directly to the Codex job for ${project.name}. I’ll keep its evidence and next decision synchronized here.`);
+        } else {
+          setChatContext(project.id);
+          await sendToMarcus(`Send this exact follow-up to the active Codex work for ${project.name}: ${message}`, { echoUser: false, rethrow: true });
+        }
+        await load();
+        activeTab = "codex";
+        renderWorkspace();
+      } catch (error) {
+        addMessage("marcus error", `Codex follow-up failed: ${error.message}`);
+      } finally {
+        if (submit) { submit.disabled = false; submit.textContent = "Send"; }
+      }
     }
     function evidenceSurface(project, title, items) {
       return `
@@ -1790,7 +1846,7 @@
         if (chat) return setChatContext(chat.dataset.chatProject);
         if (action) return projectAction(action.dataset.actionProject);
         selectedId = button.dataset.selectProject;
-        activeTab = "preview";
+        activeTab = "codex";
         render();
       });
       document.querySelectorAll("[data-chat-project]").forEach((button) => button.onclick = (event) => {
@@ -1806,6 +1862,13 @@
         renderWorkspace();
       });
       document.querySelectorAll("[data-project-command]").forEach((button) => button.onclick = () => runProjectCommand(button.dataset.projectCommand, button.dataset.projectId));
+      document.querySelectorAll("[data-codex-compose]").forEach((form) => form.onsubmit = (event) => {
+        event.preventDefault();
+        const input = form.querySelector("textarea");
+        const message = text(input?.value).trim();
+        if (!message) return;
+        sendCodexFollowup(form.dataset.codexCompose, message, form);
+      });
       document.querySelectorAll("[data-review-next]").forEach((button) => button.onclick = () => explainReasoning(selectedId));
       document.querySelectorAll("[data-control-current]").forEach((button) => button.onclick = toggleControl);
       document.querySelectorAll("[data-pause-current]").forEach((button) => button.onclick = () => addMessage("marcus", "Pause is recorded locally in this display slice. A backend operation pause requires an exact operation binding."));

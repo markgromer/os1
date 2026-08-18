@@ -480,6 +480,27 @@ export class ProjectOperatorService {
     }
   }
 
+  async attachMatchingDesktopWorkspace(businessKey, project, desktop) {
+    if (!project?.id) return project;
+    const candidate = (Array.isArray(desktop?.codexWorkspaces) ? desktop.codexWorkspaces : [])
+      .find((workspace) => codexWorkspaceMatchesProject(workspace, project));
+    const workspacePath = safeString(candidate?.workspacePath, 2_000);
+    if (!workspacePath) return this.applyDesktopAuthorization(businessKey, project, desktop);
+
+    let attached = project;
+    const registeredPath = safeString(project.localWorkspace?.canonicalPath || project.localWorkspace?.path, 2_000);
+    if (registeredPath.toLowerCase() !== workspacePath.toLowerCase()) {
+      try {
+        attached = await this.operationsEngine.updateProjectRegistryRecord(businessKey, project.id, {
+          localWorkspace: { path: workspacePath, platform: 'win32' },
+        });
+      } catch {
+        return project;
+      }
+    }
+    return this.applyDesktopAuthorization(businessKey, attached, desktop);
+  }
+
   async ensureExplicitGithubProject(businessKey, request) {
     const key = safeBusinessKey(businessKey);
     const explicit = extractExplicitGitHubRepositories(request)[0] || '';
@@ -934,6 +955,9 @@ export class ProjectOperatorService {
         reply: replyForResult({ status: 'needs_project', alternatives }),
       };
     }
+    const desktop = await this.getDesktopContext().catch(() => ({}));
+    const executableProject = await this.attachMatchingDesktopWorkspace(key, resolution.registryRecord, desktop);
+    if (executableProject?.id === resolution.registryRecord.id) resolution.registryRecord = executableProject;
     const brief = await this.buildExecutionBrief(key, request, resolution);
     const lockedConflict = assessLockedDecisionConflict(request, brief.missionMemory);
     if (lockedConflict) return { ok: true, ...lockedConflict, resolution, project: summarizeProject(resolution.registryRecord) };

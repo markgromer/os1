@@ -10,6 +10,7 @@ import { WinningMethodStore } from '../marcus/memory/winning_method_store.js';
 import { buildVoiceContinuityBrief } from '../marcus/voice/continuity_brief.js';
 import { assessPostInterruptionAlignment } from '../marcus/voice/conversation_alignment.js';
 import { containsSpokenMachineReference, sanitizeOperatorResultForSpeech } from '../marcus/voice/spoken_reference.js';
+import { evaluateMarcusVoiceStyle } from '../marcus/voice/voice_style_eval.js';
 
 test('operator results retain machine evidence outside the speech-safe projection', () => {
   const raw = { ok: true, operationId: 'op_123456789', project: { name: 'Reggie', id: 'project_123456789' }, reply: 'PR #1847 is at https://example.test/pull/1847 for operation op_123456789.' };
@@ -54,4 +55,12 @@ test('semantic interruption audit rejects a stale answer and accepts the redirec
   const aligned = assessPostInterruptionAlignment({ interruptedRequest: 'Audit Reggie font rendering', nextRequest: 'Actually check Marcus voice latency', answer: 'Marcus voice latency is healthy.' });
   assert.equal(stale.aligned, false);
   assert.equal(aligned.aligned, true);
+});
+
+test('voice style eval rejects ChatGPT training wheels and accepts Marcus delivery', () => {
+  const beige = evaluateMarcusVoiceStyle("Got it, I'll verify the repo and get back to you, but first I'll make sure this doesn't duplicate anything.");
+  const marcus = evaluateMarcusVoiceStyle('Repo is clean. Miraculously, we did not invent the same feature twice.');
+  assert.equal(beige.passed, false);
+  assert.ok(beige.violations.length >= 3);
+  assert.equal(marcus.passed, true);
 });

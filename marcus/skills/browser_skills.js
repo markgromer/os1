@@ -115,13 +115,32 @@ const BROWSER_SKILLS = [
     recovery: ['return to community root', 'dismiss thread surface', 'reopen feed composer', 'fail closed if proof is incomplete'],
     verify(result, input) {
       const observed = actionResult(result);
+      const expectedTitle = String(input?.title || '').trim();
+      const expectedCategory = String(input?.category || '').trim();
+      const expectedPoll = Array.isArray(input?.pollOptions) ? input.pollOptions.filter(Boolean) : [];
+      const richCompositionRequired = Boolean(expectedTitle || expectedCategory || expectedPoll.length);
+      const richCompositionVerified = !richCompositionRequired || (
+        observed.completeDraft === true
+        && observed.title === expectedTitle
+        && observed.category === expectedCategory
+        && JSON.stringify(observed.pollOptions || []) === JSON.stringify(expectedPoll.slice(0, 3))
+      );
       const ok = observed.surface === 'standalone-feed-composer'
         && observed.verified === true
         && observed.communityRoot === true
-        && exactInsertedText(result, input);
+        && exactInsertedText(result, input)
+        && richCompositionVerified;
       return ok
-        ? { ok: true, evidence: { surface: observed.surface, href: observed.href, insertedChars: observed.insertedChars } }
-        : { ok: false, error: 'Standalone post preparation was not proven on the Skool main feed composer.' };
+        ? { ok: true, evidence: {
+          surface: observed.surface,
+          href: observed.href,
+          insertedChars: observed.insertedChars,
+          completeDraft: observed.completeDraft === true,
+          title: observed.title || '',
+          category: observed.category || '',
+          pollOptions: observed.pollOptions || [],
+        } }
+        : { ok: false, error: 'A complete standalone post was not proven in the Skool main-feed composer.' };
     },
   }),
   defineMarcusSkill({
