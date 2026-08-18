@@ -22,6 +22,7 @@ import { registerMissionMemoryRoutes } from './marcus/api/mission_memory_routes.
 import { registerCommunityIntelligenceRoutes } from './marcus/api/community_intelligence_routes.js';
 import { registerProjectEvidenceRoutes } from './marcus/api/project_evidence_routes.js';
 import { registerAwarenessRoutes } from './marcus/api/awareness_routes.js';
+import { registerNervousSystemRoutes } from './marcus/api/nervous_system_routes.js';
 import { AwarenessService } from './marcus/awareness/awareness_service.js';
 import { AwarenessStore } from './marcus/awareness/awareness_store.js';
 import { ProjectMemoryIndexer } from './marcus/awareness/project_memory_index.js';
@@ -60,7 +61,13 @@ import { buildVoiceContinuityBrief } from './marcus/voice/continuity_brief.js';
 import { createOperationsEngine } from './marcus/operations/operation_engine.js';
 import { discoverDurableBackupSources } from './marcus/operations/operation_backups.js';
 import { DesktopActionQueue } from './marcus/operations/desktop_action_queue.js';
-import { startOperationMonitor } from './marcus/operations/operation_monitor.js';
+import { runOperationMonitorPass } from './marcus/operations/operation_monitor.js';
+import { startOperatingLoop } from './marcus/nervous_system/operating_loop.js';
+import { AttentionStore } from './marcus/nervous_system/attention_store.js';
+import { OutcomeLedger } from './marcus/nervous_system/outcome_ledger.js';
+import { ReflexEngine } from './marcus/nervous_system/reflex_engine.js';
+import { SignalBus } from './marcus/nervous_system/signal_bus.js';
+import { SignalJournal } from './marcus/nervous_system/signal_journal.js';
 import { extractExplicitGitHubRepositories, ProjectOperatorService } from './marcus/operators/project_operator_service.js';
 import { DesktopCodexAdapter } from './marcus/providers/desktop_codex_adapter.js';
 import { createGitHubActionsCodexAdapterFromEnv } from './marcus/providers/github_actions_codex_adapter.js';
@@ -272,6 +279,43 @@ function resolveDirFromEnv(envValue) {
 }
 
 const DATA_DIR = resolveDirFromEnv(process.env.TASK_TRACKER_DATA_DIR || process.env.DATA_DIR) || path.join(process.cwd(), 'data');
+const marcusSignalJournal = new SignalJournal({ dataDir: DATA_DIR });
+const marcusAttentionStore = new AttentionStore({ dataDir: DATA_DIR });
+const marcusOutcomeLedger = new OutcomeLedger({ dataDir: DATA_DIR });
+const marcusSignalBus = new SignalBus({
+  journal: marcusSignalJournal,
+  onError: (error, context = {}) => console.error(`M.A.R.C.U.S. pathway ${context.pathway || 'unknown'} failed:`, error?.message || error),
+});
+const marcusReflexEngine = new ReflexEngine({
+  attentionStore: marcusAttentionStore,
+  outcomeLedger: marcusOutcomeLedger,
+  onError: (error, context = {}) => console.error(`M.A.R.C.U.S. reflex ${context.reflex || 'unknown'} failed:`, error?.message || error),
+});
+marcusReflexEngine.register({
+  name: 'raise-attention-for-risk-or-uncertainty',
+  priority: 10,
+  when: (signal) => ['warning', 'critical'].includes(signal.severity) || signal.confidence < 0.6,
+  act: async (signal) => {
+    const item = await marcusAttentionStore.raise(signal.businessKey, {
+      signalId: signal.id, signalType: signal.type, subject: signal.subject,
+      title: signal.severity === 'critical' ? 'Critical MARCUS signal' : 'MARCUS signal needs attention',
+      reason: signal.context?.message || `${signal.type} requires review because it is ${signal.severity} or low confidence.`,
+      severity: signal.severity, confidence: signal.confidence,
+      owner: signal.severity === 'critical' || signal.context?.status === 'recovery_required' ? 'mark' : 'marcus',
+      evidence: signal.evidence,
+    });
+    return { response: `Raised attention item ${item.id}.`, status: 'succeeded', evidence: [{ attentionId: item.id }] };
+  },
+});
+marcusReflexEngine.register({
+  name: 'preserve-recovery-inhibition',
+  priority: 20,
+  when: (signal) => signal.type === 'operation.status.changed' && signal.context?.status === 'recovery_required',
+  act: async () => ({ response: 'Preserved recovery-required state; no automatic mutation retry was authorized.', status: 'succeeded' }),
+  owner: 'mark',
+});
+marcusSignalBus.register({ name: 'reflex-arc', accepts: ['*'], priority: 20, handle: (signal) => marcusReflexEngine.handle(signal) });
+let marcusOperatingLoop = null;
 const DATA_FILE = path.join(DATA_DIR, 'tasks.json');
 const MARCUS_OPERATIONAL_CONTROLS_FILE = path.join(DATA_DIR, 'marcus-operational-controls.json');
 const MARCUS_SESSION_STATE_FILE = path.join(DATA_DIR, 'marcus-session-state.json');
@@ -1088,6 +1132,15 @@ registerProjectEvidenceRoutes(app, {
 registerAwarenessRoutes(app, {
   service: awarenessService,
   getBusinessKey: () => getBusinessKeyFromContext(),
+});
+
+registerNervousSystemRoutes(app, {
+  attentionStore: marcusAttentionStore,
+  outcomeLedger: marcusOutcomeLedger,
+  signalJournal: marcusSignalJournal,
+  getBusinessKey: () => getBusinessKeyFromContext(),
+  getLoopHealth: () => marcusOperatingLoop?.health() || { status: 'starting' },
+  triggerLoop: () => marcusOperatingLoop?.trigger() || null,
 });
 
 app.post('/api/desktop-context/codex-updates', async (req, res) => {
@@ -16658,6 +16711,11 @@ async function handleMissionMemoryCommand(businessKey, command, source = 'marcus
       actor: 'mark',
       source,
     });
+    await marcusSignalBus.publish({
+      type: result.created ? 'memory.record.created' : 'memory.record.confirmed', source: 'mission-memory', businessKey,
+      subject: { type: 'memory', id: result.memory.id }, severity: 'info',
+      context: { kind: result.memory.kind, source },
+    });
     return {
       ok: true,
       status: result.created ? 'mission_memory_created' : 'mission_memory_confirmed',
@@ -19445,6 +19503,13 @@ ${contextParts.join('\n')}`;
               ? { type: toolResult.skill.skillId || toolName, summary: JSON.stringify(toolResult.skill.evidence).slice(0, 1_000) }
               : null,
             error: toolResult.error || '',
+          });
+          await marcusSignalBus.publish({
+            type: toolResult.ok === true ? 'browser.skill.observed' : 'browser.skill.failed', source: 'browser-mission',
+            businessKey: getBusinessKeyFromContext(), subject: { type: 'browser_mission', id: browserMission.id },
+            severity: toolResult.ok === true ? 'info' : 'warning', confidence: toolResult.ok === true ? 1 : 0.8,
+            evidence: toolResult.skill?.evidence ? [{ skill: toolName, evidence: toolResult.skill.evidence }] : [],
+            context: { skill: toolName, message: toolResult.error || '', completed: toolResult.submitted === true, waitingForApproval: toolResult.draftPrepared === true },
           });
         }
         liveMessages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify(toolResult).slice(0, 12_000) });
@@ -22935,6 +23000,11 @@ async function recordOperationAwarenessNote(businessKey, operation) {
     blockers,
     recordedAt: operation.updatedAt,
   });
+  await marcusSignalBus.publish({
+    type: 'awareness.work.recorded', source: 'awareness-service', businessKey,
+    subject: { type: 'project', id: operation.projectRegistryId }, severity: 'debug',
+    context: { operationId: operation.id, status: operation.status },
+  });
 }
 
 function startProjectEvidenceScheduler() {
@@ -22951,12 +23021,27 @@ function startProjectEvidenceScheduler() {
       if (getCloudflareConfig(settings).configured) sources.push('cloudflare');
       for (const business of cfg.businesses || []) {
         const businessKey = normalizeBusinessKey(business?.key || '') || DEFAULT_BUSINESS_KEY;
-        await withBusinessKey(businessKey, () => projectEvidenceService.refresh(businessKey, { sources }));
+        const snapshot = await withBusinessKey(businessKey, () => projectEvidenceService.refresh(businessKey, { sources }));
+        await marcusSignalBus.publish({
+          type: 'evidence.refresh.completed', source: 'project-evidence-scheduler', businessKey,
+          subject: { type: 'business', id: businessKey }, severity: 'debug',
+          context: { sources, projectCount: Array.isArray(snapshot?.activity?.snapshots) ? snapshot.activity.snapshots.length : 0 },
+        });
+        for (const project of Array.isArray(snapshot?.activity?.snapshots) ? snapshot.activity.snapshots : []) {
+          if (!['at_risk', 'decaying'].includes(project?.operationalState) && !['at-risk', 'decaying'].includes(project?.decay?.stage)) continue;
+          await marcusSignalBus.publish({
+            type: 'project.attention.degrading', source: 'project-evidence-scheduler', businessKey,
+            subject: { type: 'project', id: project.projectRegistryId }, severity: 'warning', confidence: project.confidence ?? 0.8,
+            evidence: project.evidenceSummary ? [{ summary: project.evidenceSummary }] : [],
+            context: { message: project.health?.explanation || project.decay?.explanation || 'Project evidence indicates attention is degrading.', operationalState: project.operationalState, decay: project.decay?.stage, nextExpectedEvent: project.nextExpectedEvent },
+          });
+        }
         const terminalOperations = await operationsEngine.listOperations(businessKey, { limit: 100 });
         for (const operation of terminalOperations) await recordOperationAwarenessNote(businessKey, operation);
       }
     } catch (error) {
       console.error('Project evidence refresh failed:', error?.message || error);
+      await marcusSignalBus.publish({ type: 'evidence.refresh.failed', source: 'project-evidence-scheduler', businessKey: DEFAULT_BUSINESS_KEY, severity: 'warning', context: { message: error?.message || String(error) } }).catch(() => {});
     } finally {
       running = false;
     }
@@ -23020,25 +23105,70 @@ function startCommunityLearningScheduler() {
   if (typeof interval.unref === 'function') interval.unref();
 }
 
-function startDurableOperationMonitor() {
-  return startOperationMonitor({
+async function runDurableOperationPass() {
+  await refreshBusinessCacheFromSettings();
+  return runOperationMonitorPass({
     engine: operationsEngine,
-    listBusinessKeys: async () => {
-      await refreshBusinessCacheFromSettings();
-      return (Array.isArray(cachedBusinesses) ? cachedBusinesses : [])
-        .map((business) => normalizeBusinessKey(business?.key || '') || DEFAULT_BUSINESS_KEY);
-    },
-    initialDelayMs: Math.max(1_000, Number(process.env.MARCUS_OPERATION_MONITOR_INITIAL_DELAY_MS) || 3_000),
-    intervalMs: Math.max(5_000, Number(process.env.MARCUS_OPERATION_MONITOR_INTERVAL_MS) || 15_000),
+    businessKeys: (Array.isArray(cachedBusinesses) ? cachedBusinesses : [])
+      .map((business) => normalizeBusinessKey(business?.key || '') || DEFAULT_BUSINESS_KEY),
     maxOperationsPerBusiness: 20,
     onError: (error, context = {}) => {
       console.error(`Durable operation monitor ${context.phase || 'pass'} failed${context.operationId ? ` for ${context.operationId}` : ''}:`, error?.message || error);
     },
     onOperationSettled: async (operation, { businessKey, previous } = {}) => {
+      if (operation?.status !== previous?.status) {
+        await marcusSignalBus.publish({
+          type: 'operation.status.changed',
+          source: 'durable-operation-monitor',
+          businessKey,
+          subject: { type: 'operation', id: operation?.id },
+          severity: ['failed', 'blocked', 'recovery_required'].includes(operation?.status) ? 'warning' : 'info',
+          context: { previousStatus: previous?.status, status: operation?.status, projectRegistryId: operation?.projectRegistryId },
+        });
+      }
       if (!operation?.projectRegistryId || operation.status === previous?.status) return;
       await recordOperationAwarenessNote(businessKey, operation);
     },
   });
+}
+
+async function reconcileAttentionPass() {
+  await refreshBusinessCacheFromSettings();
+  for (const business of Array.isArray(cachedBusinesses) ? cachedBusinesses : []) {
+    const businessKey = normalizeBusinessKey(business?.key || '') || DEFAULT_BUSINESS_KEY;
+    const reopened = await marcusAttentionStore.reopenDue(businessKey);
+    for (const item of reopened) {
+      await marcusSignalBus.publish({
+        type: 'attention.defer.expired', source: 'attention-homeostasis', businessKey,
+        subject: { type: 'attention', id: item.id }, severity: item.severity, confidence: item.confidence,
+        context: { message: item.reason, owner: item.owner },
+      });
+    }
+  }
+}
+
+function startMarcusOperatingLoop() {
+  marcusOperatingLoop = startOperatingLoop({
+    bus: marcusSignalBus,
+    sensors: [{
+      name: 'runtime-proprioception',
+      sense: async ({ cycle }) => {
+        await refreshBusinessCacheFromSettings();
+        return (Array.isArray(cachedBusinesses) ? cachedBusinesses : []).map((business) => ({
+          type: 'system.cycle.observed',
+          businessKey: normalizeBusinessKey(business?.key || '') || DEFAULT_BUSINESS_KEY,
+          subject: { type: 'runtime', id: 'marcus-server' },
+          severity: 'debug',
+          context: { cycle },
+        }));
+      },
+    }],
+    homeostasis: [runDurableOperationPass, reconcileAttentionPass],
+    initialDelayMs: Math.max(1_000, Number(process.env.MARCUS_OPERATING_LOOP_INITIAL_DELAY_MS) || 3_000),
+    intervalMs: Math.max(5_000, Number(process.env.MARCUS_OPERATING_LOOP_INTERVAL_MS) || 15_000),
+    onError: (error, context = {}) => console.error(`M.A.R.C.U.S. operating loop ${context.phase || 'cycle'} failed:`, error?.message || error),
+  });
+  return marcusOperatingLoop;
 }
 
 const httpServer = app.listen(PORT, SERVER_HOST, async () => {
@@ -23088,7 +23218,7 @@ const httpServer = app.listen(PORT, SERVER_HOST, async () => {
   startBackupScheduler();
   startGa4Scheduler();
   startAirtableRequestsAutoSyncScheduler();
-  startDurableOperationMonitor();
+  startMarcusOperatingLoop();
   startProjectEvidenceScheduler();
   startCommunityLearningScheduler();
   startMarcusBriefScheduler();

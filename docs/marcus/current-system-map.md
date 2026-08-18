@@ -2,6 +2,10 @@
 
 Status: active
 
+## Nervous System
+
+`marcus/nervous_system/` provides the connective tissue around existing capabilities. `SignalBus` routes normalized, traced signals through failure-isolated pathways; `SignalJournal` stores a bounded business-scoped history; `AttentionStore` owns durable attention; `OutcomeLedger` retains corrections and reusable outcomes; and `startOperatingLoop` runs cadence-aware sensory and homeostatic work without overlapping cycles. `server.js` connects runtime, operations, evidence, project decay, awareness, mission memory, and browser missions. `/marcus-nervous-system.html` exposes loop health and traces. See [[nervous-system]].
+
 The [[operator-intelligence-layer]] adds bounded voice continuity, speech-safe human references, request-specific job priming, semantic interruption alignment checks, recovered-method memory, and locked-decision enforcement. Raw identifiers remain in durable records while voice receives a reduced human-readable projection.
 
 ## Server
