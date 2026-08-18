@@ -143,6 +143,12 @@ test('desktop visualizer uses canonical awareness instead of browser-local proje
   assert.match(html, /\/api\/marcus\/browser\/status/);
   assert.match(html, /\/api\/marcus\/browser\/actions/);
   assert.match(html, /\/api\/marcus\/browser\/publications/);
+  assert.match(html, /grid-template-rows: 90px minmax\(0, 1fr\) 34px/);
+  assert.match(html, /\.workspace-body \{ grid-row: 2;/);
+  assert.match(html, /\.workspace-status \{ grid-row: 3; \}/);
+  assert.match(html, /authenticatedFetch\(`\/api\/marcus\/browser\/frame\?v=/);
+  assert.match(html, /URL\.createObjectURL\(blob\)/);
+  assert.doesNotMatch(html, /frame\.src = `\/api\/marcus\/browser\/frame/);
   assert.match(html, /data-publication-approve/);
   assert.match(html, /data-publication-deny/);
   assert.match(html, /\["pending_approval", "failed"\]\.includes\(item\.status\)/);

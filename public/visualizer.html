@@ -743,20 +743,26 @@
         border: 1px solid var(--line);
         border-radius: 8px;
         overflow: hidden;
-        grid-template-rows: 90px 0 minmax(0, 1fr) 34px;
+        grid-template-rows: 90px minmax(0, 1fr) 34px;
       }
       .workspace-header {
-        grid-template-columns: minmax(0, 1fr) auto;
+        grid-template-columns: minmax(145px, 1fr) auto;
         grid-template-rows: 48px 42px;
         padding: 0 16px;
-        gap: 0 12px;
+        gap: 0 8px;
       }
       .workspace-title { grid-column: 1; grid-row: 1; }
+      .workspace-title > .glyph { display: none; }
+      .workspace-title { grid-template-columns: minmax(0, 1fr); gap: 0; }
       .top-actions { grid-column: 2; grid-row: 1; }
+      .top-actions { gap: 4px; }
+      .top-actions .btn { min-height: 30px; padding: 5px 7px; font-size: 11px; }
+      #restartDesktopAgent { display: none; }
       .tabs { grid-column: 1 / -1; grid-row: 2; justify-content: space-around; gap: 4px; border-top: 1px solid var(--line); }
       .tab { flex: 1 1 auto; padding: 0 4px; }
       .browser-bar { display: none; }
-      .workspace-body { grid-template-columns: minmax(0, 1.55fr) minmax(190px, .8fr); }
+      .workspace-body { grid-row: 2; grid-template-columns: minmax(0, 1.55fr) minmax(190px, .8fr); }
+      .workspace-status { grid-row: 3; }
       .workspace-body.browser-mode { grid-template-columns: minmax(0, 1fr); }
       .brief-surface { grid-template-columns: minmax(0, 1fr); padding: 22px; }
       .brief-main, .brief-side { padding: 0; }
@@ -1057,7 +1063,10 @@
     let lastLiveReadAt = 0;
     let browserTypingBuffer = "";
     let browserTypingTimer = null;
-    let lastBrowserFrameVersion = 0;
+    let browserFrameObjectUrl = "";
+    let browserFrameObjectVersion = "";
+    let browserFrameLoadingVersion = "";
+    let browserFrameRequestId = 0;
     let lastBrowserContextVersion = "";
     const LIVE_BROWSER_CONTEXT_KINDS = new Set(["zoom", "skool", "google-meet", "teams", "youtube", "tiktok"]);
     let browserStatusLoading = false;
@@ -1105,7 +1114,7 @@
       return `${Math.round(hours / 24)}d`;
     }
 
-    async function api(url, options = {}) {
+    async function authenticatedFetch(url, options = {}) {
       const headers = new Headers(options.headers || {});
       const token = adminToken();
       if (token) headers.set("Authorization", `Bearer ${token}`);
@@ -1119,6 +1128,11 @@
           response = await fetch(url, { ...options, headers, credentials: "include" });
         }
       }
+      return response;
+    }
+
+    async function api(url, options = {}) {
+      const response = await authenticatedFetch(url, options);
       const data = await response.json().catch(() => null);
       if (!response.ok) throw new Error(text(data?.error || data?.message || `${url} returned ${response.status}`));
       return data;
@@ -1578,15 +1592,70 @@
       const detail = document.getElementById("browserPlaceholderDetail");
       if (!frame || !placeholder || !detail) return;
       const hasFrame = Boolean(status.online && status.frameAvailable && !status.sensitive);
-      frame.classList.toggle("live", hasFrame);
+      const frameVersion = String(Number(status.frameVersion) || text(status.contextVersion, "current"));
+      const frameReady = hasFrame && frame.complete && frame.naturalWidth > 0 && Boolean(frame.currentSrc || frame.src);
+      frame.classList.toggle("live", frameReady);
       frame.classList.toggle("mark-control", markHasControl);
-      placeholder.style.display = hasFrame ? "none" : "grid";
-      detail.textContent = status.sensitive ? "Use the visible MARCUS Chrome window for password entry" : (status.error || "Waiting for the desktop bridge");
-      if (hasFrame && Number(status.frameVersion) !== lastBrowserFrameVersion) {
-        lastBrowserFrameVersion = Number(status.frameVersion) || Date.now();
-        frame.src = `/api/marcus/browser/frame?v=${encodeURIComponent(lastBrowserFrameVersion)}`;
+      placeholder.style.display = frameReady ? "none" : "grid";
+      detail.textContent = status.sensitive
+        ? "Use the visible MARCUS Chrome window for password entry"
+        : hasFrame
+          ? "Loading the live browser frame"
+          : (status.error || "Waiting for the desktop bridge");
+      if (hasFrame && frame.dataset.loadedVersion !== frameVersion) {
+        if (browserFrameObjectUrl && browserFrameObjectVersion === frameVersion) {
+          showBrowserFrame(frame, placeholder, detail, browserFrameObjectUrl, frameVersion);
+        } else if (browserFrameLoadingVersion !== frameVersion) {
+          loadBrowserFrame(frame, placeholder, detail, frameVersion);
+        }
       }
       bindBrowserFrame(frame);
+    }
+    function showBrowserFrame(frame, placeholder, detail, objectUrl, frameVersion) {
+      frame.onload = () => {
+        if (!frame.isConnected || activeTab !== "browser") return;
+        frame.dataset.loadedVersion = frameVersion;
+        frame.classList.add("live");
+        placeholder.style.display = "none";
+      };
+      frame.onerror = () => {
+        if (!frame.isConnected) return;
+        frame.classList.remove("live");
+        placeholder.style.display = "grid";
+        detail.textContent = "The live browser frame could not be displayed. Retrying automatically.";
+      };
+      frame.src = objectUrl;
+    }
+    async function loadBrowserFrame(frame, placeholder, detail, frameVersion) {
+      const requestId = ++browserFrameRequestId;
+      browserFrameLoadingVersion = frameVersion;
+      try {
+        const response = await authenticatedFetch(`/api/marcus/browser/frame?v=${encodeURIComponent(frameVersion)}`);
+        if (!response.ok) {
+          const failure = await response.json().catch(() => null);
+          throw new Error(text(failure?.error || failure?.message || `Browser frame returned ${response.status}`));
+        }
+        const blob = await response.blob();
+        if (!blob.type.startsWith("image/")) throw new Error("Browser frame was not an image");
+        const objectUrl = URL.createObjectURL(blob);
+        if (requestId !== browserFrameRequestId) {
+          URL.revokeObjectURL(objectUrl);
+          return;
+        }
+        const previousObjectUrl = browserFrameObjectUrl;
+        browserFrameObjectUrl = objectUrl;
+        browserFrameObjectVersion = frameVersion;
+        if (previousObjectUrl && previousObjectUrl !== objectUrl) URL.revokeObjectURL(previousObjectUrl);
+        if (frame.isConnected && activeTab === "browser") showBrowserFrame(frame, placeholder, detail, objectUrl, frameVersion);
+      } catch (error) {
+        if (frame.isConnected && activeTab === "browser") {
+          frame.classList.remove("live");
+          placeholder.style.display = "grid";
+          detail.textContent = `${error.message}. Retrying automatically.`;
+        }
+      } finally {
+        if (browserFrameLoadingVersion === frameVersion) browserFrameLoadingVersion = "";
+      }
     }
     function browserPoint(event, frame) {
       const status = snapshot.browser || {};
