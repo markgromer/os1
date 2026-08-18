@@ -563,13 +563,15 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
 
     const agencyHeaders = { ...adminHeaders, 'x-business-key': 'agency' };
     const codexWorkspace = path.join(server.workspaceRoot, 'scoopFairies');
+    const simulatedPcRoot = 'C:\\';
+    const simulatedNewProjectRoot = 'C:\\Marcus Projects';
     await fs.mkdir(codexWorkspace, { recursive: true });
     const relayResponse = await fetch(`${base}/api/desktop-context/relay`, { method: 'POST', headers: agencyHeaders, body: JSON.stringify({
       agentId: 'agent-smoke', windowTitle: 'Codex', processName: 'ChatGPT', idleSeconds: 1,
       desktopAuthorization: {
         scope: 'full_pc', broadWorkspaceRootsAllowed: true, fullPcAccess: true,
-        allowedRoots: [server.workspaceRoot], newProjectRoot: server.workspaceRoot,
-        pcAccessRoots: [path.parse(server.workspaceRoot).root],
+        allowedRoots: [server.workspaceRoot, simulatedNewProjectRoot], newProjectRoot: simulatedNewProjectRoot,
+        pcAccessRoots: [simulatedPcRoot],
         capabilities: ['inventory', 'search_files', 'read_text_file', 'open_file_or_folder', 'launch_installed_application'],
       },
       codexWorkspaces: [{
@@ -702,20 +704,14 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     assert.equal(pcCapabilities.authorization.scope, 'full_pc');
     assert.equal(pcCapabilities.authorization.fullPcAccess, true);
     assert.equal(pcCapabilities.boundaries.credentialContentBlocked, true);
-    const workspaceDrive = server.workspaceRoot.match(/^([A-Za-z]):[\\/]/)?.[1]?.toUpperCase();
-    assert.deepEqual(pcCapabilities.recommendedFullPcRoots, workspaceDrive ? [`${workspaceDrive}:\\`] : []);
+    assert.deepEqual(pcCapabilities.recommendedFullPcRoots, [simulatedPcRoot]);
     const existingPcAccess = await fetch(`${base}/api/marcus/pc/access-request`, {
       method: 'POST', headers: agencyHeaders, body: JSON.stringify({ scope: 'full_pc' }),
     });
     const existingPcAccessBody = await existingPcAccess.json();
-    if (workspaceDrive) {
-      assert.equal(existingPcAccess.status, 200);
-      assert.equal(existingPcAccessBody.alreadyConfigured, true);
-      assert.equal(existingPcAccessBody.operation, null);
-    } else {
-      assert.equal(existingPcAccess.status, 400);
-      assert.match(existingPcAccessBody.error, /root|drive|target/i);
-    }
+    assert.equal(existingPcAccess.status, 200);
+    assert.equal(existingPcAccessBody.alreadyConfigured, true);
+    assert.equal(existingPcAccessBody.operation, null);
 
     const pcSearchRequest = fetch(`${base}/api/marcus/pc/actions`, {
       method: 'POST', headers: agencyHeaders, body: JSON.stringify({
