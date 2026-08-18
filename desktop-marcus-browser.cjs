@@ -61,6 +61,17 @@ function safeObservableUrl(value) {
   return parsed.toString();
 }
 
+function redactVisibleText(value) {
+  return String(value || '')
+    .replace(/https?:\/\/\S+/gi, (rawUrl) => {
+      const suffix = /[),.!?]$/.test(rawUrl) ? rawUrl.at(-1) : '';
+      const url = suffix ? rawUrl.slice(0, -1) : rawUrl;
+      return `${safeObservableUrl(url) || '[redacted url]'}${suffix}`;
+    })
+    .replace(/\b\d{4,8}\b(?=[^\n]{0,100}\b(?:verification|security|login|sign[- ]?in|two[- ]?factor|2fa|one[- ]?time|otp|passcode|reset|code)\b)/gi, '[redacted code]')
+    .replace(/\b((?:verification|security|login|sign[- ]?in|two[- ]?factor|2fa|one[- ]?time|otp|passcode|reset|code)[^\n]{0,100})\b\d{4,8}\b/gi, '$1[redacted code]');
+}
+
 function chromeExecutable() {
   const candidates = [
     path.join(process.env.ProgramFiles || '', 'Google', 'Chrome', 'Application', 'chrome.exe'),
@@ -755,7 +766,7 @@ class MarcusBrowserBridge {
         })()`,
         returnByValue: true,
       });
-      return String(result?.result?.value || '').trim().slice(0, MAX_VISIBLE_TEXT_LENGTH);
+      return redactVisibleText(result?.result?.value).trim().slice(0, MAX_VISIBLE_TEXT_LENGTH);
     } catch {
       return '';
     }
@@ -861,4 +872,5 @@ module.exports = {
   liveContextKind,
   safeHttpUrl,
   safeObservableUrl,
+  redactVisibleText,
 };

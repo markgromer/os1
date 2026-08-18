@@ -4,7 +4,7 @@ import test from 'node:test';
 
 const require = createRequire(import.meta.url);
 const {
-  MarcusBrowserBridge, isMarcusBrowserActionType, liveContextKind, safeHttpUrl, safeObservableUrl,
+  MarcusBrowserBridge, isMarcusBrowserActionType, liveContextKind, safeHttpUrl, safeObservableUrl, redactVisibleText,
 } = require('../desktop-marcus-browser.cjs');
 
 test('desktop dispatcher recognizes every MARCUS browser action type', () => {
@@ -28,6 +28,13 @@ test('MARCUS browser observations redact credential-like URL parameters', () => 
     safeObservableUrl('https://www.skool.com/localgiants/drop-your-intro?view=latest'),
     'https://www.skool.com/localgiants/drop-your-intro?view=latest',
   );
+});
+
+test('MARCUS browser visible text redacts one-time codes and credential URLs', () => {
+  const observed = redactVisibleText('049325 is your Zoom verification code. Join https://us06web.zoom.us/j/123?pwd=secret&from=mail');
+  assert.doesNotMatch(observed, /049325|pwd=secret/);
+  assert.match(observed, /\[redacted code\]/);
+  assert.match(observed, /from=mail/);
 });
 
 test('MARCUS browser bridge uses the dedicated non-conflicting localhost port', () => {
