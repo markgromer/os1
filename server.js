@@ -16231,6 +16231,32 @@ app.post('/api/marcus/browser/restart-relay', async (_req, res) => {
   }
 });
 
+let desktopAgentRestartRequest = null;
+let desktopAgentRestartAck = null;
+
+app.get('/api/marcus/desktop-agent/restart', (_req, res) => {
+  res.json({ ok: true, request: desktopAgentRestartRequest, acknowledgement: desktopAgentRestartAck });
+});
+
+app.post('/api/marcus/desktop-agent/restart', (_req, res) => {
+  desktopAgentRestartRequest = {
+    id: crypto.randomUUID(),
+    requestedAt: new Date().toISOString(),
+    requestedBy: 'browser:mark',
+  };
+  desktopAgentRestartAck = null;
+  res.status(202).json({ ok: true, queued: true, request: desktopAgentRestartRequest });
+});
+
+app.post('/api/marcus/desktop-agent/restart/ack', (req, res) => {
+  const requestId = String(req.body?.requestId || '').trim();
+  if (!desktopAgentRestartRequest || requestId !== desktopAgentRestartRequest.id) {
+    return res.status(409).json({ ok: false, error: 'Restart request is no longer current.' });
+  }
+  desktopAgentRestartAck = { requestId, ok: req.body?.ok === true, acknowledgedAt: new Date().toISOString() };
+  res.json({ ok: true, acknowledgement: desktopAgentRestartAck });
+});
+
 app.post('/api/marcus/browser/actions', async (req, res) => {
   const status = marcusBrowserStatus();
   const actor = req.body?.actor === 'marcus' ? 'marcus' : 'mark';

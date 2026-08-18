@@ -17,11 +17,16 @@ param(
 
 $ErrorActionPreference = "Stop"
 $taskName = "MARCUS-DesktopAgent"
+$watchdogTaskName = "MARCUS-DesktopAgent-Watchdog"
 $scriptDir = $PSScriptRoot
 $agentPath = Join-Path $scriptDir "desktop-agent.cjs"
+$watchdogPath = Join-Path $scriptDir "desktop-agent-watchdog.cjs"
 
 if (-not (Test-Path -LiteralPath $agentPath)) {
     throw "desktop-agent.cjs was not found at $agentPath"
+}
+if (-not (Test-Path -LiteralPath $watchdogPath)) {
+    throw "desktop-agent-watchdog.cjs was not found at $watchdogPath"
 }
 
 if (-not (Test-Path -LiteralPath $TokenFile)) {
@@ -98,12 +103,31 @@ Register-ScheduledTask `
     -Description "Relays local desktop and workspace context to Marcus production" `
     -RunLevel Limited | Out-Null
 
+$existingWatchdog = Get-ScheduledTask -TaskName $watchdogTaskName -ErrorAction SilentlyContinue
+if ($existingWatchdog) {
+    Stop-ScheduledTask -TaskName $watchdogTaskName -ErrorAction SilentlyContinue
+    Unregister-ScheduledTask -TaskName $watchdogTaskName -Confirm:$false
+}
+$watchdogAction = New-ScheduledTaskAction `
+    -Execute $nodePath `
+    -Argument "`"$watchdogPath`" `"$ServerUrl`"" `
+    -WorkingDirectory $scriptDir
+Register-ScheduledTask `
+    -TaskName $watchdogTaskName `
+    -Action $watchdogAction `
+    -Trigger $trigger `
+    -Settings $settings `
+    -Description "Independently recovers the MARCUS desktop agent when requested from the dashboard" `
+    -RunLevel Limited | Out-Null
+
 if ($StartNow) {
     Start-ScheduledTask -TaskName $taskName
+    Start-ScheduledTask -TaskName $watchdogTaskName
 }
 
 [pscustomobject]@{
     TaskName = $taskName
+    WatchdogTaskName = $watchdogTaskName
     ServerUrl = $ServerUrl
     TokenSource = $TokenFile
     ConfigPath = $configPath

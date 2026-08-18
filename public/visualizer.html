@@ -870,6 +870,7 @@
         </nav>
         <div class="top-actions">
           <span class="control-state" id="controlState">Shared observation</span>
+          <button class="btn bad" type="button" id="restartDesktopAgent" title="Restart the MARCUS desktop agent through its independent watchdog">Restart agent</button>
           <button class="btn warn" type="button" id="restartBrowserRelay" title="Restart the dedicated MARCUS browser relay">Restart browser</button>
           <button class="btn primary" type="button" id="takeControl">Take control</button>
           <button class="btn icon-btn" type="button" id="pauseButton" title="Pause visible operation">||</button>
@@ -1699,6 +1700,36 @@
         button.textContent = previous;
       }
     }
+    async function restartDesktopAgent() {
+      const button = document.getElementById("restartDesktopAgent");
+      const previous = button.textContent;
+      button.disabled = true;
+      button.textContent = "Restarting…";
+      addMessage("marcus", "Sending a recovery request to the independent desktop watchdog.");
+      try {
+        const queued = await api("/api/marcus/desktop-agent/restart", { method: "POST" });
+        let recovered = false;
+        let acknowledged = false;
+        for (let attempt = 0; attempt < 18; attempt += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+          const status = await api("/api/marcus/desktop-agent/restart");
+          acknowledged = status.acknowledgement?.requestId === queued.request?.id && status.acknowledgement?.ok === true;
+          await refreshBrowserStatus();
+          if (acknowledged && snapshot.browser?.connected) { recovered = true; break; }
+        }
+        addMessage("marcus", recovered
+          ? "The desktop agent restarted and the browser relay is connected."
+          : acknowledged
+            ? "The watchdog restarted the desktop agent; it is still reconnecting."
+            : "The restart request is queued, but the independent watchdog has not acknowledged it yet.");
+        render();
+      } catch (error) {
+        addMessage("marcus error", `Desktop agent restart failed: ${error.message}`);
+      } finally {
+        button.disabled = false;
+        button.textContent = previous;
+      }
+    }
     function workspaceStatus(project) {
       if (project.state === "needs_mark") return `${project.name} needs Mark before Marcus continues.`;
       if (project.state === "blocked") return `${project.name} is blocked; Marcus should prepare recovery.`;
@@ -2396,6 +2427,7 @@
     document.getElementById("homeButton").addEventListener("click", () => { activeFilter = ""; activeTab = "browser"; selectedId = snapshot.projects[0]?.id || ""; render(); });
     document.getElementById("profileButton").addEventListener("click", () => openBrowserUrl("https://mail.google.com/"));
     document.getElementById("takeControl").addEventListener("click", toggleControl);
+    document.getElementById("restartDesktopAgent").addEventListener("click", restartDesktopAgent);
     document.getElementById("restartBrowserRelay").addEventListener("click", restartBrowserRelay);
     document.getElementById("dockOpenCodex").addEventListener("click", () => { activeTab = "codex"; renderWorkspace(); });
     document.getElementById("dockSendBack").addEventListener("click", () => { const project = selectedProject(); if (project) runProjectCommand("fix", project.id); });
