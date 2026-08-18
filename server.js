@@ -16107,6 +16107,21 @@ app.post('/api/marcus/browser/control', (req, res) => {
   res.json({ ok: true, control: { ...marcusBrowserControl } });
 });
 
+app.post('/api/marcus/browser/restart-relay', async (_req, res) => {
+  const desktopAgentId = String(desktopRelayCache?.data?.desktopAuthorization?.agentId || '').trim();
+  if (!desktopAgentId) return res.status(503).json({ ok: false, error: 'The MARCUS desktop agent is offline.' });
+  try {
+    const result = await queueDesktopActionAndWait({
+      type: 'restart-browser-relay',
+      payload: { desktopAgentId },
+      requestedBy: 'browser:mark',
+    }, { timeoutMs: 12_000 });
+    res.status(result.ok ? 200 : result.pending ? 202 : 503).json(result);
+  } catch (error) {
+    res.status(503).json({ ok: false, error: String(error?.message || error) });
+  }
+});
+
 app.post('/api/marcus/browser/actions', async (req, res) => {
   const status = marcusBrowserStatus();
   const actor = req.body?.actor === 'marcus' ? 'marcus' : 'mark';

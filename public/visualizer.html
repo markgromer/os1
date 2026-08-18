@@ -489,6 +489,7 @@
       min-width: 0;
     }
     .dock-head { border-bottom: 1px solid var(--line); }
+    .dock-head-actions { margin-left: auto; display: flex; align-items: center; gap: 6px; }
     .dock-head h2 { margin: 0; font-size: 14px; letter-spacing: 0.08em; }
     .dock-foot { border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; justify-content: space-between; }
     .dock-body {
@@ -702,7 +703,7 @@
           clamp(610px, 35vh, 700px)
           38px
           clamp(280px, 17vh, 340px)
-          clamp(250px, 15vh, 290px)
+          clamp(360px, 21vh, 430px)
           52px
           30px;
         grid-template-areas:
@@ -812,10 +813,13 @@
         border: 1px solid var(--line);
         border-radius: 8px;
         overflow: hidden;
-        grid-template-rows: 34px minmax(0, 1fr) 30px;
+        grid-template-rows: 46px minmax(0, 1fr) 30px;
       }
+      .dock-head { flex-wrap: wrap; padding: 5px 12px; }
+      .dock-head-actions .btn { min-height: 28px; padding: 5px 9px; font-size: 11px; }
       .dock-body { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); }
-      .dock-card { padding: 9px 12px; }
+      .dock-card { padding: 9px 12px; overflow: auto; }
+      .dock-card p { overflow: visible; }
       .dock-foot { font-size: 11px; }
 
       .chat-card {
@@ -866,6 +870,7 @@
         </nav>
         <div class="top-actions">
           <span class="control-state" id="controlState">Shared observation</span>
+          <button class="btn warn" type="button" id="restartBrowserRelay" title="Restart the dedicated MARCUS browser relay">Restart browser</button>
           <button class="btn primary" type="button" id="takeControl">Take control</button>
           <button class="btn icon-btn" type="button" id="pauseButton" title="Pause visible operation">||</button>
           <button class="btn icon-btn bad" type="button" id="closeWorkspace" title="Close visible workspace">x</button>
@@ -900,6 +905,12 @@
         <span id="dockContext" class="truncate">No project selected</span>
         <span class="state-pill ok" id="dockPass">LIVE</span>
         <span id="dockElapsed" class="truncate">freshness unknown</span>
+        <span class="dock-head-actions">
+          <button class="btn" type="button" id="dockOpenCodex">Open Codex</button>
+          <button class="btn bad" type="button" id="dockSendBack">Send back</button>
+          <button class="btn good" type="button" id="dockFinishTask">Finish task</button>
+          <button class="btn primary" type="button" id="dockStartTask">Start new task</button>
+        </span>
       </header>
       <div class="dock-body">
         <section class="dock-card" id="dockCurrent"></section>
@@ -1664,6 +1675,30 @@
       } catch {}
       finally { browserStatusLoading = false; }
     }
+    async function restartBrowserRelay() {
+      const button = document.getElementById("restartBrowserRelay");
+      const previous = button.textContent;
+      button.disabled = true;
+      button.textContent = "Restarting…";
+      addMessage("marcus", "Restarting the dedicated browser relay. Codex, projects, and the rest of MARCUS will keep running.");
+      try {
+        const result = await api("/api/marcus/browser/restart-relay", { method: "POST" });
+        for (let attempt = 0; attempt < 8; attempt += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+          await refreshBrowserStatus();
+          if (snapshot.browser?.connected) break;
+        }
+        addMessage("marcus", snapshot.browser?.connected
+          ? `Browser relay is back online${snapshot.browser.title ? ` on ${snapshot.browser.title}` : ""}.`
+          : (result.pending ? "The restart is queued; the desktop agent has not reported a healthy frame yet." : "The relay restarted, but Chrome has not reconnected yet."));
+        render();
+      } catch (error) {
+        addMessage("marcus error", `Browser relay restart failed: ${error.message}`);
+      } finally {
+        button.disabled = false;
+        button.textContent = previous;
+      }
+    }
     function workspaceStatus(project) {
       if (project.state === "needs_mark") return `${project.name} needs Mark before Marcus continues.`;
       if (project.state === "blocked") return `${project.name} is blocked; Marcus should prepare recovery.`;
@@ -2080,6 +2115,20 @@
       if (!project) return;
       runProjectCommand(primaryAuditAction(project).command, id);
     }
+    async function finishSelectedTask() {
+      const project = selectedProject();
+      if (!project) return addMessage("marcus error", "Select a project before finishing a task.");
+      setChatContext(project.id);
+      await sendToMarcus(`Mark the current task for ${project.name} finished, preserve its outcome and evidence, and keep the project active for future tasks. Do not archive or close the project.`);
+    }
+    function startTaskForSelectedProject() {
+      const project = selectedProject();
+      if (!project) return addMessage("marcus error", "Select a project before starting a task.");
+      setChatContext(project.id);
+      els.composerInput.value = `Start a new task for ${project.name}: `;
+      els.composerInput.focus();
+      addMessage("marcus", `${project.name} is selected. Describe the new outcome; I’ll start it as separate work without mixing it into the prior task.`);
+    }
     function projectByAnyId(id) {
       return snapshot.projects.find((p) => p.id === id || p.awarenessProjectId === id || p.projectRegistryId === id) || selectedProject();
     }
@@ -2347,6 +2396,11 @@
     document.getElementById("homeButton").addEventListener("click", () => { activeFilter = ""; activeTab = "browser"; selectedId = snapshot.projects[0]?.id || ""; render(); });
     document.getElementById("profileButton").addEventListener("click", () => openBrowserUrl("https://mail.google.com/"));
     document.getElementById("takeControl").addEventListener("click", toggleControl);
+    document.getElementById("restartBrowserRelay").addEventListener("click", restartBrowserRelay);
+    document.getElementById("dockOpenCodex").addEventListener("click", () => { activeTab = "codex"; renderWorkspace(); });
+    document.getElementById("dockSendBack").addEventListener("click", () => { const project = selectedProject(); if (project) runProjectCommand("fix", project.id); });
+    document.getElementById("dockFinishTask").addEventListener("click", finishSelectedTask);
+    document.getElementById("dockStartTask").addEventListener("click", startTaskForSelectedProject);
     document.getElementById("pauseButton").addEventListener("click", () => setBrowserControl("mark"));
     document.getElementById("closeWorkspace").addEventListener("click", () => addMessage("marcus", "Workspace surface closed visually; active work remains visible in the dock and right panel."));
     document.getElementById("autoToggle").addEventListener("click", () => {

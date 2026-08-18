@@ -1318,6 +1318,8 @@ async function checkDesktopActions() {
         outcome = validateBoundPcAccessAction(action)
           ? verifyPcAccess(action?.payload || {})
           : { ok: false, error: 'PC access verification requires an exact durable operation binding for this desktop agent.' };
+      } else if (type === 'restart-browser-relay') {
+        outcome = restartMarcusBrowserRelay();
       } else if (type === 'pc-inventory') {
         outcome = getPcInventory(PC_ACCESS_POLICY);
       } else if (type === 'pc-search-files') {
@@ -1834,6 +1836,13 @@ async function tick() {
 }
 
 let browserRelayInFlight = false;
+
+function restartMarcusBrowserRelay() {
+  browserRelayInFlight = false;
+  marcusBrowserOperationQueue = Promise.resolve();
+  setTimeout(() => relayMarcusBrowser(), 25);
+  return { ok: true, details: { restarted: true, checkedAt: new Date().toISOString() } };
+}
 
 async function relayMarcusBrowser() {
   if (browserRelayInFlight) return;
