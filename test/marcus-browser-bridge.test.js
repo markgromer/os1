@@ -99,6 +99,40 @@ test('MARCUS open command creates a new Chrome tab instead of replacing the acti
   assert.equal(result.ok, true);
 });
 
+test('MARCUS opens the approved Skool community when no Skool tab exists', async () => {
+  const bridge = new MarcusBrowserBridge();
+  const created = [];
+  let pageCall = 0;
+  bridge.ensureBrowser = async () => true;
+  bridge.pages = async () => [{
+    id: 'gmail-tab', type: 'page', url: 'https://mail.google.com/mail/u/0/#inbox',
+    webSocketDebuggerUrl: 'ws://127.0.0.1/gmail',
+  }];
+  bridge.page = async (contextKind = '') => {
+    pageCall += 1;
+    if (!contextKind) {
+      return {
+        target: { id: 'gmail-tab', url: 'https://mail.google.com/mail/u/0/#inbox' },
+        session: { send: async (method, params) => {
+          created.push({ method, params });
+          return { targetId: 'skool-tab' };
+        } },
+      };
+    }
+    return {
+      target: { id: 'skool-tab', url: 'https://www.skool.com/localgiants' },
+      session: { send: async () => ({}) },
+    };
+  };
+
+  const result = await bridge.pageForUrl('https://www.skool.com/localgiants');
+  assert.equal(result.target.id, 'skool-tab');
+  assert.equal(pageCall, 2);
+  assert.deepEqual(created, [{
+    method: 'Target.createTarget', params: { url: 'https://www.skool.com/localgiants' },
+  }]);
+});
+
 test('MARCUS activate command matches bounded visible controls without script interpolation', async () => {
   const bridge = new MarcusBrowserBridge();
   let expression = '';

@@ -70,6 +70,10 @@ test('browser composition is prepared separately from explicitly approved submis
     'marcus_browser_prepare_post',
   );
   assert.equal(
+    classifyMarcusBrowserIntent('Make a post in the ScoopOS community'),
+    'marcus_browser_prepare_post',
+  );
+  assert.equal(
     classifyMarcusBrowserIntent('Use your browser to draft your first post on the ScoopOS main feed on Skool.'),
     'marcus_browser_prepare_post',
   );

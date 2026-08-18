@@ -290,7 +290,21 @@ class MarcusBrowserBridge {
     });
     const sameSite = pages.find((target) => liveContextKind(target.url) === liveContextKind(requestedUrl));
     const selected = exact || sameSite;
-    if (!selected) throw new Error('No controllable MARCUS Chrome tab is available for this approved publication.');
+    if (!selected) {
+      const current = await this.page();
+      const created = await current.session.send('Target.createTarget', { url: requestedUrl });
+      if (!created?.targetId) throw new Error('MARCUS Chrome could not open the approved browser page.');
+      this.activeTargetId = created.targetId;
+      this.session?.close();
+      this.session = null;
+      this.sessionTargetId = '';
+      await wait(1_200);
+      const opened = await this.page(liveContextKind(requestedUrl));
+      if (liveContextKind(opened.target.url) !== liveContextKind(requestedUrl)) {
+        throw new Error('The approved browser page opened, but no controllable tab was found.');
+      }
+      return opened;
+    }
     this.activeTargetId = selected.id;
     const page = await this.page(liveContextKind(requestedUrl));
     if (!exact) {
@@ -308,7 +322,12 @@ class MarcusBrowserBridge {
     const preferredContextKind = ['prepare-post', 'prepare-reply'].includes(command) ? 'skool' : '';
     const { target, session } = command === 'publish-approved-draft'
       ? await this.pageForUrl(requestedUrl)
-      : await this.page(preferredContextKind);
+      : preferredContextKind && requestedUrl
+        ? await this.pageForUrl(requestedUrl)
+        : await this.page(preferredContextKind);
+    if (preferredContextKind && liveContextKind(target.url) !== preferredContextKind) {
+      throw new Error(`No controllable MARCUS Chrome ${preferredContextKind} tab is available.`);
+    }
     let result = {};
     if (command === 'open') {
       if (!requestedUrl) throw new Error('A valid http or https URL is required.');

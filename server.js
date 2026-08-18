@@ -14929,8 +14929,11 @@ async function executeMarcusBrowserTool(toolName, args = {}, {
     if (!text) return { ok: false, error: 'Exact standalone post text is required.' };
     const identityCheck = validateMarcusIntroductionDraft(text, { requestMessage: authorizationRequest });
     if (!identityCheck.ok) return { ok: false, retryable: true, error: identityCheck.error };
+    const communityUrl = /\bscoop\s*os\b/.test(directRequest)
+      ? safeMarcusBrowserUrl(process.env.MARCUS_SCOOPOS_COMMUNITY_URL || 'https://www.skool.com/localgiants')
+      : status.contextKind === 'skool' ? safeMarcusBrowserUrl(status.url) : '';
     payload = {
-      command: 'prepare-post', text,
+      command: 'prepare-post', text, ...(communityUrl ? { url: communityUrl } : {}),
       desktopAgentId: status.agentId || desktopRelayCache?.data?.desktopAuthorization?.agentId || '',
     };
   } else if (toolName === 'marcus_browser_fill') {

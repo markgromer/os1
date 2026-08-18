@@ -1,4 +1,4 @@
-const BROWSER_SURFACE_PATTERN = /\b(browser|chrome|web\s?page|website|skool|gmail|google mail|zoom|youtube|tik\s?tok)\b/i;
+const BROWSER_SURFACE_PATTERN = /\b(browser|chrome|web\s?page|website|skool|scoop\s*os|gmail|google mail|zoom|youtube|tik\s?tok)\b/i;
 const COMPOSITION_PATTERN = /\b(post|comment|reply|response|message|caption)\b/i;
 const APPROVAL_PATTERN = /\b(approve|approved|go ahead|do it|post it|publish it|send it|submit it|reply now|comment now)\b/i;
 const THREAD_NAVIGATION_PATTERN = /\b(head to|go to|find|open|visit|navigate to|(?:in(?:side)?|on|to) (?:the )?(?:thread|post|tab)|thread)\b/i;
@@ -71,7 +71,7 @@ export function classifyMarcusBrowserIntent(message, { pendingDraft = false, con
   if (!BROWSER_SURFACE_PATTERN.test(text) && !implicitCurrentSurface && !implicitFeedRead && !implicitBrowserComposition) return '';
   if (approvedSubmit) return 'marcus_browser_submit';
 
-  const skoolContext = String(contextKind || '').trim().toLowerCase() === 'skool' || /\bskool\b/i.test(text);
+  const skoolContext = String(contextKind || '').trim().toLowerCase() === 'skool' || /\b(?:skool|scoop\s*os)\b/i.test(text);
   if (skoolContext && COMMUNITY_NOTIFICATION_PATTERN.test(text)
     && /\b(check|inspect|read|review|scan|triage|clear|respond|handle|look)\b/i.test(text)) {
     return 'marcus_browser_inspect_notifications';
@@ -86,8 +86,7 @@ export function classifyMarcusBrowserIntent(message, { pendingDraft = false, con
   }
   if ((COMPOSITION_PATTERN.test(text) || STANDALONE_POST_PATTERN.test(text)) && COMPOSITION_VERB_PATTERN.test(text)) {
     if (!STANDALONE_POST_PATTERN.test(text) && THREAD_NAVIGATION_PATTERN.test(text)) return 'marcus_browser_prepare_reply';
-    if (STANDALONE_POST_PATTERN.test(text)
-      && (String(contextKind || '').trim().toLowerCase() === 'skool' || /\bskool\b/i.test(text))) {
+    if (STANDALONE_POST_PATTERN.test(text) && skoolContext) {
       return 'marcus_browser_prepare_post';
     }
     return 'marcus_browser_fill';
