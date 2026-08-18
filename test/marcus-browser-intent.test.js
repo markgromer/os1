@@ -24,6 +24,14 @@ test('Skool inspection requests route to the live browser instead of project wor
     classifyMarcusBrowserIntent('no, the main feed on scoopos on skool'),
     'marcus_browser_read',
   );
+  assert.equal(
+    classifyMarcusBrowserIntent('im switched your browser to the main feed', { contextKind: 'skool' }),
+    'marcus_browser_read',
+  );
+  assert.equal(
+    classifyMarcusBrowserIntent('open each, read all the comments, click read more ALWAYS', { contextKind: 'skool' }),
+    'marcus_browser_read',
+  );
 });
 
 test('browser composition is prepared separately from explicitly approved submission', () => {
@@ -37,6 +45,10 @@ test('browser composition is prepared separately from explicitly approved submis
   );
   assert.equal(
     classifyMarcusBrowserIntent('draft your first standalone post', { contextKind: 'skool' }),
+    'marcus_browser_fill',
+  );
+  assert.equal(
+    classifyMarcusBrowserIntent('create the post', { contextKind: 'skool' }),
     'marcus_browser_fill',
   );
   assert.equal(classifyMarcusBrowserIntent('Post it', { pendingDraft: false }), '');
