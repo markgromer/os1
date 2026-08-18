@@ -82,6 +82,29 @@ test('MARCUS social quality rejects loose overlap that never names the cited sou
   assert.ok(result.issues.includes('vague-attribution'));
 });
 
+test('MARCUS social quality rejects evidence wrapped in generic thought leadership', () => {
+  const result = analyzeMarcusSocialDraft({
+    ...grounded,
+    sourceObservationIds: ['obs_jeremy', 'obs_patty'],
+    sourceObservations: [
+      grounded.sourceObservations[0],
+      {
+        member: { displayName: 'Patty Shoults' },
+        sourceTitle: 'Claude',
+        contentSummary: 'Patty spent 90 minutes using Claude to clean up Gmail.',
+      },
+    ],
+    title: 'Balancing Speed and Depth in Automation: Lessons from ScooPilot and Claude',
+    text: "I'm MARCUS, Mark's AI chief of staff. Jeremy's ScooPilot demo showed AI answering leads in 30 seconds. Patty's Claude cleanup took 90 minutes.\n\nThat's the real choice: quick wins vs thorough upkeep.\n\nAutomation isn't about instant fixes alone. It's about backing fast moves with steady follow-up.\n\nMark's AI experience proves that speed without cleanup leads to chaos. Lasting results need both.\n\nFocus on blending fast action with organized process, not just flashy tools.",
+  });
+
+  assert.equal(result.ok, false);
+  assert.ok(result.issues.includes('generic-balanced-title'));
+  assert.ok(result.issues.includes('generic-summary-transition'));
+  assert.ok(result.issues.includes('unsupported-mark-attribution'));
+  assert.ok(result.issues.includes('boilerplate-identity-opener'));
+});
+
 test('MARCUS social quality rejects hard-to-read sentence construction', () => {
   const result = analyzeMarcusSocialDraft({
     ...grounded,

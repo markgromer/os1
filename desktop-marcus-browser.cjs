@@ -830,8 +830,24 @@ class MarcusBrowserBridge {
 
   async completeSkoolPostComposition(session, { title, category, pollOptions = [] }) {
     await this.replaceSkoolInput(session, { placeholder: 'Title', text: title });
-    await this.trustedClickVisible(session, { label: 'Select a category', selector: 'button' });
-    await this.trustedClickVisible(session, { label: category, selector: '.skool-ui-dropdown-option' });
+    const selectedCategory = await session.send('Runtime.evaluate', {
+      expression: `(() => {
+        const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
+        const expectedCategory = ${JSON.stringify(category)};
+        return [...document.querySelectorAll('button')].some((button) => {
+          const rect = button.getBoundingClientRect();
+          const style = getComputedStyle(button);
+          return normalize(button.innerText || button.textContent) === expectedCategory
+            && rect.width > 0 && rect.height > 0 && style.display !== 'none'
+            && style.visibility !== 'hidden' && Number(style.opacity) !== 0;
+        });
+      })()`,
+      returnByValue: true,
+    }, 4_000);
+    if (selectedCategory?.result?.value !== true) {
+      await this.trustedClickVisible(session, { label: 'Select a category', selector: 'button' });
+      await this.trustedClickVisible(session, { label: category, selector: '.skool-ui-dropdown-option' });
+    }
 
     const options = pollOptions.slice(0, 3);
     if (options.length >= 2) {

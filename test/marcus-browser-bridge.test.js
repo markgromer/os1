@@ -439,6 +439,7 @@ test('MARCUS completes and verifies a rich standalone Skool post', async () => {
   const session = {
     send: async (method, params) => {
       assert.equal(method, 'Runtime.evaluate');
+      if (!/completeDraft/.test(params.expression)) return { result: { value: false } };
       assert.match(params.expression, /completeDraft/);
       return { result: { value: {
         completeDraft: true,
@@ -467,6 +468,39 @@ test('MARCUS completes and verifies a rich standalone Skool post', async () => {
     { type: 'fill', placeholder: 'Option 1', text: 'Lead follow-up' },
     { type: 'fill', placeholder: 'Option 2', text: 'Route planning' },
     { type: 'fill', placeholder: 'Option 3', text: 'Customer updates' },
+  ]);
+});
+
+test('MARCUS preserves an already-selected Skool category', async () => {
+  const bridge = new MarcusBrowserBridge();
+  const actions = [];
+  let runtimeCall = 0;
+  bridge.replaceSkoolInput = async (_session, input) => actions.push({ type: 'fill', ...input });
+  bridge.trustedClickVisible = async (_session, input) => actions.push({ type: 'click', ...input });
+  const session = {
+    send: async () => {
+      runtimeCall += 1;
+      if (runtimeCall === 1) return { result: { value: true } };
+      return { result: { value: {
+        completeDraft: true,
+        titleVerified: true,
+        categoryVerified: true,
+        pollVerified: true,
+        title: 'A concrete operator observation',
+        category: 'Operations',
+        pollOptions: [],
+      } } };
+    },
+  };
+
+  const result = await bridge.completeSkoolPostComposition(session, {
+    title: 'A concrete operator observation',
+    category: 'Operations',
+  });
+
+  assert.equal(result.completeDraft, true);
+  assert.deepEqual(actions, [
+    { type: 'fill', placeholder: 'Title', text: 'A concrete operator observation' },
   ]);
 });
 

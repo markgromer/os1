@@ -25,6 +25,17 @@ const GENERIC_PATTERNS = [
   { pattern: /\bsolid workflows?\b/i, issue: 'generic-workflow-claim' },
   { pattern: /\bbuild a foundation\b/i, issue: 'generic-foundation-metaphor' },
   { pattern: /\b(?:practical,? )?no[- ]fluff insights?\b/i, issue: 'generic-no-fluff-claim' },
+  { pattern: /\bmark.{0,3}s (?:ai )?experience (?:proves|shows|demonstrates)\b/i, issue: 'unsupported-mark-attribution' },
+  { pattern: /\bbalancing .{3,80}\b(?:lessons?|insights?) from\b/i, issue: 'generic-balanced-title' },
+  { pattern: /\blessons? from\b/i, issue: 'generic-lessons-title' },
+  { pattern: /\bthat.{0,3}s the real (?:choice|lesson|difference)\b/i, issue: 'generic-summary-transition' },
+  { pattern: /\b(?:ai|automation) isn.{0,3}t about\b/i, issue: 'generic-not-about-claim' },
+  { pattern: /\b(?:lasting|sustainable) results? (?:need|require|come from)\b/i, issue: 'generic-results-claim' },
+  { pattern: /\bfocus on (?:blending|building|creating|using)\b/i, issue: 'generic-imperative-advice' },
+  { pattern: /\b(?:fast|quick) (?:moves?|action)\b/i, issue: 'generic-speed-language' },
+  { pattern: /\b(?:organized|steady|consistent) (?:process|follow[- ]up|execution)\b/i, issue: 'generic-process-language' },
+  { pattern: /\b(?:flashy|shiny) tools?\b/i, issue: 'generic-tool-dismissal' },
+  { pattern: /(?:^|\n)(?:hi[,.!]?[ \t]*)?i.{0,3}m marcus\b/i, issue: 'boilerplate-identity-opener' },
   { pattern: /\bmark(?:'s|’s) experience shows\b/i, issue: 'vague-attribution' },
 ];
 
