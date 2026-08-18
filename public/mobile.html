@@ -95,10 +95,26 @@
   .row-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
   .row-actions .btn { min-height: 36px; padding: 7px 10px; border-radius: 8px; font-size: 12px; white-space: nowrap; }
   .project-row { grid-template-columns: 44px minmax(0,1fr); }
+  .project-row.active { border-color: rgba(69,200,255,0.7); background: rgba(69,200,255,0.07); }
   .project-row .status-label { justify-self: start; margin-top: 7px; }
   .post-approval { min-height: 46px; display: grid; grid-template-columns: auto minmax(0,1fr); gap: 10px; align-items: center; padding: 10px 12px; color: var(--muted); }
   .post-approval strong { color: var(--text); font-weight: 650; }
   .mobile-empty { margin: 0; padding: 13px; border: 1px dashed var(--line); border-radius: 10px; color: var(--muted); font-size: 13px; }
+  .mobile-project-shell { min-height: calc(100dvh - 190px); display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 10px; }
+  .project-ledger { max-height: 34dvh; overflow: auto; }
+  .codex-mobile { min-height: 48dvh; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; overflow: hidden; background: #07111f; }
+  .codex-mobile-head { display: grid; gap: 5px; padding: 12px 14px; border-bottom: 1px solid #223247; }
+  .codex-mobile-title { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .codex-mobile-title strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .codex-mobile-meta { color: #7f95ad; font: 11px/1.35 ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; }
+  .codex-mobile-thread { min-height: 0; overflow: auto; padding: 14px; display: grid; align-content: start; gap: 14px; }
+  .codex-mobile-turn { padding-left: 12px; border-left: 3px solid var(--active); }
+  .codex-mobile-turn.assistant { border-left-color: var(--accent); }
+  .codex-mobile-turn small { display: block; margin-bottom: 5px; color: #7f95ad; font-size: 10px; font-weight: 800; }
+  .codex-mobile-turn p { margin: 0; color: #e7eef8; font-size: 14px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .codex-mobile-compose { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 10px; border-top: 1px solid #223247; background: #091523; }
+  .codex-mobile-compose textarea { min-height: 58px; resize: none; border: 1px solid #30445c; border-radius: 10px; padding: 10px; color: var(--text); background: #0d1b2b; }
+  .codex-mobile-compose .route-note { grid-column: 1 / -1; color: #7f95ad; font-size: 10px; }
   .bottom-nav { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2px; padding: 8px 14px calc(8px + env(safe-area-inset-bottom)); background: rgba(7,11,18,0.94); border-top: 1px solid var(--line); backdrop-filter: blur(12px); }
   .bottom-nav button { min-height: 52px; border: 0; border-radius: 10px; color: var(--muted); background: transparent; display: grid; place-items: center; gap: 2px; cursor: pointer; }
   .bottom-nav button.active { color: #bd9cff; background: rgba(155,108,255,0.12); }
@@ -212,6 +228,12 @@
     .provider-grid { grid-template-columns: 1fr; }
     .provider-field.wide { grid-column: auto; }
     .footer-actions .btn { padding-left: 6px; padding-right: 6px; font-size: 12px; }
+    body[data-view="projects"] .app { padding-left: 8px; padding-right: 8px; gap: 8px; }
+    body[data-view="projects"] .topbar { padding: 0 4px; }
+    body[data-view="projects"] .brand h1 { font-size: 25px; }
+    body[data-view="projects"] #projectsView { gap: 8px; }
+    body[data-view="projects"] #projectsView > .brief-card { padding: 10px 12px; }
+    .mobile-project-shell { min-height: calc(100dvh - 174px); }
   }
   @media (min-width: 760px) {
     .app { max-width: 760px; width: 100%; margin: 0 auto; }
@@ -288,8 +310,13 @@
       <p class="section-label">Projects ledger</p>
       <p id="projectsBriefCopy" style="margin:0; font-size:17px; line-height:1.35;">Live projects will appear here after Marcus reads the current brief and desktop relay.</p>
     </section>
-    <section class="project-ledger">
-      <div id="projectLedger"></div>
+    <section class="mobile-project-shell">
+      <section class="project-ledger" aria-label="Active projects">
+        <div id="projectLedger"></div>
+      </section>
+      <section id="mobileCodexWorkbench" class="panel codex-mobile" aria-label="Selected Codex workspace">
+        <div class="codex-mobile-head"><strong>Select an active project</strong><span class="codex-mobile-meta">Its Codex session and rolling context will appear here.</span></div>
+      </section>
     </section>
   </section>
 
@@ -728,9 +755,10 @@
   let selectedMessageAction = null;
   let messageRequestInFlight = false;
   let pcAccessRequestInFlight = false;
-  let workspaceSnapshot = { health: null, brief: null, operations: [], pcCapabilities: null };
+  let workspaceSnapshot = { health: null, brief: null, operations: [], pcCapabilities: null, desktop: null, codexJobs: [], awareness: [] };
   let activeMobileView = document.body.dataset.view || 'review';
   let activeReviewTab = 'brief';
+  let selectedMobileProjectId = '';
 
   function asArray(value) {
     return Array.isArray(value) ? value : [];
@@ -841,13 +869,30 @@
         source,
         summary: itemSummary(item, source ? `From ${source}` : 'Tracked by Marcus.'),
         status: cleanText(item?.status || item?.state || item?.lane || item?.kind || source, 'active'),
+        raw: item,
+        workspacePath: cleanText(item?.workspacePath),
+        branch: cleanText(item?.gitBranch || item?.branch),
+        rollingContext: asArray(item?.rollingContext),
+        sessionId: cleanText(item?.sessionId),
+        jobId: source === 'job' ? cleanText(item?.id) : '',
       });
     };
+    asArray(workspaceSnapshot.desktop?.codexWorkspaces).forEach((item) => push(item, 'session'));
+    asArray(workspaceSnapshot.codexJobs).forEach((item) => push(item, 'job'));
+    asArray(operations).forEach((item) => push(item, 'codex'));
+    asArray(brief.worldModel?.activeWork).forEach((item) => push(item, 'desktop'));
     asArray(brief.projects).forEach((item) => push(item, 'brief'));
     asArray(brief.projectActivity).forEach((item) => push(item, 'activity'));
-    asArray(brief.worldModel?.activeWork).forEach((item) => push(item, 'desktop'));
-    asArray(operations).forEach((item) => push(item, 'codex'));
-    return dedupeByLabel(rows, (row) => row.name.toLowerCase()).slice(0, 20);
+    asArray(workspaceSnapshot.awareness).forEach((item) => push(item, 'awareness'));
+    return dedupeByLabel(rows, (row) => row.name.toLowerCase()).slice(0, 50).map((project) => {
+      if (project.jobId) return project;
+      const match = asArray(workspaceSnapshot.codexJobs).find((job) => {
+        const sameName = itemTitle(job, '').toLowerCase() === project.name.toLowerCase();
+        const jobWorkspace = cleanText(job?.workspacePath || job?.cwd || job?.repositoryPath).toLowerCase();
+        return sameName || (project.workspacePath && jobWorkspace === project.workspacePath.toLowerCase());
+      });
+      return match?.id ? { ...project, jobId: cleanText(match.id) } : project;
+    });
   }
   function renderMobileWorkspace() {
     const model = buildReviewModel();
@@ -966,21 +1011,67 @@
       return;
     }
     els.projectLedger.innerHTML = projects.map((project, index) => `
-      <article class="project-row">
+      <article class="project-row ${project.id === selectedMobileProjectId ? 'active' : ''}" data-open-project="${escapeHtml(project.id)}">
         <span class="review-icon" aria-hidden="true">${escapeHtml(project.name.slice(0, 1).toUpperCase())}</span>
         <div>
           <span class="row-title">${escapeHtml(project.name)}</span>
           <span class="row-copy">${escapeHtml(project.summary)}</span>
           <span class="status-label ${statusTone(project.status)}">${escapeHtml(approvalLabel(project.status))}</span>
-          <div class="row-actions" style="margin-top:8px;"><button class="btn" type="button" data-project-index="${index}">Ask Marcus</button></div>
+          <div class="row-actions" style="margin-top:8px;"><button class="btn" type="button" data-project-index="${index}">Open Codex</button></div>
         </div>
       </article>`).join('');
     els.projectLedger.querySelectorAll('[data-project-index]').forEach((button) => {
       button.addEventListener('click', () => {
         const project = projects[Number(button.dataset.projectIndex)];
-        setMobileView('marcus');
-        sendMessage(`Give me the live status for ${project.name}. Include active Codex tasks, blockers, evidence, and the next decision if any.`);
+        selectedMobileProjectId = project.id;
+        renderProjectLedger(projects);
+        renderMobileCodex(project);
       });
+    });
+    if (!selectedMobileProjectId && projects[0]) selectedMobileProjectId = projects[0].id;
+    const selected = projects.find((project) => project.id === selectedMobileProjectId) || projects[0];
+    if (selected) renderMobileCodex(selected);
+  }
+  function renderMobileCodex(project) {
+    const host = document.getElementById('mobileCodexWorkbench');
+    if (!host || !project) return;
+    const context = project.rollingContext.length ? project.rollingContext : [
+      { role: 'user', content: cleanText(project.raw?.latestUserRequest, 'No user request captured for this session yet.'), at: project.raw?.latestUserRequestAt },
+      { role: 'assistant', content: cleanText(project.raw?.handoffSummary || project.summary, 'No Codex update has been reported yet.'), at: project.raw?.handoffObservedAt },
+    ];
+    const session = project.sessionId || project.jobId || project.id;
+    const route = project.jobId ? 'Direct to this Codex job.' : 'MARCUS routes this to the active Codex workspace.';
+    host.innerHTML = `
+      <header class="codex-mobile-head">
+        <div class="codex-mobile-title"><strong>${escapeHtml(project.name)}</strong><span class="status-label">CODEX</span></div>
+        <span class="codex-mobile-meta">Chat ${escapeHtml(session.slice(0, 12))} · ${escapeHtml(project.branch || project.source)}${project.workspacePath ? ` · ${escapeHtml(project.workspacePath)}` : ''}</span>
+      </header>
+      <div class="codex-mobile-thread">
+        ${context.map((item) => `<article class="codex-mobile-turn ${item.role === 'assistant' ? 'assistant' : ''}"><small>${item.role === 'assistant' ? 'CODEX' : 'MARK'}</small><p>${escapeHtml(item.content)}</p></article>`).join('')}
+      </div>
+      <form class="codex-mobile-compose">
+        <textarea aria-label="Message Codex" placeholder="Tell Codex what to inspect, change, test, or explain..." required></textarea>
+        <button class="btn primary" type="submit">Send</button>
+        <span class="route-note">${escapeHtml(route)} MARCUS keeps the project context.</span>
+      </form>`;
+    host.querySelector('form')?.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const input = host.querySelector('textarea');
+      const message = cleanText(input?.value);
+      if (!message) return;
+      const button = host.querySelector('button[type="submit"]');
+      button.disabled = true;
+      try {
+        if (project.jobId) {
+          await adminApi(`/api/codex/jobs/${encodeURIComponent(project.jobId)}/followup`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message }) });
+        } else {
+          await api('/api/marcus/live/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: `Send this exact follow-up to the active Codex work for ${project.name}: ${message}`, surface: 'mobile_codex', projectId: project.raw?.awarenessProjectId || project.raw?.projectId || project.id }) });
+        }
+        input.value = '';
+        await refreshHealth();
+      } catch (error) {
+        addMessage('system', `Codex follow-up failed: ${error.message}`);
+      } finally { button.disabled = false; }
     });
   }
   function actOnReviewItem(item) {
@@ -1353,11 +1444,14 @@
   }
   async function refreshHealth() {
     if (!(await ensureSession())) return false;
-    const [health, operationsPayload, brief, pcCapabilities] = await Promise.all([
+    const [health, operationsPayload, brief, pcCapabilities, desktop, codexJobs, awareness] = await Promise.all([
       api('/api/marcus/operator-health'),
       api('/api/operations/summary?limit=50').catch(() => ({ operations: [] })),
       api('/api/marcus/active-brief').catch(() => null),
       adminApi('/api/marcus/pc/capabilities').catch(() => null),
+      api('/api/desktop-context').catch(() => ({ codexWorkspaces: [] })),
+      api('/api/codex/jobs').catch(() => ({ jobs: [] })),
+      api('/api/marcus/awareness?includeArchived=false').catch(() => ({ projects: [] })),
     ]);
     const actions = await adminApi('/api/marcus/external-actions')
       .then((data) => asArray(data.actions))
@@ -1369,6 +1463,9 @@
       operations: asArray(operationsPayload?.operations || operationsPayload),
       brief,
       pcCapabilities,
+      desktop,
+      codexJobs: asArray(codexJobs?.jobs),
+      awareness: asArray(awareness?.projects),
     };
     const caps = health.capabilities || {};
     els.codex.textContent = caps.projectOperator?.mode || 'unknown';
