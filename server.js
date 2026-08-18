@@ -14810,7 +14810,11 @@ async function executeMarcusBrowserTool(toolName, args = {}, {
     if (!/\b(write|draft|compose|type|fill|prepare|create|make|respond|post|comment|reply)\b/.test(directRequest)) {
       return { ok: false, approvalRequired: true, error: 'The current user message does not directly ask MARCUS to prepare browser text.' };
     }
-    const target = typeof args?.target === 'string' ? args.target.replace(/\s+/g, ' ').trim().slice(0, 240) : '';
+    let target = typeof args?.target === 'string' ? args.target.replace(/\s+/g, ' ').trim().slice(0, 240) : '';
+    if (/\b(?:main feed|feed editor|standalone|new post|first post)\b/i.test(`${directRequest} ${target}`)
+      && !/\b(?:comment|reply)\b/i.test(`${directRequest} ${target}`)) {
+      target = 'Write something';
+    }
     const text = typeof args?.text === 'string' ? args.text.trim().slice(0, 4_000) : '';
     if (!text) return { ok: false, error: 'Exact draft text is required.' };
     const identityCheck = validateMarcusIntroductionDraft(text, { requestMessage });

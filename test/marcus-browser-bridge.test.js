@@ -166,6 +166,34 @@ test('MARCUS fill command can open a named composer before inserting the draft',
   assert.equal(runtimeCall, 3);
 });
 
+test('MARCUS standalone feed post targeting avoids comment editors', async () => {
+  const bridge = new MarcusBrowserBridge();
+  let runtimeCall = 0;
+  const expressions = [];
+  bridge.ensureBrowser = async () => true;
+  bridge.sensitiveFieldFocused = async () => false;
+  bridge.page = async () => ({
+    target: { id: 'skool-tab' },
+    session: {
+      send: async (method, params) => {
+        if (method === 'Input.insertText') return {};
+        expressions.push(params.expression);
+        runtimeCall += 1;
+        if (runtimeCall === 1) return { result: { value: { focused: false } } };
+        if (runtimeCall === 2) return { result: { value: { activated: true } } };
+        return { result: { value: { focused: true, tag: 'DIV', contentEditable: true, label: 'Write something' } } };
+      },
+    },
+  });
+  const result = await bridge.command({ command: 'fill', target: 'main feed editor', text: 'Standalone post text.' });
+  assert.equal(result.ok, true);
+  assert.equal(runtimeCall, 3);
+  assert.match(expressions[0], /wantsStandalonePost/);
+  assert.match(expressions[0], /replyOrCommentMatch/);
+  assert.match(expressions[1], /write something\|start a post\|create post\|post something/);
+  assert.match(expressions[2], /wantsStandalonePost/);
+});
+
 test('MARCUS thread reply workflow opens the thread and current comment editor before filling', async () => {
   const bridge = new MarcusBrowserBridge();
   const calls = [];

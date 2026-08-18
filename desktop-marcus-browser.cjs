@@ -387,6 +387,10 @@ class MarcusBrowserBridge {
       const focusEditor = (wantedLabel = '') => session.send('Runtime.evaluate', {
         expression: `(() => {
           const wanted = ${JSON.stringify(String(wantedLabel || '').toLowerCase())};
+          const wantsStandalonePost = /\\b(?:main feed|feed editor|post editor|write something|standalone|new post|first post)\\b/.test(wanted)
+            && !/\\b(?:comment|reply)\\b/.test(wanted);
+          const standalonePostMatch = (details) => /\\b(?:write something|start a post|create post|post something|what do you want to share)\\b/.test(details);
+          const replyOrCommentMatch = (details) => /\\b(?:comment|reply|respond|leave a comment|write a comment|add a comment)\\b/.test(details);
           const candidates = [...document.querySelectorAll('textarea,input:not([type="password"]),[contenteditable="true"],[contenteditable="plaintext-only"],[role="textbox"]')]
             .filter((element) => {
               const rect = element.getBoundingClientRect();
@@ -402,6 +406,8 @@ class MarcusBrowserBridge {
                 element.getAttribute('aria-label'), element.getAttribute('placeholder'), element.getAttribute('name'),
                 element.getAttribute('data-placeholder'), element.closest('form,[role="dialog"],section')?.innerText,
               ].filter(Boolean).join(' ').replace(/\\s+/g, ' ').toLowerCase();
+              if (wantsStandalonePost && replyOrCommentMatch(details)) return false;
+              if (wantsStandalonePost && standalonePostMatch(details)) return true;
               return details.includes(wanted) || wanted.includes(details.slice(0, 120));
             })
             .sort((left, right) => {
@@ -435,12 +441,16 @@ class MarcusBrowserBridge {
         const opened = await session.send('Runtime.evaluate', {
           expression: `(() => {
             const wanted = ${JSON.stringify(targetLabel.toLowerCase())};
+            const wantsStandalonePost = /\\b(?:main feed|feed editor|post editor|write something|standalone|new post|first post)\\b/.test(wanted)
+              && !/\\b(?:comment|reply)\\b/.test(wanted);
             const candidates = [...document.querySelectorAll('a,button,[role="button"],[role="link"]')]
               .filter((element) => {
                 const text = String(element.innerText || element.textContent || '').replace(/\\s+/g, ' ').trim().toLowerCase();
                 const rect = element.getBoundingClientRect();
                 const style = getComputedStyle(element);
-                return text.includes(wanted) && rect.width > 0 && rect.height > 0 && rect.bottom >= 0 && rect.top <= innerHeight
+                const matches = text.includes(wanted) || (wantsStandalonePost && /\\b(?:write something|start a post|create post|post something)\\b/.test(text));
+                if (wantsStandalonePost && /\\b(?:comment|reply|respond)\\b/.test(text)) return false;
+                return matches && rect.width > 0 && rect.height > 0 && rect.bottom >= 0 && rect.top <= innerHeight
                   && style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) !== 0;
               })
               .sort((left, right) => String(left.innerText || '').length - String(right.innerText || '').length);
@@ -452,7 +462,7 @@ class MarcusBrowserBridge {
         });
         if (opened?.result?.value?.activated) {
           await wait(600);
-          focused = await focusEditor('');
+          focused = await focusEditor(targetLabel);
         }
       }
       if (!focused?.result?.value?.focused) {
