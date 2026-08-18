@@ -544,12 +544,13 @@ class MarcusBrowserBridge {
     if (!pathParts.length) throw new Error('The Skool community could not be resolved from the visible page.');
     const communityUrl = `${currentUrl.origin}/${pathParts[0]}`;
     await session.send('Page.navigate', { url: communityUrl }, 4_000);
+    await wait(1_200);
 
-    const opened = await this.evaluateUntil(session, {
+    const opener = await this.evaluateUntil(session, {
       expression: `(() => {
         const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').trim().toLowerCase();
         const wanted = /^(?:write something|start a post|create post|post something|what do you want to share)(?:\.{3}|[.!?])?$/;
-        const candidates = [...document.querySelectorAll('button,[role="button"],textarea,[contenteditable="true"],[contenteditable="plaintext-only"]')]
+        const candidates = [...document.querySelectorAll('button,[role="button"],textarea,[contenteditable="true"],[contenteditable="plaintext-only"],div')]
           .map((element) => ({
             element,
             label: normalize(element.getAttribute('aria-label') || element.getAttribute('placeholder') || element.getAttribute('data-placeholder') || element.innerText || element.textContent).replace(/\u2026/g, '...'),
@@ -563,22 +564,36 @@ class MarcusBrowserBridge {
               && !element.closest('article');
           })
           .sort((left, right) => left.label.length - right.label.length
-            || (left.element.getBoundingClientRect().width * left.element.getBoundingClientRect().height)
-              - (right.element.getBoundingClientRect().width * right.element.getBoundingClientRect().height));
+            || (right.element.getBoundingClientRect().width * right.element.getBoundingClientRect().height)
+              - (left.element.getBoundingClientRect().width * left.element.getBoundingClientRect().height));
         const control = candidates[0]?.element;
-        if (!control) return { activated: false };
+        if (!control) return { located: false };
         control.scrollIntoView({ block: 'center', inline: 'nearest' });
-        control.click();
-        return { activated: true, label: candidates[0].label, href: location.href };
+        const rect = control.getBoundingClientRect();
+        return {
+          located: true,
+          x: rect.left + (rect.width / 2),
+          y: rect.top + (rect.height / 2),
+          label: candidates[0].label,
+          href: location.href,
+        };
       })()`,
       returnByValue: true,
     }, {
       timeoutMs: this.composerOpenTimeoutMs,
-      accept: (value) => value?.result?.value?.activated === true,
+      accept: (value) => value?.result?.value?.located === true,
     });
-    if (!opened?.result?.value?.activated) {
+    const point = opener?.result?.value;
+    if (!point?.located || !Number.isFinite(point.x) || !Number.isFinite(point.y)) {
       throw new Error('The ScoopOS main feed is visible, but its standalone post composer could not be opened.');
     }
+    await session.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: point.x, y: point.y });
+    await session.send('Input.dispatchMouseEvent', {
+      type: 'mousePressed', x: point.x, y: point.y, button: 'left', clickCount: 1,
+    });
+    await session.send('Input.dispatchMouseEvent', {
+      type: 'mouseReleased', x: point.x, y: point.y, button: 'left', clickCount: 1,
+    });
     const focus = await this.evaluateUntil(session, {
       expression: `(() => {
         const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').trim().toLowerCase();
@@ -588,8 +603,14 @@ class MarcusBrowserBridge {
           return !element.disabled && !element.readOnly && rect.width > 0 && rect.height > 0
             && style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) !== 0;
         };
+        const rendered = (element) => {
+          const rect = element.getBoundingClientRect();
+          const style = getComputedStyle(element);
+          return rect.width > 0 && rect.height > 0
+            && style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) !== 0;
+        };
         const exactPostControl = (root) => [...root.querySelectorAll('button,[role="button"],input[type="submit"]')]
-          .some((button) => visible(button) && /^(?:post|publish)$/.test(normalize(button.innerText || button.value || button.textContent)));
+          .some((button) => rendered(button) && /^(?:post|publish)$/.test(normalize(button.innerText || button.value || button.textContent)));
         const composerContainer = (editor) => {
           let current = editor;
           for (let depth = 0; current && depth < 8; depth += 1, current = current.parentElement) {
@@ -656,7 +677,9 @@ class MarcusBrowserBridge {
           hasPostControl = [...container.querySelectorAll('button,[role="button"],input[type="submit"]')].some((button) => {
             const label = String(button.innerText || button.value || button.textContent || '').replace(/\\s+/g, ' ').trim().toLowerCase();
             const rect = button.getBoundingClientRect();
-            return /^(?:post|publish)$/.test(label) && !button.disabled && rect.width > 0 && rect.height > 0;
+            const style = getComputedStyle(button);
+            return /^(?:post|publish)$/.test(label) && rect.width > 0 && rect.height > 0
+              && style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) !== 0;
           });
           if (hasPostControl) break;
         }

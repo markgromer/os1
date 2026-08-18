@@ -299,8 +299,11 @@ test('MARCUS standalone post skill leaves an open thread and proves the main fee
         calls.push({ method, params });
         if (method === 'Page.navigate') return { frameId: 'frame-1' };
         if (method === 'Input.insertText') return {};
+        if (method === 'Input.dispatchMouseEvent') return {};
         runtimeCall += 1;
-        if (runtimeCall === 1) return { result: { value: { activated: true, label: 'write something', href: 'https://www.skool.com/localgiants' } } };
+        if (runtimeCall === 1) return { result: { value: {
+          located: true, x: 300, y: 120, label: 'write something', href: 'https://www.skool.com/localgiants',
+        } } };
         if (runtimeCall === 2) return { result: { value: {
           focused: true, surface: 'standalone-feed-composer', communityRoot: true,
           href: 'https://www.skool.com/localgiants', label: '',
@@ -321,10 +324,12 @@ test('MARCUS standalone post skill leaves an open thread and proves the main fee
   assert.equal(result.details.result.insertedChars, 21);
   assert.deepEqual(calls[0], { method: 'Page.navigate', params: { url: 'https://www.skool.com/localgiants' } });
   assert.match(calls[1].params.expression, /write something\|start a post\|create post/i);
-  assert.match(calls[2].params.expression, /exactPostControl/);
-  assert.match(calls[2].params.expression, /editor\.closest\('article'\)/);
-  assert.deepEqual(calls[3], { method: 'Input.insertText', params: { text: 'Standalone post text.' } });
-  assert.match(calls[4].params.expression, /actual === expected/);
+  assert.match(calls[1].params.expression, /contenteditable="plaintext-only"\],div/);
+  assert.deepEqual(calls.slice(2, 5).map((call) => call.params.type), ['mouseMoved', 'mousePressed', 'mouseReleased']);
+  assert.match(calls[5].params.expression, /exactPostControl/);
+  assert.match(calls[5].params.expression, /editor\.closest\('article'\)/);
+  assert.deepEqual(calls[6], { method: 'Input.insertText', params: { text: 'Standalone post text.' } });
+  assert.match(calls[7].params.expression, /actual === expected/);
 });
 
 test('MARCUS standalone post skill refuses a composer that is still inside a thread surface', async () => {
@@ -338,12 +343,13 @@ test('MARCUS standalone post skill refuses a composer that is still inside a thr
     session: {
       send: async (method) => {
         if (method === 'Page.navigate') return {};
+        if (method === 'Input.dispatchMouseEvent') return {};
         if (method === 'Input.insertText') {
           inserted = true;
           return {};
         }
         runtimeCall += 1;
-        if (runtimeCall === 1) return { result: { value: { activated: true } } };
+        if (runtimeCall === 1) return { result: { value: { located: true, x: 300, y: 120 } } };
         return { result: { value: { focused: true, surface: 'standalone-feed-composer', communityRoot: false } } };
       },
     },
@@ -366,9 +372,10 @@ test('MARCUS standalone post waits for the main-feed composer to render', async 
     session: {
       send: async (method) => {
         if (method === 'Page.navigate' || method === 'Input.insertText') return {};
+        if (method === 'Input.dispatchMouseEvent') return {};
         runtimeCall += 1;
-        if (runtimeCall < 3) return { result: { value: { activated: false } } };
-        if (runtimeCall === 3) return { result: { value: { activated: true } } };
+        if (runtimeCall < 3) return { result: { value: { located: false } } };
+        if (runtimeCall === 3) return { result: { value: { located: true, x: 300, y: 120 } } };
         if (runtimeCall === 4) return { result: { value: { focused: false } } };
         if (runtimeCall === 5) return { result: { value: {
           focused: true, surface: 'standalone-feed-composer', communityRoot: true,
