@@ -17,7 +17,7 @@ test('live MARCUS prompt keeps the social persona distinct from Mark', async () 
   assert.match(source, /Default to no poll/i);
   assert.match(source, /rewrite and retry immediately in the same turn/i);
   assert.match(source, /novelty gap supported by at least three researched threads/i);
-  assert.match(source, /browserIntent === 'marcus_browser_prepare_post' \? 9 : 4/i);
+  assert.match(source, /browserIntent === 'marcus_browser_prepare_post'[\s\S]{0,120}browserIntent === 'marcus_browser_research_social' \? 10 : 4/i);
   assert.match(source, /forcedLiveTool = 'marcus_browser_prepare_post'/i);
   assert.match(source, /Last verified blocker/i);
   assert.match(source, /source-specific title; 2-4 short paragraphs/i);

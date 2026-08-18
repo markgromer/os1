@@ -45,6 +45,20 @@ test('community intelligence routes ingest profiles, queue Obsidian projection, 
     assert.equal(members.ok, true);
     assert.equal(members.members.length, 1);
 
+    const context = await (await fetch(`${baseUrl}/api/marcus/community/context?platform=skool&community=ScoopOS`)).json();
+    assert.equal(context.ok, true);
+    assert.equal(context.members.length, 1);
+
+    const knowledge = await fetch(`${baseUrl}/api/marcus/community/knowledge`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        kind: 'expertise', summary: 'Route Tester has shared a source-backed route automation checklist.',
+        scope: 'member', memberId: members.members[0].id, platform: 'skool', community: 'ScoopOS',
+        sourceObservationIds: [observationBody.observations[0].id], confidence: 0.9,
+      }),
+    });
+    assert.equal(knowledge.status, 201);
+
     const notificationBody = await (await fetch(`${baseUrl}/api/marcus/community/notifications`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ notifications: [{

@@ -98,6 +98,60 @@ test('community identity reconciliation keeps conflicting stable profiles separa
   });
 });
 
+test('social research becomes durable thread, participant, culture, and resumable coverage memory', async () => {
+  await withStore(async ({ store }) => {
+    const research = {
+      contextKind: 'skool', community: 'localgiants', startingUrl: 'https://www.skool.com/localgiants',
+      query: '', postsDiscovered: 1, postsRead: 1, commentsRead: 2,
+      coverage: {
+        feedViewportsRead: 7, feedEndReached: false, allVisibleCommentEndsReached: true,
+        resumeToken: 'resume_abc', limitation: 'Rendered signed-in content only.',
+      },
+      sources: [{
+        sourceUrl: 'https://www.skool.com/localgiants/route-day', title: 'Route day fell apart',
+        postText: 'I am trying to stop route changes from getting lost. What do you tell the customer?',
+        author: { displayName: 'Pat Operator', profileUrl: 'https://www.skool.com/@pat-operator' },
+        commentsRead: 2, reachedVisibleEnd: true,
+        comments: [
+          { author: 'Jamie Route', authorUrl: 'https://www.skool.com/@jamie-route', text: 'The hard part is updating the crew before they drive across town.' },
+          { author: 'Pat Operator', authorUrl: 'https://www.skool.com/@pat-operator', text: 'My goal is one source of truth for dispatch.' },
+        ],
+      }],
+    };
+    const first = await store.ingestResearch('personal', research);
+    const second = await store.ingestResearch('personal', research);
+    assert.equal(first.created, 3);
+    assert.equal(second.created, 0);
+    assert.equal(first.threads.length, 1);
+    assert.equal(first.threads[0].commentCountObserved, 2);
+
+    const context = await store.getCommunityContext('personal', { platform: 'skool', community: 'localgiants' });
+    assert.equal(context.community.threadCount, 1);
+    assert.equal(context.community.memberCount, 2);
+    assert.equal(context.community.coverage.resumeToken, 'resume_abc');
+    assert.deepEqual(context.knownSourceUrls, ['https://www.skool.com/localgiants/route-day']);
+    const pat = context.members.find((member) => member.displayName === 'Pat Operator');
+    const jamie = context.members.find((member) => member.displayName === 'Jamie Route');
+    assert.equal(pat.relationships[0].memberId, jamie.id);
+    assert.equal(pat.signals.some((signal) => signal.kind === 'goal'), true);
+    assert.equal(jamie.signals.some((signal) => signal.kind === 'struggle'), true);
+
+    const observationId = first.observations.find((item) => item.member.displayName === 'Pat Operator').id;
+    const remembered = await store.rememberKnowledge('personal', {
+      kind: 'ongoing_thread', summary: 'Pat is actively working toward a single dispatch source of truth.',
+      scope: 'member', memberId: pat.id, platform: 'skool', community: 'localgiants',
+      sourceObservationIds: [observationId], confidence: 0.95,
+    });
+    assert.equal(remembered.created, true);
+    const detail = await store.getMember('personal', pat.id);
+    assert.equal(detail.member.signals.some((signal) => signal.kind === 'ongoing_thread'), true);
+    const projection = await store.communityProjection('personal', { platform: 'skool', community: 'localgiants' });
+    assert.equal(projection.filename, 'community-skool-localgiants.md');
+    assert.match(projection.content, /## Explicit Struggles/);
+    assert.match(projection.content, /Route day fell apart/);
+  });
+});
+
 test('notification triage recommends response drafts but requires evidence to record external completion', async () => {
   await withStore(async ({ store }) => {
     const recommendation = recommendCommunityNotificationAction({ kind: 'reply' }, 'Pat asked whether the checklist is available?');

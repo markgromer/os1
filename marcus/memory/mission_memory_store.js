@@ -344,11 +344,20 @@ export class MissionMemoryStore {
     const temporary = `${file}.tmp-${process.pid}-${crypto.randomBytes(6).toString('hex')}`;
     if (createBackup) await fs.copyFile(file, `${file}.bak`).catch(() => {});
     await fs.writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8', flag: 'wx' });
-    try {
-      await fs.rename(temporary, file);
-    } catch (error) {
-      await fs.unlink(temporary).catch(() => {});
-      throw error;
+    const attempts = process.platform === 'win32' ? 6 : 1;
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      try {
+        await fs.rename(temporary, file);
+        return;
+      } catch (error) {
+        const transient = ['EACCES', 'EBUSY', 'EPERM'].includes(error?.code);
+        if (attempt < attempts && transient) {
+          await new Promise((resolve) => setTimeout(resolve, 20 * attempt));
+          continue;
+        }
+        await fs.unlink(temporary).catch(() => {});
+        throw error;
+      }
     }
   }
 }

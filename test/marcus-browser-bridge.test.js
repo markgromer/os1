@@ -299,10 +299,10 @@ test('MARCUS social research opens discovered threads, expands comments, and rep
       }
       assert.equal(method, 'Runtime.evaluate');
       if (/const links =/.test(params.expression)) {
-        return { result: { value: [{
-          url: 'https://social.example/posts/field-test',
-          title: 'Field test', excerpt: 'A real operating observation.',
-        }] } };
+        return { result: { value: [
+          { url: 'https://social.example/posts/already-read', title: 'Earlier field test', excerpt: 'Known evidence.' },
+          { url: 'https://social.example/posts/field-test', title: 'Field test', excerpt: 'A real operating observation.' },
+        ] } };
       }
       if (/const labels =/.test(params.expression)) return { result: { value: 1 } };
       if (/const selectors =/.test(params.expression)) {
@@ -319,12 +319,16 @@ test('MARCUS social research opens discovered threads, expands comments, and rep
   };
 
   const result = await bridge.researchSocialPage(session, 'https://social.example/feed', {
-    query: 'field', maxPosts: 3, maxCommentViewports: 1,
+    query: 'field', maxPosts: 1, maxCommentViewports: 1, feedViewports: 3,
+    knownSourceUrls: ['https://social.example/posts/already-read'],
   });
 
   assert.equal(result.contextKind, 'web');
   assert.equal(result.postsRead, 1);
   assert.equal(result.commentsRead, 1);
+  assert.equal(result.postsDiscovered, 2);
+  assert.equal(result.coverage.newlyDiscoveredPosts, 1);
+  assert.equal(result.coverage.remainingDiscoveredPosts, 1);
   assert.equal(result.sources[0].comments[0].author, 'Casey');
   assert.equal(result.coverage.platformComplete, false);
   assert.match(result.coverage.limitation, /algorithmically withheld/i);

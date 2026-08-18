@@ -12,13 +12,27 @@ import {
   safeString,
 } from '../operations/operation_types.js';
 
-const STORE_VERSION = 1;
+const STORE_VERSION = 2;
 const MAX_MEMBERS = 2_000;
 const MAX_OBSERVATIONS = 5_000;
 const MAX_NOTIFICATIONS = 2_000;
+const MAX_THREADS = 5_000;
+const MAX_RESEARCH_RUNS = 500;
+const MAX_ANNOTATIONS = 5_000;
 const OBSERVATION_KINDS = new Set(['post', 'comment', 'reply', 'reaction', 'mention', 'profile', 'other']);
 const NOTIFICATION_STATES = new Set(['unread', 'triaged', 'drafted', 'cleared', 'responded', 'ignored']);
+const KNOWLEDGE_KINDS = new Set([
+  'goal', 'struggle', 'expertise', 'language', 'notable_moment', 'open_loop', 'relationship',
+  'cultural_reference', 'recurring_topic', 'ongoing_thread',
+]);
 const SENSITIVE_INFERENCE_PATTERN = /\b(?:age(?:d)?|racial|race|ethnic|religio|politic|sexual|gender|disab|medical|health|income|financ|citizen|nationalit)/i;
+const TOPIC_STOP_WORDS = new Set([
+  'about', 'after', 'again', 'also', 'because', 'been', 'before', 'being', 'between', 'business',
+  'community', 'could', 'does', 'from', 'have', 'here', 'into', 'just', 'like', 'more', 'only',
+  'other', 'people', 'really', 'should', 'some', 'than', 'that', 'their', 'there', 'these', 'they',
+  'this', 'those', 'through', 'using', 'very', 'want', 'what', 'when', 'where', 'which', 'with',
+  'would', 'your', 'youre', 'skool', 'scoopos',
+]);
 
 function normalizeText(value, maxChars = 1_000) {
   return redactSecrets(safeString(value, maxChars), maxChars).replace(/\s+/g, ' ').trim();
@@ -45,6 +59,28 @@ function normalizedIso(value) {
 
 function stableId(prefix, value) {
   return `${prefix}_${crypto.createHash('sha256').update(String(value || '')).digest('base64url').slice(0, 18)}`;
+}
+
+function sourceFingerprint(value) {
+  return crypto.createHash('sha256').update(String(value || '')).digest('base64url').slice(0, 24);
+}
+
+function sentenceFragments(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim().split(/(?<=[.!?])\s+/).map((item) => item.trim()).filter(Boolean);
+}
+
+function explicitSignals(text) {
+  const sentences = sentenceFragments(text);
+  return {
+    struggles: sentences.filter((sentence) => /\b(?:struggl|stuck|hard(?:est)?|difficult|problem|issue|pain|frustrat|fail|los(?:e|ing)|can(?:not|'t)|need help|keeps? getting)\b/i.test(sentence)).slice(0, 8),
+    goals: sentences.filter((sentence) => /\b(?:my goal|our goal|trying to|want to|need to|plan to|hoping to|working toward|looking to)\b/i.test(sentence)).slice(0, 8),
+    questions: sentences.filter((sentence) => sentence.endsWith('?')).slice(0, 8),
+  };
+}
+
+function extractTopicTerms(value) {
+  const words = normalizeText(value, 3_000).toLowerCase().match(/[a-z][a-z0-9'-]{3,}/g) || [];
+  return [...new Set(words.filter((word) => !TOPIC_STOP_WORDS.has(word)))].slice(0, 20);
 }
 
 function normalizePlatform(value) {
@@ -120,6 +156,10 @@ function normalizeObservation(input) {
     sourceUrl,
     sourceTitle,
     contentSummary,
+    threadId: safeString(raw.threadId, 120),
+    parentObservationId: safeString(raw.parentObservationId, 120),
+    position: safeInteger(raw.position, 0, 0, 100_000),
+    sourceFingerprint: normalizeText(raw.sourceFingerprint, 120) || sourceFingerprint(`${sourceUrl}\n${contentSummary}`),
     topics: normalizeList(raw.topics, { maxItems: 20, maxChars: 100 }),
     engagement: normalizeEngagement(raw.engagement),
     observedAt,
@@ -186,7 +226,36 @@ function emptyDocument(businessKey) {
     updatedAt: new Date(0).toISOString(),
     members: [],
     observations: [],
+    threads: [],
+    communities: [],
+    researchRuns: [],
+    annotations: [],
     notifications: [],
+  };
+}
+
+function normalizeKnowledgeSignal(input) {
+  const raw = safeObject(input);
+  const kind = normalizeText(raw.kind, 80).toLowerCase();
+  const summary = normalizeText(raw.summary || raw.value, 800);
+  if (!KNOWLEDGE_KINDS.has(kind) || !summary || SENSITIVE_INFERENCE_PATTERN.test(`${kind} ${summary}`)) return null;
+  const sourceObservationIds = normalizeList(raw.sourceObservationIds, { maxItems: 30, maxChars: 120 });
+  return {
+    id: safeString(raw.id, 120) || stableId('knowledge', `${kind}\n${summary.toLowerCase()}\n${sourceObservationIds.join('\n')}`),
+    kind,
+    summary,
+    scope: ['member', 'thread', 'community'].includes(normalizeText(raw.scope, 40).toLowerCase())
+      ? normalizeText(raw.scope, 40).toLowerCase() : 'community',
+    memberId: safeString(raw.memberId, 120),
+    threadId: safeString(raw.threadId, 120),
+    platform: normalizePlatform(raw.platform),
+    community: normalizeCommunity(raw.community),
+    relatedMemberIds: normalizeList(raw.relatedMemberIds, { maxItems: 20, maxChars: 120 }),
+    sourceObservationIds,
+    confidence: Math.max(0, Math.min(1, Number(raw.confidence) || 0)),
+    firstObservedAt: normalizedIso(raw.firstObservedAt || raw.observedAt),
+    lastObservedAt: normalizedIso(raw.lastObservedAt || raw.observedAt),
+    updatedAt: normalizedIso(raw.updatedAt),
   };
 }
 
@@ -226,7 +295,109 @@ function normalizeMember(input) {
       updatedAt: normalizedIso(item?.updatedAt),
     })).filter((item) => item.id && item.label && item.summary && !SENSITIVE_INFERENCE_PATTERN.test(`${item.label} ${item.summary}`)).slice(-100),
     openLoops: normalizeList(raw.openLoops, { maxItems: 30, maxChars: 500 }),
+    signals: (Array.isArray(raw.signals) ? raw.signals : []).map(normalizeKnowledgeSignal).filter(Boolean).slice(-200),
+    relationships: (Array.isArray(raw.relationships) ? raw.relationships : []).map((item) => ({
+      memberId: safeString(item?.memberId, 120),
+      displayName: normalizeText(item?.displayName, 200),
+      sharedThreadCount: safeInteger(item?.sharedThreadCount, 0, 0, MAX_THREADS),
+      lastSeenAt: normalizedIso(item?.lastSeenAt),
+      sourceObservationIds: normalizeList(item?.sourceObservationIds, { maxItems: 30, maxChars: 120 }),
+    })).filter((item) => item.memberId).slice(0, 100),
     noteFilename: normalizeText(raw.noteFilename, 160),
+  };
+}
+
+function normalizeThread(input) {
+  const raw = safeObject(input);
+  const sourceUrl = safeHttpUrl(raw.sourceUrl || raw.url || '');
+  const id = safeString(raw.id, 120) || stableId('thread', sourceUrl || `${raw.platform}\n${raw.community}\n${raw.title}`);
+  return {
+    id,
+    platform: normalizePlatform(raw.platform),
+    community: normalizeCommunity(raw.community),
+    sourceUrl,
+    title: normalizeText(raw.title, 300),
+    postSummary: normalizeText(raw.postSummary || raw.postText, 2_000),
+    authorMemberId: safeString(raw.authorMemberId, 120),
+    participantMemberIds: normalizeList(raw.participantMemberIds, { maxItems: 500, maxChars: 120 }),
+    observationIds: normalizeList(raw.observationIds, { maxItems: 500, maxChars: 120 }),
+    commentCountObserved: safeInteger(raw.commentCountObserved, 0, 0, 100_000),
+    reachedVisibleEnd: raw.reachedVisibleEnd === true,
+    firstObservedAt: normalizedIso(raw.firstObservedAt),
+    lastObservedAt: normalizedIso(raw.lastObservedAt),
+    lastFingerprint: normalizeText(raw.lastFingerprint, 120),
+    revisionCount: safeInteger(raw.revisionCount, 1, 1, 100_000),
+    openQuestions: normalizeList(raw.openQuestions, { maxItems: 50, maxChars: 500 }),
+    explicitStruggles: normalizeList(raw.explicitStruggles, { maxItems: 50, maxChars: 500 }),
+    explicitGoals: normalizeList(raw.explicitGoals, { maxItems: 50, maxChars: 500 }),
+    topicTerms: normalizeList(raw.topicTerms, { maxItems: 50, maxChars: 100 }),
+  };
+}
+
+function normalizeCommunityModel(input) {
+  const raw = safeObject(input);
+  const platform = normalizePlatform(raw.platform);
+  const name = normalizeCommunity(raw.name || raw.community);
+  return {
+    id: safeString(raw.id, 120) || stableId('community', `${platform}\n${name.toLowerCase()}`),
+    platform,
+    name,
+    sourceUrl: safeHttpUrl(raw.sourceUrl || ''),
+    firstObservedAt: normalizedIso(raw.firstObservedAt),
+    lastObservedAt: normalizedIso(raw.lastObservedAt),
+    threadCount: safeInteger(raw.threadCount, 0, 0, MAX_THREADS),
+    observationCount: safeInteger(raw.observationCount, 0, 0, MAX_OBSERVATIONS),
+    memberCount: safeInteger(raw.memberCount, 0, 0, MAX_MEMBERS),
+    recurringTopics: (Array.isArray(raw.recurringTopics) ? raw.recurringTopics : []).map((item) => ({
+      name: normalizeText(item?.name, 100), count: safeInteger(item?.count, 0, 0, MAX_OBSERVATIONS),
+      memberCount: safeInteger(item?.memberCount, 0, 0, MAX_MEMBERS),
+      sourceObservationIds: normalizeList(item?.sourceObservationIds, { maxItems: 20, maxChars: 120 }),
+    })).filter((item) => item.name).slice(0, 80),
+    commonStruggles: (Array.isArray(raw.commonStruggles) ? raw.commonStruggles : []).map((item) => ({
+      summary: normalizeText(item?.summary, 500), memberId: safeString(item?.memberId, 120),
+      sourceObservationId: safeString(item?.sourceObservationId, 120), observedAt: normalizedIso(item?.observedAt),
+    })).filter((item) => item.summary && item.sourceObservationId).slice(-100),
+    openQuestions: (Array.isArray(raw.openQuestions) ? raw.openQuestions : []).map((item) => ({
+      summary: normalizeText(item?.summary, 500), memberId: safeString(item?.memberId, 120),
+      sourceObservationId: safeString(item?.sourceObservationId, 120), observedAt: normalizedIso(item?.observedAt),
+    })).filter((item) => item.summary && item.sourceObservationId).slice(-100),
+    recurringLanguage: (Array.isArray(raw.recurringLanguage) ? raw.recurringLanguage : []).map((item) => ({
+      phrase: normalizeText(item?.phrase, 160), observationCount: safeInteger(item?.observationCount, 0, 0, MAX_OBSERVATIONS),
+      memberCount: safeInteger(item?.memberCount, 0, 0, MAX_MEMBERS),
+      sourceObservationIds: normalizeList(item?.sourceObservationIds, { maxItems: 20, maxChars: 120 }),
+    })).filter((item) => item.phrase).slice(0, 60),
+    annotations: (Array.isArray(raw.annotations) ? raw.annotations : []).map(normalizeKnowledgeSignal).filter(Boolean).slice(-500),
+    coverage: {
+      feedViewportsRead: safeInteger(raw.coverage?.feedViewportsRead, 0, 0, 100_000),
+      postsDiscovered: safeInteger(raw.coverage?.postsDiscovered, 0, 0, 100_000),
+      postsRead: safeInteger(raw.coverage?.postsRead, 0, 0, 100_000),
+      commentsRead: safeInteger(raw.coverage?.commentsRead, 0, 0, 1_000_000),
+      feedEndReached: raw.coverage?.feedEndReached === true,
+      allVisibleCommentEndsReached: raw.coverage?.allVisibleCommentEndsReached === true,
+      lastRunAt: normalizedIso(raw.coverage?.lastRunAt),
+      resumeToken: normalizeText(raw.coverage?.resumeToken, 200),
+      limitation: normalizeText(raw.coverage?.limitation, 600),
+    },
+  };
+}
+
+function normalizeResearchRun(input) {
+  const raw = safeObject(input);
+  const sourceUrls = normalizeList(raw.sourceUrls, { maxItems: 500, maxChars: 2_000 }).map(safeHttpUrl).filter(Boolean);
+  const startedAt = normalizedIso(raw.startedAt || raw.observedAt);
+  return {
+    id: safeString(raw.id, 120) || stableId('research', `${startedAt}\n${sourceUrls.join('\n')}`),
+    platform: normalizePlatform(raw.platform),
+    community: normalizeCommunity(raw.community),
+    sourceUrl: safeHttpUrl(raw.sourceUrl || raw.startingUrl || ''),
+    query: normalizeText(raw.query, 300),
+    startedAt,
+    completedAt: normalizedIso(raw.completedAt || raw.observedAt),
+    sourceUrls,
+    postsDiscovered: safeInteger(raw.postsDiscovered, 0, 0, 100_000),
+    postsRead: safeInteger(raw.postsRead, 0, 0, 100_000),
+    commentsRead: safeInteger(raw.commentsRead, 0, 0, 1_000_000),
+    coverage: safeObject(raw.coverage),
   };
 }
 
@@ -245,6 +416,14 @@ function normalizeDocument(input, businessKey) {
   }
   const members = (Array.isArray(raw.members) ? raw.members : []).slice(-MAX_MEMBERS)
     .map(normalizeMember).filter((item) => item.id);
+  const threads = (Array.isArray(raw.threads) ? raw.threads : []).slice(-MAX_THREADS)
+    .map(normalizeThread).filter((item) => item.id);
+  const communities = (Array.isArray(raw.communities) ? raw.communities : [])
+    .map(normalizeCommunityModel).filter((item) => item.id);
+  const researchRuns = (Array.isArray(raw.researchRuns) ? raw.researchRuns : []).slice(-MAX_RESEARCH_RUNS)
+    .map(normalizeResearchRun).filter((item) => item.id);
+  const annotations = (Array.isArray(raw.annotations) ? raw.annotations : []).slice(-MAX_ANNOTATIONS)
+    .map(normalizeKnowledgeSignal).filter(Boolean);
   const notifications = (Array.isArray(raw.notifications) ? raw.notifications : []).slice(-MAX_NOTIFICATIONS)
     .map((item) => {
       try {
@@ -271,6 +450,10 @@ function normalizeDocument(input, businessKey) {
     updatedAt: normalizedIso(raw.updatedAt),
     members,
     observations,
+    threads,
+    communities,
+    researchRuns,
+    annotations,
     notifications,
   };
 }
@@ -316,7 +499,9 @@ function applyObservation(document, observation) {
   member.lastSeenAt = member.lastSeenAt > observation.observedAt ? member.lastSeenAt : observation.observedAt;
   member.observationCount += 1;
   member.activityCounts[observation.kind] = (member.activityCounts[observation.kind] || 0) + 1;
-  for (const topic of observation.topics) {
+  const observationTopics = observation.topics.length ? observation.topics : extractTopicTerms(`${observation.sourceTitle} ${observation.contentSummary}`).slice(0, 8);
+  observation.topics = observationTopics;
+  for (const topic of observationTopics) {
     const current = member.topics.find((item) => item.name.toLowerCase() === topic.toLowerCase());
     if (current) current.count += 1;
     else member.topics.push({ name: topic, count: 1 });
@@ -326,6 +511,20 @@ function applyObservation(document, observation) {
     const current = member.inferences.find((item) => item.id === inference.id);
     if (!current) member.inferences.push(inference);
   }
+  const signals = explicitSignals(observation.contentSummary);
+  for (const [kind, values] of [['struggle', signals.struggles], ['goal', signals.goals], ['open_loop', signals.questions]]) {
+    for (const summary of values) {
+      const signal = normalizeKnowledgeSignal({
+        kind, summary, scope: 'member', memberId: member.id, platform: member.platform,
+        community: member.community, sourceObservationIds: [observation.id], confidence: 1,
+        firstObservedAt: observation.observedAt, lastObservedAt: observation.observedAt,
+      });
+      if (signal && !member.signals.some((item) => item.id === signal.id)) member.signals.push(signal);
+      if (kind === 'open_loop' && !member.openLoops.includes(summary)) member.openLoops.push(summary);
+    }
+  }
+  member.signals = member.signals.slice(-200);
+  member.openLoops = member.openLoops.slice(-30);
   if (!member.verifiedFacts.some((item) => item.key === 'community_membership' && item.value === observation.community)) {
     member.verifiedFacts.push({
       key: 'community_membership', value: observation.community,
@@ -336,6 +535,76 @@ function applyObservation(document, observation) {
   if (existingIndex >= 0) document.members[existingIndex] = member;
   else document.members.push(member);
   return { created: true, observation, member: structuredClone(member) };
+}
+
+function phraseCandidates(value) {
+  const words = normalizeText(value, 3_000).toLowerCase().match(/[a-z][a-z0-9'-]{2,}/g) || [];
+  const output = [];
+  for (let size = 3; size <= 5; size += 1) {
+    for (let index = 0; index <= words.length - size; index += 1) {
+      const phraseWords = words.slice(index, index + size);
+      if (phraseWords.filter((word) => !TOPIC_STOP_WORDS.has(word)).length < 2) continue;
+      output.push(phraseWords.join(' '));
+    }
+  }
+  return [...new Set(output)].slice(0, 300);
+}
+
+function rebuildCommunityModel(document, platform, community, sourceUrl = '') {
+  const relevant = document.observations.filter((item) => item.platform === platform
+    && item.community.toLowerCase() === community.toLowerCase());
+  const members = new Set(relevant.map((item) => item.memberId).filter(Boolean));
+  const threads = document.threads.filter((item) => item.platform === platform
+    && item.community.toLowerCase() === community.toLowerCase());
+  const topicMap = new Map();
+  const phraseMap = new Map();
+  const struggles = [];
+  const questions = [];
+  for (const observation of relevant) {
+    for (const topic of observation.topics) {
+      const key = topic.toLowerCase();
+      const current = topicMap.get(key) || { name: topic, count: 0, members: new Set(), sourceObservationIds: [] };
+      current.count += 1;
+      current.members.add(observation.memberId);
+      if (current.sourceObservationIds.length < 20) current.sourceObservationIds.push(observation.id);
+      topicMap.set(key, current);
+    }
+    const signals = explicitSignals(observation.contentSummary);
+    for (const summary of signals.struggles) struggles.push({ summary, memberId: observation.memberId, sourceObservationId: observation.id, observedAt: observation.observedAt });
+    for (const summary of signals.questions) questions.push({ summary, memberId: observation.memberId, sourceObservationId: observation.id, observedAt: observation.observedAt });
+    for (const phrase of phraseCandidates(observation.contentSummary)) {
+      const current = phraseMap.get(phrase) || { phrase, observations: new Set(), members: new Set(), sourceObservationIds: [] };
+      current.observations.add(observation.id);
+      current.members.add(observation.memberId);
+      if (current.sourceObservationIds.length < 20) current.sourceObservationIds.push(observation.id);
+      phraseMap.set(phrase, current);
+    }
+  }
+  const existingIndex = document.communities.findIndex((item) => item.platform === platform
+    && item.name.toLowerCase() === community.toLowerCase());
+  const existing = existingIndex >= 0 ? document.communities[existingIndex] : normalizeCommunityModel({ platform, name: community, sourceUrl });
+  const model = normalizeCommunityModel({
+    ...existing,
+    sourceUrl: sourceUrl || existing.sourceUrl,
+    firstObservedAt: relevant.reduce((value, item) => value < item.observedAt ? value : item.observedAt, existing.firstObservedAt),
+    lastObservedAt: relevant.reduce((value, item) => value > item.observedAt ? value : item.observedAt, existing.lastObservedAt),
+    threadCount: threads.length,
+    observationCount: relevant.length,
+    memberCount: members.size,
+    recurringTopics: [...topicMap.values()].map((item) => ({
+      name: item.name, count: item.count, memberCount: item.members.size, sourceObservationIds: item.sourceObservationIds,
+    })).filter((item) => item.count >= 2).sort((a, b) => b.memberCount - a.memberCount || b.count - a.count).slice(0, 80),
+    commonStruggles: struggles.slice(-100),
+    openQuestions: questions.slice(-100),
+    recurringLanguage: [...phraseMap.values()].map((item) => ({
+      phrase: item.phrase, observationCount: item.observations.size, memberCount: item.members.size,
+      sourceObservationIds: item.sourceObservationIds,
+    })).filter((item) => item.observationCount >= 3 && item.memberCount >= 2)
+      .sort((a, b) => b.memberCount - a.memberCount || b.observationCount - a.observationCount).slice(0, 60),
+  });
+  if (existingIndex >= 0) document.communities[existingIndex] = model;
+  else document.communities.push(model);
+  return model;
 }
 
 export function buildCommunityProfileMarkdown(memberInput, observationsInput = []) {
@@ -379,6 +648,14 @@ export function buildCommunityProfileMarkdown(memberInput, observationsInput = [
     '',
     ...(member.openLoops.length ? member.openLoops.map((item) => `- ${item}`) : ['- None recorded']),
     '',
+    '## Durable Social Context',
+    '',
+    ...(member.signals.length ? member.signals.slice(-30).map((item) => `- ${item.kind}: ${item.summary} (sources: ${item.sourceObservationIds.join(', ') || 'none'})`) : ['- No source-backed social signals recorded yet']),
+    '',
+    '## Conversation Network',
+    '',
+    ...(member.relationships.length ? member.relationships.slice(0, 25).map((item) => `- ${item.displayName || item.memberId}: ${item.sharedThreadCount} shared threads`) : ['- No shared-thread relationships observed yet']),
+    '',
     '## Recent Activity',
     '',
     ...(observations.length ? observations.map((item) => `- ${item.observedAt.slice(0, 10)} | ${item.kind} | ${item.contentSummary || item.sourceTitle}${item.sourceUrl ? ` | [source](${item.sourceUrl})` : ''}`) : ['- No retained activity summaries']),
@@ -388,6 +665,74 @@ export function buildCommunityProfileMarkdown(memberInput, observationsInput = [
     '- Facts above come from visible community activity and are source-linked where available.',
     '- Inferences are kept separate from facts. Sensitive-trait inference is not stored.',
     '- This note stores bounded summaries, not full post or comment transcripts.',
+    '',
+    '## Links',
+    '',
+    '- [[people-index]]',
+    '- [[conversation-index]]',
+    '',
+  ];
+  return `${lines.join('\n')}\n`;
+}
+
+export function buildCommunityBriefMarkdown(communityInput, threadsInput = [], membersInput = []) {
+  const community = normalizeCommunityModel(communityInput);
+  const threads = (Array.isArray(threadsInput) ? threadsInput : []).map(normalizeThread)
+    .filter((item) => item.platform === community.platform && item.community.toLowerCase() === community.name.toLowerCase())
+    .sort((a, b) => b.lastObservedAt.localeCompare(a.lastObservedAt)).slice(0, 40);
+  const members = (Array.isArray(membersInput) ? membersInput : []).map(normalizeMember)
+    .filter((item) => item.platform === community.platform && item.community.toLowerCase() === community.name.toLowerCase())
+    .sort((a, b) => b.observationCount - a.observationCount).slice(0, 40);
+  const lines = [
+    `# ${community.name} Community Intelligence`,
+    '',
+    'Status: active',
+    'Tags: #community #social-intelligence #marcus-memory',
+    '',
+    `Platform: ${community.platform}`,
+    community.sourceUrl ? `Community: ${community.sourceUrl}` : 'Community: source URL not captured',
+    `Last learned: ${community.coverage.lastRunAt}`,
+    '',
+    '## Coverage',
+    '',
+    `- ${community.threadCount} conversation threads retained`,
+    `- ${community.observationCount} source observations retained`,
+    `- ${community.memberCount} members observed`,
+    `- Feed end reached in latest pass: ${community.coverage.feedEndReached ? 'yes' : 'no'}`,
+    `- All rendered comment ends reached in latest pass: ${community.coverage.allVisibleCommentEndsReached ? 'yes' : 'no'}`,
+    `- Limitation: ${community.coverage.limitation || 'Only content rendered to the signed-in MARCUS browser can be claimed.'}`,
+    '',
+    '## Recurring Topics',
+    '',
+    ...(community.recurringTopics.length ? community.recurringTopics.slice(0, 30).map((item) => `- ${item.name}: ${item.count} observations across ${item.memberCount} members`) : ['- Not established yet']),
+    '',
+    '## Explicit Struggles',
+    '',
+    ...(community.commonStruggles.length ? community.commonStruggles.slice(-30).map((item) => `- ${item.summary} (source: ${item.sourceObservationId})`) : ['- None captured yet']),
+    '',
+    '## Open Questions And Threads',
+    '',
+    ...(community.openQuestions.length ? community.openQuestions.slice(-30).map((item) => `- ${item.summary} (source: ${item.sourceObservationId})`) : ['- None captured yet']),
+    '',
+    '## Shared Language And Culture',
+    '',
+    ...(community.recurringLanguage.length ? community.recurringLanguage.slice(0, 25).map((item) => `- "${item.phrase}" (${item.memberCount} members)`) : ['- No recurring phrase has enough cross-member evidence yet']),
+    ...(community.annotations.filter((item) => ['cultural_reference', 'language'].includes(item.kind)).length
+      ? community.annotations.filter((item) => ['cultural_reference', 'language'].includes(item.kind)).slice(-25).map((item) => `- ${item.kind}: ${item.summary}`) : []),
+    '',
+    '## People In The Conversation',
+    '',
+    ...(members.length ? members.map((member) => `- [[${(member.noteFilename || noteFilename(member)).replace(/\.md$/i, '')}|${member.displayName}]]: ${member.observationCount} observations; ${member.topics.slice(0, 5).map((item) => item.name).join(', ') || 'topics not established'}`) : ['- No member profiles yet']),
+    '',
+    '## Recent Conversations',
+    '',
+    ...(threads.length ? threads.map((thread) => `- ${thread.lastObservedAt.slice(0, 10)} | ${thread.title || 'Untitled thread'} | ${thread.participantMemberIds.length} participants | ${thread.commentCountObserved} comments observed${thread.sourceUrl ? ` | [source](${thread.sourceUrl})` : ''}`) : ['- No conversation threads retained yet']),
+    '',
+    '## MARCUS Rule',
+    '',
+    '- Use this history to recognize people and continue conversations. Do not turn it into imitation content.',
+    '- Recheck source evidence before asserting that an old fact is still current.',
+    '- Never infer sensitive personal traits.',
     '',
     '## Links',
     '',
@@ -442,6 +787,198 @@ export class CommunityIntelligenceStore {
         members: [...new Map(results.filter((item) => item.member).map((item) => [item.member.id, item.member])).values()],
       };
     });
+  }
+
+  async ingestResearch(businessKey, input = {}) {
+    const raw = safeObject(input);
+    const platform = normalizePlatform(raw.platform || raw.contextKind);
+    const community = normalizeCommunity(raw.community);
+    const observedAt = nowIso();
+    const sourceUrl = safeHttpUrl(raw.startingUrl || raw.sourceUrl || '');
+    const sourceValues = (Array.isArray(raw.sources) ? raw.sources : []).slice(0, 100);
+    return this.mutate(businessKey, (document) => {
+      let created = 0;
+      let duplicate = 0;
+      const affectedMembers = new Map();
+      const affectedThreads = [];
+      for (const source of sourceValues) {
+        const threadUrl = safeHttpUrl(source?.sourceUrl || '');
+        if (!threadUrl) continue;
+        const threadId = stableId('thread', threadUrl);
+        const postAuthor = safeObject(source?.author || source?.member);
+        const postObservation = normalizeObservation({
+          platform, community, member: {
+            displayName: postAuthor.displayName || postAuthor.name || source?.authorName || 'Unknown author',
+            profileUrl: postAuthor.profileUrl || source?.authorUrl || '',
+          },
+          kind: 'post', sourceUrl: threadUrl, sourceTitle: source?.title,
+          contentSummary: source?.postText || source?.title, threadId, position: 0,
+          sourceKey: `${threadUrl}\npost\n${sourceFingerprint(source?.postText || source?.title)}`,
+          observedAt,
+        });
+        const postApplied = applyObservation(document, postObservation);
+        if (postApplied.created) created += 1; else duplicate += 1;
+        if (postApplied.member) affectedMembers.set(postApplied.member.id, postApplied.member);
+        const observationIds = [postObservation.id];
+        const participantIds = new Set([postObservation.memberId]);
+        let commentPosition = 0;
+        for (const comment of (Array.isArray(source?.comments) ? source.comments : []).slice(0, 500)) {
+          commentPosition += 1;
+          const commentObservation = normalizeObservation({
+            platform, community, member: {
+              displayName: comment?.author || comment?.displayName || 'Unknown commenter',
+              profileUrl: comment?.authorUrl || comment?.profileUrl || '',
+            },
+            kind: 'comment', sourceUrl: threadUrl, sourceTitle: source?.title,
+            contentSummary: comment?.text, threadId, parentObservationId: postObservation.id,
+            position: commentPosition,
+            sourceKey: `${threadUrl}\ncomment\n${comment?.author || ''}\n${sourceFingerprint(comment?.text)}`,
+            observedAt,
+          });
+          const commentApplied = applyObservation(document, commentObservation);
+          if (commentApplied.created) created += 1; else duplicate += 1;
+          if (commentApplied.member) affectedMembers.set(commentApplied.member.id, commentApplied.member);
+          observationIds.push(commentObservation.id);
+          participantIds.add(commentObservation.memberId);
+        }
+        const signals = explicitSignals(`${source?.postText || ''} ${(source?.comments || []).map((item) => item?.text || '').join(' ')}`);
+        const fingerprint = sourceFingerprint(`${source?.postText || ''}\n${(source?.comments || []).map((item) => `${item?.author || ''}:${item?.text || ''}`).join('\n')}`);
+        const existingIndex = document.threads.findIndex((item) => item.id === threadId);
+        const existing = existingIndex >= 0 ? document.threads[existingIndex] : null;
+        const thread = normalizeThread({
+          ...existing,
+          id: threadId, platform, community, sourceUrl: threadUrl, title: source?.title,
+          postSummary: source?.postText, authorMemberId: postObservation.memberId,
+          participantMemberIds: [...participantIds], observationIds,
+          commentCountObserved: Math.max(0, Number(source?.commentsRead) || commentPosition),
+          reachedVisibleEnd: source?.reachedVisibleEnd === true,
+          firstObservedAt: existing?.firstObservedAt || observedAt, lastObservedAt: observedAt,
+          lastFingerprint: fingerprint,
+          revisionCount: existing ? existing.revisionCount + (existing.lastFingerprint === fingerprint ? 0 : 1) : 1,
+          openQuestions: signals.questions,
+          explicitStruggles: signals.struggles,
+          explicitGoals: signals.goals,
+          topicTerms: extractTopicTerms(`${source?.title || ''} ${source?.postText || ''}`),
+        });
+        if (existingIndex >= 0) document.threads[existingIndex] = thread;
+        else document.threads.push(thread);
+        affectedThreads.push(thread);
+
+        const participantList = [...participantIds].filter(Boolean);
+        for (const memberId of participantList) {
+          const member = document.members.find((item) => item.id === memberId);
+          if (!member) continue;
+          for (const relatedId of participantList.filter((id) => id !== memberId)) {
+            const related = document.members.find((item) => item.id === relatedId);
+            const relationship = member.relationships.find((item) => item.memberId === relatedId);
+            if (relationship) {
+              if (!relationship.sourceObservationIds.includes(postObservation.id)) relationship.sharedThreadCount += 1;
+              relationship.lastSeenAt = observedAt;
+              relationship.sourceObservationIds = [...new Set([...relationship.sourceObservationIds, postObservation.id])].slice(-30);
+            } else {
+              member.relationships.push({
+                memberId: relatedId, displayName: related?.displayName || '', sharedThreadCount: 1,
+                lastSeenAt: observedAt, sourceObservationIds: [postObservation.id],
+              });
+            }
+          }
+          member.relationships.sort((a, b) => b.sharedThreadCount - a.sharedThreadCount || b.lastSeenAt.localeCompare(a.lastSeenAt));
+          member.relationships = member.relationships.slice(0, 100);
+          affectedMembers.set(member.id, structuredClone(member));
+        }
+      }
+      document.observations = document.observations.slice(-MAX_OBSERVATIONS);
+      document.members = document.members.slice(-MAX_MEMBERS);
+      document.threads = document.threads.slice(-MAX_THREADS);
+      const communityModel = rebuildCommunityModel(document, platform, community, sourceUrl);
+      const run = normalizeResearchRun({
+        platform, community, sourceUrl, query: raw.query, startedAt: raw.startedAt || observedAt,
+        completedAt: observedAt, sourceUrls: affectedThreads.map((item) => item.sourceUrl),
+        postsDiscovered: raw.postsDiscovered, postsRead: raw.postsRead, commentsRead: raw.commentsRead,
+        coverage: raw.coverage,
+      });
+      document.researchRuns.push(run);
+      document.researchRuns = document.researchRuns.slice(-MAX_RESEARCH_RUNS);
+      communityModel.coverage = normalizeCommunityModel({
+        ...communityModel,
+        coverage: {
+          ...communityModel.coverage,
+          ...(safeObject(raw.coverage)),
+          postsDiscovered: raw.postsDiscovered,
+          postsRead: raw.postsRead,
+          commentsRead: raw.commentsRead,
+          lastRunAt: observedAt,
+        },
+      }).coverage;
+      const affectedObservationIds = new Set(affectedThreads.flatMap((thread) => thread.observationIds));
+      return {
+        created, duplicate, researchRun: structuredClone(run),
+        members: [...affectedMembers.values()], threads: structuredClone(affectedThreads),
+        observations: structuredClone(document.observations.filter((item) => affectedObservationIds.has(item.id))),
+        community: structuredClone(communityModel),
+      };
+    });
+  }
+
+  async rememberKnowledge(businessKey, input = {}) {
+    const signal = normalizeKnowledgeSignal(input);
+    if (!signal || !signal.sourceObservationIds.length) {
+      throw Object.assign(new Error('Durable community knowledge requires a supported kind, summary, and source observation IDs.'), { code: 'COMMUNITY_KNOWLEDGE_EVIDENCE_REQUIRED' });
+    }
+    return this.mutate(businessKey, (document) => {
+      const validIds = new Set(document.observations.map((item) => item.id));
+      if (signal.sourceObservationIds.some((id) => !validIds.has(id))) {
+        throw Object.assign(new Error('Community knowledge cited an observation that is not in the evidence ledger.'), { code: 'COMMUNITY_KNOWLEDGE_SOURCE_INVALID' });
+      }
+      const sourceObservations = document.observations.filter((item) => signal.sourceObservationIds.includes(item.id));
+      if (signal.platform === 'unknown') signal.platform = sourceObservations[0]?.platform || signal.platform;
+      if (signal.community === 'Unknown community') signal.community = sourceObservations[0]?.community || signal.community;
+      if (signal.scope === 'member' && !document.members.some((item) => item.id === signal.memberId)) {
+        throw Object.assign(new Error('Community member for this knowledge note was not found.'), { code: 'COMMUNITY_MEMBER_NOT_FOUND' });
+      }
+      if (signal.scope === 'thread' && !document.threads.some((item) => item.id === signal.threadId)) {
+        throw Object.assign(new Error('Community thread for this knowledge note was not found.'), { code: 'COMMUNITY_THREAD_NOT_FOUND' });
+      }
+      const existing = document.annotations.find((item) => item.id === signal.id);
+      if (!existing) document.annotations.push(signal);
+      if (signal.scope === 'member') {
+        const member = document.members.find((item) => item.id === signal.memberId);
+        if (!member.signals.some((item) => item.id === signal.id)) member.signals.push(signal);
+        if (signal.kind === 'open_loop' && !member.openLoops.includes(signal.summary)) member.openLoops.push(signal.summary);
+      }
+      if (signal.scope === 'community') {
+        const community = document.communities.find((item) => item.platform === signal.platform
+          && item.name.toLowerCase() === signal.community.toLowerCase());
+        if (community && !community.annotations.some((item) => item.id === signal.id)) community.annotations.push(signal);
+      }
+      document.annotations = document.annotations.slice(-MAX_ANNOTATIONS);
+      return { created: !existing, knowledge: structuredClone(existing || signal) };
+    });
+  }
+
+  async getCommunityContext(businessKey, filters = {}) {
+    const document = await this.readDocument(businessKey);
+    const platform = normalizeText(filters.platform, 80).toLowerCase();
+    const communityQuery = normalizeText(filters.community, 160).toLowerCase();
+    const community = document.communities.find((item) => (!platform || item.platform === platform)
+      && (!communityQuery || item.name.toLowerCase().includes(communityQuery)));
+    const relevantThreads = document.threads.filter((item) => (!community || (item.platform === community.platform
+      && item.community.toLowerCase() === community.name.toLowerCase())))
+      .sort((a, b) => b.lastObservedAt.localeCompare(a.lastObservedAt));
+    const relevantMembers = document.members.filter((item) => (!community || (item.platform === community.platform
+      && item.community.toLowerCase() === community.name.toLowerCase())))
+      .sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt));
+    const relevantRuns = document.researchRuns.filter((item) => !community || (item.platform === community.platform
+      && item.community.toLowerCase() === community.name.toLowerCase()))
+      .sort((a, b) => b.completedAt.localeCompare(a.completedAt));
+    return {
+      version: document.version, businessKey: document.businessKey, revision: document.revision,
+      updatedAt: document.updatedAt, community: community ? structuredClone(community) : null,
+      members: structuredClone(relevantMembers.slice(0, safeInteger(filters.memberLimit, 30, 1, 200))),
+      threads: structuredClone(relevantThreads.slice(0, safeInteger(filters.threadLimit, 30, 1, 200))),
+      recentResearchRuns: structuredClone(relevantRuns.slice(0, 10)),
+      knownSourceUrls: [...new Set(relevantThreads.map((item) => item.sourceUrl).filter(Boolean))].slice(0, 500),
+    };
   }
 
   async listMembers(businessKey, filters = {}) {
@@ -521,6 +1058,18 @@ export class CommunityIntelligenceStore {
   async profileProjection(businessKey, memberId) {
     const { member, observations } = await this.getMember(businessKey, memberId);
     return { filename: member.noteFilename || noteFilename(member), content: buildCommunityProfileMarkdown(member, observations), member };
+  }
+
+  async communityProjection(businessKey, { platform = 'skool', community = 'localgiants' } = {}) {
+    const context = await this.getCommunityContext(businessKey, { platform, community, memberLimit: 200, threadLimit: 200 });
+    if (!context.community) throw Object.assign(new Error('Community model not found.'), { code: 'COMMUNITY_NOT_FOUND' });
+    const slug = `${context.community.platform}-${context.community.name}`.toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 100);
+    return {
+      filename: `community-${slug}.md`,
+      content: buildCommunityBriefMarkdown(context.community, context.threads, context.members),
+      community: context.community,
+    };
   }
 
   async mutate(businessKey, mutator) {

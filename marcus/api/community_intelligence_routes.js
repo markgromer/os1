@@ -1,7 +1,7 @@
 import express from 'express';
 
 function errorStatus(error) {
-  if (['COMMUNITY_MEMBER_NOT_FOUND', 'COMMUNITY_NOTIFICATION_NOT_FOUND'].includes(error?.code)) return 404;
+  if (['COMMUNITY_MEMBER_NOT_FOUND', 'COMMUNITY_THREAD_NOT_FOUND', 'COMMUNITY_NOTIFICATION_NOT_FOUND'].includes(error?.code)) return 404;
   if (error?.code === 'CORRUPT_COMMUNITY_INTELLIGENCE_STORE') return 503;
   return 400;
 }
@@ -54,6 +54,21 @@ export function registerCommunityIntelligenceRoutes(app, {
       }
     }
     res.status(result.created ? 201 : 200).json({ ok: true, ...result, projections });
+  }));
+
+  router.get('/marcus/community/context', asyncRoute(async (req, res) => {
+    const result = await store.getCommunityContext(business(req), {
+      platform: req.query.platform,
+      community: req.query.community,
+      memberLimit: req.query.memberLimit,
+      threadLimit: req.query.threadLimit,
+    });
+    res.json({ ok: true, ...result });
+  }));
+
+  router.post('/marcus/community/knowledge', asyncRoute(async (req, res) => {
+    const result = await store.rememberKnowledge(business(req), req.body || {});
+    res.status(result.created ? 201 : 200).json({ ok: true, ...result });
   }));
 
   router.get('/marcus/community/notifications', asyncRoute(async (req, res) => {

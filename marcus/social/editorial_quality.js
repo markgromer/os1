@@ -97,6 +97,18 @@ function distinctiveSourceCount(text, observations) {
   }).length;
 }
 
+function maxSourceSimilarity(text, sources) {
+  const draftTokens = meaningfulTokens(text);
+  let maximum = 0;
+  for (const source of Array.isArray(sources) ? sources : []) {
+    const sourceTokens = meaningfulTokens(`${source?.title || ''} ${source?.postText || source?.contentSummary || ''}`);
+    if (draftTokens.size < 6 || sourceTokens.size < 6) continue;
+    const overlap = [...draftTokens].filter((token) => sourceTokens.has(token)).length;
+    maximum = Math.max(maximum, overlap / Math.min(draftTokens.size, sourceTokens.size));
+  }
+  return maximum;
+}
+
 export function normalizeMarcusSocialDraftText(value) {
   const paragraphs = String(value || '').trim().split(/\n\s*\n/).map(clean).filter(Boolean);
   const identityIndex = paragraphs.findIndex((paragraph) => /\bmarcus\b/i.test(paragraph)
@@ -129,6 +141,8 @@ export function analyzeMarcusSocialDraft(input = {}) {
   const sourceObservations = Array.isArray(input.sourceObservations) ? input.sourceObservations : [];
   const communitySynthesis = input.communitySynthesis === true;
   const researchSourceCount = [...new Set((Array.isArray(input.researchSourceUrls) ? input.researchSourceUrls : []).map(clean).filter(Boolean))].length;
+  const researchSources = Array.isArray(input.researchSources) ? input.researchSources : [];
+  const sourceSimilarity = maxSourceSimilarity(combined, researchSources);
   const noveltyGap = clean(input.noveltyGap);
   const groundedSources = groundedSourceCount(combined, sourceObservations);
   const distinctiveSources = distinctiveSourceCount(combined, sourceObservations);
@@ -154,6 +168,7 @@ export function analyzeMarcusSocialDraft(input = {}) {
   if (!communitySynthesis && sourceObservations.length && distinctiveTitleSources < 1) issues.push('generic-source-free-title');
   if (communitySynthesis && researchSourceCount < 3) issues.push('insufficient-community-research');
   if (communitySynthesis && noveltyGap.length < 60) issues.push('missing-novelty-gap');
+  if (communitySynthesis && sourceSimilarity >= 0.58) issues.push('source-imitation');
   if (/\b(?:balanc\w*|versus|vs\.?)\b/i.test(title)) issues.push('generic-balanced-title');
   if (/\b(?:both matter|need both|requires? both|best of both)\b/i.test(text)) issues.push('generic-both-sides-conclusion');
   if (sourceObservations.length > 1
@@ -181,6 +196,7 @@ export function analyzeMarcusSocialDraft(input = {}) {
       draftPreservesUnverifiedStatus,
       communitySynthesis,
       researchSourceCount,
+      sourceSimilarity,
     },
   };
 }

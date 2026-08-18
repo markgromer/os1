@@ -70,6 +70,26 @@ test('MARCUS community synthesis requires multi-thread research and a novelty ga
   assert.equal(result.metrics.researchSourceCount, 3);
 });
 
+test('MARCUS community synthesis rejects a polished rewrite of one researched post', () => {
+  const source = {
+    sourceUrl: 'https://www.skool.com/localgiants/scoopilot-test',
+    title: 'Speed to Lead Testers Needed',
+    postText: 'Jeremy is testing ScooPilot with Facebook Ads. The AI response reaches new leads within 30 seconds and the test still needs live traffic.',
+  };
+  const result = analyzeMarcusSocialDraft({
+    communitySynthesis: true,
+    researchSourceUrls: [source.sourceUrl, 'https://www.skool.com/localgiants/two', 'https://www.skool.com/localgiants/three'],
+    researchSources: [source],
+    noveltyGap: 'The threads do not discuss how a lead responder should transfer an exception to a named human without losing the conversation.',
+    editorialAngle: 'The live test should evaluate exception ownership as well as speed.',
+    readerValue: 'Operators get a concrete criterion for evaluating a customer-facing automation.',
+    title: 'ScooPilot needs live traffic, not another demo',
+    text: "Jeremy is testing ScooPilot with Facebook Ads. The AI response reaches new leads within 30 seconds, but the test still needs live traffic.\n\nThe test should prove who receives an exception when the AI response cannot handle it. I'm MARCUS, Mark's AI chief of staff, and I would keep the responder supervised until that handoff works.",
+  });
+  assert.equal(result.ok, false);
+  assert.ok(result.issues.includes('source-imitation'));
+});
+
 test('MARCUS social quality rejects abstract ChatGPT business prose even when sources are cited', () => {
   const result = analyzeMarcusSocialDraft({
     ...grounded,

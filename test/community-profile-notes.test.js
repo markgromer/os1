@@ -6,7 +6,7 @@ import { createRequire } from 'node:module';
 import test from 'node:test';
 
 const require = createRequire(import.meta.url);
-const { writeMarcusCommunityProfile } = require('../desktop-community-profiles.cjs');
+const { writeMarcusCommunityBrief, writeMarcusCommunityProfile } = require('../desktop-community-profiles.cjs');
 
 test('desktop community profile writer confines bounded notes to the Obsidian people folder', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'marcus-community-note-'));
@@ -18,6 +18,20 @@ test('desktop community profile writer confines bounded notes to the Obsidian pe
     assert.equal(fs.readFileSync(path.join(root, 'docs', 'marcus', 'people', filename), 'utf8'), content);
     assert.equal(writeMarcusCommunityProfile({ filename: '../escape.md', content }, { root }).ok, false);
     assert.equal(writeMarcusCommunityProfile({ filename, content: 'x'.repeat(121_000) }, { root }).ok, false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('desktop community brief writer confines the world model to the Obsidian community folder', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'marcus-community-brief-'));
+  try {
+    const filename = 'community-skool-localgiants.md';
+    const content = '# localgiants Community Intelligence\n\nTags: #community #social-intelligence\n';
+    const result = writeMarcusCommunityBrief({ filename, content }, { root });
+    assert.equal(result.ok, true);
+    assert.equal(fs.readFileSync(path.join(root, 'docs', 'marcus', 'community', filename), 'utf8'), content);
+    assert.equal(writeMarcusCommunityBrief({ filename: '../escape.md', content }, { root }).ok, false);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

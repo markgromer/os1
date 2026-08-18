@@ -319,7 +319,7 @@ class MarcusBrowserBridge {
     const command = String(payload.command || '').trim().toLowerCase();
     const requestedUrl = safeHttpUrl(payload.url);
     await this.ensureBrowser(requestedUrl || undefined);
-    const preferredContextKind = ['prepare-post', 'prepare-reply'].includes(command) ? 'skool' : '';
+    const preferredContextKind = ['prepare-post', 'prepare-reply', 'research-social'].includes(command) ? 'skool' : '';
     const { target, session } = command === 'publish-approved-draft'
       ? await this.pageForUrl(requestedUrl)
       : preferredContextKind && requestedUrl
@@ -395,6 +395,8 @@ class MarcusBrowserBridge {
         query: payload.query,
         maxPosts: payload.maxPosts,
         maxCommentViewports: payload.maxCommentViewports,
+        feedViewports: payload.feedViewports,
+        knownSourceUrls: payload.knownSourceUrls,
       });
     } else if (command === 'inspect-notifications') {
       result = await this.inspectCommunityNotifications(session, target.url);
@@ -1267,32 +1269,94 @@ class MarcusBrowserBridge {
     };
   }
 
-  async researchSocialPage(session, url, { query = '', maxPosts = 8, maxCommentViewports = 12 } = {}) {
+  async researchSocialPage(session, url, {
+    query = '', maxPosts = 12, maxCommentViewports = 12, feedViewports = 20, knownSourceUrls = [],
+  } = {}) {
     const contextKind = liveContextKind(url) || (safeHttpUrl(url) ? 'web' : '');
     if (!contextKind) throw new Error('A valid visible HTTP(S) page is required for social research.');
     if (await this.sensitiveFieldFocused(session)) throw new Error('Social research is blocked while a password field is focused.');
     const startingUrl = safeObservableUrl(url);
     const wanted = String(query || '').replace(/\s+/g, ' ').trim().slice(0, 300).toLowerCase();
-    const postLimit = Math.max(1, Math.min(12, Number(maxPosts) || 8));
+    const postLimit = Math.max(1, Math.min(40, Number(maxPosts) || 12));
     const commentLimit = Math.max(1, Math.min(20, Number(maxCommentViewports) || 12));
-    const feed = await session.send('Runtime.evaluate', {
-      expression: `(() => {
-        const clean = (value, max = 3000) => String(value || '').replace(/\\s+/g, ' ').trim().slice(0, max);
-        const wanted = ${JSON.stringify(wanted)};
-        const visible = (element) => { const rect = element.getBoundingClientRect(); const style = getComputedStyle(element); return rect.width > 20 && rect.height > 15 && style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) !== 0; };
-        const links = [...document.querySelectorAll('article a[href],main a[href],[data-testid*="post"] a[href],[class*="post"] a[href]')]
-          .filter((link) => visible(link) && /^https?:/i.test(String(link.href || '')))
-          .map((link) => {
-            const card = link.closest('article,[data-testid*="post"],[class*="Post"],[class*="post"]') || link.parentElement;
-            return { url: String(link.href).slice(0, 2000), title: clean(link.innerText || link.textContent, 300), excerpt: clean(card?.innerText || card?.textContent, 1500) };
-          })
-          .filter((item) => item.title || item.excerpt)
-          .filter((item) => !wanted || (item.title + ' ' + item.excerpt).toLowerCase().includes(wanted));
-        return [...new Map(links.map((item) => [item.url, item])).values()].slice(0, ${postLimit});
-      })()`,
-      returnByValue: true,
-    }, 8_000);
-    const candidates = Array.isArray(feed?.result?.value) ? feed.result.value : [];
+    const feedLimit = Math.max(1, Math.min(40, Number(feedViewports) || 20));
+    const knownUrls = new Set((Array.isArray(knownSourceUrls) ? knownSourceUrls : []).map(safeHttpUrl).filter(Boolean));
+    let researchUrl = startingUrl;
+    if (contextKind === 'skool' && startingUrl) {
+      const parsed = new URL(startingUrl);
+      const communitySlug = parsed.pathname.split('/').filter(Boolean)[0];
+      if (communitySlug) researchUrl = `${parsed.origin}/${communitySlug}`;
+    }
+    const expectedCommunitySlug = contextKind === 'skool' && researchUrl
+      ? new URL(researchUrl).pathname.split('/').filter(Boolean)[0] || '' : '';
+    if (researchUrl && researchUrl !== startingUrl) {
+      await session.send('Page.navigate', { url: researchUrl });
+      await wait(700);
+    }
+    await session.send('Runtime.evaluate', { expression: 'window.scrollTo(0, 0)' }).catch(() => {});
+    const candidateMap = new Map();
+    let feedEndReached = false;
+    let feedViewportsRead = 0;
+    let consecutiveKnownViewports = 0;
+    for (let feedViewport = 0; feedViewport < feedLimit; feedViewport += 1) {
+      if (feedViewport) await wait(350);
+      const feed = await session.send('Runtime.evaluate', {
+        expression: `(() => {
+          const clean = (value, max = 3000) => String(value || '').replace(/\\s+/g, ' ').trim().slice(0, max);
+          const wanted = ${JSON.stringify(wanted)};
+          const expectedCommunity = ${JSON.stringify(expectedCommunitySlug)};
+          const visible = (element) => { const rect = element.getBoundingClientRect(); const style = getComputedStyle(element); return rect.width > 20 && rect.height > 15 && style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) !== 0; };
+          const reserved = new Set(['about', 'calendar', 'classroom', 'leaderboards', 'members']);
+          const links = [...document.querySelectorAll('article a[href],main a[href],[data-testid*="post"] a[href],[class*="post"] a[href]')]
+            .filter((link) => visible(link) && /^https?:/i.test(String(link.href || '')))
+            .map((link) => {
+              const card = link.closest('article,[data-testid*="post"],[class*="Post"],[class*="post"]') || link.parentElement;
+              return { url: String(link.href).slice(0, 2000), title: clean(link.innerText || link.textContent, 300), excerpt: clean(card?.innerText || card?.textContent, 1500) };
+            })
+            .filter((item) => {
+              try {
+                const target = new URL(item.url, location.href);
+                const current = new URL(location.href);
+                const parts = target.pathname.split('/').filter(Boolean);
+                const currentParts = current.pathname.split('/').filter(Boolean);
+                if (target.origin !== current.origin) return false;
+                if (expectedCommunity) return parts.length === 2 && parts[0] === expectedCommunity && !reserved.has(parts[1]);
+                if (currentParts[0] && parts[0] === currentParts[0]) return parts.length >= 2 && !reserved.has(parts[1]);
+                return parts.length >= 2;
+              } catch { return false; }
+            })
+            .filter((item) => item.title || item.excerpt)
+            .filter((item) => !wanted || (item.title + ' ' + item.excerpt).toLowerCase().includes(wanted));
+          return [...new Map(links.map((item) => [item.url, item])).values()].slice(0, ${Math.max(40, postLimit * 3)});
+        })()`,
+        returnByValue: true,
+      }, 8_000);
+      const viewportCandidates = Array.isArray(feed?.result?.value) ? feed.result.value : [];
+      const beforeSize = candidateMap.size;
+      for (const item of viewportCandidates) {
+        const candidateUrl = safeHttpUrl(item?.url);
+        if (candidateUrl && !candidateMap.has(candidateUrl)) candidateMap.set(candidateUrl, { ...item, url: candidateUrl });
+      }
+      feedViewportsRead += 1;
+      const unseenThisViewport = viewportCandidates.some((item) => {
+        const candidateUrl = safeHttpUrl(item?.url);
+        return candidateUrl && !knownUrls.has(candidateUrl);
+      });
+      consecutiveKnownViewports = unseenThisViewport ? 0 : consecutiveKnownViewports + 1;
+      const movement = await session.send('Runtime.evaluate', {
+        expression: '(() => { const before = window.scrollY; window.scrollBy(0, Math.max(400, Math.floor(innerHeight * 0.86))); return { before, after: window.scrollY, max: Math.max(0, document.documentElement.scrollHeight - innerHeight) }; })()',
+        returnByValue: true,
+      });
+      const scroll = movement?.result?.value || {};
+      feedEndReached = Number(scroll.after) <= Number(scroll.before) || Number(scroll.after) >= Number(scroll.max);
+      if (feedEndReached || candidateMap.size >= Math.max(80, postLimit * 4)) break;
+      if (consecutiveKnownViewports >= 3 && candidateMap.size === beforeSize) break;
+    }
+    const candidates = [...candidateMap.values()].sort((left, right) => {
+      const leftKnown = knownUrls.has(left.url) ? 1 : 0;
+      const rightKnown = knownUrls.has(right.url) ? 1 : 0;
+      return leftKnown - rightKnown;
+    }).slice(0, postLimit);
     const sources = [];
     for (const candidate of candidates.slice(0, postLimit)) {
       const candidateUrl = safeHttpUrl(candidate?.url);
@@ -1324,11 +1388,20 @@ class MarcusBrowserBridge {
             const heading = clean(document.querySelector('h1,[role="heading"]')?.innerText || document.title, 300);
             const postText = clean(root?.innerText || root?.textContent, 4000);
             const selectors = '[data-testid*="comment"],[class*="Comment"],[class*="comment"],[aria-label*="comment" i]';
-            const comments = [...document.querySelectorAll(selectors)].map((element) => ({
-              author: clean(element.querySelector('a[href*="/profile"],a[href*="/@"],a[href*="/user"]')?.innerText, 200),
-              text: clean(element.innerText || element.textContent, 2000)
-            })).filter((item) => item.text);
-            return { title: heading, postText, comments };
+            const authorLink = root?.querySelector('a[href*="/profile"],a[href*="/@"],a[href*="/user"]');
+            const comments = [...document.querySelectorAll(selectors)].map((element) => {
+              const commentAuthor = element.querySelector('a[href*="/profile"],a[href*="/@"],a[href*="/user"]');
+              return {
+                author: clean(commentAuthor?.innerText, 200),
+                authorUrl: String(commentAuthor?.href || '').slice(0, 2000),
+                text: clean(element.innerText || element.textContent, 2000)
+              };
+            }).filter((item) => item.text);
+            return {
+              title: heading, postText, comments,
+              author: clean(authorLink?.innerText, 200),
+              authorUrl: String(authorLink?.href || '').slice(0, 2000)
+            };
           })()`, returnByValue: true,
         }, 8_000);
         const value = snapshot?.result?.value || {};
@@ -1336,7 +1409,10 @@ class MarcusBrowserBridge {
           const text = redactVisibleText(comment?.text).replace(/\s+/g, ' ').trim().slice(0, 1_200);
           if (!text) continue;
           const key = crypto.createHash('sha256').update(`${comment?.author || ''}\n${text}`).digest('hex');
-          comments.set(key, { author: redactVisibleText(comment?.author).slice(0, 200), text });
+          comments.set(key, {
+            author: redactVisibleText(comment?.author).slice(0, 200),
+            authorUrl: safeObservableUrl(comment?.authorUrl), text,
+          });
         }
         candidate._snapshot = value;
         const movement = await session.send('Runtime.evaluate', {
@@ -1352,7 +1428,11 @@ class MarcusBrowserBridge {
         sourceUrl: safeObservableUrl(candidateUrl),
         title: redactVisibleText(snapshot.title || candidate.title).replace(/\s+/g, ' ').trim().slice(0, 300),
         postText: redactVisibleText(snapshot.postText || candidate.excerpt).replace(/\s+/g, ' ').trim().slice(0, 4_000),
-        comments: [...comments.values()].slice(0, 30),
+        author: {
+          displayName: redactVisibleText(snapshot.author).replace(/\s+/g, ' ').trim().slice(0, 200),
+          profileUrl: safeObservableUrl(snapshot.authorUrl),
+        },
+        comments: [...comments.values()].slice(0, 500),
         commentsRead: comments.size,
         expandedControls,
         reachedVisibleEnd: reachedEnd,
@@ -1366,15 +1446,24 @@ class MarcusBrowserBridge {
       contextKind,
       query: wanted,
       startingUrl,
-      postsDiscovered: candidates.length,
+      postsDiscovered: candidateMap.size,
       postsRead: sources.length,
       commentsRead: sources.reduce((total, source) => total + source.commentsRead, 0),
       sources,
       coverage: {
         requestedPosts: postLimit,
+        feedViewportsRequested: feedLimit,
+        feedViewportsRead,
         commentViewportLimit: commentLimit,
-        allDiscoveredPostsRead: candidates.length > 0 && sources.length === candidates.length,
+        allDiscoveredPostsRead: candidateMap.size > 0 && sources.length === candidateMap.size,
         allVisibleCommentEndsReached: sources.length > 0 && sources.every((source) => source.reachedVisibleEnd),
+        feedEndReached,
+        knownFrontierReached: consecutiveKnownViewports >= 3,
+        newlyDiscoveredPosts: sources.filter((source) => !knownUrls.has(source.sourceUrl)).length,
+        remainingDiscoveredPosts: Math.max(0, candidateMap.size - sources.length),
+        resumeToken: sources.length
+          ? crypto.createHash('sha256').update(sources[sources.length - 1].sourceUrl).digest('hex').slice(0, 20)
+          : '',
         platformComplete: false,
         limitation: 'Coverage is limited to posts and comments the current signed-in page rendered; hidden, deleted, restricted, or algorithmically withheld content cannot be claimed as read.',
       },
