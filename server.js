@@ -40,6 +40,7 @@ import { BrowserPublicationStore } from './marcus/browser_publication_store.js';
 import { describeMarcusBrowserSkills, verifyMarcusBrowserSkillResult } from './marcus/skills/browser_skills.js';
 import { BrowserMissionStore } from './marcus/skills/browser_mission_store.js';
 import { analyzeMarcusSocialDraft } from './marcus/social/editorial_quality.js';
+import { buildCommunitySourceLedger } from './marcus/social/community_source_ledger.js';
 import { normalizeDesktopActionDetails } from './marcus/desktop/action_result_details.js';
 import { ProjectEvidenceService } from './marcus/evidence/project_evidence_service.js';
 import {
@@ -15145,7 +15146,19 @@ async function executeMarcusBrowserTool(toolName, args = {}, {
     for (const member of ingested.members.slice(0, 50)) {
       projections.push(await queueCommunityProfileProjection(getBusinessKeyFromContext(), member.id));
     }
-    result = { ...result, communityMemory: { created: ingested.created, duplicate: ingested.duplicate, projections } };
+    const compactResult = result?.details?.result && typeof result.details.result === 'object'
+      ? { ...result.details.result, observations: undefined }
+      : result?.details?.result;
+    result = {
+      communityMemory: {
+        created: ingested.created,
+        duplicate: ingested.duplicate,
+        sourceObservations: buildCommunitySourceLedger(ingested.observations),
+        projections,
+      },
+      ...result,
+      details: { ...result.details, result: compactResult },
+    };
   } else if (toolName === 'marcus_browser_inspect_notifications' && result.ok) {
     const notifications = Array.isArray(result?.details?.result?.notifications) ? result.details.result.notifications : [];
     const ingested = await communityIntelligenceStore.ingestNotifications(getBusinessKeyFromContext(), notifications);
@@ -19052,6 +19065,7 @@ RULES:
 - Use marcus_browser_observe_community when Mark asks you to browse, learn from, remember, build knowledge about, or write for a Skool community. Before drafting a new community post, call it in the current conversation and ground the draft in returned observation IDs. If it returns no observations, say the feed has not been learned yet; do not fill the gap with generic content. Use marcus_browser_inspect_notifications for the visible Skool notification surface. Those tools store bounded source-linked observations; they do not clear, react, reply, or publish. Use marcus_community_profiles and marcus_community_notifications when Mark asks what you remember about people, engagement, or pending community notifications.
 - Use marcus_browser_prepare_post for Mark's first, new, own, standalone, or main-feed Skool post. It is the only allowed tool for that task and must verify the standalone feed composer before you claim the draft is ready. Use marcus_browser_fill only for an editor already visible when the request is not a standalone Skool post. For a compound request to open a named Skool thread and draft a reply there, use marcus_browser_prepare_reply so the thread and its current comment editor are opened before filling. Preparation tools stop before submission; state clearly that the draft is visible and not posted. Use marcus_browser_submit only for that recent prepared draft after Mark explicitly approves posting it. Never type passwords; Mark completes credential fields visibly and the dedicated profile keeps the resulting login session.
 - A Skool draft is not complete with body text alone. Give it a specific title, readable short paragraphs, the best visible category, source observation IDs, a non-obvious editorial angle, and reader value that does not depend on comments. Default to no poll. Add a poll only when Mark directly requests one. Never report a Skool draft ready unless the tool confirms completeDraft.
+- If a Skool draft preparation returns retryable, use the returned issue list and source ledger to rewrite and retry immediately in the same turn. Do not ask Mark to repeat or reconfirm a draft-only request.
 - When Mark returns browser control while an active browser mission is recovering, immediately resume that retained preparation or inspection mission. Do not ask him to repeat the request or use scripted wording. Returning control is never approval to publish, submit, send, delete, purchase, or perform another consequential action.
 - If a browser preparation action is still pending or times out, keep the browser mission active and retry it through the retained mission. Never tell Mark to copy and paste or post manually as the first recovery. Report the exact browser or relay blocker only after the retry returns a verified failure.
 - For Skool research, keep the current browser mission in mind across turns. If Mark says he moved your browser to the main feed, treat the visible page as the target and read it without demanding magic wording. If Mark asks to open each post, read comments, or always click "read more", use visible browser tools iteratively and report exact progress such as "read 6 posts and 18 comments so far"; never claim you read all posts/comments unless the tools actually traversed them. If a browser action times out, say it timed out and retry the same browser task; do not offer manual posting as the first recovery.
