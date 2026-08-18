@@ -1,5 +1,17 @@
 # Implementation Roadmap
 
+## 2026-08-17: Executable Skill Contracts
+
+Status: local implementation and focused tests pass. The desktop relay was restarted and production reported it online with a live Skool surface. Production server deployment and live standalone-post acceptance remain pending.
+
+- Added a first-class skill contract with authority, prerequisites, completion evidence, recovery, and deterministic verification.
+- Added eight browser skill definitions and `GET /api/marcus/skills` readiness output.
+- Added a dedicated `skool.prepare-standalone-post` path that returns to the community root, opens the feed composer, rejects thread/comment editors, inserts exact text, and reads it back before success.
+- Changed approved browser publishing to use the exact durable draft and publication workflow instead of a generic visible-button click.
+- Added adversarial coverage for thread overlays, wrong editor surfaces, false-success relay output, exact draft evidence, and standalone intent routing.
+- Added durable browser mission state across multi-turn instructions and process restarts, including evidence, recovery, approval, and completion state.
+- Remaining: site adapters for virtualized feeds/comments, visual fallback, relay supervision, multi-page evidence ledgers, and live published-object read-back. See [[skill-system]].
+
 ## 2026-08-17: Browser Presence Slice
 
 Status: implemented and locally verified

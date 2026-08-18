@@ -194,6 +194,76 @@ test('MARCUS standalone feed post targeting avoids comment editors', async () =>
   assert.match(expressions[2], /wantsStandalonePost/);
 });
 
+test('MARCUS standalone post skill leaves an open thread and proves the main feed composer', async () => {
+  const bridge = new MarcusBrowserBridge();
+  const calls = [];
+  let runtimeCall = 0;
+  bridge.ensureBrowser = async () => true;
+  bridge.sensitiveFieldFocused = async () => false;
+  bridge.page = async () => ({
+    target: { id: 'skool-tab', url: 'https://www.skool.com/localgiants/drop-your-intro' },
+    session: {
+      send: async (method, params) => {
+        calls.push({ method, params });
+        if (method === 'Page.navigate') return { frameId: 'frame-1' };
+        if (method === 'Input.insertText') return {};
+        runtimeCall += 1;
+        if (runtimeCall === 1) return { result: { value: { activated: true, label: 'write something', href: 'https://www.skool.com/localgiants' } } };
+        if (runtimeCall === 2) return { result: { value: {
+          focused: true, surface: 'standalone-feed-composer', communityRoot: true,
+          href: 'https://www.skool.com/localgiants', label: '',
+        } } };
+        return { result: { value: {
+          verified: true, chars: 21, communityRoot: true, inThread: false, hasPostControl: true,
+          href: 'https://www.skool.com/localgiants',
+        } } };
+      },
+    },
+  });
+
+  const result = await bridge.command({ command: 'prepare-post', text: 'Standalone post text.' });
+  assert.equal(result.ok, true);
+  assert.equal(result.details.result.surface, 'standalone-feed-composer');
+  assert.equal(result.details.result.verified, true);
+  assert.equal(result.details.result.communityRoot, true);
+  assert.equal(result.details.result.insertedChars, 21);
+  assert.deepEqual(calls[0], { method: 'Page.navigate', params: { url: 'https://www.skool.com/localgiants' } });
+  assert.match(calls[1].params.expression, /write something\|start a post\|create post/i);
+  assert.match(calls[2].params.expression, /exactPostControl/);
+  assert.match(calls[2].params.expression, /editor\.closest\('article'\)/);
+  assert.deepEqual(calls[3], { method: 'Input.insertText', params: { text: 'Standalone post text.' } });
+  assert.match(calls[4].params.expression, /actual === expected/);
+});
+
+test('MARCUS standalone post skill refuses a composer that is still inside a thread surface', async () => {
+  const bridge = new MarcusBrowserBridge();
+  let inserted = false;
+  let runtimeCall = 0;
+  bridge.ensureBrowser = async () => true;
+  bridge.sensitiveFieldFocused = async () => false;
+  bridge.page = async () => ({
+    target: { id: 'skool-tab', url: 'https://www.skool.com/localgiants/drop-your-intro' },
+    session: {
+      send: async (method) => {
+        if (method === 'Page.navigate') return {};
+        if (method === 'Input.insertText') {
+          inserted = true;
+          return {};
+        }
+        runtimeCall += 1;
+        if (runtimeCall === 1) return { result: { value: { activated: true } } };
+        return { result: { value: { focused: true, surface: 'standalone-feed-composer', communityRoot: false } } };
+      },
+    },
+  });
+
+  await assert.rejects(
+    () => bridge.command({ command: 'prepare-post', text: 'Do not put this in comments.' }),
+    /standalone Skool feed composer was not verified/i,
+  );
+  assert.equal(inserted, false);
+});
+
 test('MARCUS thread reply workflow opens the thread and current comment editor before filling', async () => {
   const bridge = new MarcusBrowserBridge();
   const calls = [];

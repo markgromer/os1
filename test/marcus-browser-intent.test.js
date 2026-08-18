@@ -41,15 +41,19 @@ test('browser composition is prepared separately from explicitly approved submis
   );
   assert.equal(
     classifyMarcusBrowserIntent('draft your first post', { contextKind: 'skool' }),
-    'marcus_browser_fill',
+    'marcus_browser_prepare_post',
   );
   assert.equal(
     classifyMarcusBrowserIntent('draft your first standalone post', { contextKind: 'skool' }),
-    'marcus_browser_fill',
+    'marcus_browser_prepare_post',
   );
   assert.equal(
     classifyMarcusBrowserIntent('create the post', { contextKind: 'skool' }),
-    'marcus_browser_fill',
+    'marcus_browser_prepare_post',
+  );
+  assert.equal(
+    classifyMarcusBrowserIntent('Use your browser to draft your first post on the ScoopOS main feed on Skool.'),
+    'marcus_browser_prepare_post',
   );
   assert.equal(classifyMarcusBrowserIntent('Post it', { pendingDraft: false }), '');
   assert.equal(classifyMarcusBrowserIntent('Post it', { pendingDraft: true }), 'marcus_browser_submit');

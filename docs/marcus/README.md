@@ -14,6 +14,7 @@ This folder is an Obsidian-compatible documentation space for Marcus.
 - [[voice-interface]]
 - [[personality-modes]]
 - [[live-presence]]
+- [[skill-system]]
 - [[context-memory]]
 - [[operator-intelligence-layer]]
 - [[visualizer-operational-awareness]]

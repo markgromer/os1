@@ -52,7 +52,13 @@ Settings:
 
 The legacy settings file currently contains richer integration/business configuration than the newer settings path.
 
-Marcus Mobile conversation state is stored under `marcusLiveConversation` in settings. It retains a bounded recent transcript and one active project binding. Recent context is limited to 45 minutes when requirements are assembled for a project operation; stored messages are capped at 80.
+Marcus Mobile conversation state is stored under `marcusLiveConversation` in settings. It retains up to 500 messages, uses a 14-day live context window, and carries one active project binding plus bounded project requirements. Browser objectives, instructions, skill history, evidence, recovery, and approval/completion state are persisted separately in `marcus-browser-missions.json` by `BrowserMissionStore`.
+
+## MARCUS Skills
+
+`marcus/skills/skill_contract.js` defines the executable capability contract. `marcus/skills/browser_skills.js` registers browser skills with authority, preconditions, required evidence, recovery, and deterministic completion verification.
+
+`server.js` routes browser intent to a specific skill-bound tool and rejects a relay `ok` result when the skill evidence is incomplete. `desktop-marcus-browser.cjs` performs the local browser action and returns bounded surface evidence. `GET /api/marcus/skills` reports the redacted registry and live browser readiness. See [[skill-system]].
 
 ## Marcus Operations
 

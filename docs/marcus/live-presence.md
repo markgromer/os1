@@ -20,7 +20,8 @@ Live presence is Marcus operating from Mark's PC as a visible assistant in norma
 - Local browser controller: `desktop-marcus-browser.cjs`
 - Browser status/frame/control/actions: `/api/marcus/browser/status`, `/api/marcus/browser/frame`, `/api/marcus/browser/control`, and `/api/marcus/browser/actions`
 - Browser relay intake: `/api/marcus/browser/relay`
-- Marcus chat tools: `marcus_browser_status`, `marcus_browser_open`, and non-consequential exact-visible-control `marcus_browser_activate`
+- Marcus chat tools: `marcus_browser_status`, `marcus_browser_open`, non-consequential exact-visible-control `marcus_browser_activate`, generic visible-editor `marcus_browser_fill`, standalone Skool `marcus_browser_prepare_post`, exact-thread `marcus_browser_prepare_reply`, and exact-approved-draft `marcus_browser_submit`
+- Browser skill contracts and readiness: `GET /api/marcus/skills` and [[skill-system]]
 - Current-page inspection tool: `marcus_browser_read` scans up to 12 rendered viewports on approved sites and restores the original page position
 - Visible-context allowlist: Gmail for explicit browser inspection; Zoom, Skool, Google Meet, Teams, YouTube, and TikTok for live Realtime context
 - Automatic meeting-note checkpoint: `/api/marcus/meeting-notes/checkpoint` to the local `docs/marcus/conversations/` writer

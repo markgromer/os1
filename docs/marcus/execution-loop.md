@@ -6,7 +6,15 @@ Status: active
 
 `Mark request or visualizer input -> authenticated browser route -> durable desktop action queue -> local desktop agent -> localhost-only MARCUS Chrome CDP -> compressed viewport relay -> /visualizer.html`
 
-The browser status loop runs independently from the heavier desktop-awareness scan so click and navigation commands are claimed quickly. The page frame is observational evidence, not proof that a consequential action completed. Provider receipts, page read-back, or the existing durable operation verification rules remain required before Marcus claims an external result.
+The browser status loop runs independently from the heavier desktop-awareness scan so click and navigation commands are claimed quickly. Browser commands now pass through the executable contracts in [[skill-system]]. The page frame, a successful click, or inserted text is observational evidence, not proof that the requested action completed. The selected skill must verify the intended surface and result. Provider receipts, page read-back, or the existing durable operation verification rules remain required before Marcus claims an external result.
+
+Standalone Skool drafting follows:
+
+`standalone-post intent -> skool.prepare-standalone-post -> community-root navigation -> feed-composer activation -> comment/thread rejection -> exact text insertion -> exact editor read-back -> pending publication approval`
+
+Publishing follows:
+
+`explicit authenticated approval -> exact stored draft -> composer re-preparation -> exact text verification -> approved submit control -> publication result -> durable published/failed state`
 
 Before a project operation is created, Marcus selects a job-priming manifest and checks relevant mission-memory decisions for a locked conflict. A conflict stops operation creation until Mark identifies a permanent change or one-time exception. Completed operations that previously failed or entered recovery may bank the verified winning method.
 

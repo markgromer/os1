@@ -299,7 +299,7 @@ class MarcusBrowserBridge {
     const command = String(payload.command || '').trim().toLowerCase();
     const requestedUrl = safeHttpUrl(payload.url);
     await this.ensureBrowser(requestedUrl || undefined);
-    const preferredContextKind = command === 'prepare-reply' ? 'skool' : '';
+    const preferredContextKind = ['prepare-post', 'prepare-reply'].includes(command) ? 'skool' : '';
     const { target, session } = command === 'publish-approved-draft'
       ? await this.pageForUrl(requestedUrl)
       : await this.page(preferredContextKind);
@@ -470,6 +470,9 @@ class MarcusBrowserBridge {
       }
       await session.send('Input.insertText', { text });
       result = { ...focused.result.value, insertedChars: text.length };
+    } else if (command === 'prepare-post') {
+      const text = String(payload.text || '').slice(0, 4_000);
+      result = await this.prepareStandalonePost(session, target, { text });
     } else if (command === 'prepare-reply') {
       const thread = String(payload.thread || '').replace(/\s+/g, ' ').trim().slice(0, 240);
       const text = String(payload.text || '').slice(0, 4_000);
@@ -496,6 +499,148 @@ class MarcusBrowserBridge {
     }
     this.lastError = '';
     return { ok: true, details: { command, targetId: target.id, result } };
+  }
+
+  async prepareStandalonePost(session, target, { text }) {
+    if (!text) throw new Error('Text is required.');
+    if (liveContextKind(target.url) !== 'skool') {
+      throw new Error('Standalone post preparation is available only on the approved Skool page.');
+    }
+    if (await this.sensitiveFieldFocused(session)) {
+      throw new Error('Password entry is blocked from the remote bridge. Type it in the visible MARCUS Chrome window.');
+    }
+
+    const currentUrl = new URL(String(target.url || ''));
+    const pathParts = currentUrl.pathname.split('/').filter(Boolean);
+    if (!pathParts.length) throw new Error('The Skool community could not be resolved from the visible page.');
+    const communityUrl = `${currentUrl.origin}/${pathParts[0]}`;
+    await session.send('Page.navigate', { url: communityUrl }, 4_000);
+    await wait(1_200);
+
+    const opened = await session.send('Runtime.evaluate', {
+      expression: `(() => {
+        const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+        const wanted = /^(?:write something|start a post|create post|post something|what do you want to share)[.!…]?$/;
+        const candidates = [...document.querySelectorAll('button,[role="button"],textarea,[contenteditable="true"],[contenteditable="plaintext-only"]')]
+          .map((element) => ({
+            element,
+            label: normalize(element.getAttribute('aria-label') || element.getAttribute('placeholder') || element.getAttribute('data-placeholder') || element.innerText || element.textContent),
+          }))
+          .filter(({ element, label }) => {
+            const rect = element.getBoundingClientRect();
+            const style = getComputedStyle(element);
+            return wanted.test(label) && rect.width > 0 && rect.height > 0
+              && rect.bottom >= 0 && rect.top <= innerHeight
+              && style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) !== 0
+              && !element.closest('article');
+          })
+          .sort((left, right) => left.label.length - right.label.length
+            || (left.element.getBoundingClientRect().width * left.element.getBoundingClientRect().height)
+              - (right.element.getBoundingClientRect().width * right.element.getBoundingClientRect().height));
+        const control = candidates[0]?.element;
+        if (!control) return { activated: false };
+        control.scrollIntoView({ block: 'center', inline: 'nearest' });
+        control.click();
+        return { activated: true, label: candidates[0].label, href: location.href };
+      })()`,
+      returnByValue: true,
+    }, 4_000);
+    if (!opened?.result?.value?.activated) {
+      throw new Error('The ScoopOS main feed is visible, but its standalone post composer could not be opened.');
+    }
+    await wait(800);
+
+    const focus = await session.send('Runtime.evaluate', {
+      expression: `(() => {
+        const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+        const visible = (element) => {
+          const rect = element.getBoundingClientRect();
+          const style = getComputedStyle(element);
+          return !element.disabled && !element.readOnly && rect.width > 0 && rect.height > 0
+            && style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) !== 0;
+        };
+        const exactPostControl = (root) => [...root.querySelectorAll('button,[role="button"],input[type="submit"]')]
+          .some((button) => visible(button) && /^(?:post|publish)$/.test(normalize(button.innerText || button.value || button.textContent)));
+        const composerContainer = (editor) => {
+          let current = editor;
+          for (let depth = 0; current && depth < 8; depth += 1, current = current.parentElement) {
+            if (exactPostControl(current)) return current;
+          }
+          return null;
+        };
+        const candidates = [...document.querySelectorAll('textarea,[contenteditable="true"],[contenteditable="plaintext-only"],[role="textbox"]:not(input)')]
+          .filter(visible)
+          .map((editor) => ({ editor, container: composerContainer(editor) }))
+          .filter(({ editor, container }) => {
+            if (!container || editor.closest('article')) return false;
+            const details = normalize([
+              editor.getAttribute('aria-label'), editor.getAttribute('placeholder'), editor.getAttribute('data-placeholder'),
+              container.getAttribute('aria-label'), container.innerText,
+            ].filter(Boolean).join(' '));
+            return !/\\b(?:leave|write|add) (?:a )?(?:comment|reply)\\b|\\breply to\\b|\\bview \\d+ more replies\\b/.test(details);
+          })
+          .sort((left, right) => Number(Boolean(right.editor.closest('[role="dialog"]'))) - Number(Boolean(left.editor.closest('[role="dialog"]'))));
+        const selected = candidates[0];
+        if (!selected) return { focused: false };
+        const editor = selected.editor;
+        editor.scrollIntoView({ block: 'center', inline: 'nearest' });
+        editor.focus();
+        if (typeof editor.select === 'function') editor.select();
+        else {
+          const selection = window.getSelection();
+          const range = document.createRange();
+          range.selectNodeContents(editor);
+          selection.removeAllRanges();
+          selection.addRange(range);
+        }
+        return {
+          focused: true,
+          surface: 'standalone-feed-composer',
+          communityRoot: location.pathname.replace(/\\/$/, '').split('/').filter(Boolean).length === 1,
+          href: location.href,
+          label: String(editor.getAttribute('aria-label') || editor.getAttribute('placeholder') || editor.getAttribute('data-placeholder') || '').slice(0, 240),
+        };
+      })()`,
+      returnByValue: true,
+    }, 4_000);
+    if (!focus?.result?.value?.focused || !focus?.result?.value?.communityRoot) {
+      throw new Error('The standalone Skool feed composer was not verified. No draft was inserted.');
+    }
+
+    await session.send('Input.insertText', { text });
+    const verified = await session.send('Runtime.evaluate', {
+      expression: `(() => {
+        const expected = ${JSON.stringify(text.replace(/\r\n/g, '\n'))};
+        const editor = document.activeElement;
+        if (!editor || !editor.matches('textarea,[contenteditable="true"],[contenteditable="plaintext-only"],[role="textbox"]:not(input)')) {
+          return { verified: false };
+        }
+        const actual = String(editor.value ?? editor.innerText ?? editor.textContent ?? '').replace(/\\r\\n/g, '\\n');
+        const communityRoot = location.pathname.replace(/\\/$/, '').split('/').filter(Boolean).length === 1;
+        const inThread = Boolean(editor.closest('article'));
+        let container = editor;
+        let hasPostControl = false;
+        for (let depth = 0; container && depth < 8; depth += 1, container = container.parentElement) {
+          hasPostControl = [...container.querySelectorAll('button,[role="button"],input[type="submit"]')].some((button) => {
+            const label = String(button.innerText || button.value || button.textContent || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+            const rect = button.getBoundingClientRect();
+            return /^(?:post|publish)$/.test(label) && !button.disabled && rect.width > 0 && rect.height > 0;
+          });
+          if (hasPostControl) break;
+        }
+        return { verified: actual === expected && communityRoot && !inThread && hasPostControl, chars: actual.length, communityRoot, inThread, hasPostControl, href: location.href };
+      })()`,
+      returnByValue: true,
+    }, 4_000);
+    if (!verified?.result?.value?.verified) {
+      throw new Error('The standalone Skool draft failed exact composer read-back. MARCUS will not claim it is ready.');
+    }
+    return {
+      ...focus.result.value,
+      verified: true,
+      insertedChars: text.length,
+      href: verified.result.value.href || focus.result.value.href || communityUrl,
+    };
   }
 
   async replaceVisibleEditor(session, text) {
@@ -542,6 +687,7 @@ class MarcusBrowserBridge {
       throw new Error('Approved publication is blocked while a password field is focused.');
     }
     if (mode === 'reply') await this.prepareReply(session, target, { thread, text });
+    else if (liveContextKind(target.url || payload.url) === 'skool') await this.prepareStandalonePost(session, target, { text });
     else await this.replaceVisibleEditor(session, text);
 
     const verified = await session.send('Runtime.evaluate', {

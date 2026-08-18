@@ -5,7 +5,7 @@ const THREAD_NAVIGATION_PATTERN = /\b(head to|go to|find|open|visit|navigate to|
 const SUBMISSION_NEGATION_PATTERN = /\b(do not|don't|never|not yet|without)\b[^.!?\n]{0,60}\b(post|publish|send|submit|reply|comment)\b/i;
 const FEED_READING_PATTERN = /\b(?:main\s+feed|feed|posts?|comments?|community|group|timeline|latest|browse|read|review|inspect|scan|look\s+through|check\s+out)\b/i;
 const COMPOSITION_VERB_PATTERN = /\b(write|draft|compose|type|fill|prepare|create|make|respond)\b/i;
-const STANDALONE_POST_PATTERN = /\b(?:(?:new|standalone|own|first)\s+post|post\s+(?:of|from)\s+(?:your|marcus))\b/i;
+const STANDALONE_POST_PATTERN = /\b(?:(?:new|standalone|own|first)\s+post|(?:create|draft|write|make)\s+the\s+post|post\s+(?:of|from)\s+(?:your|marcus))\b/i;
 const BROWSER_FOLLOWUP_CONFIRMATION_PATTERN = /^(?:yes|yeah|yep|yup|ok|okay|do it|go ahead|please do|proceed|confirm(?:ed)?|approv(?:e|ed)|i approve|sure)(?:[.!\s,]*(?:i approve|approve it|do it|please|now|with (?:your|the) account|it'?s? (?:marcus|your) account|you are logged in with|you'?re logged in with))*[.!]?$/i;
 const BROWSER_PROMPT_PATTERN = /\b(browser|chrome|skool|feed|page|post|posts|comments|thread|visible content|dedicated profile|marcus account)\b/i;
 const BROWSER_READ_PROMPT_PATTERN = /\b(read|inspect|review|summari[sz]e|scan|browse|look through|check out|visible content|posts?|comments?)\b/i;
@@ -39,6 +39,10 @@ export function classifyMarcusBrowserIntent(message, { pendingDraft = false, con
   }
   if ((COMPOSITION_PATTERN.test(text) || STANDALONE_POST_PATTERN.test(text)) && COMPOSITION_VERB_PATTERN.test(text)) {
     if (!STANDALONE_POST_PATTERN.test(text) && THREAD_NAVIGATION_PATTERN.test(text)) return 'marcus_browser_prepare_reply';
+    if (STANDALONE_POST_PATTERN.test(text)
+      && (String(contextKind || '').trim().toLowerCase() === 'skool' || /\bskool\b/i.test(text))) {
+      return 'marcus_browser_prepare_post';
+    }
     return 'marcus_browser_fill';
   }
   if (implicitFeedRead) return 'marcus_browser_read';
