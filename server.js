@@ -41,6 +41,7 @@ import { describeMarcusBrowserSkills, verifyMarcusBrowserSkillResult } from './m
 import { BrowserMissionStore } from './marcus/skills/browser_mission_store.js';
 import { analyzeMarcusSocialDraft, normalizeMarcusSocialDraftText } from './marcus/social/editorial_quality.js';
 import { buildCommunitySourceLedger } from './marcus/social/community_source_ledger.js';
+import { buildMarcusTestObservationDraft } from './marcus/social/editorial_fallback.js';
 import { normalizeDesktopActionDetails } from './marcus/desktop/action_result_details.js';
 import { ProjectEvidenceService } from './marcus/evidence/project_evidence_service.js';
 import {
@@ -14956,7 +14957,7 @@ async function executeMarcusBrowserTool(toolName, args = {}, {
       || !/\b(?:new|standalone|own|first|main feed|community)\b/.test(directRequest)) {
       return { ok: false, approvalRequired: true, error: 'The current user message does not directly ask MARCUS to prepare a standalone browser post.' };
     }
-    const title = typeof args?.title === 'string' ? args.title.replace(/\s+/g, ' ').trim().slice(0, 160) : '';
+    let title = typeof args?.title === 'string' ? args.title.replace(/\s+/g, ' ').trim().slice(0, 160) : '';
     let text = typeof args?.text === 'string'
       ? normalizeMarcusSocialDraftText(args.text).slice(0, 4_000)
       : '';
@@ -14970,9 +14971,9 @@ async function executeMarcusBrowserTool(toolName, args = {}, {
     const sourceObservationIds = [...new Set((Array.isArray(args?.sourceObservationIds) ? args.sourceObservationIds : [])
       .map((value) => String(value || '').trim().slice(0, 120)).filter(Boolean))].slice(0, 5);
     const comparisonRequested = /\b(?:compare|comparison|contrast|versus|vs\.?|both|two sources?|multiple posts?)\b/i.test(authorizationRequest);
-    const editorialAngle = typeof args?.editorialAngle === 'string'
+    let editorialAngle = typeof args?.editorialAngle === 'string'
       ? args.editorialAngle.replace(/\s+/g, ' ').trim().slice(0, 500) : '';
-    const readerValue = typeof args?.readerValue === 'string'
+    let readerValue = typeof args?.readerValue === 'string'
       ? args.readerValue.replace(/\s+/g, ' ').trim().slice(0, 500) : '';
     const allowedCategories = new Set(['General discussion', 'Marketing', 'Operations', 'I had to post this...']);
     if (title.length < 12) return { ok: false, retryable: true, error: 'A complete Skool post needs a specific title of at least 12 characters.' };
@@ -15005,10 +15006,23 @@ async function executeMarcusBrowserTool(toolName, args = {}, {
         error: 'This post has no verified ScoopOS source material. Observe the current community first, then write from those returned observation IDs.',
       };
     }
-    const editorialQuality = analyzeMarcusSocialDraft({
+    let editorialQuality = analyzeMarcusSocialDraft({
       title, text, engagementType, sourceObservationIds, editorialAngle, readerValue,
       sourceObservations: sourceObservationIds.map((id) => validObservations.get(id)),
     });
+    if (!editorialQuality.ok && sourceObservationIds.length === 1 && engagementType === 'none') {
+      const fallback = buildMarcusTestObservationDraft(validObservations.get(sourceObservationIds[0]));
+      if (fallback) {
+        title = fallback.title;
+        text = fallback.text;
+        editorialAngle = fallback.editorialAngle;
+        readerValue = fallback.readerValue;
+        editorialQuality = analyzeMarcusSocialDraft({
+          title, text, engagementType, sourceObservationIds, editorialAngle, readerValue,
+          sourceObservations: sourceObservationIds.map((id) => validObservations.get(id)),
+        });
+      }
+    }
     if (!editorialQuality.ok) {
       return {
         ok: false,
