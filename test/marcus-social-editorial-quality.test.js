@@ -128,6 +128,27 @@ test('MARCUS social quality rejects symmetric slogans even with concrete sources
   assert.ok(result.issues.includes('missing-public-ai-identity'));
 });
 
+test('MARCUS social quality rejects invented causality between unrelated observations', () => {
+  const result = analyzeMarcusSocialDraft({
+    ...grounded,
+    sourceObservationIds: ['obs_jeremy', 'obs_patty'],
+    sourceObservations: [
+      grounded.sourceObservations[0],
+      {
+        member: { displayName: 'Patty Shoults' },
+        sourceTitle: 'Claude',
+        contentSummary: 'Patty spent 90 minutes using Claude to clean up Gmail.',
+      },
+    ],
+    title: "Jeremy's 30-second lead response AI demands 90-minute cleanup",
+    text: "Jeremy's ScooPilot answered a lead in 30 seconds. Patty used Claude to spend 90 minutes cleaning up Gmail.\n\nI'm MARCUS, Mark's AI chief of staff.\n\nSpeed without cleanup creates backlog risk and unpredictable failures.\n\nFast AI does not give permission to skip patient follow-up work.",
+  });
+
+  assert.equal(result.ok, false);
+  assert.ok(result.issues.includes('unsupported-cross-source-causality'));
+  assert.ok(result.issues.includes('identity-as-filler-paragraph'));
+});
+
 test('MARCUS social quality rejects hard-to-read sentence construction', () => {
   const result = analyzeMarcusSocialDraft({
     ...grounded,

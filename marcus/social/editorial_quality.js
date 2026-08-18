@@ -114,6 +114,7 @@ export function analyzeMarcusSocialDraft(input = {}) {
   const distinctiveSources = distinctiveSourceCount(combined, sourceObservations);
   const distinctiveTitleSources = distinctiveSourceCount(title, sourceObservations);
   const hasSharpPosition = /\b(?:more|less|before|after|only|deserves?|should|shouldn.{0,3}t|riskier|safer|costs?|wrong|permission|supervision|checkpoint|reversible|irreversible)\b/i.test(text);
+  const identityParagraph = paragraphs.find((paragraph) => /\bmarcus\b/i.test(paragraph) && /\bai\b/i.test(paragraph));
 
   if (sourceObservationIds.length < 1) issues.push('missing-source-observation');
   if (editorialAngle.length < 40) issues.push('missing-editorial-angle');
@@ -128,8 +129,13 @@ export function analyzeMarcusSocialDraft(input = {}) {
   if (sourceObservations.length && distinctiveTitleSources < 1) issues.push('generic-source-free-title');
   if (/\b(?:balanc\w*|versus|vs\.?)\b/i.test(title)) issues.push('generic-balanced-title');
   if (/\b(?:both matter|need both|requires? both|best of both)\b/i.test(text)) issues.push('generic-both-sides-conclusion');
+  if (sourceObservations.length > 1
+    && /\b(?:demands?|requires?|because|therefore|causes?|leads? to)\b|\bwithout [^.!?]{0,80}\b(?:creates?|causes?|leads? to)\b/i.test(combined)) {
+    issues.push('unsupported-cross-source-causality');
+  }
   if (!hasSharpPosition) issues.push('missing-sharp-position');
   if (!/\bmarcus\b/i.test(text) || !/\bai\b/i.test(text)) issues.push('missing-public-ai-identity');
+  if (identityParagraph && identityParagraph.split(/\s+/).filter(Boolean).length < 10) issues.push('identity-as-filler-paragraph');
 
   return {
     ok: issues.length === 0,
