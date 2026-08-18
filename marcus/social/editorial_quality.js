@@ -20,6 +20,12 @@ const GENERIC_PATTERNS = [
   { pattern: /\bscalable (?:business|operations?|systems?)\b/i, issue: 'generic-scale-claim' },
   { pattern: /\bthis post isn(?:'|’)t about\b/i, issue: 'generic-post-disclaimer' },
   { pattern: /\bi(?:'| wi)ll continue sharing\b/i, issue: 'generic-content-promise' },
+  { pattern: /\bi see a clear tension\b/i, issue: 'generic-tension-opener' },
+  { pattern: /\bquick automation wins?\b/i, issue: 'generic-quick-win' },
+  { pattern: /\bsolid workflows?\b/i, issue: 'generic-workflow-claim' },
+  { pattern: /\bbuild a foundation\b/i, issue: 'generic-foundation-metaphor' },
+  { pattern: /\b(?:practical,? )?no[- ]fluff insights?\b/i, issue: 'generic-no-fluff-claim' },
+  { pattern: /\bmark(?:'s|’s) experience shows\b/i, issue: 'vague-attribution' },
 ];
 
 const SOURCE_STOP_WORDS = new Set([
@@ -60,6 +66,25 @@ function groundedSourceCount(text, observations) {
   }).length;
 }
 
+function distinctiveSourceCount(text, observations) {
+  const body = clean(text).toLowerCase();
+  const bodyTokens = meaningfulTokens(text);
+  return (Array.isArray(observations) ? observations : []).filter((observation) => {
+    const memberFirstName = clean(observation?.member?.displayName, 200).split(/\s+/)[0]?.toLowerCase() || '';
+    const namedMember = memberFirstName.length >= 4 && memberFirstName !== 'mark'
+      && new RegExp(`\\b${memberFirstName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(body);
+    const titleTokens = [...meaningfulTokens(observation?.sourceTitle)];
+    const titleOverlap = titleTokens.filter((token) => bodyTokens.has(token)).length >= Math.min(2, titleTokens.length || 2);
+    const sourceText = [observation?.sourceTitle, observation?.contentSummary].filter(Boolean).join(' ');
+    const sourceNumbers = [...new Set(sourceText.match(/\b\d{2,}\b/g) || [])];
+    const repeatedNumber = sourceNumbers.some((number) => new RegExp(`\\b${number}\\b`).test(body));
+    const sourceTerms = [...new Set(sourceText.match(/\b(?:[A-Z]{2,}|[A-Z][a-z]+[A-Z][A-Za-z0-9]*|[A-Za-z]+\.[A-Za-z]+)\b/g) || [])]
+      .map((term) => term.toLowerCase());
+    const repeatedTerm = sourceTerms.some((term) => bodyTokens.has(term));
+    return namedMember || titleOverlap || repeatedNumber || repeatedTerm;
+  }).length;
+}
+
 export function analyzeMarcusSocialDraft(input = {}) {
   const title = clean(input.title);
   const text = String(input.text || '').trim();
@@ -75,6 +100,7 @@ export function analyzeMarcusSocialDraft(input = {}) {
   const questionCount = (combined.match(/\?/g) || []).length;
   const sourceObservations = Array.isArray(input.sourceObservations) ? input.sourceObservations : [];
   const groundedSources = groundedSourceCount(combined, sourceObservations);
+  const distinctiveSources = distinctiveSourceCount(combined, sourceObservations);
 
   if (sourceObservationIds.length < 1) issues.push('missing-source-observation');
   if (editorialAngle.length < 40) issues.push('missing-editorial-angle');
@@ -85,6 +111,7 @@ export function analyzeMarcusSocialDraft(input = {}) {
   if (maxSentenceWords > 36) issues.push('sentence-too-long');
   if (text.length > 900) issues.push('draft-too-long');
   if (sourceObservations.length && groundedSources < 1) issues.push('weak-source-grounding');
+  if (sourceObservations.length && distinctiveSources < 1) issues.push('missing-distinctive-source-anchor');
 
   return {
     ok: issues.length === 0,
@@ -95,6 +122,7 @@ export function analyzeMarcusSocialDraft(input = {}) {
       maxSentenceWords,
       sourceObservations: sourceObservationIds.length,
       groundedSources,
+      distinctiveSources,
     },
   };
 }

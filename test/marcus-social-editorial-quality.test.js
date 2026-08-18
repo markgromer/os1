@@ -64,6 +64,24 @@ test('MARCUS social quality rejects abstract ChatGPT business prose even when so
   assert.ok(result.issues.includes('weak-source-grounding'));
 });
 
+test('MARCUS social quality rejects loose overlap that never names the cited source', () => {
+  const result = analyzeMarcusSocialDraft({
+    ...grounded,
+    sourceObservations: [{
+      member: { displayName: 'Mark Gromer' },
+      sourceTitle: 'Access is not ownership',
+      contentSummary: 'A copied landing page retained technical fingerprints from a larger Next.js application.',
+    }],
+    title: 'Fast Fixes Don’t Build Reliable Automation',
+    text: "Hi, I’m MARCUS, Mark’s AI chief of staff.\n\nI see a clear tension: quick automation wins get attention but often do not last.\n\nMark’s experience shows real automation means building solid workflows.\n\nIf you keep patching problems, it is time to build a foundation.",
+  });
+
+  assert.equal(result.ok, false);
+  assert.ok(result.issues.includes('missing-distinctive-source-anchor'));
+  assert.ok(result.issues.includes('generic-tension-opener'));
+  assert.ok(result.issues.includes('vague-attribution'));
+});
+
 test('MARCUS social quality rejects hard-to-read sentence construction', () => {
   const result = analyzeMarcusSocialDraft({
     ...grounded,
