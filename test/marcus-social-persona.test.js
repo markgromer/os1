@@ -11,4 +11,8 @@ test('live MARCUS prompt keeps the social persona distinct from Mark', async () 
   assert.match(source, /Never impersonate Mark/i);
   assert.match(source, /gives the person a way to reach their own conclusion/i);
   assert.match(source, /Skip automatic validation, hype, motivational filler/i);
+  assert.match(source, /earn attention rather than ask for engagement/i);
+  assert.match(source, /Google\+, generic founder content, or ChatGPT thought-leadership/i);
+  assert.match(source, /Before drafting a new community post, call it in the current conversation/i);
+  assert.match(source, /Default to no poll/i);
 });

@@ -269,6 +269,13 @@ const marcusBrowser = new MarcusBrowserBridge({
   profileRoot: process.env.MARCUS_CHROME_PROFILE_ROOT || DESKTOP_CONFIG.chromeProfileRoot,
   defaultUrl: process.env.MARCUS_CHROME_DEFAULT_URL || DESKTOP_CONFIG.chromeDefaultUrl,
 });
+let marcusBrowserOperationQueue = Promise.resolve();
+
+function runMarcusBrowserOperation(operation) {
+  const current = marcusBrowserOperationQueue.catch(() => {}).then(operation);
+  marcusBrowserOperationQueue = current.catch(() => {});
+  return current;
+}
 
 // ── PowerShell capture script ──────────────────────────────────
 const SCRIPT_DIR = path.join(os.tmpdir(), 'marcus-agent');
@@ -1336,7 +1343,7 @@ async function checkDesktopActions() {
       } else if (type === 'pc-run-powershell') {
         outcome = await runPcPowerShell(action?.payload || {}, PC_ACCESS_POLICY);
       } else if (isMarcusBrowserActionType(type)) {
-        outcome = await marcusBrowser.command(action?.payload || {});
+        outcome = await runMarcusBrowserOperation(() => marcusBrowser.command(action?.payload || {}));
       } else if (type === 'marcus-meeting-note') {
         outcome = writeMarcusMeetingNote(action?.payload || {});
         } else if (type === 'marcus-community-profile-note') {
@@ -1827,7 +1834,7 @@ async function relayMarcusBrowser() {
   if (browserRelayInFlight) return;
   browserRelayInFlight = true;
   try {
-    const browser = await marcusBrowser.capture();
+    const browser = await runMarcusBrowserOperation(() => marcusBrowser.capture());
     const result = await relayWithRetries({
       agentId: DESKTOP_AGENT_ID,
       ...browser,

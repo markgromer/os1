@@ -1212,6 +1212,7 @@ class MarcusBrowserBridge {
     const parsed = new URL(String(url || ''));
     const community = parsed.pathname.split('/').filter(Boolean)[0] || 'unknown';
     const count = Math.max(1, Math.min(12, Number(viewports) || 8));
+    const communityLiteral = JSON.stringify(community);
     const position = await session.send('Runtime.evaluate', { expression: 'Number(window.scrollY) || 0', returnByValue: true });
     const originalY = Number(position?.result?.value) || 0;
     const collected = new Map();
@@ -1222,6 +1223,7 @@ class MarcusBrowserBridge {
         const snapshot = await session.send('Runtime.evaluate', {
           expression: `(() => {
             const clean = (value, max = 1500) => String(value || '').replace(/\\s+/g, ' ').trim().slice(0, max);
+            const communitySlug = ${communityLiteral};
             const visible = (element) => {
               if (!element || element.closest('textarea,input,select,[contenteditable="true"],[contenteditable="plaintext-only"]')) return false;
               const rect = element.getBoundingClientRect();
@@ -1233,24 +1235,51 @@ class MarcusBrowserBridge {
               'article', '[data-testid*="post"]', '[data-testid*="comment"]',
               '[class*="PostCard"]', '[class*="post-card"]', '[class*="CommentCard"]', '[class*="comment-card"]'
             ].join(',');
-            let candidates = [...document.querySelectorAll(selectors)].filter(visible);
+            const reservedPaths = new Set(['about', 'calendar', 'classroom', '-', 'leaderboards', 'members']);
+            const isPostLink = (link) => {
+              try {
+                const target = new URL(String(link?.href || ''), location.href);
+                const segments = target.pathname.split('/').filter(Boolean);
+                return target.origin === location.origin && segments.length === 2
+                  && segments[0] === communitySlug && !reservedPaths.has(segments[1]);
+              } catch {
+                return false;
+              }
+            };
+            const uniquePostPaths = (element) => new Set(
+              [...element.querySelectorAll('a[href]')].filter(isPostLink).map((link) => new URL(link.href).pathname)
+            );
+            const semanticCards = [...document.querySelectorAll('a[href]')]
+              .filter((link) => isPostLink(link) && visible(link))
+              .map((sourceLink) => {
+                let element = sourceLink;
+                let card = null;
+                while (element && element !== document.body) {
+                  const postPaths = uniquePostPaths(element);
+                  const hasMember = [...element.querySelectorAll('a[href]')].some((link) => /\\/@[^/?#]+/i.test(String(link.href || '')));
+                  if (postPaths.size > 1) break;
+                  if (postPaths.size === 1 && hasMember && visible(element)) card = element;
+                  element = element.parentElement;
+                }
+                return card;
+              })
+              .filter(Boolean);
+            let candidates = [...document.querySelectorAll(selectors), ...semanticCards].filter(visible);
             if (!candidates.length) {
-              candidates = [...document.querySelectorAll('main > div > div, main section > div')]
+              candidates = [...document.querySelectorAll('main > div > div, main section > div, body section > div')]
                 .filter((element) => visible(element) && clean(element.innerText).length >= 80);
             }
+            candidates = [...new Set(candidates)];
             return candidates.slice(0, 80).map((element) => {
               const profile = [...element.querySelectorAll('a[href]')].find((link) => {
                 const href = String(link.href || '');
                 const label = clean(link.innerText || link.textContent, 200);
-                return label && (/\\/@[^/]+/i.test(href) || /\\/(?:member|profile|user)s?\\//i.test(href));
+                return /[a-z]/i.test(label) && (/\\/@[^/]+/i.test(href) || /\\/(?:member|profile|user)s?\\//i.test(href));
               });
-              const sourceLink = [...element.querySelectorAll('a[href]')].find((link) => {
-                const href = String(link.href || '');
-                return href.startsWith(location.origin) && !/\\/@[^/]+/i.test(href);
-              });
+              const sourceLink = [...element.querySelectorAll('a[href]')].find(isPostLink);
               const details = clean([element.getAttribute('data-testid'), element.className].join(' '), 500).toLowerCase();
               const text = clean(element.innerText || element.textContent);
-              const title = clean(element.querySelector('h1,h2,h3,h4,[role="heading"]')?.innerText, 300);
+              const title = clean(sourceLink?.innerText || element.querySelector('h1,h2,h3,h4,[role="heading"]')?.innerText, 300);
               const kind = details.includes('comment') ? 'comment' : details.includes('reply') ? 'reply' : 'post';
               const counts = [...element.querySelectorAll('button,[role="button"]')].map((button) => clean(button.innerText || button.textContent, 100));
               const numberNear = (word) => {

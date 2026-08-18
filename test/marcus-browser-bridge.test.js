@@ -257,7 +257,8 @@ test('MARCUS community observation returns bounded structured member evidence', 
   assert.equal(result.observations.length, 1);
   assert.equal(result.observations[0].member.displayName, 'Pat Example');
   assert.equal(result.observations[0].engagement.reactions, 2);
-  assert.match(snapshotExpression, /data-testid\*="post"/);
+  assert.match(snapshotExpression, /semanticCards/);
+  assert.match(snapshotExpression, /isPostLink/);
   assert.match(snapshotExpression, /authorUrl/);
 });
 

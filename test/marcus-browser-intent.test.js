@@ -43,6 +43,10 @@ test('Skool learning and notification triage route to structured memory skills',
     'marcus_browser_observe_community',
   );
   assert.equal(
+    classifyMarcusBrowserIntent('Browse the current ScoopOS Skool feed and store source-linked observations.', { contextKind: 'skool' }),
+    'marcus_browser_observe_community',
+  );
+  assert.equal(
     classifyMarcusBrowserIntent('Check and triage the Skool notifications.', { contextKind: 'skool' }),
     'marcus_browser_inspect_notifications',
   );
