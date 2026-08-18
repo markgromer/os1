@@ -1316,7 +1316,7 @@
             ${publications.map((item) => {
               const busy = publicationRequests.has(item.id) || item.status === "publishing";
               const canApprove = ["pending_approval", "failed"].includes(item.status);
-              const canDeny = item.status === "pending_approval";
+              const canDeny = ["pending_approval", "failed"].includes(item.status);
               return `<article class="approval-item">
                 <header class="approval-item-head">
                   <div class="approval-source">

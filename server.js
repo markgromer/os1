@@ -16073,7 +16073,7 @@ app.post('/api/marcus/browser/publications/:id/reject', async (req, res) => {
   if (!id) return res.status(400).json({ ok: false, error: 'Publication id is required.' });
   try {
     const publication = await updateBrowserPublication(id, (draft) => {
-      if (draft.status !== 'pending_approval') {
+      if (!['pending_approval', 'failed'].includes(draft.status)) {
         throw Object.assign(new Error(`Browser publication cannot be rejected from ${draft.status}.`), { statusCode: 409 });
       }
       return {
