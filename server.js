@@ -19084,7 +19084,8 @@ ${contextParts.join('\n')}`;
     ];
     const liveTools = [getExternalMessageDraftToolDefinition(), ...getPcOperatorToolDefinitions(), ...getMarcusBrowserToolDefinitions(), ...getCommunityIntelligenceToolDefinitions()];
     let finalMessage = null;
-    for (let toolStep = 0; toolStep < 4; toolStep += 1) {
+    const liveToolStepLimit = browserIntent === 'marcus_browser_prepare_post' ? 7 : 4;
+    for (let toolStep = 0; toolStep < liveToolStepLimit; toolStep += 1) {
       const result = await aiChatCompletion({
         routeKey: 'marcusChat',
         messages: liveMessages,
