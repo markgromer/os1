@@ -1,5 +1,21 @@
 # Implementation Roadmap
 
+## 2026-08-18: Nervous-System Connective Tissue
+
+Status: initial implementation completed locally; focused tests, syntax lint, and Obsidian link checks pass
+
+- Added normalized signals with provenance, severity, confidence, evidence, subject, trace, and causation identity.
+- Added priority-ordered namespace pathways with isolated failures.
+- Added a bounded business-scoped durable signal journal.
+- Added a non-overlapping continuous operating loop with sensors and homeostatic functions.
+- Moved durable-operation reconciliation under the operating loop and returned operation transitions as signals.
+- Added runtime proprioception plus operation, evidence, project-decay, awareness, mission-memory, and browser-mission receptors.
+- Added named reflexes for risk/uncertainty attention and recovery inhibition without changing approval or provider authority.
+- Added deduplicated durable attention with ownership, deferral, reopening, and resolution.
+- Added an outcome/correction ledger with explicit reusable-method marking.
+- Added cadence-aware sensing, event-triggered cycles, overlap suppression, loop health, authenticated control routes, and a trace console at `/marcus-nervous-system.html`.
+- Further work is production tuning and provider-specific receptor expansion rather than a missing architectural layer. See [[nervous-system]].
+
 ## 2026-08-17: Executable Skill Contracts
 
 Status: local implementation and focused tests pass. The desktop relay was restarted and production reported it online with a live Skool surface. Production server deployment and live standalone-post acceptance remain pending.

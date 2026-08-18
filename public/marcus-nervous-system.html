@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>MARCUS Nervous System</title>
+  <style>
+    :root{color-scheme:dark;background:#07110e;color:#e8fff4;font:15px/1.45 system-ui,sans-serif}body{margin:0;padding:24px;max-width:1400px;margin:auto}header{display:flex;gap:16px;align-items:center;justify-content:space-between;margin-bottom:20px}h1,h2{margin:.2em 0}button{background:#28d17c;border:0;border-radius:8px;padding:9px 14px;font-weight:700;color:#03120a}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px}.card{background:#0d1c17;border:1px solid #1c3c30;border-radius:12px;padding:16px;min-height:120px}.item{border-top:1px solid #1c3c30;padding:10px 0}.item:first-child{border-top:0}.muted{color:#8eb7a5}.warning{color:#ffca70}.critical{color:#ff8585}.healthy{color:#62e39d}.degraded{color:#ffca70}code{word-break:break-word}#error{color:#ff8585;white-space:pre-wrap}
+  </style>
+</head>
+<body>
+  <header><div><h1>MARCUS Nervous System</h1><div class="muted">Signal → pathway → response → outcome</div></div><button id="tick">Run cycle</button></header>
+  <div id="error"></div>
+  <section class="grid">
+    <article class="card"><h2>Loop health</h2><div id="health">Loading…</div></article>
+    <article class="card"><h2>Open attention</h2><div id="attention">Loading…</div></article>
+    <article class="card"><h2>Recent signals</h2><div id="signals">Loading…</div></article>
+    <article class="card"><h2>Recent outcomes</h2><div id="outcomes">Loading…</div></article>
+  </section>
+  <script>
+    const escapeHtml=(value)=>String(value??'').replace(/[&<>"']/g,(char)=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+    const item=(title,detail,kind='')=>`<div class="item ${escapeHtml(kind)}"><strong>${escapeHtml(title)}</strong><div class="muted">${escapeHtml(detail)}</div></div>`;
+    async function load(){
+      try{
+        const response=await fetch('/api/marcus/nervous-system/status',{credentials:'same-origin',cache:'no-store'}); const data=await response.json(); if(!response.ok||!data.ok)throw new Error(data.error||`HTTP ${response.status}`);
+        const loop=data.loop||{}; document.querySelector('#health').innerHTML=item(loop.status||'unknown',`cycle ${loop.cycle||0} · ${loop.lastDurationMs||0} ms · ${loop.skippedOverlaps||0} overlaps skipped`,loop.status);
+        document.querySelector('#attention').innerHTML=data.attention.length?data.attention.map((entry)=>item(entry.title,`${entry.owner} · ${entry.reason}`,entry.severity)).join(''):'<div class="muted">Nothing open.</div>';
+        document.querySelector('#signals').innerHTML=data.signals.length?data.signals.slice().reverse().map((entry)=>item(entry.signal?.type,`${entry.signal?.source} · ${entry.delivery?.handled?.length||0} pathways`,entry.signal?.severity)).join(''):'<div class="muted">No signals recorded.</div>';
+        document.querySelector('#outcomes').innerHTML=data.outcomes.length?data.outcomes.map((entry)=>item(entry.pathway,`${entry.status} · ${entry.response}`,entry.status==='failed'?'critical':'')).join(''):'<div class="muted">No outcomes recorded.</div>'; document.querySelector('#error').textContent='';
+      }catch(error){document.querySelector('#error').textContent=error.message;}
+    }
+    document.querySelector('#tick').addEventListener('click',async()=>{document.querySelector('#tick').disabled=true;try{await fetch('/api/marcus/nervous-system/tick',{method:'POST',credentials:'same-origin'});await load();}finally{document.querySelector('#tick').disabled=false;}});
+    load(); setInterval(load,15000);
+  </script>
+</body>
+</html>

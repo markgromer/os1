@@ -2,6 +2,14 @@
 
 Status: active
 
+## Continuous Nervous-System Loop
+
+The server now runs a bounded non-overlapping cycle:
+
+`runtime and capability sensors -> normalized signals -> priority pathways -> attention classification -> existing operation/provider capability -> outcome signal -> durable journal -> next cycle`
+
+The first integrated homeostatic pathway advances the existing durable-operation monitor. Operation state transitions return as `operation.status.changed` signals, while the established approval, recovery, and verification contracts remain authoritative. Runtime proprioception records that each business-scoped cycle occurred. The initial implementation is documented in [[nervous-system]].
+
 ## Visible Browser Loop
 
 `Mark request or visualizer input -> authenticated browser route -> durable desktop action queue -> local desktop agent -> localhost-only MARCUS Chrome CDP -> compressed viewport relay -> /visualizer.html`

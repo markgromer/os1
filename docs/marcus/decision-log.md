@@ -1,5 +1,13 @@
 # Decision Log
 
+## 2026-08-18: MARCUS Is Organized As A Nervous System
+
+Context: Treating MARCUS as a centralized brain encourages more behavior to accumulate in model prompts and `server.js`, while the system already contains specialized operations, evidence, awareness, memory, skills, and provider capabilities.
+
+Decision: Add compatibility-first connective tissue built from normalized signals, routed pathways, bounded reflexes, attention classification, a durable signal journal, and a continuous non-overlapping operating loop. Keep specialized modules and all existing approval, verification, and provider authority boundaries intact.
+
+Consequence: Existing behavior can migrate pathway by pathway without a rewrite. MARCUS can learn from signal-response-outcome records, while continuous operation remains observation and reconciliation by default rather than permission for continuous external action. See [[nervous-system]].
+
 Status: active
 
 ## 2026-08-17: Private Voice Does Not Narrate Its Safety Net
