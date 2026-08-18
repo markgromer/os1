@@ -15209,6 +15209,8 @@ async function executeMarcusBrowserTool(toolName, args = {}, {
   }
   return {
     ...result,
+    retryable: Boolean(result.retryable)
+      || (toolName === 'marcus_browser_prepare_post' && result.ok !== true),
     url: payload.url || status.url || '',
     label: payload.label || payload.thread || payload.target || '',
     draftPrepared: ['marcus_browser_fill', 'marcus_browser_prepare_post', 'marcus_browser_prepare_reply'].includes(toolName) && Boolean(result.ok),
@@ -19086,13 +19088,18 @@ ${contextParts.join('\n')}`;
     ];
     const liveTools = [getExternalMessageDraftToolDefinition(), ...getPcOperatorToolDefinitions(), ...getMarcusBrowserToolDefinitions(), ...getCommunityIntelligenceToolDefinitions()];
     let finalMessage = null;
-    const liveToolStepLimit = browserIntent === 'marcus_browser_prepare_post' ? 7 : 4;
+    const liveToolStepLimit = browserIntent === 'marcus_browser_prepare_post' ? 9 : 4;
+    let forcedLiveTool = '';
     for (let toolStep = 0; toolStep < liveToolStepLimit; toolStep += 1) {
+      const forcedToolThisStep = forcedLiveTool;
+      forcedLiveTool = '';
       const result = await aiChatCompletion({
         routeKey: 'marcusChat',
         messages: liveMessages,
         tools: liveTools,
-        tool_choice: toolStep === 0 && browserIntent
+        tool_choice: forcedToolThisStep
+          ? { type: 'function', function: { name: forcedToolThisStep } }
+          : toolStep === 0 && browserIntent
           ? { type: 'function', function: { name: initialMarcusBrowserToolForIntent(browserIntent) } }
           : toolStep === 0 && externalCommunicationRequest
             ? { type: 'function', function: { name: 'draft_external_message' } }
@@ -19129,6 +19136,9 @@ ${contextParts.join('\n')}`;
             : COMMUNITY_INTELLIGENCE_TOOL_NAMES.has(toolName)
               ? await executeCommunityIntelligenceTool(toolName, args)
               : { ok: false, error: `Unknown Marcus Live tool: ${toolName}` };
+        if (toolName === 'marcus_browser_prepare_post' && toolResult.retryable === true) {
+          forcedLiveTool = 'marcus_browser_prepare_post';
+        }
         if (MARCUS_BROWSER_TOOL_NAMES.has(toolName) && browserMission) {
           browserMission = await browserMissionStore.recordResult(browserMission.id, {
             skill: toolName,
