@@ -2,7 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  browserMissionSkillForControlReturn,
   classifyMarcusBrowserIntent,
+  isMarcusBrowserControlReturn,
+  isMarcusBrowserMissionResume,
   resolveMarcusBrowserFollowupIntent,
   validateMarcusIntroductionDraft,
 } from '../marcus/browser_intent.js';
@@ -34,6 +37,17 @@ test('Skool inspection requests route to the live browser instead of project wor
   );
 });
 
+test('Skool learning and notification triage route to structured memory skills', () => {
+  assert.equal(
+    classifyMarcusBrowserIntent('Browse the ScoopOS Skool community, take notes, and learn about the members.', { contextKind: 'skool' }),
+    'marcus_browser_observe_community',
+  );
+  assert.equal(
+    classifyMarcusBrowserIntent('Check and triage the Skool notifications.', { contextKind: 'skool' }),
+    'marcus_browser_inspect_notifications',
+  );
+});
+
 test('browser composition is prepared separately from explicitly approved submission', () => {
   assert.equal(
     classifyMarcusBrowserIntent('Write a Skool reply thanking Tanya for the commercial account question.'),
@@ -49,6 +63,10 @@ test('browser composition is prepared separately from explicitly approved submis
   );
   assert.equal(
     classifyMarcusBrowserIntent('create the post', { contextKind: 'skool' }),
+    'marcus_browser_prepare_post',
+  );
+  assert.equal(
+    classifyMarcusBrowserIntent('make a post in the scoop os community', { contextKind: 'skool' }),
     'marcus_browser_prepare_post',
   );
   assert.equal(
@@ -144,4 +162,51 @@ test('browser follow-up resolver preserves publication safeguards', () => {
   ];
   assert.equal(resolveMarcusBrowserFollowupIntent('Post it', recentMessages, { pendingDraft: true, contextKind: 'skool' }), 'marcus_browser_submit');
   assert.equal(resolveMarcusBrowserFollowupIntent('approve and send the email', recentMessages, { pendingDraft: true, contextKind: 'gmail' }), '');
+});
+
+test('returning browser control resumes the retained non-consequential mission', () => {
+  const mission = {
+    status: 'recovering',
+    currentSkill: 'marcus_browser_prepare_post',
+    objective: 'Make a post in the ScoopOS community.',
+    currentInstruction: 'Make a post in the ScoopOS community.',
+  };
+
+  assert.equal(isMarcusBrowserControlReturn('control returned'), true);
+  assert.equal(isMarcusBrowserControlReturn('You have browser control back.'), true);
+  assert.equal(browserMissionSkillForControlReturn('control returned', mission), 'marcus_browser_prepare_post');
+  assert.equal(
+    resolveMarcusBrowserFollowupIntent('control returned', [], { contextKind: 'skool', activeMission: mission }),
+    'marcus_browser_prepare_post',
+  );
+  assert.equal(
+    isMarcusBrowserMissionResume({ message: 'control returned', mission, toolName: 'marcus_browser_prepare_post' }),
+    true,
+  );
+
+  const legacyMission = {
+    ...mission,
+    platform: 'skool',
+    currentSkill: 'marcus_browser_fill',
+    objective: 'Make a post in the ScoopOS community.',
+  };
+  assert.equal(browserMissionSkillForControlReturn('control returned', legacyMission), 'marcus_browser_prepare_post');
+});
+
+test('returning browser control never authorizes a publish mission', () => {
+  const mission = {
+    status: 'recovering',
+    currentSkill: 'marcus_browser_submit',
+    objective: 'Post the prepared draft.',
+  };
+
+  assert.equal(browserMissionSkillForControlReturn('control returned', mission), '');
+  assert.equal(
+    resolveMarcusBrowserFollowupIntent('control returned', [], { contextKind: 'skool', activeMission: mission }),
+    '',
+  );
+  assert.equal(
+    isMarcusBrowserMissionResume({ message: 'control returned', mission, toolName: 'marcus_browser_submit' }),
+    false,
+  );
 });

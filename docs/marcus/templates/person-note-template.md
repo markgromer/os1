@@ -3,6 +3,11 @@
 Status: active
 Tags: #person
 
+Platform:
+Community:
+First observed:
+Last observed:
+
 Projects:
 - TBD
 
@@ -12,6 +17,22 @@ Projects:
 ## Preferences
 
 - TBD
+
+## Verified Facts
+
+- TBD
+
+## Engagement
+
+- TBD
+
+## Recurring Topics
+
+- TBD
+
+## Evidence-Based Inferences
+
+- None recorded
 
 ## Commitments
 
@@ -32,3 +53,6 @@ Projects:
 
 - Captured from:
 - Verified by:
+- Confidence:
+
+Keep verified facts separate from inferences. Do not infer or store sensitive traits. Prefer bounded summaries and stable source links over copied transcripts.

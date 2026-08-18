@@ -27,6 +27,7 @@ const { discoverRecentCodexWorkspaces, parseGitStatus } = require('./desktop-cod
 const { localPackageBinInvocation, npmCliInvocation } = require('./desktop-node-cli.cjs');
 const { MarcusBrowserBridge, isMarcusBrowserActionType } = require('./desktop-marcus-browser.cjs');
 const { writeMarcusMeetingNote } = require('./desktop-meeting-notes.cjs');
+const { writeMarcusCommunityProfile } = require('./desktop-community-profiles.cjs');
 const {
   createPcAccessPolicy,
   createPcDirectory,
@@ -1337,6 +1338,8 @@ async function checkDesktopActions() {
         outcome = await marcusBrowser.command(action?.payload || {});
       } else if (type === 'marcus-meeting-note') {
         outcome = writeMarcusMeetingNote(action?.payload || {});
+      } else if (type === 'marcus-community-profile-note') {
+        outcome = writeMarcusCommunityProfile(action?.payload || {});
       }
       if (type.startsWith('pc-')) outcome = toDesktopActionOutcome(outcome);
 

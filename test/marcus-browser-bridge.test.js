@@ -194,6 +194,64 @@ test('MARCUS standalone feed post targeting avoids comment editors', async () =>
   assert.match(expressions[2], /wantsStandalonePost/);
 });
 
+test('MARCUS community observation returns bounded structured member evidence', async () => {
+  const bridge = new MarcusBrowserBridge();
+  bridge.sensitiveFieldFocused = async () => false;
+  let runtimeCall = 0;
+  let snapshotExpression = '';
+  const session = {
+    send: async (method, params) => {
+      assert.equal(method, 'Runtime.evaluate');
+      runtimeCall += 1;
+      if (runtimeCall === 1) return { result: { value: 0 } };
+      if (runtimeCall === 2) return {};
+      if (runtimeCall === 3) {
+        snapshotExpression = params.expression;
+        return { result: { value: [{
+          author: 'Pat Example', authorUrl: 'https://www.skool.com/@pat-example', kind: 'comment',
+          title: 'Route planning', text: 'Asked about route automation.',
+          sourceUrl: 'https://www.skool.com/localgiants/route-planning', reactions: 2, comments: 1, replies: 0,
+        }] } };
+      }
+      if (runtimeCall === 4) return { result: { value: { before: 0, after: 0, max: 0 } } };
+      return {};
+    },
+  };
+  const result = await bridge.observeCommunityPage(session, 'https://www.skool.com/localgiants', { viewports: 1 });
+  assert.equal(result.contextKind, 'skool');
+  assert.equal(result.community, 'localgiants');
+  assert.equal(result.observations.length, 1);
+  assert.equal(result.observations[0].member.displayName, 'Pat Example');
+  assert.equal(result.observations[0].engagement.reactions, 2);
+  assert.match(snapshotExpression, /data-testid\*="post"/);
+  assert.match(snapshotExpression, /authorUrl/);
+});
+
+test('MARCUS notification inspection structures visible notifications without clearing them', async () => {
+  const bridge = new MarcusBrowserBridge();
+  bridge.sensitiveFieldFocused = async () => false;
+  let runtimeCall = 0;
+  const session = {
+    send: async (method, params) => {
+      assert.equal(method, 'Runtime.evaluate');
+      runtimeCall += 1;
+      if (runtimeCall === 1) {
+        assert.match(params.expression, /notification/i);
+        return { result: { value: { activated: false } } };
+      }
+      return { result: { value: [{
+        actor: 'Pat Example', actorUrl: 'https://www.skool.com/@pat-example', kind: 'reply',
+        summary: 'Pat replied to your route automation post.', sourceUrl: 'https://www.skool.com/localgiants/route-planning',
+      }] } };
+    },
+  };
+  const result = await bridge.inspectCommunityNotifications(session, 'https://www.skool.com/localgiants');
+  assert.equal(result.notificationCount, 1);
+  assert.equal(result.notifications[0].kind, 'reply');
+  assert.equal(result.notifications[0].actor.displayName, 'Pat Example');
+  assert.equal(runtimeCall, 2);
+});
+
 test('MARCUS standalone post skill leaves an open thread and proves the main feed composer', async () => {
   const bridge = new MarcusBrowserBridge();
   const calls = [];

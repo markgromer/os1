@@ -5,16 +5,53 @@ const THREAD_NAVIGATION_PATTERN = /\b(head to|go to|find|open|visit|navigate to|
 const SUBMISSION_NEGATION_PATTERN = /\b(do not|don't|never|not yet|without)\b[^.!?\n]{0,60}\b(post|publish|send|submit|reply|comment)\b/i;
 const FEED_READING_PATTERN = /\b(?:main\s+feed|feed|posts?|comments?|community|group|timeline|latest|browse|read|review|inspect|scan|look\s+through|check\s+out)\b/i;
 const COMPOSITION_VERB_PATTERN = /\b(write|draft|compose|type|fill|prepare|create|make|respond)\b/i;
-const STANDALONE_POST_PATTERN = /\b(?:(?:new|standalone|own|first)\s+post|(?:create|draft|write|make)\s+the\s+post|post\s+(?:of|from)\s+(?:your|marcus))\b/i;
+const STANDALONE_POST_PATTERN = /\b(?:(?:new|standalone|own|first)\s+post|(?:create|draft|write|make)\s+(?:a|the)\s+(?:new\s+)?(?:standalone\s+)?post|post\s+(?:of|from)\s+(?:your|marcus))\b/i;
 const BROWSER_FOLLOWUP_CONFIRMATION_PATTERN = /^(?:yes|yeah|yep|yup|ok|okay|do it|go ahead|please do|proceed|confirm(?:ed)?|approv(?:e|ed)|i approve|sure)(?:[.!\s,]*(?:i approve|approve it|do it|please|now|with (?:your|the) account|it'?s? (?:marcus|your) account|you are logged in with|you'?re logged in with))*[.!]?$/i;
 const BROWSER_PROMPT_PATTERN = /\b(browser|chrome|skool|feed|page|post|posts|comments|thread|visible content|dedicated profile|marcus account)\b/i;
 const BROWSER_READ_PROMPT_PATTERN = /\b(read|inspect|review|summari[sz]e|scan|browse|look through|check out|visible content|posts?|comments?)\b/i;
 const BROWSER_OPEN_PROMPT_PATTERN = /\b(open|navigate|go to|pull up|visit|browse)\b/i;
+const COMMUNITY_MEMORY_PATTERN = /\b(learn|remember|take notes?|build (?:a )?profile|profiles?|members?|engagement|content trends?)\b/i;
+const COMMUNITY_NOTIFICATION_PATTERN = /\b(notifications?|mentions?|replies|inbox)\b/i;
 const LIVE_BROWSER_CONTEXTS = ['gmail', 'zoom', 'skool', 'google-meet', 'teams', 'youtube', 'tiktok'];
+const BROWSER_CONTROL_RETURN_PATTERN = /^(?:(?:browser\s+)?control(?:\s+is|\s+has\s+been)?\s+(?:back|returned|released)(?:\s+(?:back\s+)?to\s+(?:you|marcus))?|(?:i(?:'ve|\s+have)?\s+)?(?:returned|released|gave|given|handed)\s+(?:the\s+)?(?:browser\s+)?control(?:\s+back)?\s+to\s+(?:you|marcus)|you(?:'ve|\s+have|\s+got)\s+(?:the\s+)?(?:browser\s+)?control(?:\s+back)?|it'?s\s+yours(?:\s+again)?)[.!\s]*$/i;
+const RESUMABLE_BROWSER_MISSION_SKILLS = new Set([
+  'marcus_browser_open',
+  'marcus_browser_activate',
+  'marcus_browser_read',
+  'marcus_browser_observe_community',
+  'marcus_browser_inspect_notifications',
+  'marcus_browser_fill',
+  'marcus_browser_prepare_post',
+  'marcus_browser_prepare_reply',
+]);
 
 export function isMarcusBrowserFollowupConfirmation(message) {
   const text = String(message || '').replace(/\s+/g, ' ').trim();
   return Boolean(text && BROWSER_FOLLOWUP_CONFIRMATION_PATTERN.test(text));
+}
+
+export function isMarcusBrowserControlReturn(message) {
+  const text = String(message || '').replace(/\s+/g, ' ').trim();
+  return Boolean(text && BROWSER_CONTROL_RETURN_PATTERN.test(text));
+}
+
+export function browserMissionSkillForControlReturn(message, mission) {
+  if (!isMarcusBrowserControlReturn(message) || !mission || typeof mission !== 'object') return '';
+  const status = String(mission.status || '').trim().toLowerCase();
+  let skill = String(mission.currentSkill || '').trim();
+  if (skill === 'marcus_browser_fill') {
+    const retainedIntent = classifyMarcusBrowserIntent(mission.objective || mission.currentInstruction, {
+      contextKind: mission.platform,
+    });
+    if (retainedIntent === 'marcus_browser_prepare_post') skill = retainedIntent;
+  }
+  if (!['active', 'recovering'].includes(status) || !RESUMABLE_BROWSER_MISSION_SKILLS.has(skill)) return '';
+  return skill;
+}
+
+export function isMarcusBrowserMissionResume({ message = '', mission = null, toolName = '' } = {}) {
+  const resumableSkill = browserMissionSkillForControlReturn(message, mission);
+  return Boolean(resumableSkill && resumableSkill === String(toolName || '').trim());
 }
 
 export function classifyMarcusBrowserIntent(message, { pendingDraft = false, contextKind = '' } = {}) {
@@ -33,6 +70,16 @@ export function classifyMarcusBrowserIntent(message, { pendingDraft = false, con
   const explicitRead = /\b(read|review|inspect|analy[sz]e|browse|browsing|scan|summari[sz]e|feedback|look(?:ing)? at|check(?:ing)? out)\b|\blook through\b/i.test(text);
   if (!BROWSER_SURFACE_PATTERN.test(text) && !implicitCurrentSurface && !implicitFeedRead && !implicitBrowserComposition) return '';
   if (approvedSubmit) return 'marcus_browser_submit';
+
+  const skoolContext = String(contextKind || '').trim().toLowerCase() === 'skool' || /\bskool\b/i.test(text);
+  if (skoolContext && COMMUNITY_NOTIFICATION_PATTERN.test(text)
+    && /\b(check|inspect|read|review|scan|triage|clear|respond|handle|look)\b/i.test(text)) {
+    return 'marcus_browser_inspect_notifications';
+  }
+  if (skoolContext && COMMUNITY_MEMORY_PATTERN.test(text)
+    && /\b(read|review|inspect|analy[sz]e|browse|scan|learn|remember|study|take)\b/i.test(text)) {
+    return 'marcus_browser_observe_community';
+  }
 
   if (explicitRead) {
     return 'marcus_browser_read';
@@ -55,7 +102,11 @@ export function classifyMarcusBrowserIntent(message, { pendingDraft = false, con
   return '';
 }
 
-export function resolveMarcusBrowserFollowupIntent(message, recentMessages = [], { pendingDraft = false, contextKind = '' } = {}) {
+export function resolveMarcusBrowserFollowupIntent(message, recentMessages = [], {
+  pendingDraft = false, contextKind = '', activeMission = null,
+} = {}) {
+  const resumedMissionSkill = browserMissionSkillForControlReturn(message, activeMission);
+  if (resumedMissionSkill) return resumedMissionSkill;
   const directIntent = classifyMarcusBrowserIntent(message, { pendingDraft, contextKind });
   if (directIntent) return directIntent;
   if (!isMarcusBrowserFollowupConfirmation(message)) return '';

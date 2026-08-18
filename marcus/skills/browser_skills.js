@@ -66,6 +66,34 @@ const BROWSER_SKILLS = [
     },
   }),
   defineMarcusSkill({
+    id: 'skool.observe-community', version: 1, toolName: 'marcus_browser_observe_community', authority: 'observe',
+    purpose: 'Collect bounded source-linked member activity from visible Skool community surfaces for durable profiles.',
+    contexts: ['skool'],
+    preconditions: ['browser connected', 'MARCUS has control', 'approved Skool surface', 'no password field focused'],
+    evidence: ['community identifier', 'structured rendered observations', 'source URLs', 'bounded viewport count'],
+    recovery: ['return to the requested community surface', 'retry a bounded scan', 'never infer hidden activity'],
+    verify(result) {
+      const observed = actionResult(result);
+      return observed.contextKind === 'skool' && Array.isArray(observed.observations)
+        ? { ok: true, evidence: { community: observed.community, observedCount: observed.observations.length } }
+        : { ok: false, error: 'The community scan returned no structured Skool observation evidence.' };
+    },
+  }),
+  defineMarcusSkill({
+    id: 'skool.inspect-notifications', version: 1, toolName: 'marcus_browser_inspect_notifications', authority: 'observe',
+    purpose: 'Inspect visible Skool notifications and classify them without clearing or answering them.',
+    contexts: ['skool'],
+    preconditions: ['browser connected', 'MARCUS has control', 'approved Skool surface', 'no password field focused'],
+    evidence: ['community identifier', 'structured visible notifications', 'source URLs'],
+    recovery: ['open the visible notification control', 'report when the notification surface is unavailable'],
+    verify(result) {
+      const observed = actionResult(result);
+      return observed.contextKind === 'skool' && Array.isArray(observed.notifications)
+        ? { ok: true, evidence: { community: observed.community, notificationCount: observed.notifications.length } }
+        : { ok: false, error: 'The notification scan returned no structured Skool evidence.' };
+    },
+  }),
+  defineMarcusSkill({
     id: 'browser.prepare-visible-draft', version: 1, toolName: 'marcus_browser_fill', authority: 'prepare',
     purpose: 'Fill an explicitly targeted visible editor without submitting it.',
     contexts: ['gmail', 'skool', 'zoom', 'google-meet', 'teams', 'youtube', 'tiktok'],

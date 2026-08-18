@@ -342,6 +342,10 @@ SMTP is configured through Resend's relay with `Marcus <marcus@gromore.media>`, 
 
 The same desktop agent owns the MARCUS browser viewport loop. `desktop-marcus-browser.cjs` launches or attaches only to the isolated `%LOCALAPPDATA%\M.A.R.C.U.S\MarcusBrowserProfile` Chrome instance through `127.0.0.1:9333`, captures bounded JPEG page frames, blocks password-field frames and typing, and executes the narrow `marcus-browser-open` and `marcus-browser-command` desktop actions. `/visualizer.html` renders the frame and maintains explicit Mark/MARCUS control ownership. See [[live-presence]] and [[access-model]].
 
+The browser now has structured Skool observation skills in addition to plain visible-text reads. `marcus_browser_observe_community` collects bounded rendered post/comment evidence with visible authors and source links. `marcus_browser_inspect_notifications` opens the visible notification surface and returns structured items without clearing or answering them. The server stores those results in `data/businesses/<business>/marcus-community-intelligence.json` through `CommunityIntelligenceStore`, which uses serialized writes, atomic replacement, backup recovery, deterministic deduplication, and separate fact/inference fields. Sensitive-trait inference is rejected.
+
+Changed community members are projected through the `marcus-community-profile-note` desktop action. `desktop-community-profiles.cjs` confines atomic writes to `docs/marcus/people/community-*.md`. MARCUS can query the same records through `marcus_community_profiles` and query notification recommendations through `marcus_community_notifications`. Notifications are classified as clear, draft response, review, or escalate. The classification is advisory: clearing requires browser evidence, and responding still requires an exact prepared draft plus Mark's existing publication approval.
+
 Browser bridge routes:
 
 - `POST /api/marcus/browser/relay`

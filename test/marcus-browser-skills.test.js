@@ -9,7 +9,7 @@ import {
 
 test('MARCUS browser skills declare authority, recovery, and deterministic evidence', () => {
   const skills = listMarcusBrowserSkills();
-  assert.equal(skills.length, 8);
+  assert.equal(skills.length, 10);
   for (const skill of skills) {
     assert.match(skill.id, /^[a-z0-9]+(?:[.-][a-z0-9]+)*$/);
     assert.ok(['observe', 'prepare', 'consequential'].includes(skill.authority));
@@ -18,6 +18,8 @@ test('MARCUS browser skills declare authority, recovery, and deterministic evide
     assert.ok(skill.recovery.length > 0);
   }
   assert.equal(getMarcusBrowserSkill('marcus_browser_prepare_post').id, 'skool.prepare-standalone-post');
+  assert.equal(getMarcusBrowserSkill('marcus_browser_observe_community').id, 'skool.observe-community');
+  assert.equal(getMarcusBrowserSkill('marcus_browser_inspect_notifications').id, 'skool.inspect-notifications');
 });
 
 test('standalone post skill rejects relay success without standalone composer proof', () => {

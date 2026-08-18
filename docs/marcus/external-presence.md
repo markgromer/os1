@@ -65,24 +65,24 @@ Planned enhancement:
 
 ## Social Opportunity Radar
 
-Status: planned. This covers Skool first, then any future connected social or community channel that can be monitored through a permitted source.
+Status: local Skool observation and durable profile foundation implemented; production browser verification and scheduled monitoring remain pending. This covers Skool first, then future connected social or community channels that can be monitored through a permitted source.
 
 Boundary:
 
-- Marcus may read community/social content that Mark manually supplies, exports, forwards by email, screenshots, notifications, RSS, official APIs, or another permitted connector.
+- Marcus may read community/social content that Mark manually supplies, exports, forwards by email, screenshots, notifications, RSS, official APIs, or the attended visible MARCUS browser profile.
 - Marcus may watch for high-signal interaction opportunities: unanswered questions, buying-intent discussions, confusion Marcus can clarify, relationship-building openings, testimonials, objection patterns, repeated pain points, and good original-post ideas.
 - Marcus may summarize why an opportunity matters and prepare multiple copy/paste options.
-- Marcus must not scrape a platform, auto-post, auto-comment, auto-message members, farm engagement, or operate an undisclosed automation account.
+- Marcus must not bypass platform controls, run an undisclosed account, farm engagement, or auto-post/auto-comment/auto-message without the exact approval and verification path.
 - If Marcus ever has a platform profile, it should clearly identify Marcus as Mark's AI assistant.
 
 Safe loop:
 
-1. Mark connects or supplies a permitted source such as Skool notifications, copied posts, screenshots, exports, or an official platform connector.
+1. Mark connects or supplies a permitted source such as the attended MARCUS browser profile, Skool notifications, copied posts, screenshots, exports, or an official platform connector.
 2. Marcus ranks recent items by relevance, urgency, relationship value, sales value, and fit with Mark's voice.
 3. Marcus sends Mark a compact opportunity brief.
 4. Each opportunity includes context, recommended angle, and two or three copy/paste options.
-5. Mark chooses whether to post manually.
-6. Marcus records the final posted text only when Mark confirms it or a permitted read-back source proves it.
+5. Mark chooses whether to post manually or explicitly approves the exact prepared browser draft.
+6. Marcus records the final posted text only when Mark confirms it or browser publication read-back proves it.
 
 Opportunity brief format:
 
@@ -95,11 +95,11 @@ Opportunity brief format:
 Skool-specific readiness gate:
 
 - Monitoring source is permitted: notification emails, manual copy/paste, screenshots, export, official API, or written community/platform permission.
-- Marcus does not auto-post, auto-comment, or auto-message.
-- Mark remains the actor who posts in Skool.
+- Marcus does not auto-post, auto-comment, or auto-message from advisory output.
+- A MARCUS browser draft can publish only after Mark approves that exact recent draft and the bridge verifies the target editor and submit control.
 - Audit trail links each recommendation to source context and any Mark-confirmed final post.
 
-Until those gates exist, Skool remains `watch_and_draft_only`.
+Unattended Skool activity remains `watch_and_draft_only`. Exact attended browser drafts use the implemented prepare -> approve -> publish -> read-back path.
 
 ## Zoom Capability
 

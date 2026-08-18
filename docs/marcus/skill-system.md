@@ -37,12 +37,14 @@ Implemented locally:
 - `browser.open-url`
 - `browser.activate-visible-control`
 - `browser.inspect-visible-page`
+- `skool.observe-community`
+- `skool.inspect-notifications`
 - `browser.prepare-visible-draft`
 - `skool.prepare-standalone-post`
 - `skool.prepare-thread-reply`
 - `browser.publish-approved-draft`
 
-The standalone Skool post skill always navigates to the community root, opens the main feed composer, rejects article/comment surfaces, inserts the exact text, and reads the editor back before success. Publishing re-prepares the exact approved draft and requires a publication result, not a generic `Post` click.
+The Skool observation skills turn rendered feed/member activity and notifications into bounded structured evidence without reacting or posting. The standalone Skool post skill always navigates to the community root, opens the main feed composer, rejects article/comment surfaces, inserts the exact text, and reads the editor back before success. Publishing re-prepares the exact approved draft and requires a publication result, not a generic `Post` click.
 
 ## Capability Standard
 

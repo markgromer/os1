@@ -363,6 +363,10 @@ class MarcusBrowserBridge {
       if (!result?.result?.value?.activated) throw new Error(`No visible link or button matched: ${label}`);
     } else if (command === 'read') {
       result = await this.readVisiblePage(session, target.url, { viewports: payload.viewports });
+    } else if (command === 'observe-community') {
+      result = await this.observeCommunityPage(session, target.url, { viewports: payload.viewports });
+    } else if (command === 'inspect-notifications') {
+      result = await this.inspectCommunityNotifications(session, target.url);
     } else if (command === 'scroll') {
       result = await session.send('Input.dispatchMouseEvent', {
         type: 'mouseWheel',
@@ -961,6 +965,173 @@ class MarcusBrowserBridge {
       visibleText: sections.join('\n\n--- next viewport ---\n\n').slice(0, 16_000),
       viewportsRead: sections.length,
     };
+  }
+
+  async observeCommunityPage(session, url, { viewports = 8 } = {}) {
+    if (liveContextKind(url) !== 'skool') throw new Error('Community observation is available only on the approved Skool page.');
+    if (await this.sensitiveFieldFocused(session)) throw new Error('Community observation is blocked while a password field is focused.');
+    const parsed = new URL(String(url || ''));
+    const community = parsed.pathname.split('/').filter(Boolean)[0] || 'unknown';
+    const count = Math.max(1, Math.min(12, Number(viewports) || 8));
+    const position = await session.send('Runtime.evaluate', { expression: 'Number(window.scrollY) || 0', returnByValue: true });
+    const originalY = Number(position?.result?.value) || 0;
+    const collected = new Map();
+    try {
+      await session.send('Runtime.evaluate', { expression: 'window.scrollTo(0, 0)' });
+      for (let index = 0; index < count; index += 1) {
+        await wait(index === 0 ? 200 : 350);
+        const snapshot = await session.send('Runtime.evaluate', {
+          expression: `(() => {
+            const clean = (value, max = 1500) => String(value || '').replace(/\\s+/g, ' ').trim().slice(0, max);
+            const visible = (element) => {
+              if (!element || element.closest('textarea,input,select,[contenteditable="true"],[contenteditable="plaintext-only"]')) return false;
+              const rect = element.getBoundingClientRect();
+              const style = getComputedStyle(element);
+              return rect.width > 40 && rect.height > 20 && rect.bottom >= 0 && rect.top <= innerHeight
+                && style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) !== 0;
+            };
+            const selectors = [
+              'article', '[data-testid*="post"]', '[data-testid*="comment"]',
+              '[class*="PostCard"]', '[class*="post-card"]', '[class*="CommentCard"]', '[class*="comment-card"]'
+            ].join(',');
+            let candidates = [...document.querySelectorAll(selectors)].filter(visible);
+            if (!candidates.length) {
+              candidates = [...document.querySelectorAll('main > div > div, main section > div')]
+                .filter((element) => visible(element) && clean(element.innerText).length >= 80);
+            }
+            return candidates.slice(0, 80).map((element) => {
+              const profile = [...element.querySelectorAll('a[href]')].find((link) => {
+                const href = String(link.href || '');
+                const label = clean(link.innerText || link.textContent, 200);
+                return label && (/\\/@[^/]+/i.test(href) || /\\/(?:member|profile|user)s?\\//i.test(href));
+              });
+              const sourceLink = [...element.querySelectorAll('a[href]')].find((link) => {
+                const href = String(link.href || '');
+                return href.startsWith(location.origin) && !/\\/@[^/]+/i.test(href);
+              });
+              const details = clean([element.getAttribute('data-testid'), element.className].join(' '), 500).toLowerCase();
+              const text = clean(element.innerText || element.textContent);
+              const title = clean(element.querySelector('h1,h2,h3,h4,[role="heading"]')?.innerText, 300);
+              const kind = details.includes('comment') ? 'comment' : details.includes('reply') ? 'reply' : 'post';
+              const counts = [...element.querySelectorAll('button,[role="button"]')].map((button) => clean(button.innerText || button.textContent, 100));
+              const numberNear = (word) => {
+                const match = counts.join(' | ').match(new RegExp('(?:\\\\d+[,.]?\\\\d*\\\\s*)?' + word + '|' + word + '\\\\s*(\\\\d+[,.]?\\\\d*)', 'i'));
+                const numeric = String(match?.[0] || '').match(/\\d+[,.]?\\d*/)?.[0];
+                return numeric ? Number(numeric.replace(/,/g, '')) || 0 : 0;
+              };
+              return {
+                author: clean(profile?.innerText || profile?.textContent, 200),
+                authorUrl: String(profile?.href || '').slice(0, 2000),
+                kind,
+                title,
+                text,
+                sourceUrl: String(sourceLink?.href || location.href).slice(0, 2000),
+                reactions: numberNear('like|reaction'),
+                comments: numberNear('comment'),
+                replies: numberNear('repl(?:y|ies)')
+              };
+            }).filter((item) => item.author && (item.text || item.title));
+          })()`,
+          returnByValue: true,
+        }, 6_000);
+        for (const item of (Array.isArray(snapshot?.result?.value) ? snapshot.result.value : [])) {
+          const author = redactVisibleText(item?.author).replace(/\s+/g, ' ').trim().slice(0, 200);
+          const contentSummary = redactVisibleText(item?.text).replace(/\s+/g, ' ').trim().slice(0, 1_500);
+          const sourceUrl = safeObservableUrl(item?.sourceUrl) || safeObservableUrl(url);
+          if (!author || !contentSummary) continue;
+          const sourceKey = crypto.createHash('sha256').update(`${author}\n${sourceUrl}\n${contentSummary}`).digest('hex');
+          if (collected.has(sourceKey)) continue;
+          collected.set(sourceKey, {
+            sourceKey,
+            platform: 'skool',
+            community,
+            member: { displayName: author, profileUrl: safeObservableUrl(item?.authorUrl) },
+            kind: ['post', 'comment', 'reply'].includes(item?.kind) ? item.kind : 'other',
+            sourceTitle: redactVisibleText(item?.title).replace(/\s+/g, ' ').trim().slice(0, 300),
+            sourceUrl,
+            contentSummary,
+            engagement: {
+              reactions: Math.max(0, Number(item?.reactions) || 0),
+              comments: Math.max(0, Number(item?.comments) || 0),
+              replies: Math.max(0, Number(item?.replies) || 0),
+            },
+            observedAt: new Date().toISOString(),
+          });
+        }
+        const movement = await session.send('Runtime.evaluate', {
+          expression: '(() => { const before = window.scrollY; window.scrollBy(0, Math.max(320, Math.floor(innerHeight * 0.82))); return { before, after: window.scrollY, max: Math.max(0, document.documentElement.scrollHeight - innerHeight) }; })()',
+          returnByValue: true,
+        });
+        const scroll = movement?.result?.value || {};
+        if (Number(scroll.after) <= Number(scroll.before) || Number(scroll.after) >= Number(scroll.max)) break;
+      }
+    } finally {
+      await session.send('Runtime.evaluate', { expression: `window.scrollTo(0, ${Math.max(0, originalY)})` }).catch(() => {});
+    }
+    return {
+      contextKind: 'skool',
+      community,
+      observations: [...collected.values()].slice(0, 200),
+      observedCount: collected.size,
+      viewportsRequested: count,
+    };
+  }
+
+  async inspectCommunityNotifications(session, url) {
+    if (liveContextKind(url) !== 'skool') throw new Error('Community notifications are available only on the approved Skool page.');
+    if (await this.sensitiveFieldFocused(session)) throw new Error('Notification inspection is blocked while a password field is focused.');
+    const parsed = new URL(String(url || ''));
+    const community = parsed.pathname.split('/').filter(Boolean)[0] || 'unknown';
+    const opened = await session.send('Runtime.evaluate', {
+      expression: `(() => {
+        const visible = (element) => { const rect = element.getBoundingClientRect(); const style = getComputedStyle(element); return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden'; };
+        const controls = [...document.querySelectorAll('a[href],button,[role="button"]')].filter(visible);
+        const target = controls.find((element) => /notification/i.test(String(element.getAttribute('aria-label') || element.title || element.innerText || '')))
+          || controls.find((element) => /notification/i.test(String(element.href || '')));
+        if (!target) return { activated: false };
+        target.click();
+        return { activated: true, href: String(target.href || location.href).slice(0, 2000) };
+      })()`,
+      returnByValue: true,
+    });
+    if (opened?.result?.value?.activated) await wait(800);
+    const snapshot = await session.send('Runtime.evaluate', {
+      expression: `(() => {
+        const clean = (value, max = 1000) => String(value || '').replace(/\\s+/g, ' ').trim().slice(0, max);
+        const visible = (element) => { const rect = element.getBoundingClientRect(); const style = getComputedStyle(element); return rect.width > 40 && rect.height > 18 && rect.bottom >= 0 && rect.top <= innerHeight && style.display !== 'none' && style.visibility !== 'hidden'; };
+        let candidates = [...document.querySelectorAll('[data-testid*="notification"], [class*="Notification"], [class*="notification"], [role="listitem"]')].filter(visible);
+        if (!candidates.length) candidates = [...document.querySelectorAll('main a[href], [role="dialog"] a[href]')].filter((element) => visible(element) && clean(element.innerText).length >= 20);
+        return candidates.slice(0, 100).map((element) => {
+          const profile = [...element.querySelectorAll('a[href]')].find((link) => /\\/@[^/]+/i.test(String(link.href || '')));
+          const link = element.matches('a[href]') ? element : element.querySelector('a[href]');
+          const text = clean(element.innerText || element.textContent);
+          const lower = text.toLowerCase();
+          const kind = lower.includes('repl') ? 'reply' : lower.includes('mention') ? 'mention' : lower.includes('comment') ? 'comment' : lower.includes('like') || lower.includes('react') ? 'reaction' : 'other';
+          return { actor: clean(profile?.innerText || profile?.textContent, 200), actorUrl: String(profile?.href || '').slice(0, 2000), summary: text, sourceUrl: String(link?.href || location.href).slice(0, 2000), kind };
+        }).filter((item) => item.summary);
+      })()`,
+      returnByValue: true,
+    }, 6_000);
+    const notifications = [];
+    const seen = new Set();
+    for (const item of (Array.isArray(snapshot?.result?.value) ? snapshot.result.value : [])) {
+      const summary = redactVisibleText(item?.summary).replace(/\s+/g, ' ').trim().slice(0, 1_000);
+      const sourceUrl = safeObservableUrl(item?.sourceUrl) || safeObservableUrl(url);
+      const sourceKey = crypto.createHash('sha256').update(`${sourceUrl}\n${summary}`).digest('hex');
+      if (!summary || seen.has(sourceKey)) continue;
+      seen.add(sourceKey);
+      notifications.push({
+        sourceKey,
+        platform: 'skool',
+        community,
+        actor: item?.actor ? { displayName: redactVisibleText(item.actor).slice(0, 200), profileUrl: safeObservableUrl(item?.actorUrl) } : null,
+        kind: item?.kind || 'other',
+        summary,
+        sourceUrl,
+        observedAt: new Date().toISOString(),
+      });
+    }
+    return { contextKind: 'skool', community, notifications, notificationCount: notifications.length };
   }
 
   async capture() {

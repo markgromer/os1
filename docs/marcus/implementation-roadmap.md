@@ -5,7 +5,7 @@
 Status: local implementation and focused tests pass. The desktop relay was restarted and production reported it online with a live Skool surface. Production server deployment and live standalone-post acceptance remain pending.
 
 - Added a first-class skill contract with authority, prerequisites, completion evidence, recovery, and deterministic verification.
-- Added eight browser skill definitions and `GET /api/marcus/skills` readiness output.
+- Added ten browser skill definitions and `GET /api/marcus/skills` readiness output, including structured Skool community and notification observation.
 - Added a dedicated `skool.prepare-standalone-post` path that returns to the community root, opens the feed composer, rejects thread/comment editors, inserts exact text, and reads it back before success.
 - Changed approved browser publishing to use the exact durable draft and publication workflow instead of a generic visible-button click.
 - Added adversarial coverage for thread overlays, wrong editor surfaces, false-success relay output, exact draft evidence, and standalone intent routing.
@@ -604,3 +604,22 @@ Production durable-recovery correction on 2026-08-12:
 - The correction passed the complete `132/132` suite, JavaScript syntax lint for 66 files, GitHub CI run `31622049442`, and a Render process replacement.
 - Superseded Reggie operations `op_PNlbjXYY-r565w` and `op_BoKja2fbT0v6xQ` were cancelled after confirming both provider jobs were already complete. No GitHub branch or pull request was changed. Reggie PR #19 remains open for separate review; verified PR #16 remains the accepted implementation result.
 - A fresh paired 390 x 844 production session then tracked the legitimate Cloudflare approval `op_nA9c9c_bZYsMjg`, showed 10/12 acceptance with messaging at 3/4, retained no browser token, and produced zero console warnings or errors.
+
+## Community Intelligence Foundation
+
+Implemented locally:
+
+- Durable business-scoped member, observation, and notification storage with atomic writes and backup recovery.
+- Deterministic deduplication across repeated Skool feed and notification scans.
+- Separate observed facts and evidence-based inferences, with sensitive-trait inference rejected.
+- Bounded source-linked community profile notes projected to [[people-index]] through the desktop relay.
+- Notification recommendations for clear, draft response, review, and escalate.
+- Read tools for MARCUS chat to retrieve member profiles, recent evidence, and notification triage.
+
+Still required before this is complete in production:
+
+- Verify the structured DOM extraction against the current signed-in Skool feed and notification surfaces.
+- Add exact browser read-back for notification clearing before enabling any automatic low-risk clearing policy.
+- Bind notification response drafts to the exact target thread and existing publication approval record.
+- Add scheduled attended scans with rate limits and a visible last-scan/source-health indicator.
+- Add cross-channel identity linking only when stable identifiers or Mark-reviewed aliases prove two records are the same person.
