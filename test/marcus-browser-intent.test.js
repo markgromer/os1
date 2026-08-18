@@ -4,11 +4,23 @@ import assert from 'node:assert/strict';
 import {
   browserMissionSkillForControlReturn,
   classifyMarcusBrowserIntent,
+  initialMarcusBrowserToolForIntent,
   isMarcusBrowserControlReturn,
   isMarcusBrowserMissionResume,
   resolveMarcusBrowserFollowupIntent,
   validateMarcusIntroductionDraft,
 } from '../marcus/browser_intent.js';
+
+test('standalone post requests gather community evidence before opening the composer', () => {
+  assert.equal(
+    initialMarcusBrowserToolForIntent('marcus_browser_prepare_post'),
+    'marcus_browser_observe_community',
+  );
+  assert.equal(
+    initialMarcusBrowserToolForIntent('marcus_browser_read'),
+    'marcus_browser_read',
+  );
+});
 
 test('Skool inspection requests route to the live browser instead of project work', () => {
   assert.equal(

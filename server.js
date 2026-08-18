@@ -30,6 +30,7 @@ import { buildMarcusSystemPrompt } from './marcus/core/build_system_prompt.js';
 import { explicitlyDefersCodexStart, explicitlyDefersProjectAudit, withoutProjectExecutionDeferrals } from './marcus/core/request_intent.js';
 import {
   classifyMarcusBrowserIntent,
+  initialMarcusBrowserToolForIntent,
   isMarcusBrowserFollowupConfirmation,
   isMarcusBrowserMissionResume,
   resolveMarcusBrowserFollowupIntent,
@@ -19073,7 +19074,7 @@ ${contextParts.join('\n')}`;
         messages: liveMessages,
         tools: liveTools,
         tool_choice: toolStep === 0 && browserIntent
-          ? { type: 'function', function: { name: browserIntent } }
+          ? { type: 'function', function: { name: initialMarcusBrowserToolForIntent(browserIntent) } }
           : toolStep === 0 && externalCommunicationRequest
             ? { type: 'function', function: { name: 'draft_external_message' } }
             : 'auto',

@@ -24,6 +24,7 @@ Thumbs.db
 
 # Optional local notes
 notes/
+docs/marcus/people/community-*.md
 
 # Codex / local workspace artifacts
 .codex-remote-attachments/

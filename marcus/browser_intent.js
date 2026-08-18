@@ -30,6 +30,11 @@ export function isMarcusBrowserFollowupConfirmation(message) {
   return Boolean(text && BROWSER_FOLLOWUP_CONFIRMATION_PATTERN.test(text));
 }
 
+export function initialMarcusBrowserToolForIntent(intent) {
+  const tool = String(intent || '').trim();
+  return tool === 'marcus_browser_prepare_post' ? 'marcus_browser_observe_community' : tool;
+}
+
 export function isMarcusBrowserControlReturn(message) {
   const text = String(message || '').replace(/\s+/g, ' ').trim();
   return Boolean(text && BROWSER_CONTROL_RETURN_PATTERN.test(text));
