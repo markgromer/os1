@@ -251,6 +251,7 @@
     .browser-focus-ring { position: absolute; inset: 0; border: 2px solid transparent; pointer-events: none; }
     .browser-frame:focus + .browser-focus-ring { border-color: rgba(53, 200, 235, 0.72); }
     .surface.approvals-surface { display: block; overflow: auto; background: #0b1118; color: var(--text); }
+    .surface.codex-surface { display: block; background: #07111f; color: var(--text); }
     .approval-page { max-width: 980px; margin: 0 auto; padding: 24px; }
     .approval-head { display: flex; align-items: end; justify-content: space-between; gap: 18px; margin-bottom: 18px; }
     .approval-head h2 { margin: 0 0 4px; font-size: 22px; }
@@ -401,6 +402,8 @@
     .codex-turn.assistant { padding-left: 18px; border-left: 3px solid #8d62f5; }
     .codex-context { display: flex; flex-wrap: wrap; gap: 8px; color: #8fa1b5; font-size: 12px; }
     .codex-context span { border: 1px solid #26364a; border-radius: 999px; padding: 4px 8px; background: #0d1928; }
+    .codex-session-title { display: grid; gap: 2px; min-width: 0; }
+    .codex-session-title small { color: #7f95ad; font: 11px/1.2 var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .codex-compose { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; padding: 14px clamp(22px, 5vw, 72px) 18px; border-top: 1px solid #223247; background: #091523; }
     .codex-compose textarea { min-height: 68px; max-height: 180px; resize: vertical; border: 1px solid #30445c; border-radius: 12px; padding: 12px 14px; background: #0d1b2b; color: #eef6ff; font: 14px/1.45 system-ui, sans-serif; }
     .codex-compose-note { grid-column: 1 / -1; color: #7f95ad; font-size: 11px; }
@@ -1041,6 +1044,7 @@
         recentCommits: arr(item.gitRecentCommits).map(text).filter(Boolean),
         evidence: codexEvidence(item, active),
         raw: item,
+        rollingContext: arr(item.rollingContext),
         live: true,
         activeDesktop: active,
       };
@@ -1246,6 +1250,7 @@
       els.workspaceBody.classList.toggle("browser-mode", fullSurfaceMode);
       els.workspaceSurface.classList.toggle("browser-surface", browserMode);
       els.workspaceSurface.classList.toggle("approvals-surface", activeTab === "approvals");
+      els.workspaceSurface.classList.toggle("codex-surface", activeTab === "codex");
       document.querySelectorAll(".tab").forEach((tab) => tab.classList.toggle("active", tab.dataset.tab === activeTab));
       if (browserMode) {
         renderBrowserSurface();
@@ -1637,17 +1642,20 @@
     function codeSurface(project) {
       const directJob = directCodexJob(project);
       const routeLabel = directJob ? "Direct to this Codex job" : "MARCUS routes to this Codex workspace";
+      const context = arr(project.rollingContext).length ? arr(project.rollingContext) : [
+        { role: "user", content: project.request, at: "" },
+        { role: "assistant", content: project.response, at: project.updatedAt },
+      ];
+      const sessionId = text(project.raw?.sessionId || directJob?.id || project.id);
       return `
         <div class="codex-workbench">
           <header class="preview-nav" style="background:#0b1725;color:#f4f1ea;border-color:#223247">
-            <div class="preview-brand" style="font-size:18px">${esc(project.name)} <span class="state-pill live">CODEX</span></div>
+            <div class="codex-session-title"><div class="preview-brand" style="font-size:18px">${esc(project.name)} <span class="state-pill live">CODEX</span></div><small>Chat ${esc(sessionId.slice(0, 12))} · ${esc(text(project.raw?.source || project.source))} · ${esc(project.workspacePath || "workspace unavailable")}</small></div>
             <nav class="preview-links" style="color:#AAB3C0"><span>${esc(project.label)}</span><span>${esc(age(project.updatedAt))}</span></nav>
           </header>
           <div class="codex-thread" aria-label="Codex conversation for ${esc(project.name)}">
             <div class="codex-context"><span>${esc(project.workspacePath || "workspace not reported")}</span><span>${esc(project.branch || "branch not reported")}</span><span>${esc(String(project.statusCount || 0))} changed files</span></div>
-            <article class="codex-turn user"><span class="message-meta">MARK · REQUEST</span><p>${esc(project.request)}</p></article>
-            <article class="codex-turn assistant"><span class="message-meta">CODEX · LATEST UPDATE</span><p>${esc(project.response)}</p></article>
-            <article class="codex-turn assistant"><span class="message-meta">MARCUS · NEXT READ</span><p>${esc(project.next)}</p></article>
+            ${context.map((item) => `<article class="codex-turn ${item.role === "assistant" ? "assistant" : "user"}"><span class="message-meta">${item.role === "assistant" ? "CODEX" : "MARK"}${item.at ? ` · ${esc(age(item.at))}` : ""}</span><p>${esc(item.content)}</p></article>`).join("")}
           </div>
           <form class="codex-compose" data-codex-compose="${esc(project.id)}">
             <textarea aria-label="Message Codex" placeholder="Tell Codex what to inspect, change, test, or explain..." required></textarea>

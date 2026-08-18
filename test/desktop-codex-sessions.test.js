@@ -6,7 +6,7 @@ import path from 'node:path';
 import test from 'node:test';
 
 const require = createRequire(import.meta.url);
-const { discoverRecentCodexWorkspaces, parseGitStatus, readSessionHandoffSummary } = require('../desktop-codex-sessions.cjs');
+const { discoverRecentCodexWorkspaces, parseGitStatus, readSessionHandoffSummary, readSessionRollingContext } = require('../desktop-codex-sessions.cjs');
 
 test('git status parsing preserves leading-column status and dot-prefixed paths', () => {
   const result = parseGitStatus(' D .github/workflows/deploy.yml\n M src/app/page.tsx\n?? output/', 30);
@@ -53,6 +53,9 @@ test('Codex workspace discovery reads bounded metadata plus assistant handoff an
     assert.equal(result[0].handoffStatus, 'ready_for_mark');
     assert.equal(result.some((item) => item.sessionId === 'session-subagent'), false);
     assert.doesNotMatch(JSON.stringify(result), /SECRET TRANSCRIPT CONTENT/);
+    assert.deepEqual(result[0].rollingContext.map((item) => item.role), ['user', 'assistant']);
+    assert.match(result[0].rollingContext[0].content, /redacted sensitive content/);
+    assert.match(readSessionRollingContext(newerFile)[1].content, /Fixed the live blocker/);
     assert.equal(readSessionHandoffSummary(newerFile).status, 'ready_for_mark');
   } finally {
     await fs.rm(root, { recursive: true, force: true });

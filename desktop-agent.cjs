@@ -1485,6 +1485,11 @@ async function scanCodexWorkspaceSummary(session) {
     gitRecentCommits: recentCommitsRaw ? recentCommitsRaw.split('\n').map((line) => line.trim()).filter(Boolean) : [],
     latestUserRequest: typeof session.latestUserRequest === 'string' ? session.latestUserRequest.slice(0, 800) : '',
     latestUserRequestAt: typeof session.latestUserRequestAt === 'string' ? session.latestUserRequestAt.slice(0, 40) : '',
+    rollingContext: Array.isArray(session.rollingContext) ? session.rollingContext.slice(-18).map((item) => ({
+      role: item?.role === 'assistant' ? 'assistant' : 'user',
+      content: typeof item?.content === 'string' ? item.content.slice(0, 1800) : '',
+      at: typeof item?.at === 'string' ? item.at.slice(0, 40) : '',
+    })).filter((item) => item.content) : [],
   };
 }
 

@@ -15593,6 +15593,11 @@ function getRecentCodexWorkspacesForDesktopContext() {
       handoffObservedAt: typeof item.handoffObservedAt === 'string' ? item.handoffObservedAt.slice(0, 40) : '',
       latestUserRequest: typeof item.latestUserRequest === 'string' ? item.latestUserRequest.slice(0, 800) : '',
       latestUserRequestAt: typeof item.latestUserRequestAt === 'string' ? item.latestUserRequestAt.slice(0, 40) : '',
+      rollingContext: Array.isArray(item.rollingContext) ? item.rollingContext.slice(-18).map((entry) => ({
+        role: entry?.role === 'assistant' ? 'assistant' : 'user',
+        content: typeof entry?.content === 'string' ? entry.content.slice(0, 1800) : '',
+        at: typeof entry?.at === 'string' ? entry.at.slice(0, 40) : '',
+      })).filter((entry) => entry.content) : [],
     })).filter((item) => item.workspacePath && item.folderName);
   } catch {
     workspaces = [];
@@ -15751,6 +15756,11 @@ app.post('/api/desktop-context/relay', (req, res) => {
         handoffObservedAt: typeof item.handoffObservedAt === 'string' ? item.handoffObservedAt.trim().slice(0, 40) : '',
         latestUserRequest: typeof item.latestUserRequest === 'string' ? item.latestUserRequest.trim().slice(0, 800) : '',
         latestUserRequestAt: typeof item.latestUserRequestAt === 'string' ? item.latestUserRequestAt.trim().slice(0, 40) : '',
+        rollingContext: Array.isArray(item.rollingContext) ? item.rollingContext.slice(-18).map((entry) => ({
+          role: entry?.role === 'assistant' ? 'assistant' : 'user',
+          content: typeof entry?.content === 'string' ? entry.content.trim().slice(0, 1800) : '',
+          at: typeof entry?.at === 'string' ? entry.at.trim().slice(0, 40) : '',
+        })).filter((entry) => entry.content) : [],
       };
     })
     .filter((item) => item.workspacePath && item.folderName);
