@@ -21,4 +21,6 @@ test('live MARCUS prompt keeps the social persona distinct from Mark', async () 
   assert.match(source, /forcedLiveTool = 'marcus_browser_prepare_post'/i);
   assert.match(source, /Last verified blocker/i);
   assert.match(source, /source-specific title; 2-4 short paragraphs/i);
+  assert.match(source, /Use exactly one source for a normal standalone post/i);
+  assert.match(source, /Choose exactly one verified community observation/i);
 });

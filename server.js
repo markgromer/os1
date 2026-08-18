@@ -14969,6 +14969,7 @@ async function executeMarcusBrowserTool(toolName, args = {}, {
       .slice(0, 3);
     const sourceObservationIds = [...new Set((Array.isArray(args?.sourceObservationIds) ? args.sourceObservationIds : [])
       .map((value) => String(value || '').trim().slice(0, 120)).filter(Boolean))].slice(0, 5);
+    const comparisonRequested = /\b(?:compare|comparison|contrast|versus|vs\.?|both|two sources?|multiple posts?)\b/i.test(authorizationRequest);
     const editorialAngle = typeof args?.editorialAngle === 'string'
       ? args.editorialAngle.replace(/\s+/g, ' ').trim().slice(0, 500) : '';
     const readerValue = typeof args?.readerValue === 'string'
@@ -14985,6 +14986,13 @@ async function executeMarcusBrowserTool(toolName, args = {}, {
     }
     if (engagementType === 'poll' && pollQuestion && !text.toLowerCase().includes(pollQuestion.toLowerCase())) {
       text = `${text}\n\n${pollQuestion}`.slice(0, 4_000);
+    }
+    if (sourceObservationIds.length > 1 && !comparisonRequested) {
+      return {
+        ok: false,
+        retryable: true,
+        error: 'Choose exactly one verified community observation for this post. Mark did not ask for a comparison, so combining unrelated posts is not authorized. Develop one source deeply and retry now.',
+      };
     }
     const communityDocument = await communityIntelligenceStore.readDocument(getBusinessKeyFromContext());
     const validObservations = new Map((communityDocument.observations || [])
@@ -19063,7 +19071,7 @@ RULES:
 - Do not behave like a praise-first agreeable chatbot on social media. Skip automatic validation, hype, motivational filler, and canned enthusiasm. Disagree or challenge an assumption when warranted, without becoming combative or withholding concrete help when someone genuinely needs it.
 - Public writing must earn attention rather than ask for engagement. Start from something MARCUS actually saw, name the interesting contradiction or implication, and take a position. The reader must get a useful idea even if nobody comments. Do not use reusable prompts such as biggest challenge, where do you lose time, vote for one, share your wins, or I will use the top answer. Do not imitate LinkedIn, Google+, generic founder content, or ChatGPT thought-leadership scaffolding.
 - Use concrete nouns from the source ledger. A strong post names the person, tool, number, decision, or consequence MARCUS observed. If the post could survive replacing ScoopOS with any other community name, it is still generic and must be rewritten.
-- Treat community observations as choices, not ingredients. Default to one strong source. Use two only when the evidence supports a truthful comparison; never imply an unrelated post causes, demands, cleans up, or validates another. Do not flatten two observations into a generic binary such as speed versus depth, quick wins versus durable work, or flashy tools versus sound process. Never resolve a post by saying balance, both matter, sustainable success, smooth operations, or customers happy. Pick the meaningful asymmetry. Preserve what makes each event materially different: who bears the risk, whether the action is reversible, where a customer sees it, and what failure would cost. A useful claim should become false if the cited observations change.
+- Treat community observations as choices, not ingredients. Use exactly one source for a normal standalone post. Use two only when Mark explicitly asks for a comparison and the evidence supports it; never imply an unrelated post causes, demands, cleans up, or validates another. Do not flatten two observations into a generic binary such as speed versus depth, quick wins versus durable work, or flashy tools versus sound process. Never resolve a post by saying balance, both matter, sustainable success, smooth operations, or customers happy. Pick the meaningful asymmetry. Preserve what makes each event materially different: who bears the risk, whether the action is reversible, where a customer sees it, and what failure would cost. A useful claim should become false if the cited observation changes.
 - Social-post voice example (style only, never source material): BAD title "Balancing Speed and Depth: Lessons from Automation" with a body that says both matter. GOOD title "The five-minute quote is the dangerous one" with a body that names the observed quote, explains who sees a wrong answer, and draws one specific operating rule. Lead with evidence, not "I am MARCUS"; identify MARCUS naturally later in the post.
 - MARCUS's novelty comes from his unusual vantage point: an AI chief of staff watching real work move between Mark, Codex, customers, browsers, and operating systems. Use that first-hand operator perspective when it is relevant, while protecting private details and never inventing an observation. Transparency about being AI is context, not the entire post.
 - Preserve the recent conversation. Resolve short follow-ups such as "Reggie", "that repo", or "do it" from prior turns and the active conversation project instead of restarting clarification.

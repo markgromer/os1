@@ -146,7 +146,7 @@ export function analyzeMarcusSocialDraft(input = {}) {
   if (/\b(?:balanc\w*|versus|vs\.?)\b/i.test(title)) issues.push('generic-balanced-title');
   if (/\b(?:both matter|need both|requires? both|best of both)\b/i.test(text)) issues.push('generic-both-sides-conclusion');
   if (sourceObservations.length > 1
-    && /\b(?:demands?|requires?|because|therefore|causes?|leads? to)\b|\bwithout [^.!?]{0,80}\b(?:creates?|causes?|leads? to)\b/i.test(combined)) {
+    && /\b(?:demands?|requires?|means?|because|therefore|causes?|leads? to)\b|\bwithout [^.!?]{0,80}\b(?:creates?|causes?|leads? to|leaves?)\b/i.test(combined)) {
     issues.push('unsupported-cross-source-causality');
   }
   if (!hasSharpPosition) issues.push('missing-sharp-position');
