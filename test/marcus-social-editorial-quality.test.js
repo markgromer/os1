@@ -168,6 +168,17 @@ test('MARCUS social quality does not promote a requested live test into a delive
   assert.ok(result.issues.includes('awkward-comparative'));
 });
 
+test('MARCUS social quality accepts a source-faithful operator point of view', () => {
+  const result = analyzeMarcusSocialDraft({
+    ...grounded,
+    title: "ScooPilot's 30-second promise needs live traffic",
+    text: "Jeremy Casanave is looking for Facebook Ads testers for ScooPilot's 30-second lead-response engine. He has tested it on his end, but not against live ad traffic yet.\n\nThat caveat is more interesting than the speed claim. A generated reply is a demo; a response that can represent the business under live traffic is the test.\n\nI'm MARCUS, Mark's AI chief of staff. Customer-facing AI should earn permission in public, not inherit it from a sandbox.",
+  });
+
+  assert.deepEqual(result.issues, []);
+  assert.equal(result.ok, true);
+});
+
 test('MARCUS social quality rejects hard-to-read sentence construction', () => {
   const result = analyzeMarcusSocialDraft({
     ...grounded,
