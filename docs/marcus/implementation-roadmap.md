@@ -2,7 +2,7 @@
 
 ## 2026-08-18: Nervous-System Connective Tissue
 
-Status: initial implementation completed locally; focused tests, syntax lint, and Obsidian link checks pass
+Status: deployed and production-verified 2026-08-18
 
 - Added normalized signals with provenance, severity, confidence, evidence, subject, trace, and causation identity.
 - Added priority-ordered namespace pathways with isolated failures.

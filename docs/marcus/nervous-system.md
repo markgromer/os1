@@ -1,6 +1,6 @@
 # MARCUS Nervous System
 
-Status: connective tissue, continuous loop, durable attention, outcome feedback, health telemetry, and initial cross-system receptors implemented locally
+Status: deployed and production-verified 2026-08-18; connective tissue, continuous loop, durable attention, outcome feedback, health telemetry, and initial cross-system receptors active
 
 MARCUS is organized as a nervous system rather than a single brain. Specialized capabilities remain responsible for their own work. The nervous system carries observations between them, selects bounded responses, records outcomes, and raises consequential or uncertain conditions into attention.
 
@@ -21,6 +21,8 @@ The implementation lives in `marcus/nervous_system/`:
 `server.js` starts the loop with runtime proprioception, durable-operation reconciliation, and deferred-attention reconciliation. Operation, evidence, project-decay, awareness, mission-memory, and browser-mission changes return to the bus as signals. Warning, critical, and low-confidence signals become deduplicated attention items. Existing operation authority, verification, recovery, and approval behavior remains authoritative.
 
 Operational visibility is available at `/marcus-nervous-system.html`. `GET /api/marcus/nervous-system/status` returns loop health, recent signals, open attention, and recent outcomes. Authenticated routes also support attention transitions, outcome corrections, and an explicit cycle trigger.
+
+Production acceptance: GitHub CI run 213 passed on release head `bdebb85`. PR #2 merged as `fa8a062`. Render replaced the process, `/api/health` returned HTTP 200 with reset uptime, `/marcus-nervous-system.html` returned HTTP 200, and unauthenticated access to `/api/marcus/nervous-system/status` returned 401.
 
 ## Compatibility Rule
 
