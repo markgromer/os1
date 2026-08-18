@@ -596,7 +596,11 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     const browserRelay = await fetch(`${base}/api/marcus/browser/relay`, {
       method: 'POST', headers: agencyHeaders, body: JSON.stringify({
         agentId: 'agent-smoke', connected: true, sensitive: false, title: 'Skool - MARCUS', url: 'https://www.skool.com/',
-        viewportWidth: 1280, viewportHeight: 720, frameBase64: browserJpeg.toString('base64'), observedAt: new Date().toISOString(),
+        contextKind: 'skool',
+        viewportWidth: 1280, viewportHeight: 720, frameBase64: browserJpeg.toString('base64'),
+        browserSurfaceId: 'a1b2c3d4e5f6',
+        composer: { open: true, complete: true, titleSet: true, titleChars: 26, bodyChars: 412, category: 'Operations' },
+        observedAt: new Date().toISOString(),
       }),
     });
     assert.equal(browserRelay.status, 200);
@@ -606,6 +610,10 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     assert.equal(browserStatus.frameAvailable, true);
     assert.equal(browserStatus.control.owner, 'marcus');
     assert.equal(browserStatus.url, 'https://www.skool.com/');
+    assert.equal(browserStatus.browserSurfaceId, 'a1b2c3d4e5f6');
+    assert.deepEqual(browserStatus.composer, {
+      open: true, complete: true, titleSet: true, titleChars: 26, bodyChars: 412, category: 'Operations',
+    });
     const browserFrameResponse = await fetch(`${base}/api/marcus/browser/frame`, { headers: agencyHeaders });
     assert.equal(browserFrameResponse.status, 200);
     assert.deepEqual(Buffer.from(await browserFrameResponse.arrayBuffer()), browserJpeg);

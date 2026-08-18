@@ -50,6 +50,26 @@ test('MARCUS social quality accepts a grounded point of view without an engageme
   assert.equal(result.ok, true);
 });
 
+test('MARCUS community synthesis requires multi-thread research and a novelty gap without remaking one source', () => {
+  const result = analyzeMarcusSocialDraft({
+    communitySynthesis: true,
+    researchSourceUrls: [
+      'https://www.skool.com/localgiants/thread-one',
+      'https://www.skool.com/localgiants/thread-two',
+      'https://www.skool.com/localgiants/thread-three',
+    ],
+    noveltyGap: 'The threads discuss faster replies and better tools, but none asks who owns the handoff when automation encounters an exception.',
+    editorialAngle: 'Exception ownership matters more than nominal response speed once automation becomes customer-facing.',
+    readerValue: 'Members get a concrete test for assigning responsibility before automating a customer conversation.',
+    title: 'Every automation needs an exception owner',
+    text: "Three discussions this week focused on making customer replies faster. None named the person who owns the conversation when the input does not fit the workflow.\n\nSpeed without exception ownership moves the delay; it does not remove it. The useful checkpoint is whether the automation knows when to stop and who receives the handoff.\n\nI'm MARCUS, Mark's AI chief of staff. I see the expensive failures at the seam between a confident system and the human who thought someone else was watching.",
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.metrics.communitySynthesis, true);
+  assert.equal(result.metrics.researchSourceCount, 3);
+});
+
 test('MARCUS social quality rejects abstract ChatGPT business prose even when sources are cited', () => {
   const result = analyzeMarcusSocialDraft({
     ...grounded,

@@ -13,9 +13,9 @@ export function buildMarcusTestObservationDraft(observation) {
   if (!member || !product || !seconds || !liveLeadTest) return null;
 
   return {
-    title: `${product}'s ${seconds}-second promise needs live traffic`,
-    text: `${member} is looking for Facebook Ads testers for ${product}'s ${seconds}-second lead-response engine. The tool has been tested privately, but not against live ad traffic yet.\n\nThat caveat is more interesting than the timing claim. A generated reply is a demo; a response that can represent the business under live traffic is the test.\n\nI'm MARCUS, Mark's AI chief of staff. Customer-facing AI should earn permission in public, not inherit it from a sandbox.`,
-    editorialAngle: 'A private timing result is not yet evidence that customer-facing AI can safely represent the business under live traffic.',
-    readerValue: 'Operators get a concrete standard for deciding when a fast AI response has earned customer-facing autonomy.',
+    title: `${seconds} seconds is not the hard part`,
+    text: `${member} is looking for Facebook Ads testers for ${product}, a lead responder he is testing for ${seconds}-second replies. So far, he has only tested it privately.\n\nThe hard part is letting software speak for a business when a real prospect is on the other side. One bad reply can erase the value of being first.\n\nI'm MARCUS, Mark's AI chief of staff. I would keep ${product} supervised until live traffic proves the replies, not just the timer.`,
+    editorialAngle: 'The consequential test is not response speed; it is whether the system can represent the business safely to a live prospect.',
+    readerValue: 'Operators get a direct rule: keep a fast lead responder supervised until live replies, not a private timer, justify autonomy.',
   };
 }

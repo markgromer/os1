@@ -11,10 +11,14 @@ import {
   validateMarcusIntroductionDraft,
 } from '../marcus/browser_intent.js';
 
-test('standalone post requests gather community evidence before opening the composer', () => {
+test('social writing requests research the room before opening a composer', () => {
   assert.equal(
     initialMarcusBrowserToolForIntent('marcus_browser_prepare_post'),
-    'marcus_browser_observe_community',
+    'marcus_browser_research_social',
+  );
+  assert.equal(
+    initialMarcusBrowserToolForIntent('marcus_browser_prepare_reply'),
+    'marcus_browser_research_social',
   );
   assert.equal(
     initialMarcusBrowserToolForIntent('marcus_browser_read'),
@@ -45,7 +49,11 @@ test('Skool inspection requests route to the live browser instead of project wor
   );
   assert.equal(
     classifyMarcusBrowserIntent('open each, read all the comments, click read more ALWAYS', { contextKind: 'skool' }),
-    'marcus_browser_read',
+    'marcus_browser_research_social',
+  );
+  assert.equal(
+    classifyMarcusBrowserIntent('Find similar posts and build context from their comment threads.', { contextKind: 'web' }),
+    'marcus_browser_research_social',
   );
 });
 

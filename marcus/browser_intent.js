@@ -12,13 +12,15 @@ const BROWSER_READ_PROMPT_PATTERN = /\b(read|inspect|review|summari[sz]e|scan|br
 const BROWSER_OPEN_PROMPT_PATTERN = /\b(open|navigate|go to|pull up|visit|browse)\b/i;
 const COMMUNITY_MEMORY_PATTERN = /\b(learn|remember|take notes?|store (?:the )?(?:source[- ]linked )?(?:notes?|observations?|evidence)|source[- ]linked observations?|observations?|build (?:a )?profile|profiles?|members?|engagement|content trends?)\b/i;
 const COMMUNITY_NOTIFICATION_PATTERN = /\b(notifications?|mentions?|replies|inbox)\b/i;
-const LIVE_BROWSER_CONTEXTS = ['gmail', 'zoom', 'skool', 'google-meet', 'teams', 'youtube', 'tiktok'];
+const SOCIAL_RESEARCH_PATTERN = /\b(?:similar|related|find posts?|open each|read all|all the comments|comment threads?|research|context|content trends?|compare posts?)\b/i;
+const LIVE_BROWSER_CONTEXTS = ['web', 'gmail', 'zoom', 'skool', 'google-meet', 'teams', 'youtube', 'tiktok'];
 const BROWSER_CONTROL_RETURN_PATTERN = /^(?:(?:browser\s+)?control(?:\s+is|\s+has\s+been)?\s+(?:back|returned|released)(?:\s+(?:back\s+)?to\s+(?:you|marcus))?|(?:i(?:'ve|\s+have)?\s+)?(?:returned|released|gave|given|handed)\s+(?:the\s+)?(?:browser\s+)?control(?:\s+back)?\s+to\s+(?:you|marcus)|you(?:'ve|\s+have|\s+got)\s+(?:the\s+)?(?:browser\s+)?control(?:\s+back)?|it'?s\s+yours(?:\s+again)?)[.!\s]*$/i;
 const RESUMABLE_BROWSER_MISSION_SKILLS = new Set([
   'marcus_browser_open',
   'marcus_browser_activate',
   'marcus_browser_read',
   'marcus_browser_observe_community',
+  'marcus_browser_research_social',
   'marcus_browser_inspect_notifications',
   'marcus_browser_fill',
   'marcus_browser_prepare_post',
@@ -32,7 +34,8 @@ export function isMarcusBrowserFollowupConfirmation(message) {
 
 export function initialMarcusBrowserToolForIntent(intent) {
   const tool = String(intent || '').trim();
-  return tool === 'marcus_browser_prepare_post' ? 'marcus_browser_observe_community' : tool;
+  return tool === 'marcus_browser_prepare_post' || tool === 'marcus_browser_prepare_reply'
+    ? 'marcus_browser_research_social' : tool;
 }
 
 export function isMarcusBrowserControlReturn(message) {
@@ -84,6 +87,10 @@ export function classifyMarcusBrowserIntent(message, { pendingDraft = false, con
   if (skoolContext && COMMUNITY_MEMORY_PATTERN.test(text)
     && /\b(read|review|inspect|analy[sz]e|browse|scan|learn|remember|study|take)\b/i.test(text)) {
     return 'marcus_browser_observe_community';
+  }
+  if ((liveBrowserContext || BROWSER_SURFACE_PATTERN.test(text)) && SOCIAL_RESEARCH_PATTERN.test(text)
+    && /\b(read|review|inspect|analy[sz]e|browse|scan|find|research|open|build)\b/i.test(text)) {
+    return 'marcus_browser_research_social';
   }
 
   if (explicitRead) {

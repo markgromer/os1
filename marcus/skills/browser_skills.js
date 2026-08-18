@@ -80,6 +80,26 @@ const BROWSER_SKILLS = [
     },
   }),
   defineMarcusSkill({
+    id: 'browser.research-social', version: 1, toolName: 'marcus_browser_research_social', authority: 'observe',
+    purpose: 'Traverse visible social posts and their rendered comment threads, expand available content, and return source-level coverage evidence.',
+    contexts: ['web', 'skool', 'youtube', 'tiktok'],
+    preconditions: ['browser connected', 'MARCUS has control', 'direct research request', 'signed-in page already accessible', 'no password field focused'],
+    evidence: ['source URLs', 'post text', 'bounded comments', 'posts and comments read counts', 'coverage limits'],
+    recovery: ['retain the research mission', 'return to the starting page', 'report inaccessible or unrendered content precisely'],
+    verify(result) {
+      const observed = actionResult(result);
+      return Array.isArray(observed.sources) && observed.coverage && Number(observed.postsRead) >= 0
+        ? { ok: true, evidence: {
+          contextKind: observed.contextKind,
+          postsRead: observed.postsRead,
+          commentsRead: observed.commentsRead,
+          allVisibleCommentEndsReached: observed.coverage.allVisibleCommentEndsReached === true,
+          platformComplete: false,
+        } }
+        : { ok: false, error: 'Social research returned no verifiable source and coverage ledger.' };
+    },
+  }),
+  defineMarcusSkill({
     id: 'skool.inspect-notifications', version: 1, toolName: 'marcus_browser_inspect_notifications', authority: 'observe',
     purpose: 'Inspect visible Skool notifications and classify them without clearing or answering them.',
     contexts: ['skool'],

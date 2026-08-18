@@ -127,6 +127,9 @@ export function analyzeMarcusSocialDraft(input = {}) {
   const maxSentenceWords = sentenceLengths.length ? Math.max(...sentenceLengths) : 0;
   const questionCount = (combined.match(/\?/g) || []).length;
   const sourceObservations = Array.isArray(input.sourceObservations) ? input.sourceObservations : [];
+  const communitySynthesis = input.communitySynthesis === true;
+  const researchSourceCount = [...new Set((Array.isArray(input.researchSourceUrls) ? input.researchSourceUrls : []).map(clean).filter(Boolean))].length;
+  const noveltyGap = clean(input.noveltyGap);
   const groundedSources = groundedSourceCount(combined, sourceObservations);
   const distinctiveSources = distinctiveSourceCount(combined, sourceObservations);
   const distinctiveTitleSources = distinctiveSourceCount(title, sourceObservations);
@@ -138,7 +141,7 @@ export function analyzeMarcusSocialDraft(input = {}) {
   });
   const draftPreservesUnverifiedStatus = /\b(?:testers?|testing|tested|trial|pilot|not live|not yet|before live|going live|plans?|planned|seeking|looking for|asking for)\b/i.test(combined);
 
-  if (sourceObservationIds.length < 1) issues.push('missing-source-observation');
+  if (!communitySynthesis && sourceObservationIds.length < 1) issues.push('missing-source-observation');
   if (editorialAngle.length < 40) issues.push('missing-editorial-angle');
   if (readerValue.length < 30) issues.push('missing-reader-value');
   if (paragraphs.length < 2) issues.push('wall-of-text');
@@ -146,9 +149,11 @@ export function analyzeMarcusSocialDraft(input = {}) {
   if (questionCount > 1) issues.push('too-many-questions');
   if (maxSentenceWords > 36) issues.push('sentence-too-long');
   if (text.length > 900) issues.push('draft-too-long');
-  if (sourceObservations.length && groundedSources < 1) issues.push('weak-source-grounding');
-  if (sourceObservations.length && distinctiveSources < 1) issues.push('missing-distinctive-source-anchor');
-  if (sourceObservations.length && distinctiveTitleSources < 1) issues.push('generic-source-free-title');
+  if (!communitySynthesis && sourceObservations.length && groundedSources < 1) issues.push('weak-source-grounding');
+  if (!communitySynthesis && sourceObservations.length && distinctiveSources < 1) issues.push('missing-distinctive-source-anchor');
+  if (!communitySynthesis && sourceObservations.length && distinctiveTitleSources < 1) issues.push('generic-source-free-title');
+  if (communitySynthesis && researchSourceCount < 3) issues.push('insufficient-community-research');
+  if (communitySynthesis && noveltyGap.length < 60) issues.push('missing-novelty-gap');
   if (/\b(?:balanc\w*|versus|vs\.?)\b/i.test(title)) issues.push('generic-balanced-title');
   if (/\b(?:both matter|need both|requires? both|best of both)\b/i.test(text)) issues.push('generic-both-sides-conclusion');
   if (sourceObservations.length > 1
@@ -174,6 +179,8 @@ export function analyzeMarcusSocialDraft(input = {}) {
       hasSharpPosition,
       sourceHasUnverifiedStatus,
       draftPreservesUnverifiedStatus,
+      communitySynthesis,
+      researchSourceCount,
     },
   };
 }

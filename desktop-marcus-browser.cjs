@@ -390,6 +390,12 @@ class MarcusBrowserBridge {
       result = await this.readVisiblePage(session, target.url, { viewports: payload.viewports });
     } else if (command === 'observe-community') {
       result = await this.observeCommunityPage(session, target.url, { viewports: payload.viewports });
+    } else if (command === 'research-social') {
+      result = await this.researchSocialPage(session, target.url, {
+        query: payload.query,
+        maxPosts: payload.maxPosts,
+        maxCommentViewports: payload.maxCommentViewports,
+      });
     } else if (command === 'inspect-notifications') {
       result = await this.inspectCommunityNotifications(session, target.url);
     } else if (command === 'scroll') {
@@ -731,7 +737,9 @@ class MarcusBrowserBridge {
       throw new Error(`The standalone Skool draft failed exact composer read-back. MARCUS will not claim it is ready. Evidence: ${JSON.stringify(verified?.result?.value || {})}`);
     }
     const composition = title && category
-      ? await this.completeSkoolPostComposition(session, { title, category, pollOptions })
+      ? await this.completeSkoolPostComposition(session, {
+        title, text, category, pollOptions,
+      })
       : { completeDraft: false, title: '', category: '', pollOptions: [] };
     return {
       ...focus.result.value,
@@ -828,13 +836,29 @@ class MarcusBrowserBridge {
     await session.send('Input.insertText', { text });
   }
 
-  async completeSkoolPostComposition(session, { title, category, pollOptions = [] }) {
+  async completeSkoolPostComposition(session, {
+    title, text, category, pollOptions = [],
+  }) {
     await this.replaceSkoolInput(session, { placeholder: 'Title', text: title });
     const selectedCategory = await session.send('Runtime.evaluate', {
       expression: `(() => {
         const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
         const expectedCategory = ${JSON.stringify(category)};
-        return [...document.querySelectorAll('button')].some((button) => {
+        const titleInput = [...document.querySelectorAll('input')]
+          .find((input) => normalize(input.getAttribute('placeholder')).toLowerCase() === 'title');
+        const composerFor = (element) => {
+          let current = element;
+          for (let depth = 0; current && depth < 10; depth += 1, current = current.parentElement) {
+            const hasPost = [...current.querySelectorAll('button,[role="button"],input[type="submit"]')]
+              .some((button) => /^(?:post|publish)$/.test(normalize(button.innerText || button.value || button.textContent).toLowerCase()));
+            const hasEditor = Boolean(current.querySelector('textarea,[contenteditable="true"],[contenteditable="plaintext-only"],[role="textbox"]:not(input)'));
+            if (hasPost && hasEditor) return current;
+          }
+          return null;
+        };
+        const composer = composerFor(titleInput);
+        if (!composer) return false;
+        return [...composer.querySelectorAll('button')].some((button) => {
           const rect = button.getBoundingClientRect();
           const style = getComputedStyle(button);
           return normalize(button.innerText || button.textContent) === expectedCategory
@@ -860,26 +884,47 @@ class MarcusBrowserBridge {
     const verified = await session.send('Runtime.evaluate', {
       expression: `(() => {
         const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
+        const normalizeBody = (value) => String(value || '').replace(/\\r\\n/g, '\\n')
+          .split('\\n').map((line) => line.trim()).filter(Boolean).join('\\n\\n');
         const expectedTitle = ${JSON.stringify(title)};
+        const expectedBody = normalizeBody(${JSON.stringify(String(text || '').replace(/\r\n/g, '\n'))});
         const expectedCategory = ${JSON.stringify(category)};
         const expectedPoll = ${JSON.stringify(options)};
         const titleInput = [...document.querySelectorAll('input')]
           .find((input) => normalize(input.getAttribute('placeholder')).toLowerCase() === 'title');
+        const composerFor = (element) => {
+          let current = element;
+          for (let depth = 0; current && depth < 10; depth += 1, current = current.parentElement) {
+            const hasPost = [...current.querySelectorAll('button,[role="button"],input[type="submit"]')]
+              .some((button) => /^(?:post|publish)$/.test(normalize(button.innerText || button.value || button.textContent).toLowerCase()));
+            const hasEditor = Boolean(current.querySelector('textarea,[contenteditable="true"],[contenteditable="plaintext-only"],[role="textbox"]:not(input)'));
+            if (hasPost && hasEditor) return current;
+          }
+          return null;
+        };
+        const composer = composerFor(titleInput);
         const titleVerified = normalize(titleInput?.value) === expectedTitle;
-        const categoryVerified = [...document.querySelectorAll('button')]
+        const categoryVerified = Boolean(composer) && [...composer.querySelectorAll('button')]
           .some((button) => normalize(button.innerText || button.textContent) === expectedCategory);
-        const pollValues = [...document.querySelectorAll('input')]
+        const editors = composer ? [...composer.querySelectorAll('textarea,[contenteditable="true"],[contenteditable="plaintext-only"],[role="textbox"]:not(input)')] : [];
+        const editor = editors.find((element) => !element.closest('article'));
+        const body = normalizeBody(editor?.value ?? editor?.innerText ?? editor?.textContent ?? '');
+        const bodyVerified = Boolean(expectedBody) && body === expectedBody;
+        const pollValues = [...(composer?.querySelectorAll('input') || [])]
           .filter((input) => /^Option \\d+$/i.test(normalize(input.getAttribute('placeholder'))))
           .map((input) => normalize(input.value))
           .filter(Boolean)
           .slice(0, expectedPoll.length);
         const pollVerified = expectedPoll.length < 2 || JSON.stringify(pollValues) === JSON.stringify(expectedPoll);
         return {
-          completeDraft: titleVerified && categoryVerified && pollVerified,
+          completeDraft: Boolean(composer) && titleVerified && bodyVerified && categoryVerified && pollVerified,
+          composerLocated: Boolean(composer),
           titleVerified,
+          bodyVerified,
           categoryVerified,
           pollVerified,
           title: normalize(titleInput?.value),
+          bodyChars: body.length,
           category: categoryVerified ? expectedCategory : '',
           pollOptions: pollValues,
         };
@@ -887,7 +932,7 @@ class MarcusBrowserBridge {
       returnByValue: true,
     }, 4_000);
     if (!verified?.result?.value?.completeDraft) {
-      throw new Error('The Skool post is not complete: title, category, or poll verification failed.');
+      throw new Error(`The Skool post is not complete in the active composer: ${JSON.stringify(verified?.result?.value || {})}`);
     }
     return verified.result.value;
   }
@@ -1222,6 +1267,120 @@ class MarcusBrowserBridge {
     };
   }
 
+  async researchSocialPage(session, url, { query = '', maxPosts = 8, maxCommentViewports = 12 } = {}) {
+    const contextKind = liveContextKind(url) || (safeHttpUrl(url) ? 'web' : '');
+    if (!contextKind) throw new Error('A valid visible HTTP(S) page is required for social research.');
+    if (await this.sensitiveFieldFocused(session)) throw new Error('Social research is blocked while a password field is focused.');
+    const startingUrl = safeObservableUrl(url);
+    const wanted = String(query || '').replace(/\s+/g, ' ').trim().slice(0, 300).toLowerCase();
+    const postLimit = Math.max(1, Math.min(12, Number(maxPosts) || 8));
+    const commentLimit = Math.max(1, Math.min(20, Number(maxCommentViewports) || 12));
+    const feed = await session.send('Runtime.evaluate', {
+      expression: `(() => {
+        const clean = (value, max = 3000) => String(value || '').replace(/\\s+/g, ' ').trim().slice(0, max);
+        const wanted = ${JSON.stringify(wanted)};
+        const visible = (element) => { const rect = element.getBoundingClientRect(); const style = getComputedStyle(element); return rect.width > 20 && rect.height > 15 && style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) !== 0; };
+        const links = [...document.querySelectorAll('article a[href],main a[href],[data-testid*="post"] a[href],[class*="post"] a[href]')]
+          .filter((link) => visible(link) && /^https?:/i.test(String(link.href || '')))
+          .map((link) => {
+            const card = link.closest('article,[data-testid*="post"],[class*="Post"],[class*="post"]') || link.parentElement;
+            return { url: String(link.href).slice(0, 2000), title: clean(link.innerText || link.textContent, 300), excerpt: clean(card?.innerText || card?.textContent, 1500) };
+          })
+          .filter((item) => item.title || item.excerpt)
+          .filter((item) => !wanted || (item.title + ' ' + item.excerpt).toLowerCase().includes(wanted));
+        return [...new Map(links.map((item) => [item.url, item])).values()].slice(0, ${postLimit});
+      })()`,
+      returnByValue: true,
+    }, 8_000);
+    const candidates = Array.isArray(feed?.result?.value) ? feed.result.value : [];
+    const sources = [];
+    for (const candidate of candidates.slice(0, postLimit)) {
+      const candidateUrl = safeHttpUrl(candidate?.url);
+      if (!candidateUrl) continue;
+      await session.send('Page.navigate', { url: candidateUrl });
+      await wait(900);
+      const comments = new Map();
+      let reachedEnd = false;
+      let expandedControls = 0;
+      for (let viewport = 0; viewport < commentLimit; viewport += 1) {
+        const expanded = await session.send('Runtime.evaluate', {
+          expression: `(() => {
+            const labels = /(?:read|see|show|view|load)\\s+(?:more|all)|more\\s+(?:comments?|replies)|view\\s+\\d+\\s+(?:comments?|replies)/i;
+            const controls = [...document.querySelectorAll('button,[role="button"],a')].filter((element) => {
+              const text = String(element.innerText || element.textContent || element.getAttribute('aria-label') || '').replace(/\\s+/g, ' ').trim();
+              const rect = element.getBoundingClientRect();
+              return labels.test(text) && rect.width > 0 && rect.height > 0 && rect.bottom >= 0 && rect.top <= innerHeight;
+            }).slice(0, 12);
+            controls.forEach((control) => control.click());
+            return controls.length;
+          })()`, returnByValue: true,
+        });
+        expandedControls += Math.max(0, Number(expanded?.result?.value) || 0);
+        if (expandedControls) await wait(300);
+        const snapshot = await session.send('Runtime.evaluate', {
+          expression: `(() => {
+            const clean = (value, max = 4000) => String(value || '').replace(/\\s+/g, ' ').trim().slice(0, max);
+            const root = document.querySelector('article,main') || document.body;
+            const heading = clean(document.querySelector('h1,[role="heading"]')?.innerText || document.title, 300);
+            const postText = clean(root?.innerText || root?.textContent, 4000);
+            const selectors = '[data-testid*="comment"],[class*="Comment"],[class*="comment"],[aria-label*="comment" i]';
+            const comments = [...document.querySelectorAll(selectors)].map((element) => ({
+              author: clean(element.querySelector('a[href*="/profile"],a[href*="/@"],a[href*="/user"]')?.innerText, 200),
+              text: clean(element.innerText || element.textContent, 2000)
+            })).filter((item) => item.text);
+            return { title: heading, postText, comments };
+          })()`, returnByValue: true,
+        }, 8_000);
+        const value = snapshot?.result?.value || {};
+        for (const comment of (Array.isArray(value.comments) ? value.comments : [])) {
+          const text = redactVisibleText(comment?.text).replace(/\s+/g, ' ').trim().slice(0, 1_200);
+          if (!text) continue;
+          const key = crypto.createHash('sha256').update(`${comment?.author || ''}\n${text}`).digest('hex');
+          comments.set(key, { author: redactVisibleText(comment?.author).slice(0, 200), text });
+        }
+        candidate._snapshot = value;
+        const movement = await session.send('Runtime.evaluate', {
+          expression: '(() => { const before = window.scrollY; window.scrollBy(0, Math.max(400, Math.floor(innerHeight * 0.85))); return { before, after: window.scrollY, max: Math.max(0, document.documentElement.scrollHeight - innerHeight) }; })()',
+          returnByValue: true,
+        });
+        const scroll = movement?.result?.value || {};
+        reachedEnd = Number(scroll.after) <= Number(scroll.before) || Number(scroll.after) >= Number(scroll.max);
+        if (reachedEnd && Number(expanded?.result?.value || 0) === 0) break;
+      }
+      const snapshot = candidate._snapshot || {};
+      sources.push({
+        sourceUrl: safeObservableUrl(candidateUrl),
+        title: redactVisibleText(snapshot.title || candidate.title).replace(/\s+/g, ' ').trim().slice(0, 300),
+        postText: redactVisibleText(snapshot.postText || candidate.excerpt).replace(/\s+/g, ' ').trim().slice(0, 4_000),
+        comments: [...comments.values()].slice(0, 30),
+        commentsRead: comments.size,
+        expandedControls,
+        reachedVisibleEnd: reachedEnd,
+      });
+    }
+    if (startingUrl) {
+      await session.send('Page.navigate', { url: startingUrl }).catch(() => {});
+      await wait(300);
+    }
+    return {
+      contextKind,
+      query: wanted,
+      startingUrl,
+      postsDiscovered: candidates.length,
+      postsRead: sources.length,
+      commentsRead: sources.reduce((total, source) => total + source.commentsRead, 0),
+      sources,
+      coverage: {
+        requestedPosts: postLimit,
+        commentViewportLimit: commentLimit,
+        allDiscoveredPostsRead: candidates.length > 0 && sources.length === candidates.length,
+        allVisibleCommentEndsReached: sources.length > 0 && sources.every((source) => source.reachedVisibleEnd),
+        platformComplete: false,
+        limitation: 'Coverage is limited to posts and comments the current signed-in page rendered; hidden, deleted, restricted, or algorithmically withheld content cannot be claimed as read.',
+      },
+    };
+  }
+
   async observeCommunityPage(session, url, { viewports = 8 } = {}) {
     if (liveContextKind(url) !== 'skool') throw new Error('Community observation is available only on the approved Skool page.');
     if (await this.sensitiveFieldFocused(session)) throw new Error('Community observation is blocked while a password field is focused.');
@@ -1429,6 +1588,51 @@ class MarcusBrowserBridge {
       const contextVersion = visibleText
         ? crypto.createHash('sha256').update(`${contextKind}\n${visibleText}`).digest('hex').slice(0, 20)
         : '';
+      let composer = null;
+      if (!sensitive && contextKind === 'skool') {
+        const composerSnapshot = await session.send('Runtime.evaluate', {
+          expression: `(() => {
+            const clean = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
+            const visible = (element) => {
+              const rect = element.getBoundingClientRect();
+              const style = getComputedStyle(element);
+              return rect.width > 0 && rect.height > 0 && style.display !== 'none'
+                && style.visibility !== 'hidden' && Number(style.opacity) !== 0;
+            };
+            const titleInput = [...document.querySelectorAll('input')]
+              .find((input) => visible(input) && clean(input.getAttribute('placeholder')).toLowerCase() === 'title');
+            const composerFor = (element) => {
+              let current = element;
+              for (let depth = 0; current && depth < 10; depth += 1, current = current.parentElement) {
+                const hasPost = [...current.querySelectorAll('button,[role="button"],input[type="submit"]')]
+                  .some((button) => /^(?:post|publish)$/.test(clean(button.innerText || button.value || button.textContent).toLowerCase()));
+                const hasEditor = Boolean(current.querySelector('textarea,[contenteditable="true"],[contenteditable="plaintext-only"],[role="textbox"]:not(input)'));
+                if (hasPost && hasEditor) return current;
+              }
+              return null;
+            };
+            const root = composerFor(titleInput);
+            if (!root) return null;
+            const editor = [...root.querySelectorAll('textarea,[contenteditable="true"],[contenteditable="plaintext-only"],[role="textbox"]:not(input)')]
+              .find((element) => visible(element) && !element.closest('article'));
+            const body = String(editor?.value ?? editor?.innerText ?? editor?.textContent ?? '').trim();
+            const category = ['General discussion', 'Marketing', 'Operations', 'I had to post this...']
+              .find((label) => [...root.querySelectorAll('button')]
+                .some((button) => visible(button) && clean(button.innerText || button.textContent) === label)) || '';
+            const title = clean(titleInput?.value);
+            return {
+              open: true,
+              complete: Boolean(title && body && category),
+              titleSet: Boolean(title),
+              titleChars: title.length,
+              bodyChars: body.length,
+              category,
+            };
+          })()`,
+          returnByValue: true,
+        }, 4_000).catch(() => null);
+        composer = composerSnapshot?.result?.value || null;
+      }
       if (sensitive) {
         return {
           ok: true,
@@ -1468,6 +1672,8 @@ class MarcusBrowserBridge {
         contextKind,
         visibleText,
         contextVersion,
+        browserSurfaceId: crypto.createHash('sha256').update(String(target.id || '')).digest('hex').slice(0, 12),
+        composer,
         error: '',
       };
     } catch (error) {

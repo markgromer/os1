@@ -262,6 +262,11 @@
     .approval-source { min-width: 0; }
     .approval-source strong { display: block; margin-top: 4px; font-size: 15px; }
     .approval-source span { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; }
+    .approval-fields { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; padding: 14px 16px 0; }
+    .approval-field { min-width: 0; }
+    .approval-field .eyebrow { display: block; margin-bottom: 5px; }
+    .approval-field strong { display: block; color: var(--text); font-size: 16px; line-height: 1.3; }
+    .approval-field.category strong { font-size: 13px; color: var(--cyan); }
     .approval-draft { margin: 0; padding: 16px; color: #ece8f4; white-space: pre-wrap; font: 13px/1.5 var(--font); }
     .approval-item-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 16px; border-top: 1px solid var(--line); }
     .approval-item-actions { display: flex; gap: 8px; }
@@ -664,6 +669,7 @@
     }
     .composer textarea { height: 56px; resize: none; padding: 9px; line-height: 1.35; }
     .composer select { padding: 0 8px; }
+    .composer select option { background: #fffdfa; color: #17191d; }
     .sync-foot { display: flex; align-items: center; justify-content: space-between; padding: 0 10px; color: var(--muted); font-size: 11px; }
     .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 
@@ -812,7 +818,7 @@
           <button class="toggle" type="button" id="autoToggle" aria-pressed="true"><span></span></button>
         </div>
         <form class="composer" id="composer">
-          <select id="contextSelect" aria-label="Chat context"><option value="">All projects</option></select>
+          <select id="contextSelect" aria-label="Chat context"><option value="">All projects</option><option value="__browser__">Browser</option></select>
           <textarea id="composerInput" placeholder="Ask Marcus anything, create or find a project, or steer current work..."></textarea>
           <button class="btn icon-btn" type="button" id="micButton" title="Microphone">m</button>
           <button class="btn primary icon-btn" type="submit" title="Send">&gt;</button>
@@ -1320,6 +1326,10 @@
                   </div>
                   <span class="state-pill ${item.status === "published" ? "ok" : item.status === "failed" ? "bad" : "warn"}">${esc(publicationStatusLabel(item.status))}</span>
                 </header>
+                ${item.title || item.category ? `<div class="approval-fields">
+                  <div class="approval-field"><span class="eyebrow">Title</span><strong>${esc(item.title || "Untitled")}</strong></div>
+                  <div class="approval-field category"><span class="eyebrow">Category</span><strong>${esc(item.category || "Not selected")}</strong></div>
+                </div>` : ""}
                 <pre class="approval-draft">${esc(item.text)}</pre>
                 <footer class="approval-item-foot">
                   <button class="btn ghost" type="button" data-publication-source="${esc(item.id)}">View source</button>
@@ -1374,11 +1384,16 @@
     }
     function renderBrowserSurface() {
       const status = snapshot.browser || {};
-      els.workspaceCrumb.textContent = status.title || "MARCUS Chrome / dedicated profile";
+      els.workspaceCrumb.textContent = `${status.title || "Browser"} / dedicated MARCUS Chrome`;
       if (document.activeElement !== els.workspaceUrl) els.workspaceUrl.value = status.url || els.workspaceUrl.value || "https://mail.google.com/";
+      const composer = status.composer || null;
       els.workspaceStatus.textContent = status.sensitive
         ? "Sensitive sign-in is hidden from the remote display."
-        : status.online ? "MARCUS Chrome is live through the PC bridge." : (status.error || "Waiting for the MARCUS browser relay.");
+        : composer?.complete
+          ? `Draft verified in dedicated MARCUS Chrome: title, body, and ${composer.category} category.`
+          : composer?.open
+            ? `Draft is incomplete in dedicated MARCUS Chrome: ${[!composer.titleSet && "title", !composer.bodyChars && "body", !composer.category && "category"].filter(Boolean).join(", ")} missing.`
+            : status.online ? "Dedicated MARCUS Chrome is live through the PC bridge." : (status.error || "Waiting for the MARCUS browser relay.");
       els.scenarioStatus.textContent = status.online ? `${markHasControl ? "Mark" : "MARCUS"} controls browser` : "Browser offline";
       if (!document.getElementById("browserFrame")) els.workspaceSurface.innerHTML = browserSurfaceHtml();
       updateBrowserSurfaceState();
@@ -1841,11 +1856,11 @@
       bindDynamicButtons();
     }
     function renderContextOptions() {
-      if (chatContextId && !snapshot.projects.some((p) => p.id === chatContextId)) chatContextId = "";
-      els.contextSelect.innerHTML = `<option value="">All projects</option>${snapshot.projects.slice(0, 20).map((p) => `<option value="${esc(p.id)}">${esc(compact(p.name, 28))}</option>`).join("")}`;
+      if (chatContextId && chatContextId !== "__browser__" && !snapshot.projects.some((p) => p.id === chatContextId)) chatContextId = "";
+      els.contextSelect.innerHTML = `<option value="">All projects</option><option value="__browser__">Browser</option>${snapshot.projects.slice(0, 20).map((p) => `<option value="${esc(p.id)}">${esc(compact(p.name, 28))}</option>`).join("")}`;
       els.contextSelect.value = chatContextId;
       const project = snapshot.projects.find((p) => p.id === chatContextId);
-      els.chatContext.textContent = project ? project.name : "All projects";
+      els.chatContext.textContent = chatContextId === "__browser__" ? "Browser" : project ? project.name : "All projects";
     }
     function bindDynamicButtons() {
       document.querySelectorAll("[data-select-project]").forEach((button) => button.onclick = (event) => {
@@ -1976,6 +1991,7 @@
     }
     async function sendToMarcus(message, { rethrow = false, echoUser = true } = {}) {
       const project = chatContextId ? snapshot.projects.find((p) => p.id === chatContextId) : null;
+      const browserContext = chatContextId === "__browser__";
       const projectId = project?.awarenessProjectId || project?.projectRegistryId || project?.projectId || project?.id || "";
       if (echoUser) addMessage("user", message);
       try {
@@ -1985,6 +2001,7 @@
           body: JSON.stringify({
             message,
             surface: "dedicated_visualizer",
+            context: browserContext ? "browser" : project ? "project" : "all_projects",
             awarenessProjectId: projectId || "",
             projectId: projectId || "",
           }),
@@ -2172,7 +2189,7 @@
     });
     els.contextSelect.addEventListener("change", () => {
       chatContextId = els.contextSelect.value;
-      if (chatContextId) selectedId = chatContextId;
+      if (chatContextId && chatContextId !== "__browser__") selectedId = chatContextId;
       render();
     });
     els.composer.addEventListener("submit", (event) => {

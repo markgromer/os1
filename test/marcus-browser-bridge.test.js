@@ -287,6 +287,53 @@ test('MARCUS notification inspection structures visible notifications without cl
   assert.equal(runtimeCall, 2);
 });
 
+test('MARCUS social research opens discovered threads, expands comments, and reports bounded coverage', async () => {
+  const bridge = new MarcusBrowserBridge();
+  bridge.sensitiveFieldFocused = async () => false;
+  const navigations = [];
+  const session = {
+    send: async (method, params) => {
+      if (method === 'Page.navigate') {
+        navigations.push(params.url);
+        return {};
+      }
+      assert.equal(method, 'Runtime.evaluate');
+      if (/const links =/.test(params.expression)) {
+        return { result: { value: [{
+          url: 'https://social.example/posts/field-test',
+          title: 'Field test', excerpt: 'A real operating observation.',
+        }] } };
+      }
+      if (/const labels =/.test(params.expression)) return { result: { value: 1 } };
+      if (/const selectors =/.test(params.expression)) {
+        return { result: { value: {
+          title: 'Field test', postText: 'The full visible post.',
+          comments: [{ author: 'Casey', text: 'This failed when volume doubled.' }],
+        } } };
+      }
+      if (/const before = window\.scrollY/.test(params.expression)) {
+        return { result: { value: { before: 0, after: 100, max: 100 } } };
+      }
+      throw new Error(`Unexpected browser expression: ${params.expression}`);
+    },
+  };
+
+  const result = await bridge.researchSocialPage(session, 'https://social.example/feed', {
+    query: 'field', maxPosts: 3, maxCommentViewports: 1,
+  });
+
+  assert.equal(result.contextKind, 'web');
+  assert.equal(result.postsRead, 1);
+  assert.equal(result.commentsRead, 1);
+  assert.equal(result.sources[0].comments[0].author, 'Casey');
+  assert.equal(result.coverage.platformComplete, false);
+  assert.match(result.coverage.limitation, /algorithmically withheld/i);
+  assert.deepEqual(navigations, [
+    'https://social.example/posts/field-test',
+    'https://social.example/feed',
+  ]);
+});
+
 test('MARCUS standalone post skill leaves an open thread and proves the main feed composer', async () => {
   const bridge = new MarcusBrowserBridge();
   const calls = [];
@@ -434,16 +481,20 @@ test('MARCUS standalone post waits for the main-feed composer to render', async 
 test('MARCUS completes and verifies a rich standalone Skool post', async () => {
   const bridge = new MarcusBrowserBridge();
   const actions = [];
+  const evaluations = [];
   bridge.replaceSkoolInput = async (_session, input) => actions.push({ type: 'fill', ...input });
   bridge.trustedClickVisible = async (_session, input) => actions.push({ type: 'click', ...input });
   const session = {
     send: async (method, params) => {
       assert.equal(method, 'Runtime.evaluate');
+      evaluations.push(params.expression);
       if (!/completeDraft/.test(params.expression)) return { result: { value: false } };
       assert.match(params.expression, /completeDraft/);
       return { result: { value: {
         completeDraft: true,
+        composerLocated: true,
         titleVerified: true,
+        bodyVerified: true,
         categoryVerified: true,
         pollVerified: true,
         title: 'What should MARCUS automate next?',
@@ -455,11 +506,18 @@ test('MARCUS completes and verifies a rich standalone Skool post', async () => {
 
   const result = await bridge.completeSkoolPostComposition(session, {
     title: 'What should MARCUS automate next?',
+    text: 'A specific body with verified paragraph content.',
     category: 'Operations',
     pollOptions: ['Lead follow-up', 'Route planning', 'Customer updates'],
   });
 
   assert.equal(result.completeDraft, true);
+  assert.equal(result.bodyVerified, true);
+  assert.match(evaluations[0], /const composerFor/);
+  assert.match(evaluations[0], /hasPost && hasEditor/);
+  assert.match(evaluations[0], /composer\.querySelectorAll\('button'\)/);
+  assert.match(evaluations.at(-1), /bodyVerified/);
+  assert.match(evaluations.at(-1), /completeDraft: Boolean\(composer\)/);
   assert.deepEqual(actions, [
     { type: 'fill', placeholder: 'Title', text: 'What should MARCUS automate next?' },
     { type: 'click', label: 'Select a category', selector: 'button' },
@@ -483,7 +541,9 @@ test('MARCUS preserves an already-selected Skool category', async () => {
       if (runtimeCall === 1) return { result: { value: true } };
       return { result: { value: {
         completeDraft: true,
+        composerLocated: true,
         titleVerified: true,
+        bodyVerified: true,
         categoryVerified: true,
         pollVerified: true,
         title: 'A concrete operator observation',
@@ -495,6 +555,7 @@ test('MARCUS preserves an already-selected Skool category', async () => {
 
   const result = await bridge.completeSkoolPostComposition(session, {
     title: 'A concrete operator observation',
+    text: 'A concrete body that must remain in the active composer.',
     category: 'Operations',
   });
 

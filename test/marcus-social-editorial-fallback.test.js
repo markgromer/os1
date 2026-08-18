@@ -12,9 +12,10 @@ test('MARCUS builds a source-faithful draft from an unverified live lead test', 
   };
   const draft = buildMarcusTestObservationDraft(observation);
 
-  assert.equal(draft.title, "ScooPilot's 30-second promise needs live traffic");
-  assert.match(draft.text, /not against live ad traffic yet/i);
+  assert.equal(draft.title, '30 seconds is not the hard part');
+  assert.match(draft.text, /only tested it privately/i);
   assert.doesNotMatch(draft.text, /delivers|shipped|proven/i);
+  assert.match(draft.text, /keep ScooPilot supervised/i);
   const quality = analyzeMarcusSocialDraft({
     ...draft,
     sourceObservationIds: ['obs_jeremy'],

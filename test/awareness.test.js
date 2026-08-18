@@ -136,6 +136,9 @@ test('desktop visualizer uses canonical awareness instead of browser-local proje
   assert.match(html, /awarenessProjectId/);
   assert.doesNotMatch(html, /opsDismissedProjects/);
   assert.match(html, /data-tab="browser"/);
+  assert.match(html, /<option value="__browser__">Browser<\/option>/);
+  assert.match(html, /context: browserContext \? "browser"/);
+  assert.match(html, /\.composer select option \{ background: #fffdfa; color: #17191d; \}/);
   assert.match(html, /data-tab="approvals"/);
   assert.match(html, /\/api\/marcus\/browser\/status/);
   assert.match(html, /\/api\/marcus\/browser\/actions/);
