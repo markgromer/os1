@@ -31,6 +31,14 @@ test('browser composition is prepared separately from explicitly approved submis
     classifyMarcusBrowserIntent('Write a Skool reply thanking Tanya for the commercial account question.'),
     'marcus_browser_fill',
   );
+  assert.equal(
+    classifyMarcusBrowserIntent('draft your first post', { contextKind: 'skool' }),
+    'marcus_browser_fill',
+  );
+  assert.equal(
+    classifyMarcusBrowserIntent('draft your first standalone post', { contextKind: 'skool' }),
+    'marcus_browser_fill',
+  );
   assert.equal(classifyMarcusBrowserIntent('Post it', { pendingDraft: false }), '');
   assert.equal(classifyMarcusBrowserIntent('Post it', { pendingDraft: true }), 'marcus_browser_submit');
   assert.equal(classifyMarcusBrowserIntent('Approve and send the email', { pendingDraft: true }), '');
@@ -106,6 +114,7 @@ test('browser follow-up approvals stay with the visible browser instead of appro
     },
   ];
   assert.equal(resolveMarcusBrowserFollowupIntent('yes', recentMessages, { contextKind: 'skool' }), 'marcus_browser_read');
+  assert.equal(resolveMarcusBrowserFollowupIntent('yes, i approve', recentMessages, { contextKind: 'skool' }), 'marcus_browser_read');
   assert.equal(resolveMarcusBrowserFollowupIntent('do it', recentMessages, { contextKind: 'skool' }), 'marcus_browser_read');
   assert.equal(
     resolveMarcusBrowserFollowupIntent('yes, do it, its MARCUS account you are logged in with', recentMessages, { contextKind: 'skool' }),

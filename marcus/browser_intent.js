@@ -4,7 +4,9 @@ const APPROVAL_PATTERN = /\b(approve|approved|go ahead|do it|post it|publish it|
 const THREAD_NAVIGATION_PATTERN = /\b(head to|go to|find|open|visit|navigate to|(?:in(?:side)?|on|to) (?:the )?(?:thread|post|tab)|thread)\b/i;
 const SUBMISSION_NEGATION_PATTERN = /\b(do not|don't|never|not yet|without)\b[^.!?\n]{0,60}\b(post|publish|send|submit|reply|comment)\b/i;
 const FEED_READING_PATTERN = /\b(?:main\s+feed|feed|posts?|comments?|community|group|timeline|latest|browse|read|review|inspect|scan|look\s+through|check\s+out)\b/i;
-const BROWSER_FOLLOWUP_CONFIRMATION_PATTERN = /^(?:yes|yeah|yep|yup|ok|okay|do it|go ahead|please do|proceed|confirmed?|approved?|sure)(?:[.!\s,]*(?:do it|please|now|with (?:your|the) account|it'?s? (?:marcus|your) account|you are logged in with|you'?re logged in with))*[.!]?$/i;
+const COMPOSITION_VERB_PATTERN = /\b(write|draft|compose|type|fill|prepare|create|make|respond)\b/i;
+const STANDALONE_POST_PATTERN = /\b(?:(?:new|standalone|own|first)\s+post|post\s+(?:of|from)\s+(?:your|marcus))\b/i;
+const BROWSER_FOLLOWUP_CONFIRMATION_PATTERN = /^(?:yes|yeah|yep|yup|ok|okay|do it|go ahead|please do|proceed|confirm(?:ed)?|approv(?:e|ed)|i approve|sure)(?:[.!\s,]*(?:i approve|approve it|do it|please|now|with (?:your|the) account|it'?s? (?:marcus|your) account|you are logged in with|you'?re logged in with))*[.!]?$/i;
 const BROWSER_PROMPT_PATTERN = /\b(browser|chrome|skool|feed|page|post|posts|comments|thread|visible content|dedicated profile|marcus account)\b/i;
 const BROWSER_READ_PROMPT_PATTERN = /\b(read|inspect|review|summari[sz]e|scan|browse|look through|check out|visible content|posts?|comments?)\b/i;
 const BROWSER_OPEN_PROMPT_PATTERN = /\b(open|navigate|go to|pull up|visit|browse)\b/i;
@@ -27,15 +29,16 @@ export function classifyMarcusBrowserIntent(message, { pendingDraft = false, con
   const implicitCurrentSurface = liveBrowserContext
     && /\b(?:(?:this|that|the|current|open|visible)\s+(?:thread|post|page|message|comment)|thread)\b/i.test(text);
   const implicitFeedRead = liveBrowserContext && FEED_READING_PATTERN.test(text);
+  const implicitBrowserComposition = liveBrowserContext && (COMPOSITION_PATTERN.test(text) || STANDALONE_POST_PATTERN.test(text)) && COMPOSITION_VERB_PATTERN.test(text);
   const explicitRead = /\b(read|review|inspect|analy[sz]e|browse|browsing|scan|summari[sz]e|feedback|look(?:ing)? at|check(?:ing)? out)\b|\blook through\b/i.test(text);
-  if (!BROWSER_SURFACE_PATTERN.test(text) && !implicitCurrentSurface && !implicitFeedRead) return '';
+  if (!BROWSER_SURFACE_PATTERN.test(text) && !implicitCurrentSurface && !implicitFeedRead && !implicitBrowserComposition) return '';
   if (approvedSubmit) return 'marcus_browser_submit';
 
   if (explicitRead) {
     return 'marcus_browser_read';
   }
-  if (COMPOSITION_PATTERN.test(text) && /\b(write|draft|compose|type|fill|prepare|create|make|respond)\b/i.test(text)) {
-    if (THREAD_NAVIGATION_PATTERN.test(text)) return 'marcus_browser_prepare_reply';
+  if ((COMPOSITION_PATTERN.test(text) || STANDALONE_POST_PATTERN.test(text)) && COMPOSITION_VERB_PATTERN.test(text)) {
+    if (!STANDALONE_POST_PATTERN.test(text) && THREAD_NAVIGATION_PATTERN.test(text)) return 'marcus_browser_prepare_reply';
     return 'marcus_browser_fill';
   }
   if (implicitFeedRead) return 'marcus_browser_read';
