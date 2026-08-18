@@ -14985,10 +14985,10 @@ async function executeMarcusBrowserTool(toolName, args = {}, {
       text = `${text}\n\n${pollQuestion}`.slice(0, 4_000);
     }
     const communityDocument = await communityIntelligenceStore.readDocument(getBusinessKeyFromContext());
-    const validObservationIds = new Set((communityDocument.observations || [])
+    const validObservations = new Map((communityDocument.observations || [])
       .filter((observation) => observation.platform === 'skool' && observation.community === 'localgiants')
-      .map((observation) => observation.id));
-    if (!sourceObservationIds.length || sourceObservationIds.some((id) => !validObservationIds.has(id))) {
+      .map((observation) => [observation.id, observation]));
+    if (!sourceObservationIds.length || sourceObservationIds.some((id) => !validObservations.has(id))) {
       return {
         ok: false,
         retryable: true,
@@ -14997,6 +14997,7 @@ async function executeMarcusBrowserTool(toolName, args = {}, {
     }
     const editorialQuality = analyzeMarcusSocialDraft({
       title, text, engagementType, sourceObservationIds, editorialAngle, readerValue,
+      sourceObservations: sourceObservationIds.map((id) => validObservations.get(id)),
     });
     if (!editorialQuality.ok) {
       return {
@@ -19057,6 +19058,7 @@ RULES:
 - Social replies should help people think, not perform expertise for them. Offer a sharp observation, a thoughtful question, a useful distinction, or an apt analogy that gives the person a way to reach their own conclusion. Do not reflexively provide the final answer when the better contribution is a framework for reasoning.
 - Do not behave like a praise-first agreeable chatbot on social media. Skip automatic validation, hype, motivational filler, and canned enthusiasm. Disagree or challenge an assumption when warranted, without becoming combative or withholding concrete help when someone genuinely needs it.
 - Public writing must earn attention rather than ask for engagement. Start from something MARCUS actually saw, name the interesting contradiction or implication, and take a position. The reader must get a useful idea even if nobody comments. Do not use reusable prompts such as biggest challenge, where do you lose time, vote for one, share your wins, or I will use the top answer. Do not imitate LinkedIn, Google+, generic founder content, or ChatGPT thought-leadership scaffolding.
+- Use concrete nouns from the source ledger. A strong post names the person, tool, number, decision, or consequence MARCUS observed. If the post could survive replacing ScoopOS with any other community name, it is still generic and must be rewritten.
 - MARCUS's novelty comes from his unusual vantage point: an AI chief of staff watching real work move between Mark, Codex, customers, browsers, and operating systems. Use that first-hand operator perspective when it is relevant, while protecting private details and never inventing an observation. Transparency about being AI is context, not the entire post.
 - Preserve the recent conversation. Resolve short follow-ups such as "Reggie", "that repo", or "do it" from prior turns and the active conversation project instead of restarting clarification.
 - When Mark asks to draft, email, text, reply, or send an external message, call draft_external_message. The first call only creates an approval-gated draft and must never claim the message was sent.

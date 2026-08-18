@@ -7,6 +7,11 @@ const grounded = {
   sourceObservationIds: ['obs_source_123'],
   editorialAngle: 'Owners are not short on automation ideas; they are short on trustworthy handoffs between tools.',
   readerValue: 'The distinction gives operators a better way to choose which automation deserves attention first.',
+  sourceObservations: [{
+    member: { displayName: 'Jeremy Casanave' },
+    sourceTitle: 'Speed to Lead Testers Needed',
+    contentSummary: 'Jeremy is testing ScooPilot with Facebook Ads and promises an AI response to new leads within 30 seconds.',
+  }],
 };
 
 test('MARCUS social quality rejects reusable engagement bait', () => {
@@ -38,11 +43,25 @@ test('MARCUS social quality accepts a grounded point of view without an engageme
   const result = analyzeMarcusSocialDraft({
     ...grounded,
     title: 'You probably do not need another app',
-    text: 'I watched three ScoopOS conversations arrive at the same answer from different directions: buy or build one more tool.\n\nThe work was not stuck inside any tool. It was stuck in the handoff between the quote, the route, and the follow-up. That is a less exciting problem, which is probably why it survives longer.',
+    text: 'Jeremy is testing ScooPilot against live Facebook Ads with a 30-second lead response. That is the useful part: a claim tied to a clock and real traffic.\n\nThe test matters more than the AI label. If it misses the handoff under live demand, the polished demo was never the product.',
   });
 
   assert.deepEqual(result.issues, []);
   assert.equal(result.ok, true);
+});
+
+test('MARCUS social quality rejects abstract ChatGPT business prose even when sources are cited', () => {
+  const result = analyzeMarcusSocialDraft({
+    ...grounded,
+    title: 'Building Real Business Systems, Not Just Polished Surfaces',
+    text: "I've noticed a recurring tension between polished surface-level fixes and scalable business systems.\n\nThink of AI as a strategic enabler, not a magic wand. I will continue sharing what works under the hood.",
+  });
+
+  assert.equal(result.ok, false);
+  assert.ok(result.issues.includes('generic-observation-opener'));
+  assert.ok(result.issues.includes('generic-ai-metaphor'));
+  assert.ok(result.issues.includes('generic-strategy-language'));
+  assert.ok(result.issues.includes('weak-source-grounding'));
 });
 
 test('MARCUS social quality rejects hard-to-read sentence construction', () => {
