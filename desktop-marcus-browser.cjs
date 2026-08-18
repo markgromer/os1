@@ -553,10 +553,37 @@ class MarcusBrowserBridge {
     const pathParts = currentUrl.pathname.split('/').filter(Boolean);
     if (!pathParts.length) throw new Error('The Skool community could not be resolved from the visible page.');
     const communityUrl = `${currentUrl.origin}/${pathParts[0]}`;
-    await session.send('Page.navigate', { url: communityUrl }, 4_000);
-    await wait(1_200);
+    if (pathParts.length !== 1) {
+      try {
+        await session.send('Page.navigate', { url: communityUrl }, 8_000);
+      } catch (error) {
+        const location = await session.send('Runtime.evaluate', {
+          expression: 'location.href', returnByValue: true,
+        }, 4_000).catch(() => null);
+        const observedUrl = safeHttpUrl(location?.result?.value);
+        if (!observedUrl || new URL(observedUrl).pathname.split('/').filter(Boolean).length !== 1) throw error;
+      }
+      await wait(1_200);
+    }
 
-    const opener = await this.evaluateUntil(session, {
+    const composerAlreadyOpen = await session.send('Runtime.evaluate', {
+      expression: `(() => {
+        const visible = (element) => {
+          const rect = element.getBoundingClientRect();
+          const style = getComputedStyle(element);
+          return rect.width > 0 && rect.height > 0
+            && style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) !== 0;
+        };
+        const root = location.pathname.replace(/\\/$/, '').split('/').filter(Boolean).length === 1;
+        const editor = [...document.querySelectorAll('.skool-editor[contenteditable="true"]')]
+          .find((element) => visible(element) && !element.closest('article'));
+        return Boolean(root && editor);
+      })()`,
+      returnByValue: true,
+    }, 4_000).catch(() => null);
+
+    if (composerAlreadyOpen?.result?.value !== true) {
+      const opener = await this.evaluateUntil(session, {
       expression: `(() => {
         const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').trim().toLowerCase();
         const wanted = /^(?:write something|start a post|create post|post something|what do you want to share)(?:\.{3}|[.!?])?$/;
@@ -593,17 +620,18 @@ class MarcusBrowserBridge {
       timeoutMs: this.composerOpenTimeoutMs,
       accept: (value) => value?.result?.value?.located === true,
     });
-    const point = opener?.result?.value;
-    if (!point?.located || !Number.isFinite(point.x) || !Number.isFinite(point.y)) {
-      throw new Error('The ScoopOS main feed is visible, but its standalone post composer could not be opened.');
+      const point = opener?.result?.value;
+      if (!point?.located || !Number.isFinite(point.x) || !Number.isFinite(point.y)) {
+        throw new Error('The ScoopOS main feed is visible, but its standalone post composer could not be opened.');
+      }
+      await session.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: point.x, y: point.y });
+      await session.send('Input.dispatchMouseEvent', {
+        type: 'mousePressed', x: point.x, y: point.y, button: 'left', buttons: 1, clickCount: 1,
+      });
+      await session.send('Input.dispatchMouseEvent', {
+        type: 'mouseReleased', x: point.x, y: point.y, button: 'left', buttons: 0, clickCount: 1,
+      });
     }
-    await session.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: point.x, y: point.y });
-    await session.send('Input.dispatchMouseEvent', {
-      type: 'mousePressed', x: point.x, y: point.y, button: 'left', clickCount: 1,
-    });
-    await session.send('Input.dispatchMouseEvent', {
-      type: 'mouseReleased', x: point.x, y: point.y, button: 'left', clickCount: 1,
-    });
     const focus = await this.evaluateUntil(session, {
       expression: `(() => {
         const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').trim().toLowerCase();
@@ -673,12 +701,14 @@ class MarcusBrowserBridge {
     await session.send('Input.insertText', { text });
     const verified = await session.send('Runtime.evaluate', {
       expression: `(() => {
-        const expected = ${JSON.stringify(text.replace(/\r\n/g, '\n'))};
+        const normalize = (value) => String(value || '').replace(/\\r\\n/g, '\\n')
+          .split('\\n').map((line) => line.trim()).filter(Boolean).join('\\n\\n');
+        const expected = normalize(${JSON.stringify(text.replace(/\r\n/g, '\n'))});
         const editor = document.activeElement;
         if (!editor || !editor.matches('textarea,[contenteditable="true"],[contenteditable="plaintext-only"],[role="textbox"]:not(input)')) {
           return { verified: false };
         }
-        const actual = String(editor.value ?? editor.innerText ?? editor.textContent ?? '').replace(/\\r\\n/g, '\\n');
+        const actual = normalize(editor.value ?? editor.innerText ?? editor.textContent ?? '');
         const communityRoot = location.pathname.replace(/\\/$/, '').split('/').filter(Boolean).length === 1;
         const inThread = Boolean(editor.closest('article'));
         let container = editor;
@@ -698,7 +728,7 @@ class MarcusBrowserBridge {
       returnByValue: true,
     }, 4_000);
     if (!verified?.result?.value?.verified) {
-      throw new Error('The standalone Skool draft failed exact composer read-back. MARCUS will not claim it is ready.');
+      throw new Error(`The standalone Skool draft failed exact composer read-back. MARCUS will not claim it is ready. Evidence: ${JSON.stringify(verified?.result?.value || {})}`);
     }
     const composition = title && category
       ? await this.completeSkoolPostComposition(session, { title, category, pollOptions })
