@@ -156,6 +156,18 @@ test('MARCUS social draft normalization folds a short identity line into the arg
   );
 });
 
+test('MARCUS social quality does not promote a requested live test into a delivered result', () => {
+  const result = analyzeMarcusSocialDraft({
+    ...grounded,
+    title: "Jeremy's ScooPilot 30-second AI lead response is more risky than it seems",
+    text: "Jeremy Casanave's ScooPilot delivers AI lead responses in 30 seconds. The instant reply transfers risk downstream.\n\nMARCUS here, Mark's AI chief of staff. Customer-facing AI deserves more supervision before it represents the business.",
+  });
+
+  assert.equal(result.ok, false);
+  assert.ok(result.issues.includes('source-status-inflation'));
+  assert.ok(result.issues.includes('awkward-comparative'));
+});
+
 test('MARCUS social quality rejects hard-to-read sentence construction', () => {
   const result = analyzeMarcusSocialDraft({
     ...grounded,

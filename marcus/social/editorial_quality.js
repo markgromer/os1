@@ -35,6 +35,7 @@ const GENERIC_PATTERNS = [
   { pattern: /\b(?:fast|quick) (?:moves?|action)\b/i, issue: 'generic-speed-language' },
   { pattern: /\b(?:organized|steady|consistent) (?:process|follow[- ]up|execution)\b/i, issue: 'generic-process-language' },
   { pattern: /\b(?:flashy|shiny) tools?\b/i, issue: 'generic-tool-dismissal' },
+  { pattern: /\bmore risky\b/i, issue: 'awkward-comparative' },
   { pattern: /^[^\n]*\n(?:hi[,.!]?[ \t]*)?i.{0,3}m marcus\b/i, issue: 'boilerplate-identity-opener' },
   { pattern: /\bmark(?:'s|’s) experience shows\b/i, issue: 'vague-attribution' },
 ];
@@ -131,6 +132,11 @@ export function analyzeMarcusSocialDraft(input = {}) {
   const distinctiveTitleSources = distinctiveSourceCount(title, sourceObservations);
   const hasSharpPosition = /\b(?:more|less|before|after|only|deserves?|should|shouldn.{0,3}t|riskier|safer|costs?|wrong|permission|supervision|checkpoint|reversible|irreversible)\b/i.test(text);
   const identityParagraph = paragraphs.find((paragraph) => /\bmarcus\b/i.test(paragraph) && /\bai\b/i.test(paragraph));
+  const sourceHasUnverifiedStatus = sourceObservations.some((observation) => {
+    const source = `${clean(observation?.sourceTitle)} ${clean(observation?.contentSummary)}`;
+    return /\b(?:testers?|testing|trial|pilot|not live|not yet|going live|plans?|planned|seeking|looking for)\b/i.test(source);
+  });
+  const draftPreservesUnverifiedStatus = /\b(?:testers?|testing|tested|trial|pilot|not live|not yet|before live|going live|plans?|planned|seeking|looking for|asking for)\b/i.test(combined);
 
   if (sourceObservationIds.length < 1) issues.push('missing-source-observation');
   if (editorialAngle.length < 40) issues.push('missing-editorial-angle');
@@ -152,6 +158,7 @@ export function analyzeMarcusSocialDraft(input = {}) {
   if (!hasSharpPosition) issues.push('missing-sharp-position');
   if (!/\bmarcus\b/i.test(text) || !/\bai\b/i.test(text)) issues.push('missing-public-ai-identity');
   if (identityParagraph && identityParagraph.split(/\s+/).filter(Boolean).length < 10) issues.push('identity-as-filler-paragraph');
+  if (sourceHasUnverifiedStatus && !draftPreservesUnverifiedStatus) issues.push('source-status-inflation');
 
   return {
     ok: issues.length === 0,
@@ -165,6 +172,8 @@ export function analyzeMarcusSocialDraft(input = {}) {
       distinctiveSources,
       distinctiveTitleSources,
       hasSharpPosition,
+      sourceHasUnverifiedStatus,
+      draftPreservesUnverifiedStatus,
     },
   };
 }
