@@ -35,7 +35,7 @@ const GENERIC_PATTERNS = [
   { pattern: /\b(?:fast|quick) (?:moves?|action)\b/i, issue: 'generic-speed-language' },
   { pattern: /\b(?:organized|steady|consistent) (?:process|follow[- ]up|execution)\b/i, issue: 'generic-process-language' },
   { pattern: /\b(?:flashy|shiny) tools?\b/i, issue: 'generic-tool-dismissal' },
-  { pattern: /(?:^|\n)(?:hi[,.!]?[ \t]*)?i.{0,3}m marcus\b/i, issue: 'boilerplate-identity-opener' },
+  { pattern: /^[^\n]*\n(?:hi[,.!]?[ \t]*)?i.{0,3}m marcus\b/i, issue: 'boilerplate-identity-opener' },
   { pattern: /\bmark(?:'s|’s) experience shows\b/i, issue: 'vague-attribution' },
 ];
 
@@ -112,17 +112,24 @@ export function analyzeMarcusSocialDraft(input = {}) {
   const sourceObservations = Array.isArray(input.sourceObservations) ? input.sourceObservations : [];
   const groundedSources = groundedSourceCount(combined, sourceObservations);
   const distinctiveSources = distinctiveSourceCount(combined, sourceObservations);
+  const distinctiveTitleSources = distinctiveSourceCount(title, sourceObservations);
+  const hasSharpPosition = /\b(?:more|less|before|after|only|deserves?|should|shouldn.{0,3}t|riskier|safer|costs?|wrong|permission|supervision|checkpoint|reversible|irreversible)\b/i.test(text);
 
   if (sourceObservationIds.length < 1) issues.push('missing-source-observation');
   if (editorialAngle.length < 40) issues.push('missing-editorial-angle');
   if (readerValue.length < 30) issues.push('missing-reader-value');
   if (paragraphs.length < 2) issues.push('wall-of-text');
-  if (paragraphs.length > 5) issues.push('too-many-paragraphs');
+  if (paragraphs.length > 4) issues.push('too-many-paragraphs');
   if (questionCount > 1) issues.push('too-many-questions');
   if (maxSentenceWords > 36) issues.push('sentence-too-long');
   if (text.length > 900) issues.push('draft-too-long');
   if (sourceObservations.length && groundedSources < 1) issues.push('weak-source-grounding');
   if (sourceObservations.length && distinctiveSources < 1) issues.push('missing-distinctive-source-anchor');
+  if (sourceObservations.length && distinctiveTitleSources < 1) issues.push('generic-source-free-title');
+  if (/\b(?:balanc\w*|versus|vs\.?)\b/i.test(title)) issues.push('generic-balanced-title');
+  if (/\b(?:both matter|need both|requires? both|best of both)\b/i.test(text)) issues.push('generic-both-sides-conclusion');
+  if (!hasSharpPosition) issues.push('missing-sharp-position');
+  if (!/\bmarcus\b/i.test(text) || !/\bai\b/i.test(text)) issues.push('missing-public-ai-identity');
 
   return {
     ok: issues.length === 0,
@@ -134,6 +141,8 @@ export function analyzeMarcusSocialDraft(input = {}) {
       sourceObservations: sourceObservationIds.length,
       groundedSources,
       distinctiveSources,
+      distinctiveTitleSources,
+      hasSharpPosition,
     },
   };
 }

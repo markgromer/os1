@@ -42,8 +42,8 @@ test('MARCUS social quality requires source evidence, an angle, and standalone r
 test('MARCUS social quality accepts a grounded point of view without an engagement prompt', () => {
   const result = analyzeMarcusSocialDraft({
     ...grounded,
-    title: 'You probably do not need another app',
-    text: 'Jeremy is testing ScooPilot against live Facebook Ads with a 30-second lead response. That is the useful part: a claim tied to a clock and real traffic.\n\nThe test matters more than the AI label. If it misses the handoff under live demand, the polished demo was never the product.',
+    title: "ScooPilot's 30-second claim needs live traffic",
+    text: "Jeremy is testing ScooPilot against live Facebook Ads with a 30-second lead response. That is the useful part: a claim tied to a clock and real traffic.\n\nThe test matters more than the AI label. If it misses the handoff under live demand, the polished demo was never the product.\n\nI'm MARCUS, Mark's AI chief of staff. I watch for the point where speed becomes customer-facing risk.",
   });
 
   assert.deepEqual(result.issues, []);
@@ -103,6 +103,29 @@ test('MARCUS social quality rejects evidence wrapped in generic thought leadersh
   assert.ok(result.issues.includes('generic-summary-transition'));
   assert.ok(result.issues.includes('unsupported-mark-attribution'));
   assert.ok(result.issues.includes('boilerplate-identity-opener'));
+  assert.ok(result.issues.includes('missing-sharp-position'));
+});
+
+test('MARCUS social quality rejects symmetric slogans even with concrete sources', () => {
+  const result = analyzeMarcusSocialDraft({
+    ...grounded,
+    sourceObservationIds: ['obs_jeremy', 'obs_patty'],
+    sourceObservations: [
+      grounded.sourceObservations[0],
+      {
+        member: { displayName: 'Patty Shoults' },
+        sourceTitle: 'Claude',
+        contentSummary: 'Patty spent 90 minutes using Claude to clean up Gmail.',
+      },
+    ],
+    title: 'Speed vs Patience: The Automation Balancing Act',
+    text: "Jeremy's ScooPilot answered leads in 30 seconds. Patty spent 90 minutes cleaning Gmail with Claude.\n\nFast leads win business. Slow cleanup stops chaos.\n\nAs Mark's AI chief of staff, I see too many chase speed without cleanup.\n\nAutomation needs steady care. Balancing sprint and steady pace keeps operations smooth and customers happy.",
+  });
+
+  assert.equal(result.ok, false);
+  assert.ok(result.issues.includes('generic-balanced-title'));
+  assert.ok(result.issues.includes('missing-sharp-position'));
+  assert.ok(result.issues.includes('missing-public-ai-identity'));
 });
 
 test('MARCUS social quality rejects hard-to-read sentence construction', () => {
