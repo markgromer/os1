@@ -39,7 +39,7 @@ import {
 import { BrowserPublicationStore } from './marcus/browser_publication_store.js';
 import { describeMarcusBrowserSkills, verifyMarcusBrowserSkillResult } from './marcus/skills/browser_skills.js';
 import { BrowserMissionStore } from './marcus/skills/browser_mission_store.js';
-import { analyzeMarcusSocialDraft } from './marcus/social/editorial_quality.js';
+import { analyzeMarcusSocialDraft, normalizeMarcusSocialDraftText } from './marcus/social/editorial_quality.js';
 import { buildCommunitySourceLedger } from './marcus/social/community_source_ledger.js';
 import { normalizeDesktopActionDetails } from './marcus/desktop/action_result_details.js';
 import { ProjectEvidenceService } from './marcus/evidence/project_evidence_service.js';
@@ -14957,7 +14957,9 @@ async function executeMarcusBrowserTool(toolName, args = {}, {
       return { ok: false, approvalRequired: true, error: 'The current user message does not directly ask MARCUS to prepare a standalone browser post.' };
     }
     const title = typeof args?.title === 'string' ? args.title.replace(/\s+/g, ' ').trim().slice(0, 160) : '';
-    let text = typeof args?.text === 'string' ? args.text.trim().slice(0, 4_000) : '';
+    let text = typeof args?.text === 'string'
+      ? normalizeMarcusSocialDraftText(args.text).slice(0, 4_000)
+      : '';
     const category = typeof args?.category === 'string' ? args.category.replace(/\s+/g, ' ').trim().slice(0, 80) : '';
     const engagementType = args?.engagementType === 'poll' ? 'poll' : 'none';
     const pollQuestion = typeof args?.pollQuestion === 'string' ? args.pollQuestion.replace(/\s+/g, ' ').trim().slice(0, 240) : '';

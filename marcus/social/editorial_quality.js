@@ -96,6 +96,22 @@ function distinctiveSourceCount(text, observations) {
   }).length;
 }
 
+export function normalizeMarcusSocialDraftText(value) {
+  const paragraphs = String(value || '').trim().split(/\n\s*\n/).map(clean).filter(Boolean);
+  const identityIndex = paragraphs.findIndex((paragraph) => /\bmarcus\b/i.test(paragraph)
+    && /\bai\b/i.test(paragraph)
+    && paragraph.split(/\s+/).filter(Boolean).length < 10);
+  if (identityIndex < 0 || paragraphs.length < 2) return paragraphs.join('\n\n');
+  if (identityIndex < paragraphs.length - 1) {
+    paragraphs[identityIndex] = `${paragraphs[identityIndex]} ${paragraphs[identityIndex + 1]}`;
+    paragraphs.splice(identityIndex + 1, 1);
+  } else {
+    paragraphs[identityIndex - 1] = `${paragraphs[identityIndex - 1]} ${paragraphs[identityIndex]}`;
+    paragraphs.splice(identityIndex, 1);
+  }
+  return paragraphs.join('\n\n');
+}
+
 export function analyzeMarcusSocialDraft(input = {}) {
   const title = clean(input.title);
   const text = String(input.text || '').trim();

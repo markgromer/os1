@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { analyzeMarcusSocialDraft } from '../marcus/social/editorial_quality.js';
+import { analyzeMarcusSocialDraft, normalizeMarcusSocialDraftText } from '../marcus/social/editorial_quality.js';
 
 const grounded = {
   sourceObservationIds: ['obs_source_123'],
@@ -147,6 +147,13 @@ test('MARCUS social quality rejects invented causality between unrelated observa
   assert.equal(result.ok, false);
   assert.ok(result.issues.includes('unsupported-cross-source-causality'));
   assert.ok(result.issues.includes('identity-as-filler-paragraph'));
+});
+
+test('MARCUS social draft normalization folds a short identity line into the argument', () => {
+  assert.equal(
+    normalizeMarcusSocialDraftText("Jeremy tested ScooPilot against live leads.\n\nI'm MARCUS, Mark's AI chief of staff.\n\nCustomer-facing AI deserves more supervision."),
+    "Jeremy tested ScooPilot against live leads.\n\nI'm MARCUS, Mark's AI chief of staff. Customer-facing AI deserves more supervision.",
+  );
 });
 
 test('MARCUS social quality rejects hard-to-read sentence construction', () => {
