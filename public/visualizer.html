@@ -683,6 +683,144 @@
       .dock-body { grid-template-columns: repeat(4, minmax(0, 1fr)); }
       .control-panel { grid-template-rows: 80px minmax(450px, 1fr) minmax(240px, 0.7fr) 32px; }
     }
+
+    /* Dedicated 9:16 monitor: preserve the full desktop command center, but stack its regions. */
+    @media (orientation: portrait) and (min-width: 700px) {
+      html, body { min-height: 100%; height: auto; }
+      body { overflow: auto; }
+      .display {
+        width: 100%;
+        height: auto;
+        min-height: 100vh;
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-rows:
+          52px
+          clamp(680px, 38vh, 760px)
+          38px
+          clamp(250px, 15vh, 300px)
+          clamp(250px, 15vh, 290px)
+          auto
+          clamp(330px, 19vh, 390px)
+          30px;
+        grid-template-areas:
+          "os"
+          "workspace"
+          "build-head"
+          "build-list"
+          "dock"
+          "media"
+          "chat"
+          "sync";
+        gap: 8px;
+        padding: 0 8px 8px;
+      }
+      .os-strip {
+        height: 52px;
+        margin: 0 -8px;
+        padding: 0 16px;
+        grid-template-columns: minmax(220px, 0.8fr) minmax(180px, 0.8fr) minmax(0, 1.7fr);
+      }
+      .os-left::before {
+        content: "MR";
+        width: 34px;
+        height: 34px;
+        display: grid;
+        place-items: center;
+        border: 1px solid var(--line-strong);
+        color: var(--green);
+        font-weight: 800;
+      }
+      .os-left .glyph { display: none; }
+      .os-title::after { content: "\A Display 2 · Portrait workspace"; white-space: pre; color: var(--muted); font-weight: 400; font-size: 11px; }
+      .os-center { font-size: 0; }
+      .os-center::after { content: "MARCUS OS"; font-size: 13px; color: var(--text); font-weight: 800; letter-spacing: .08em; }
+      .os-right { gap: 14px; }
+
+      .workspace-region {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        overflow: hidden;
+        grid-template-rows: 90px 0 minmax(0, 1fr) 34px;
+      }
+      .workspace-header {
+        grid-template-columns: minmax(0, 1fr) auto;
+        grid-template-rows: 48px 42px;
+        padding: 0 16px;
+        gap: 0 12px;
+      }
+      .workspace-title { grid-column: 1; grid-row: 1; }
+      .top-actions { grid-column: 2; grid-row: 1; }
+      .tabs { grid-column: 1 / -1; grid-row: 2; justify-content: space-around; gap: 4px; border-top: 1px solid var(--line); }
+      .tab { flex: 1 1 auto; padding: 0 4px; }
+      .browser-bar { display: none; }
+      .workspace-body { grid-template-columns: minmax(0, 2fr) minmax(280px, .95fr); }
+      .workspace-body.browser-mode { grid-template-columns: minmax(0, 1fr); }
+      .brief-surface { grid-template-columns: minmax(0, 1fr); padding: 22px; }
+      .brief-main, .brief-side { padding: 0; }
+      .brief-title { font-size: clamp(34px, 4.4vw, 48px); }
+      .brief-subtitle { font-size: 16px; }
+      .brief-side { grid-template-columns: repeat(3, minmax(0, 1fr)); align-content: start; }
+      .brief-card { padding: 12px; }
+
+      .control-panel, .builds { display: contents; }
+      .control-head { display: none; }
+      .builds > .section-title {
+        grid-area: build-head;
+        padding: 0 16px;
+        border: 1px solid var(--line);
+        border-radius: 8px 8px 0 0;
+        background: rgba(13, 19, 27, .92);
+        color: var(--text);
+        font-size: 14px;
+        font-weight: 800;
+      }
+      .builds > .section-title::before { content: "ACTIVE BUILDS"; }
+      .builds > .section-title > span { display: none; }
+      .build-list {
+        grid-area: build-list;
+        padding: 8px 10px;
+        border: 1px solid var(--line);
+        border-top: 0;
+        border-radius: 0 0 8px 8px;
+        background: rgba(10, 15, 21, .97);
+        overflow: auto;
+      }
+      .build-card { min-height: 58px; grid-template-columns: minmax(0, 1fr) 150px; padding: 7px 10px; }
+      .build-main { grid-template-columns: minmax(180px, .75fr) minmax(0, 1.5fr); align-items: center; gap: 10px; }
+      .build-main > p { align-self: center; }
+      .build-meta { grid-column: 2; }
+      .build-actions { grid-template-columns: 1fr 1fr; }
+      .builds > .ops-mini:nth-of-type(1) { display: none; }
+      .builds > .ops-mini:nth-of-type(2) {
+        grid-area: media;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 8px 16px;
+      }
+      .builds > .ops-mini:nth-of-type(2) .section-title { min-width: 170px; }
+
+      .dock {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        overflow: hidden;
+        grid-template-rows: 34px minmax(0, 1fr) 30px;
+      }
+      .dock-body { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); }
+      .dock-card { padding: 9px 12px; }
+      .dock-foot { font-size: 11px; }
+
+      .chat-card {
+        grid-area: chat;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: rgba(10, 15, 21, .97);
+      }
+      .chat-feed { grid-template-columns: 1fr; }
+      .message { max-width: 100%; }
+      .composer { grid-template-columns: 140px minmax(0, 1fr) 42px 48px; }
+      .sync-foot { grid-area: sync; }
+    }
   </style>
 </head>
 <body>
@@ -884,7 +1022,7 @@
     const sourceLabels = { codex: "Codex", operation: "Operation", job: "Codex job", awareness: "Awareness" };
     let snapshot = { projects: [], operations: [], jobs: [], desktop: null, awareness: null, settings: null, browser: null, publications: [] };
     let selectedId = "";
-    let activeTab = "browser";
+    let activeTab = window.matchMedia("(orientation: portrait) and (min-width: 700px)").matches ? "preview" : "browser";
     let activeFilter = "";
     let chatContextId = "";
     let loading = false;
