@@ -2898,7 +2898,7 @@ function getMarcusBrowserToolDefinitions() {
     {
       type: 'function', function: {
         name: 'marcus_browser_prepare_post',
-        description: 'Prepare a complete standalone ScoopOS post without submitting it. Before using this tool, observe the current community and build the post around source-linked details plus a non-obvious MARCUS point of view. Preserve the consequential difference between the observations instead of flattening them into a generic theme. Bad: "Balancing Speed and Depth: Lessons from AI" followed by advice about quick wins, lasting results, or organized processes. Better: name the person, tool, number, and real-world consequence, then make one sharp claim that would be false if those observations changed. Do not open with MARCUS biography; identify MARCUS naturally after earning the reader\'s attention. The post must feel written for this community today, not like a reusable engagement template. Default to no poll unless Mark explicitly asked for one. The tool rejects generic challenge questions, engagement bait, marketing cliches, unsupported community claims, and hard-to-read prose.',
+        description: 'Prepare a complete standalone ScoopOS post without submitting it. Before using this tool, observe the current community and build the post around source-linked details plus a non-obvious MARCUS point of view. Required shape: a title containing a source-specific person, product, phrase, or number; two to four short body paragraphs; a clear asymmetric judgment using language such as more, less, before, after, deserves, riskier, safer, wrong, permission, supervision, or checkpoint; and a natural statement that MARCUS is AI after the evidence-led opening. Preserve the consequential difference between observations instead of flattening them into a generic theme. Bad: "Balancing Speed and Depth: Lessons from AI" followed by advice about quick wins, lasting results, or organized processes. Better: name the person, tool, number, and real-world consequence, then make one sharp claim that would be false if those observations changed. Never conclude with balance, both matter, sustainable success, smooth operations, or customers happy. The post must feel written for this community today, not like a reusable engagement template. Default to no poll unless Mark explicitly asked for one. The tool rejects generic challenge questions, engagement bait, marketing cliches, unsupported community claims, and hard-to-read prose.',
         parameters: { type: 'object', properties: {
           title: { type: 'string', description: 'Specific Skool post title, 12-100 characters.' },
           text: { type: 'string', description: 'Exact post body, normally 120-700 characters. Lead with the actual observation or tension. Use short paragraphs, a clear opinion, and concrete language. A closing question is optional.' },
@@ -15003,7 +15003,7 @@ async function executeMarcusBrowserTool(toolName, args = {}, {
       return {
         ok: false,
         retryable: true,
-        error: `The draft still reads like reusable AI social copy. Rewrite it around the observed tension and remove: ${editorialQuality.issues.join(', ')}.`,
+        error: `The draft still reads like reusable AI social copy. Rewrite it now; do not ask Mark. Remove: ${editorialQuality.issues.join(', ')}. Retry target: source-specific title; 2-4 short paragraphs; one asymmetric judgment about risk, reversibility, permission, supervision, or cost; identify MARCUS as AI after the evidence-led opening; no balance/both conclusion.`,
         editorialQuality,
       };
     }
@@ -19090,6 +19090,7 @@ ${contextParts.join('\n')}`;
     let finalMessage = null;
     const liveToolStepLimit = browserIntent === 'marcus_browser_prepare_post' ? 9 : 4;
     let forcedLiveTool = '';
+    let lastLiveToolFailure = '';
     for (let toolStep = 0; toolStep < liveToolStepLimit; toolStep += 1) {
       const forcedToolThisStep = forcedLiveTool;
       forcedLiveTool = '';
@@ -19139,6 +19140,9 @@ ${contextParts.join('\n')}`;
         if (toolName === 'marcus_browser_prepare_post' && toolResult.retryable === true) {
           forcedLiveTool = 'marcus_browser_prepare_post';
         }
+        if (toolResult.ok !== true) {
+          lastLiveToolFailure = String(toolResult.error || `${toolName} failed`).replace(/\s+/g, ' ').trim().slice(0, 1_200);
+        }
         if (MARCUS_BROWSER_TOOL_NAMES.has(toolName) && browserMission) {
           browserMission = await browserMissionStore.recordResult(browserMission.id, {
             skill: toolName,
@@ -19155,7 +19159,9 @@ ${contextParts.join('\n')}`;
       }
     }
 
-    const reply = finalMessage?.content || 'I could not finish the PC tool request within the bounded tool loop.';
+    const reply = finalMessage?.content || (lastLiveToolFailure
+      ? `I could not finish the browser task. Last verified blocker: ${lastLiveToolFailure}`
+      : 'I could not finish the PC tool request within the bounded tool loop.');
     await recordMarcusLiveExchange(message, reply, { project: conversation.activeProject, browserMissionId: browserMission?.id || '' });
     pushLiveEvent({ type: 'chat', from: 'marcus', text: reply, ts: Date.now() });
     res.json({ ok: true, reply });
