@@ -3,6 +3,17 @@ const COMPOSITION_PATTERN = /\b(post|comment|reply|response|message|caption)\b/i
 const APPROVAL_PATTERN = /\b(approve|approved|go ahead|do it|post it|publish it|send it|submit it|reply now|comment now)\b/i;
 const THREAD_NAVIGATION_PATTERN = /\b(head to|go to|find|open|visit|navigate to|(?:in(?:side)?|on|to) (?:the )?(?:thread|post|tab)|thread)\b/i;
 const SUBMISSION_NEGATION_PATTERN = /\b(do not|don't|never|not yet|without)\b[^.!?\n]{0,60}\b(post|publish|send|submit|reply|comment)\b/i;
+const FEED_READING_PATTERN = /\b(?:main\s+feed|feed|posts?|comments?|community|group|timeline|latest|browse|read|review|inspect|scan|look\s+through|check\s+out)\b/i;
+const BROWSER_FOLLOWUP_CONFIRMATION_PATTERN = /^(?:yes|yeah|yep|yup|ok|okay|do it|go ahead|please do|proceed|confirmed?|approved?|sure)(?:[.!\s,]*(?:do it|please|now|with (?:your|the) account|it'?s? (?:marcus|your) account|you are logged in with|you'?re logged in with))*[.!]?$/i;
+const BROWSER_PROMPT_PATTERN = /\b(browser|chrome|skool|feed|page|post|posts|comments|thread|visible content|dedicated profile|marcus account)\b/i;
+const BROWSER_READ_PROMPT_PATTERN = /\b(read|inspect|review|summari[sz]e|scan|browse|look through|check out|visible content|posts?|comments?)\b/i;
+const BROWSER_OPEN_PROMPT_PATTERN = /\b(open|navigate|go to|pull up|visit|browse)\b/i;
+const LIVE_BROWSER_CONTEXTS = ['gmail', 'zoom', 'skool', 'google-meet', 'teams', 'youtube', 'tiktok'];
+
+export function isMarcusBrowserFollowupConfirmation(message) {
+  const text = String(message || '').replace(/\s+/g, ' ').trim();
+  return Boolean(text && BROWSER_FOLLOWUP_CONFIRMATION_PATTERN.test(text));
+}
 
 export function classifyMarcusBrowserIntent(message, { pendingDraft = false, contextKind = '' } = {}) {
   const text = String(message || '').replace(/\s+/g, ' ').trim();
@@ -12,25 +23,54 @@ export function classifyMarcusBrowserIntent(message, { pendingDraft = false, con
     && APPROVAL_PATTERN.test(text)
     && /\b(post|publish|send|submit|reply|comment)\b/i.test(text);
   if (pendingDraft && approvedSubmit && !/\b(email|e-mail|text|sms)\b/i.test(text)) return 'marcus_browser_submit';
-  const liveBrowserContext = ['gmail', 'zoom', 'skool', 'google-meet', 'teams', 'youtube', 'tiktok']
-    .includes(String(contextKind || '').trim().toLowerCase());
+  const liveBrowserContext = LIVE_BROWSER_CONTEXTS.includes(String(contextKind || '').trim().toLowerCase());
   const implicitCurrentSurface = liveBrowserContext
     && /\b(?:(?:this|that|the|current|open|visible)\s+(?:thread|post|page|message|comment)|thread)\b/i.test(text);
-  if (!BROWSER_SURFACE_PATTERN.test(text) && !implicitCurrentSurface) return '';
+  const implicitFeedRead = liveBrowserContext && FEED_READING_PATTERN.test(text);
+  const explicitRead = /\b(read|review|inspect|analy[sz]e|browse|browsing|scan|summari[sz]e|feedback|look(?:ing)? at|check(?:ing)? out)\b|\blook through\b/i.test(text);
+  if (!BROWSER_SURFACE_PATTERN.test(text) && !implicitCurrentSurface && !implicitFeedRead) return '';
   if (approvedSubmit) return 'marcus_browser_submit';
 
-  if (/\b(read|review|inspect|analy[sz]e|browse|browsing|scan|summari[sz]e|feedback|look(?:ing)? at)\b|\blook through\b/i.test(text)) {
+  if (explicitRead) {
     return 'marcus_browser_read';
   }
   if (COMPOSITION_PATTERN.test(text) && /\b(write|draft|compose|type|fill|prepare|create|make|respond)\b/i.test(text)) {
     if (THREAD_NAVIGATION_PATTERN.test(text)) return 'marcus_browser_prepare_reply';
     return 'marcus_browser_fill';
   }
+  if (implicitFeedRead) return 'marcus_browser_read';
+  if (FEED_READING_PATTERN.test(text)) return 'marcus_browser_read';
   if (/\b(click|press|activate|choose|select|follow)\b/i.test(text)) return 'marcus_browser_activate';
   if (/\bhttps?:\/\//i.test(text) && /\b(open|show|navigate|go to|pull up|visit)\b/i.test(text)) {
     return 'marcus_browser_open';
   }
   if (/\b(can(?:not|'t)?|unable|access|connected|control|see)\b/i.test(text)) return 'marcus_browser_status';
+  return '';
+}
+
+export function resolveMarcusBrowserFollowupIntent(message, recentMessages = [], { pendingDraft = false, contextKind = '' } = {}) {
+  const directIntent = classifyMarcusBrowserIntent(message, { pendingDraft, contextKind });
+  if (directIntent) return directIntent;
+  if (!isMarcusBrowserFollowupConfirmation(message)) return '';
+
+  const liveBrowserContext = LIVE_BROWSER_CONTEXTS.includes(String(contextKind || '').trim().toLowerCase());
+  const recentAssistantPrompts = (Array.isArray(recentMessages) ? recentMessages : [])
+    .slice(-8)
+    .filter((item) => ['assistant', 'ai', 'marcus'].includes(String(item?.role || '').toLowerCase()))
+    .map((item) => String(item?.content || '').replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .reverse();
+
+  const browserPrompt = recentAssistantPrompts.find((content) => BROWSER_PROMPT_PATTERN.test(content));
+  if (browserPrompt) {
+    if (BROWSER_READ_PROMPT_PATTERN.test(browserPrompt)) return 'marcus_browser_read';
+    if (BROWSER_OPEN_PROMPT_PATTERN.test(browserPrompt)) return 'marcus_browser_open';
+    if (liveBrowserContext) return 'marcus_browser_read';
+  }
+
+  if (liveBrowserContext && String(contextKind || '').trim().toLowerCase() === 'skool') {
+    return 'marcus_browser_read';
+  }
   return '';
 }
 

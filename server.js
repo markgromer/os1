@@ -29,6 +29,8 @@ import { buildMarcusSystemPrompt } from './marcus/core/build_system_prompt.js';
 import { explicitlyDefersCodexStart, explicitlyDefersProjectAudit, withoutProjectExecutionDeferrals } from './marcus/core/request_intent.js';
 import {
   classifyMarcusBrowserIntent,
+  isMarcusBrowserFollowupConfirmation,
+  resolveMarcusBrowserFollowupIntent,
   validateMarcusIntroductionDraft,
 } from './marcus/browser_intent.js';
 import { BrowserPublicationStore } from './marcus/browser_publication_store.js';
@@ -14780,12 +14782,13 @@ async function executeMarcusBrowserTool(toolName, args = {}, {
     };
   }
   const directRequest = String(requestMessage || '').toLowerCase();
+  const confirmedBrowserFollowup = isMarcusBrowserFollowupConfirmation(requestMessage);
   if (marcusBrowserControl.owner !== 'marcus') {
     return { ok: false, controlRequired: true, error: 'Mark currently has browser control. Return control to MARCUS first.' };
   }
   let payload;
   if (toolName === 'marcus_browser_open') {
-    if (!/\b(open|show|navigate|go to|pull up|visit|browse)\b/.test(directRequest)) {
+    if (!confirmedBrowserFollowup && !/\b(open|show|navigate|go to|pull up|visit|browse)\b/.test(directRequest)) {
       return { ok: false, approvalRequired: true, error: 'The current user message does not directly ask MARCUS to navigate the browser.' };
     }
     const url = safeMarcusBrowserUrl(args?.url);
@@ -14848,7 +14851,7 @@ async function executeMarcusBrowserTool(toolName, args = {}, {
       desktopAgentId: status.agentId || desktopRelayCache?.data?.desktopAuthorization?.agentId || '',
     };
   } else {
-    if (!/\b(read|review|inspect|analy[sz]e|browse|browsing|scan|summari[sz]e|feedback|look(?:ing)? at)\b|\blook through\b/.test(directRequest)) {
+    if (!confirmedBrowserFollowup && !/\b(read|review|inspect|analy[sz]e|browse|browsing|scan|summari[sz]e|feedback|look(?:ing)? at|check(?:ing)? out)\b|\blook through\b/.test(directRequest)) {
       return { ok: false, approvalRequired: true, error: 'The current user message does not directly ask MARCUS to inspect the visible browser page.' };
     }
     payload = {
@@ -18429,7 +18432,8 @@ app.post('/api/marcus/live/chat', async (req, res) => {
     }
     const approvalAuthorized = hasDurableAdminAuthentication(req);
     const browserDraftPending = Boolean(marcusBrowserDraftCache && (Date.now() - marcusBrowserDraftCache.at) < 30 * 60_000);
-    const browserIntent = classifyMarcusBrowserIntent(message, {
+    const recentConversation = recentMarcusLiveMessages(conversation);
+    const browserIntent = resolveMarcusBrowserFollowupIntent(message, recentConversation, {
       pendingDraft: browserDraftPending,
       contextKind: marcusBrowserStatus().contextKind,
     });
@@ -18711,7 +18715,6 @@ RULES:
 CURRENT WORKSPACE CONTEXT:
 ${contextParts.join('\n')}`;
 
-    const recentConversation = recentMarcusLiveMessages(conversation);
     const externalCommunicationRequest = isExternalCommunicationRequest(message);
     const liveMessages = [
       { role: 'system', content: systemPrompt },

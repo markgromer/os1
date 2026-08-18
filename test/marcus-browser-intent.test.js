@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   classifyMarcusBrowserIntent,
+  resolveMarcusBrowserFollowupIntent,
   validateMarcusIntroductionDraft,
 } from '../marcus/browser_intent.js';
 
@@ -13,6 +14,14 @@ test('Skool inspection requests route to the live browser instead of project wor
   );
   assert.equal(
     classifyMarcusBrowserIntent("Why aren't you looking at the browser window on your connected app?"),
+    'marcus_browser_read',
+  );
+  assert.equal(
+    classifyMarcusBrowserIntent('go to the main feed and check out the other posts, read a dozen or so, including comments, and start to think about future posts', { contextKind: 'skool' }),
+    'marcus_browser_read',
+  );
+  assert.equal(
+    classifyMarcusBrowserIntent('no, the main feed on scoopos on skool'),
     'marcus_browser_read',
   );
 });
@@ -87,4 +96,27 @@ test('MARCUS public introduction drafts cannot impersonate Mark or hide their AI
 test('ordinary project requests do not become browser operations', () => {
   assert.equal(classifyMarcusBrowserIntent('Build the Scoop GPT settings page and deploy it.'), '');
   assert.equal(classifyMarcusBrowserIntent('Reply to the client by email.'), '');
+});
+
+test('browser follow-up approvals stay with the visible browser instead of approving Codex work', () => {
+  const recentMessages = [
+    {
+      role: 'assistant',
+      content: 'The ScoopOS Skool main feed is open now in the MARCUS browser. I can start reading through about a dozen recent posts and their comments to get a feel for content trends and conversations. Shall I summarize what I see and propose some future post ideas?',
+    },
+  ];
+  assert.equal(resolveMarcusBrowserFollowupIntent('yes', recentMessages, { contextKind: 'skool' }), 'marcus_browser_read');
+  assert.equal(resolveMarcusBrowserFollowupIntent('do it', recentMessages, { contextKind: 'skool' }), 'marcus_browser_read');
+  assert.equal(
+    resolveMarcusBrowserFollowupIntent('yes, do it, its MARCUS account you are logged in with', recentMessages, { contextKind: 'skool' }),
+    'marcus_browser_read',
+  );
+});
+
+test('browser follow-up resolver preserves publication safeguards', () => {
+  const recentMessages = [
+    { role: 'assistant', content: 'I prepared the Skool reply in the browser. Nothing has been posted.' },
+  ];
+  assert.equal(resolveMarcusBrowserFollowupIntent('Post it', recentMessages, { pendingDraft: true, contextKind: 'skool' }), 'marcus_browser_submit');
+  assert.equal(resolveMarcusBrowserFollowupIntent('approve and send the email', recentMessages, { pendingDraft: true, contextKind: 'gmail' }), '');
 });
