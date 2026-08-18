@@ -256,7 +256,8 @@ if (!ADMIN_TOKEN && new URL(SERVER_URL).protocol === 'https:') {
 
 const POLL_MS = 5000;
 const BROWSER_ACTION_POLL_MS = 350;
-const BROWSER_FRAME_INTERVAL_MS = 1200;
+const BROWSER_FRAME_INTERVAL_MS = 2500;
+const BROWSER_RELAY_RETRY_DELAYS_MS = [700, 1500, 3000];
 const WORKSPACE_SCAN_INTERVAL_MS = 30_000; // full workspace scan every 30s
 const CODEX_WORKSPACE_SCAN_INTERVAL_MS = 30_000;
 const SYSTEM_HEALTH_INTERVAL_MS = 60_000; // system health check every 60s
@@ -1512,6 +1513,25 @@ function relay(data, customPath) {
   });
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
+}
+
+function isTransientRelayFailure(result) {
+  const status = Number(result?.status || 0);
+  return status === 0 || status === 408 || status === 429 || status === 500 || status === 502 || status === 503 || status === 504;
+}
+
+async function relayWithRetries(data, customPath, delays = []) {
+  let result = await relay(data, customPath);
+  for (const delay of delays) {
+    if (!isTransientRelayFailure(result)) break;
+    await sleep(delay);
+    result = await relay(data, customPath);
+  }
+  return result;
+}
+
 // ── System health monitoring ────────────────────────────────────
 const HEALTH_SCRIPT_PATH = path.join(SCRIPT_DIR, 'system-health.ps1');
 const HEALTH_PS_SCRIPT = `
@@ -1801,11 +1821,11 @@ async function relayMarcusBrowser() {
   browserRelayInFlight = true;
   try {
     const browser = await marcusBrowser.capture();
-    const result = await relay({
+    const result = await relayWithRetries({
       agentId: DESKTOP_AGENT_ID,
       ...browser,
       observedAt: new Date().toISOString(),
-    }, '/api/marcus/browser/relay');
+    }, '/api/marcus/browser/relay', BROWSER_RELAY_RETRY_DELAYS_MS);
     writeDesktopAgentStatus({
       browserRelay: {
         ok: result.status === 200,
