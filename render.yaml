@@ -27,6 +27,8 @@ services:
         value: 60
       - key: TASK_TRACKER_BACKUP_RETENTION_DAYS
         value: 14
+      - key: TASK_TRACKER_BACKUP_MAX_FILES_PER_PREFIX
+        value: 72
       - key: SLACK_SIGNING_SECRET
         sync: false
       - key: SLACK_CLIENT_ID

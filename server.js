@@ -574,6 +574,7 @@ const BACKUP_INTERVAL_MINUTES = parsePositiveIntEnv(process.env.TASK_TRACKER_BAC
 const BACKUP_INTERVAL_MS = BACKUP_INTERVAL_MINUTES * 60 * 1000;
 const BACKUP_RETENTION_DAYS = parsePositiveIntEnv(process.env.TASK_TRACKER_BACKUP_RETENTION_DAYS || process.env.BACKUP_RETENTION_DAYS, 14);
 const BACKUP_RETENTION_MS = BACKUP_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+const BACKUP_MAX_FILES_PER_PREFIX = parsePositiveIntEnv(process.env.TASK_TRACKER_BACKUP_MAX_FILES_PER_PREFIX || process.env.BACKUP_MAX_FILES_PER_PREFIX, 72);
 const lastBackupAtByKey = new Map();
 
 const GA4_PULL_INTERVAL_MINUTES = parsePositiveIntEnv(process.env.TASK_TRACKER_GA4_PULL_INTERVAL_MINUTES || process.env.GA4_PULL_INTERVAL_MINUTES, 60);
@@ -612,26 +613,27 @@ async function pruneBackupsInDir({ dirPath, prefix }) {
   const pfx = String(prefix || '').trim();
   if (!dir || !pfx) return;
   if (!BACKUP_RETENTION_MS) return;
-  const now = Date.now();
   let entries = [];
   try {
     entries = await fs.readdir(dir, { withFileTypes: true });
   } catch {
     return;
   }
-  await Promise.all(entries
+  const files = (await Promise.all(entries
     .filter((entry) => entry && entry.isFile() && String(entry.name || '').startsWith(`${pfx}-`) && String(entry.name || '').endsWith('.json'))
     .map(async (entry) => {
       const filePath = path.join(dir, entry.name);
       try {
         const stat = await fs.stat(filePath);
-        if ((now - Number(stat.mtimeMs || 0)) > BACKUP_RETENTION_MS) {
-          await fs.unlink(filePath);
-        }
-      } catch {
-        // ignore cleanup errors
-      }
-    }));
+        return { filePath, mtimeMs: Number(stat.mtimeMs || 0) };
+      } catch { return null; }
+    }))).filter(Boolean).sort((left, right) => right.mtimeMs - left.mtimeMs);
+  const now = Date.now();
+  const expired = files.filter((file) => (now - file.mtimeMs) > BACKUP_RETENTION_MS);
+  const retained = files.filter((file) => (now - file.mtimeMs) <= BACKUP_RETENTION_MS);
+  const overflow = retained.slice(BACKUP_MAX_FILES_PER_PREFIX);
+  const removals = new Map([...expired, ...overflow].map((file) => [file.filePath, file]));
+  await Promise.all([...removals.values()].map((file) => fs.unlink(file.filePath).catch(() => {})));
 }
 
 async function writeBackupSnapshot({ sourceFile, prefix }) {
@@ -648,12 +650,16 @@ async function writeBackupSnapshot({ sourceFile, prefix }) {
   const fileName = `${pfx}-${stamp}.json`;
 
   await fs.mkdir(BACKUP_DIR, { recursive: true });
+  // Free expired/overflow snapshots before copying. If the disk is already full,
+  // copy-first cleanup can never run and all durable writes remain deadlocked.
+  await pruneBackupsInDir({ dirPath: BACKUP_DIR, prefix: pfx });
   await fs.copyFile(src, path.join(BACKUP_DIR, fileName));
   await pruneBackupsInDir({ dirPath: BACKUP_DIR, prefix: pfx });
 
   if (BACKUP_MIRROR_DIR) {
     try {
       await fs.mkdir(BACKUP_MIRROR_DIR, { recursive: true });
+      await pruneBackupsInDir({ dirPath: BACKUP_MIRROR_DIR, prefix: pfx });
       await fs.copyFile(src, path.join(BACKUP_MIRROR_DIR, fileName));
       await pruneBackupsInDir({ dirPath: BACKUP_MIRROR_DIR, prefix: pfx });
     } catch {
