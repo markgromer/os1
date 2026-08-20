@@ -355,6 +355,10 @@
     .brief-status.ok { border-color: #68b982; background: #edf9f0; color: #176330; }
     .brief-title { margin: 0; max-width: 780px; font-size: 42px; line-height: 1.06; letter-spacing: 0; }
     .brief-subtitle { margin: 0; max-width: 760px; color: #49505a; font-size: 18px; line-height: 1.45; }
+    .brief-context { max-width: 760px; border-left: 4px solid #35a9c8; padding: 9px 12px; background: #eef8fa; display: grid; gap: 3px; }
+    .brief-context strong { color: #17667a; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
+    .brief-context p { margin: 0; color: #27333a; font-size: 14px; line-height: 1.4; }
+    .brief-update-label { margin-bottom: -9px; color: #6a7078; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
     .brief-callout {
       border: 1px solid #cfc3ef;
       border-left: 5px solid #6d45cb;
@@ -1222,7 +1226,7 @@
     }
     function makeCodexProject(item, index, desktop) {
       const name = workspaceName(item);
-      const request = text(item.latestUserRequest || "");
+      const request = text(item.originalUserRequest || item.latestUserRequest || "");
       const response = text(item.handoffSummary || "");
       const branch = text(item.gitBranch);
       const state = projectStateFromStatus(item.status || "codex", item.handoffStatus);
@@ -1239,6 +1243,7 @@
         current,
         next: nextFromCodex(item, state),
         request: request || "No user request captured for this session yet.",
+        latestRequest: text(item.latestUserRequest || request),
         response: response || "No Codex handoff summary yet.",
         updatedAt: item.latestUserRequestAt || item.modifiedAt || item.handoffObservedAt,
         workspacePath: text(item.workspacePath),
@@ -1951,6 +1956,8 @@
           <section class="brief-main">
             <span class="brief-status ${esc(tone)}">${esc(stateLabel(project.state))}</span>
             <h2 class="brief-title">${esc(outcomeLine(project))}</h2>
+            <div class="brief-context"><strong>You asked</strong><p>${esc(humanizeLine(project.request || project.current, 220))}</p></div>
+            <strong class="brief-update-label">Latest ${project.source === "codex" || project.source === "job" ? "Codex" : "project"} update</strong>
             <p class="brief-subtitle">${esc(humanizeLine(project.truth || project.response || project.current, 260))}</p>
             <div class="brief-callout">
               <h3>What you need to do</h3>

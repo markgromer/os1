@@ -15813,6 +15813,8 @@ function getRecentCodexWorkspacesForDesktopContext() {
       handoffSummary: typeof item.handoffSummary === 'string' ? item.handoffSummary.slice(0, 1800) : '',
       handoffStatus: typeof item.handoffStatus === 'string' ? item.handoffStatus.slice(0, 80) : '',
       handoffObservedAt: typeof item.handoffObservedAt === 'string' ? item.handoffObservedAt.slice(0, 40) : '',
+      originalUserRequest: typeof item.originalUserRequest === 'string' ? item.originalUserRequest.slice(0, 800) : '',
+      originalUserRequestAt: typeof item.originalUserRequestAt === 'string' ? item.originalUserRequestAt.slice(0, 40) : '',
       latestUserRequest: typeof item.latestUserRequest === 'string' ? item.latestUserRequest.slice(0, 800) : '',
       latestUserRequestAt: typeof item.latestUserRequestAt === 'string' ? item.latestUserRequestAt.slice(0, 40) : '',
       rollingContext: Array.isArray(item.rollingContext) ? item.rollingContext.slice(-18).map((entry) => ({
@@ -15976,6 +15978,8 @@ app.post('/api/desktop-context/relay', (req, res) => {
         handoffSummary: typeof item.handoffSummary === 'string' ? item.handoffSummary.trim().slice(0, 1800) : '',
         handoffStatus: typeof item.handoffStatus === 'string' ? item.handoffStatus.trim().slice(0, 80) : '',
         handoffObservedAt: typeof item.handoffObservedAt === 'string' ? item.handoffObservedAt.trim().slice(0, 40) : '',
+        originalUserRequest: typeof item.originalUserRequest === 'string' ? item.originalUserRequest.trim().slice(0, 800) : '',
+        originalUserRequestAt: typeof item.originalUserRequestAt === 'string' ? item.originalUserRequestAt.trim().slice(0, 40) : '',
         latestUserRequest: typeof item.latestUserRequest === 'string' ? item.latestUserRequest.trim().slice(0, 800) : '',
         latestUserRequestAt: typeof item.latestUserRequestAt === 'string' ? item.latestUserRequestAt.trim().slice(0, 40) : '',
         rollingContext: Array.isArray(item.rollingContext) ? item.rollingContext.slice(-18).map((entry) => ({

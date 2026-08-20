@@ -187,10 +187,42 @@ function readSessionLatestUserRequest(filePath) {
       if (!eventLooksUserRequest(event)) continue;
       const request = cleanUserRequestText(extractTextParts(event.payload || event).join(' '));
       if (!request) continue;
+      const safeRequest = redactContextText(request);
+      if (!safeRequest || /\[redacted sensitive content\]/i.test(safeRequest)) continue;
       return {
-        request,
+        request: safeRequest,
         requestedAt: typeof event.timestamp === 'string' ? event.timestamp : stat.mtime.toISOString(),
       };
+    }
+  } catch {
+    return null;
+  } finally {
+    if (handle !== undefined) {
+      try { fs.closeSync(handle); } catch {}
+    }
+  }
+  return null;
+}
+
+function readSessionOriginalUserRequest(filePath) {
+  let stat;
+  try { stat = fs.statSync(filePath); } catch { return null; }
+  if (!stat.isFile()) return null;
+  let handle;
+  try {
+    handle = fs.openSync(filePath, 'r');
+    const bytes = Math.min(MAX_HANDOFF_BYTES, stat.size);
+    const buffer = Buffer.alloc(bytes);
+    fs.readSync(handle, buffer, 0, bytes, 0);
+    for (const line of buffer.toString('utf8').split(/\r?\n/).filter(Boolean)) {
+      let event;
+      try { event = JSON.parse(line); } catch { continue; }
+      if (!eventLooksUserRequest(event)) continue;
+      const request = cleanUserRequestText(extractTextParts(event.payload || event).join(' '));
+      if (!request) continue;
+      const safeRequest = redactContextText(request);
+      if (!safeRequest || /\[redacted sensitive content\]/i.test(safeRequest)) continue;
+      return { request: safeRequest, requestedAt: typeof event.timestamp === 'string' ? event.timestamp : stat.birthtime.toISOString() };
     }
   } catch {
     return null;
@@ -264,6 +296,8 @@ function parseSessionMetadata(filePath, nowMs, maxAgeMs) {
 
   const folderName = path.basename(workspacePath);
   const handoff = readSessionHandoffSummary(filePath);
+  const originalRequest = readSessionOriginalUserRequest(filePath);
+  const latestRequest = readSessionLatestUserRequest(filePath);
   const rollingContext = readSessionRollingContext(filePath);
   return {
     sessionId: String(payload.id || '').trim().slice(0, 160),
@@ -274,6 +308,8 @@ function parseSessionMetadata(filePath, nowMs, maxAgeMs) {
     source: String(payload.source || '').trim().slice(0, 80),
     originator: String(payload.originator || '').trim().slice(0, 120),
     rollingContext,
+    ...(originalRequest ? { originalUserRequest: originalRequest.request, originalUserRequestAt: originalRequest.requestedAt } : {}),
+    ...(latestRequest ? { latestUserRequest: latestRequest.request, latestUserRequestAt: latestRequest.requestedAt } : {}),
     ...(handoff ? {
       handoffSummary: handoff.summary,
       handoffStatus: handoff.status,
@@ -324,4 +360,4 @@ function discoverRecentCodexWorkspaces({
   return output;
 }
 
-module.exports = { discoverRecentCodexWorkspaces, humanizeWorkspaceName, parseGitStatus, parseSessionMetadata, readSessionHandoffSummary, readSessionLatestUserRequest, readSessionRollingContext };
+module.exports = { discoverRecentCodexWorkspaces, humanizeWorkspaceName, parseGitStatus, parseSessionMetadata, readSessionHandoffSummary, readSessionLatestUserRequest, readSessionOriginalUserRequest, readSessionRollingContext };
