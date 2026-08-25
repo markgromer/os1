@@ -1787,7 +1787,7 @@ async function tick() {
   // Build relay payload
   const codexNow = Date.now();
   if (!cachedCodexWorkspaces.length || (codexNow - lastCodexWorkspaceScanAt) > CODEX_WORKSPACE_SCAN_INTERVAL_MS) {
-    const sessions = discoverRecentCodexWorkspaces({ maxResults: 12 });
+    const sessions = discoverRecentCodexWorkspaces({ maxResults: 30 });
     cachedCodexWorkspaces = await Promise.all(sessions.map((session) => scanCodexWorkspaceSummary(session)));
     lastCodexWorkspaceScanAt = codexNow;
   }

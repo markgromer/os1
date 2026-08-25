@@ -2,8 +2,8 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const DEFAULT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
-const DEFAULT_MAX_RESULTS = 12;
+const DEFAULT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+const DEFAULT_MAX_RESULTS = 30;
 const MAX_METADATA_BYTES = 64 * 1024;
 const MAX_HANDOFF_BYTES = 256 * 1024;
 const MAX_HANDOFF_TEXT = 1800;
@@ -323,7 +323,7 @@ function discoverRecentCodexWorkspaces({
   nowMs = Date.now(),
   maxAgeMs = DEFAULT_MAX_AGE_MS,
   maxResults = DEFAULT_MAX_RESULTS,
-  days = 8,
+  days = 31,
   maxPerWorkspace = 1,
 } = {}) {
   const sessionsRoot = path.join(codexHome, 'sessions');

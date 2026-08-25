@@ -567,6 +567,7 @@
     }
     .section-title { display: flex; justify-content: space-between; align-items: center; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; }
     .build-list { min-height: 0; overflow: auto; display: grid; align-content: start; gap: 6px; padding-right: 2px; }
+    .build-list-summary { color: var(--faint); font-size: 10px; letter-spacing: 0; text-transform: none; }
     .build-card {
       min-height: 78px;
       padding: 9px;
@@ -696,20 +697,21 @@
 
     /* Dedicated 9:16 monitor: preserve the full desktop command center, but stack its regions. */
     @media (orientation: portrait) and (min-width: 700px) {
-      html, body { min-height: 100%; height: auto; }
-      body { overflow: auto; }
+      html, body { width: 100%; height: 100%; min-height: 0; }
+      body { overflow: hidden; }
       .display {
         width: 100%;
-        height: auto;
-        min-height: 100vh;
+        height: 100vh;
+        height: 100dvh;
+        min-height: 0;
         grid-template-columns: minmax(0, 1.12fr) minmax(350px, .88fr);
         grid-template-rows:
           52px
-          clamp(610px, 35vh, 700px)
+          minmax(0, 44fr)
           38px
-          clamp(280px, 17vh, 340px)
-          clamp(360px, 21vh, 430px)
-          52px
+          minmax(0, 18fr)
+          minmax(0, 38fr)
+          0
           30px;
         grid-template-areas:
           "os os"
@@ -762,6 +764,7 @@
       .top-actions { grid-column: 2; grid-row: 1; }
       .top-actions { gap: 4px; }
       .top-actions .btn { min-height: 30px; padding: 5px 7px; font-size: 11px; }
+      .top-actions .control-state { display: none; }
       #restartDesktopAgent { display: none; }
       .tabs { grid-column: 1 / -1; grid-row: 2; justify-content: space-around; gap: 4px; border-top: 1px solid var(--line); }
       .tab { flex: 1 1 auto; padding: 0 4px; }
@@ -822,8 +825,9 @@
         border-radius: 0 0 8px 8px;
         background: rgba(10, 15, 21, .97);
         overflow: auto;
+        scrollbar-gutter: stable;
       }
-      .build-card { min-height: 76px; grid-template-columns: minmax(0, 1fr) 150px; padding: 8px 10px; }
+      .build-card { min-height: 62px; grid-template-columns: minmax(0, 1fr) 132px; padding: 7px 10px; }
       .build-main { grid-template-columns: minmax(190px, .65fr) minmax(0, 1.55fr); grid-template-rows: auto auto; align-items: center; gap: 4px 12px; }
       .build-title { grid-row: 1 / 3; }
       .build-main > p { display: none; }
@@ -837,10 +841,7 @@
       .builds > .ops-mini:nth-of-type(1) { display: none; }
       .builds > .ops-mini:nth-of-type(2) {
         grid-area: media;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        padding: 8px 16px;
+        display: none;
       }
       .builds > .ops-mini:nth-of-type(2) .section-title { min-width: 170px; }
 
@@ -863,6 +864,7 @@
         border-radius: 8px;
         background: rgba(10, 15, 21, .97);
       }
+      .chat-feed, .surface, .dock-body { scrollbar-gutter: stable; }
       .chat-feed { grid-template-columns: 1fr; }
       .message { max-width: 100%; }
       .composer { grid-template-columns: minmax(105px, .35fr) minmax(0, 1fr) 42px 48px; }
@@ -982,7 +984,7 @@
       </header>
 
       <section class="builds">
-        <div class="section-title"><span>Active builds</span><button class="btn ghost" type="button" id="clearFilter">View all</button></div>
+        <div class="section-title"><span>Active builds <span class="build-list-summary" id="activeBuildCount">discovering projects</span></span><button class="btn ghost" type="button" id="clearFilter">View all</button></div>
         <div class="build-list" id="buildList"></div>
         <section class="ops-mini">
           <div class="section-title"><span>Marcus operations</span><button class="btn ghost" type="button" id="openOps">Open operations</button></div>
@@ -1057,6 +1059,7 @@
       countNeeds: document.getElementById("countNeeds"),
       countDecaying: document.getElementById("countDecaying"),
       buildList: document.getElementById("buildList"),
+      activeBuildCount: document.getElementById("activeBuildCount"),
       miniOps: document.getElementById("miniOps"),
       chatContext: document.getElementById("chatContext"),
       chatFeed: document.getElementById("chatFeed"),
@@ -1365,12 +1368,12 @@
     }
     function visibleProjects() {
       const projects = snapshot.projects;
-      if (!activeFilter) return projects.slice(0, 7);
-      if (activeFilter === "building") return projects.filter((p) => ["moving", "verifying"].includes(p.state)).slice(0, 7);
-      if (activeFilter === "auditing") return projects.filter((p) => p.state === "verifying").slice(0, 7);
-      if (activeFilter === "needs") return projects.filter((p) => p.state === "needs_mark").slice(0, 7);
-      if (activeFilter === "decaying") return projects.filter((p) => ["blocked", "losing_thread"].includes(p.state)).slice(0, 7);
-      return projects.slice(0, 7);
+      if (!activeFilter) return projects;
+      if (activeFilter === "building") return projects.filter((p) => ["moving", "verifying"].includes(p.state));
+      if (activeFilter === "auditing") return projects.filter((p) => p.state === "verifying");
+      if (activeFilter === "needs") return projects.filter((p) => p.state === "needs_mark");
+      if (activeFilter === "decaying") return projects.filter((p) => ["blocked", "losing_thread"].includes(p.state));
+      return projects;
     }
     function selectedProject() {
       return snapshot.projects.find((p) => p.id === selectedId) || snapshot.projects[0] || null;
@@ -2181,6 +2184,10 @@
     function renderControlPanel() {
       const projects = visibleProjects();
       const selected = selectedProject();
+      const total = snapshot.projects.length;
+      els.activeBuildCount.textContent = activeFilter
+        ? `\u00b7 ${projects.length} shown of ${total}`
+        : `\u00b7 ${total} live`;
       els.buildList.innerHTML = projects.map((project) => `
         <div class="build-card ${project.id === selected?.id ? "active" : ""}" data-state="${esc(project.state)}">
           <button class="build-main" type="button" data-select-project="${esc(project.id)}">
