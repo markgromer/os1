@@ -1272,6 +1272,8 @@
     let browserStatusLoading = false;
     const publicationRequests = new Set();
     const autoRefreshMs = 3000;
+    const codexWorkspaceCacheKey = "marcus-visualizer-codex-workspaces-v1";
+    const codexWorkspaceCacheMaxAgeMs = 6 * 60 * 60 * 1000;
 
     const text = (value, fallback = "") => String(value ?? fallback ?? "").replace(/\s+/g, " ").trim();
     const esc = (value) => text(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;");
@@ -1284,6 +1286,26 @@
     const adminToken = () => { try { return text(localStorage.getItem("opsAdminToken")); } catch { return ""; } };
     const businessKey = () => { try { return text(localStorage.getItem("opsBusinessKey"), "personal"); } catch { return "personal"; } };
     const nowLabel = () => new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    function readCachedCodexWorkspaces() {
+      try {
+        const cached = JSON.parse(sessionStorage.getItem(codexWorkspaceCacheKey) || "null");
+        if (!cached || Date.now() - Number(cached.savedAt || 0) > codexWorkspaceCacheMaxAgeMs) return [];
+        return arr(cached.workspaces);
+      } catch { return []; }
+    }
+    let lastConfirmedCodexWorkspaces = readCachedCodexWorkspaces();
+    function retainCodexWorkspaces(desktop) {
+      const reported = arr(desktop?.codexWorkspaces);
+      const reportIsConfirmed = reported.length > 0 && desktop?.codexWorkspacesStale !== true;
+      if (reportIsConfirmed) {
+        lastConfirmedCodexWorkspaces = reported;
+        try { sessionStorage.setItem(codexWorkspaceCacheKey, JSON.stringify({ savedAt: Date.now(), workspaces: reported })); } catch {}
+        return desktop;
+      }
+      if (reported.length) return { ...desktop, codexWorkspaces: reported, codexWorkspacesStale: true };
+      if (!lastConfirmedCodexWorkspaces.length) return desktop;
+      return { ...desktop, codexWorkspaces: lastConfirmedCodexWorkspaces, codexWorkspacesStale: true };
+    }
 
     async function promptForAdminToken(reason = "") {
       try { localStorage.removeItem("opsAdminToken"); } catch {}
@@ -1575,7 +1597,8 @@
           api("/api/marcus/browser/status").catch((error) => ({ ok: false, online: false, error: error.message, control: { owner: "marcus" } })),
           api("/api/marcus/browser/publications").catch((error) => ({ ok: false, error: error.message, publications: [] })),
         ]);
-        const relayCodexProjects = arr(desktop.codexWorkspaces).map((item, index) => makeCodexProject(item, index, desktop));
+        const effectiveDesktop = retainCodexWorkspaces(desktop);
+        const relayCodexProjects = arr(effectiveDesktop.codexWorkspaces).map((item, index) => makeCodexProject(item, index, effectiveDesktop));
         const projects = mergeProjects([
           ...relayCodexProjects,
           ...arr(operations.operations).map(makeOperationProject),
@@ -1584,7 +1607,7 @@
         ]);
         const codexIds = new Set(relayCodexProjects.map((project) => project.id));
         const codexProjects = projects.filter((project) => project.source === "codex" && codexIds.has(project.id));
-        snapshot = { projects, codexProjects, operations: arr(operations.operations), jobs: arr(jobs.jobs), desktop, awareness, settings, github, cloudflare, google, browser, publications: arr(publications.publications) };
+        snapshot = { projects, codexProjects, operations: arr(operations.operations), jobs: arr(jobs.jobs), desktop: effectiveDesktop, awareness, settings, github, cloudflare, google, browser, publications: arr(publications.publications) };
         markHasControl = browser?.control?.owner === "mark";
         if (!selectedId || !projects.some((p) => p.id === selectedId)) selectedId = codexProjects[0]?.id || projects[0]?.id || "";
         if (!chatContextId && selectedId) chatContextId = selectedId;
@@ -1617,17 +1640,18 @@
       };
     }
     function renderChrome() {
-      const codexCount = arr(snapshot.desktop?.codexWorkspaces).length;
+      const codexCount = snapshot.codexProjects.length;
       const relayOk = snapshot.desktop?.source === "relay" || snapshot.desktop?.source === "native";
-      els.codexDot.className = `status-dot ${codexCount ? "ok" : "warn"}`;
-      els.codexStatus.textContent = codexCount ? `Codex connected (${codexCount})` : "Codex degraded";
-      els.monitoringSummary.textContent = `Monitoring ${codexCount} Codex project${codexCount === 1 ? "" : "s"}`;
+      const codexStale = snapshot.desktop?.codexWorkspacesStale === true;
+      els.codexDot.className = `status-dot ${codexCount && !codexStale ? "ok" : "warn"}`;
+      els.codexStatus.textContent = codexStale && codexCount ? `Codex reconnecting (${codexCount} retained)` : codexCount ? `Codex connected (${codexCount})` : "Codex degraded";
+      els.monitoringSummary.textContent = `Monitoring ${codexCount} Codex project${codexCount === 1 ? "" : "s"}${codexStale && codexCount ? " · last confirmed" : ""}`;
       els.githubDot.className = `status-dot ${snapshot.github?.configured ? "ok" : "warn"}`;
       els.githubStatus.textContent = snapshot.github?.configured ? "GitHub connected" : "GitHub degraded";
       els.cloudflareDot.className = `status-dot ${snapshot.cloudflare?.configured ? "ok" : "warn"}`;
       els.cloudflareStatus.textContent = snapshot.cloudflare?.configured ? "Cloudflare connected" : "Cloudflare degraded";
       els.relayDot.className = `status-dot ${relayOk ? "ok" : "warn"}`;
-      els.relayState.textContent = relayOk ? `${text(snapshot.desktop?.source)} relay` : "Relay partial";
+      els.relayState.textContent = codexStale && codexCount ? "Relay reconnecting · projects retained" : relayOk ? `${text(snapshot.desktop?.source)} relay` : "Relay partial";
       const counts = countsByState();
       els.countBuilding.textContent = counts.building;
       els.countAuditing.textContent = counts.auditing;
@@ -2400,7 +2424,9 @@
       const total = snapshot.codexProjects.length;
       els.activeBuildCount.textContent = activeFilter
         ? `\u00b7 ${projects.length} shown of ${total}`
-        : `\u00b7 ${total} in Codex`;
+        : snapshot.desktop?.codexWorkspacesStale && total
+          ? `\u00b7 ${total} retained while reconnecting`
+          : `\u00b7 ${total} in Codex`;
       els.buildList.innerHTML = projects.map((project) => `
         <div class="build-card ${project.id === selected?.id ? "active" : ""}" data-state="${esc(project.state)}">
           <button class="build-main" type="button" data-select-project="${esc(project.id)}">

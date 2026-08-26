@@ -15800,6 +15800,25 @@ const MARCUS_BROWSER_RELAY_TTL_MS = 30_000;
 const MARCUS_BROWSER_MAX_FRAME_BYTES = 300_000;
 let desktopCodexWorkspaceCache = { at: 0, data: [] };
 const DESKTOP_CODEX_WORKSPACE_TTL_MS = 30_000;
+const DESKTOP_RELAY_CODEX_EMPTY_CONFIRMATIONS = 24;
+const desktopRelayCodexState = new Map();
+
+function reconcileRelayCodexWorkspaces(agentId, reportedWorkspaces, hasWorkspaceReport = true) {
+  const key = String(agentId || 'default').trim() || 'default';
+  const previous = desktopRelayCodexState.get(key) || { workspaces: [], emptyReports: 0, confirmedAt: '' };
+  if (reportedWorkspaces.length) {
+    const confirmedAt = new Date().toISOString();
+    desktopRelayCodexState.set(key, { workspaces: reportedWorkspaces, emptyReports: 0, confirmedAt });
+    return { workspaces: reportedWorkspaces, stale: false, confirmedAt };
+  }
+  if (previous.workspaces.length && (!hasWorkspaceReport || previous.emptyReports + 1 < DESKTOP_RELAY_CODEX_EMPTY_CONFIRMATIONS)) {
+    const emptyReports = hasWorkspaceReport ? previous.emptyReports + 1 : previous.emptyReports;
+    desktopRelayCodexState.set(key, { ...previous, emptyReports });
+    return { workspaces: previous.workspaces, stale: true, confirmedAt: previous.confirmedAt };
+  }
+  desktopRelayCodexState.set(key, { workspaces: [], emptyReports: 0, confirmedAt: previous.confirmedAt });
+  return { workspaces: [], stale: false, confirmedAt: previous.confirmedAt };
+}
 
 function getRecentCodexWorkspacesForDesktopContext() {
   const now = Date.now();
@@ -15912,6 +15931,7 @@ app.get('/api/desktop-context', async (req, res) => {
 
 // Receive desktop context from the local desktop agent
 app.post('/api/desktop-context/relay', (req, res) => {
+  const relayAgentId = typeof req.body?.agentId === 'string' ? req.body.agentId.trim().slice(0, 200) : '';
   const wt = typeof req.body?.windowTitle === 'string' ? req.body.windowTitle.trim().slice(0, 1024) : '';
   const pn = typeof req.body?.processName === 'string' ? req.body.processName.trim().slice(0, 128).toLowerCase() : '';
   const idle = Math.max(0, Number(req.body?.idleSeconds) || 0);
@@ -15959,7 +15979,8 @@ app.post('/api/desktop-context/relay', (req, res) => {
     }
   }
 
-  const codexWorkspaces = (Array.isArray(req.body?.codexWorkspaces) ? req.body.codexWorkspaces : [])
+  const hasCodexWorkspaceReport = Array.isArray(req.body?.codexWorkspaces);
+  const reportedCodexWorkspaces = (hasCodexWorkspaceReport ? req.body.codexWorkspaces : [])
     .slice(0, 12)
     .map((raw) => {
       const item = raw && typeof raw === 'object' ? raw : {};
@@ -15996,6 +16017,8 @@ app.post('/api/desktop-context/relay', (req, res) => {
       };
     })
     .filter((item) => item.workspacePath && item.folderName);
+  const reconciledCodex = reconcileRelayCodexWorkspaces(relayAgentId, reportedCodexWorkspaces, hasCodexWorkspaceReport);
+  const codexWorkspaces = reconciledCodex.workspaces;
 
   const desktopAuthorizationInput = req.body?.desktopAuthorization && typeof req.body.desktopAuthorization === 'object'
     ? req.body.desktopAuthorization
@@ -16020,7 +16043,19 @@ app.post('/api/desktop-context/relay', (req, res) => {
       ? desktopAuthorizationInput.capabilities.slice(0, 40).map((item) => typeof item === 'string' ? item.trim().slice(0, 100) : '').filter(Boolean)
       : [],
   };
-  const data = { ok: true, windowTitle: wt, processName: pn, idleSeconds: idle, source: 'relay', receivedAt: new Date().toISOString(), workspace, codexWorkspaces, desktopAuthorization };
+  const data = {
+    ok: true,
+    windowTitle: wt,
+    processName: pn,
+    idleSeconds: idle,
+    source: 'relay',
+    receivedAt: new Date().toISOString(),
+    workspace,
+    codexWorkspaces,
+    codexWorkspacesStale: reconciledCodex.stale,
+    codexWorkspacesConfirmedAt: reconciledCodex.confirmedAt,
+    desktopAuthorization,
+  };
 
   // System health telemetry from the desktop agent
   if (req.body?.systemHealth && typeof req.body.systemHealth === 'object') {
@@ -16048,7 +16083,6 @@ app.post('/api/desktop-context/relay', (req, res) => {
   // Also update the main cache so AI context injection picks it up
   desktopContextCache = { at: Date.now(), data };
 
-  const relayAgentId = typeof req.body?.agentId === 'string' ? req.body.agentId.trim().slice(0, 200) : '';
   void projectEvidenceService.recordDesktopContext(getBusinessKeyFromContext(), {
     agentId: relayAgentId,
     context: data,

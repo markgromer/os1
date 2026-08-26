@@ -594,6 +594,21 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     assert.equal(relayedContext.desktopAuthorization.scope, 'full_pc');
     assert.equal(relayedContext.desktopAuthorization.fullPcAccess, true);
     assert.deepEqual(relayedContext.desktopAuthorization.capabilities, ['inventory', 'search_files', 'read_text_file', 'open_file_or_folder', 'launch_installed_application']);
+    const transientEmptyRelay = await fetch(`${base}/api/desktop-context/relay`, {
+      method: 'POST', headers: agencyHeaders, body: JSON.stringify({
+        agentId: 'agent-smoke', windowTitle: 'Codex', processName: 'ChatGPT', idleSeconds: 1, codexWorkspaces: [],
+        desktopAuthorization: {
+          scope: 'full_pc', broadWorkspaceRootsAllowed: true, fullPcAccess: true,
+          allowedRoots: [server.workspaceRoot, simulatedNewProjectRoot], newProjectRoot: simulatedNewProjectRoot,
+          pcAccessRoots: [simulatedPcRoot],
+          capabilities: ['inventory', 'search_files', 'read_text_file', 'open_file_or_folder', 'launch_installed_application'],
+        },
+      }),
+    });
+    assert.equal(transientEmptyRelay.status, 200);
+    const retainedContext = await (await fetch(`${base}/api/desktop-context`, { headers: agencyHeaders })).json();
+    assert.equal(retainedContext.codexWorkspacesStale, true);
+    assert.equal(retainedContext.codexWorkspaces[0].projectName, 'Scoop Fairies');
     const browserJpeg = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
     const browserRelay = await fetch(`${base}/api/marcus/browser/relay`, {
       method: 'POST', headers: agencyHeaders, body: JSON.stringify({

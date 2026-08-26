@@ -162,3 +162,16 @@ test('desktop visualizer uses canonical awareness instead of browser-local proje
   assert.match(html, /function pipelineStages\(project\)/);
   assert.match(html, /messageSeenAt/);
 });
+
+test('desktop visualizer retains the last confirmed Codex ledger during relay gaps', async () => {
+  const html = await fs.readFile(new URL('../public/visualizer.html', import.meta.url), 'utf8');
+  assert.match(html, /function retainCodexWorkspaces\(desktop\)/);
+  assert.match(html, /lastConfirmedCodexWorkspaces/);
+  assert.match(html, /codexWorkspacesStale: true/);
+  assert.match(html, /retained while reconnecting/);
+  const inlineScript = [...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)]
+    .map((match) => match[1])
+    .find((script) => script.includes('function retainCodexWorkspaces'));
+  assert.ok(inlineScript);
+  assert.doesNotThrow(() => new Function(inlineScript));
+});
