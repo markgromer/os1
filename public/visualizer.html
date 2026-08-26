@@ -815,7 +815,7 @@
         font-size: 14px;
         font-weight: 800;
       }
-      .builds > .section-title::before { content: "ACTIVE BUILDS"; }
+      .builds > .section-title::before { content: "ACTIVE CODEX PROJECTS"; }
       .builds > .section-title > span { display: none; }
       .build-list {
         grid-area: build-list;
@@ -869,6 +869,151 @@
       .message { max-width: 100%; }
       .composer { grid-template-columns: minmax(105px, .35fr) minmax(0, 1fr) 42px 48px; }
       .sync-foot { grid-area: sync; }
+
+      /* 2026 focus-mode rebuild: one truth, one recommendation, one next action. */
+      html, body { height: auto; min-height: 100%; }
+      body { overflow: auto; }
+      .display {
+        min-height: 100vh;
+        height: auto;
+        grid-template-columns: minmax(300px, .72fr) minmax(0, 1.28fr);
+        grid-template-rows: 66px auto 640px auto minmax(330px, auto) 30px;
+        grid-template-areas:
+          "os os"
+          "attention attention"
+          "builds workspace"
+          "dock dock"
+          "chat chat"
+          "sync sync";
+        gap: 10px;
+        padding: 0 10px 10px;
+      }
+      .os-strip {
+        height: 66px;
+        margin: 0 -10px;
+        padding: 0 14px;
+        grid-template-columns: 250px minmax(180px, 1fr) auto;
+        border-bottom: 1px solid rgba(78, 210, 123, .2);
+      }
+      .os-left { align-items: center; }
+      .os-left::before { width: 48px; height: 48px; border-radius: 4px; font-size: 17px; box-shadow: inset 0 0 18px rgba(78, 210, 123, .08); }
+      .os-title { font-size: 16px; }
+      .os-title::after { content: "\A Dedicated Display \00B7  Portrait"; font-size: 11px; }
+      .os-center { justify-content: flex-start; font-size: 12px; color: var(--muted); }
+      .os-center::after { content: none; }
+      .os-center span { display: inline; }
+      .os-right { display: grid; grid-template-columns: 150px auto; grid-template-rows: repeat(3, 16px); gap: 0 8px; align-content: center; }
+      .os-right .connection { font-size: 10px; }
+      .os-right .connection:nth-child(1) { grid-column: 1; grid-row: 1; }
+      .os-right .connection:nth-child(2) { grid-column: 1; grid-row: 2; }
+      .os-right .connection:nth-child(3) { grid-column: 1; grid-row: 3; }
+      .os-right #clock { display: none; }
+      .os-quick-actions { grid-column: 2; grid-row: 1 / 4; display: flex; align-items: center; gap: 7px; }
+      .os-quick-actions .btn { min-height: 38px; }
+      .os-quick-actions .primary { padding-inline: 15px; }
+
+      .attention-banner {
+        grid-area: attention;
+        min-height: 82px;
+        display: grid;
+        grid-template-columns: 34px minmax(0, 1fr) auto;
+        gap: 14px;
+        align-items: center;
+        padding: 13px 18px;
+        border: 1px solid rgba(242, 181, 68, .5);
+        border-radius: 8px;
+        background: linear-gradient(90deg, rgba(56, 39, 8, .38), rgba(18, 20, 19, .96));
+      }
+      .attention-banner[hidden] { display: none; }
+      .attention-icon { width: 24px; height: 24px; display: grid; place-items: center; border-radius: 50%; background: var(--amber); color: #201400; font-weight: 900; }
+      .attention-copy { min-width: 0; display: grid; gap: 3px; }
+      .attention-copy .eyebrow { color: var(--amber); font-weight: 800; }
+      .attention-copy strong { font-size: clamp(17px, 2vw, 22px); line-height: 1.15; }
+      .attention-copy p { margin: 0; color: var(--muted); font-size: 12px; }
+      .attention-actions { display: flex; align-items: center; gap: 8px; }
+
+      .workspace-region { grid-area: workspace; min-height: 640px; grid-template-rows: 72px 0 minmax(0, 1fr) 0; }
+      .workspace-header { grid-template-rows: 38px 34px; padding: 0 14px; }
+      .workspace-body { grid-row: 3; }
+      .workspace-status { display: none; }
+      .workspace-title h1 { font-size: 18px; }
+      .workspace-title .glyph { display: none; }
+      .workspace-title p { font-size: 10px; }
+      .top-actions #restartBrowserRelay, .top-actions #pauseButton, .top-actions #closeWorkspace { display: none; }
+      .tabs { justify-content: flex-start; gap: 18px; overflow: hidden; }
+      .tab { flex: 0 0 auto; padding: 0 2px; font-size: 11px; }
+      .tab[data-tab="browser"], .tab[data-tab="approvals"] { display: none; }
+      .workspace-body:not(.browser-mode) { display: block; min-height: 0; }
+      .workspace-body:not(.browser-mode) .audit-panel { display: none; }
+      .surface { height: 100%; }
+      .surface:not(.browser-surface) { display: block; overflow: auto; }
+      .preview-nav { display: none; }
+      .brief-surface { min-height: 100%; height: auto; grid-template-columns: 1fr; padding: 10px; background: #0b1219; }
+      .brief-main { min-height: 0; gap: 0; padding: 20px; border-radius: 7px; background: #f6f3ee; color: #17191d; align-content: start; }
+      .brief-main .brief-status { margin-bottom: 11px; }
+      .brief-kicker { color: #68707b; font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+      .brief-title { margin-top: 5px; max-width: 760px; font-size: clamp(25px, 3.2vw, 38px); }
+      .brief-subtitle { margin-top: 10px; max-width: 760px; color: #424a55; font-size: 14px; line-height: 1.5; }
+      .decision-grid { display: grid; grid-template-columns: 1fr 1fr; margin-top: 16px; padding: 15px 0; border-block: 1px solid #d7d3cc; }
+      .decision-card { min-width: 0; padding-right: 18px; }
+      .decision-card + .decision-card { padding-left: 18px; border-left: 1px solid #d7d3cc; }
+      .decision-card strong { display: block; margin-bottom: 7px; color: #5a35bc; font-size: 10px; letter-spacing: .06em; text-transform: uppercase; }
+      .decision-card.request strong { color: #237ec9; }
+      .decision-card h3 { margin: 0 0 6px; font-size: 17px; line-height: 1.3; }
+      .decision-card p { margin: 0; color: #5f6670; font-size: 12px; line-height: 1.45; }
+      .current-state { display: grid; gap: 7px; margin-top: 16px; }
+      .current-state > strong { color: #68707b; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+      .state-line { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 7px; color: #3c444e; font-size: 12px; }
+      .state-line i { width: 14px; height: 14px; display: grid; place-items: center; border-radius: 50%; background: #45b96c; color: #fff; font-size: 9px; font-style: normal; }
+      .state-line.wait i { background: var(--amber); color: #342000; }
+      .brief-actions { margin-top: 18px; }
+      .brief-actions .btn { min-height: 38px; }
+      .evidence-strip { margin-top: auto; padding-top: 16px; }
+      .evidence-strip details { border: 1px solid #d5d1ca; border-radius: 7px; background: #eeece7; }
+      .evidence-strip summary { cursor: pointer; padding: 11px 13px; color: #242a31; font-weight: 800; font-size: 12px; }
+      .evidence-strip ul { margin: 0; padding: 0 28px 13px; color: #555d67; font-size: 11px; line-height: 1.5; }
+      .brief-side { display: none; }
+
+      .control-panel { display: contents; }
+      .control-head { display: none; }
+      .builds { grid-area: builds; display: grid; grid-template-rows: 58px minmax(0, 1fr); gap: 0; min-height: 640px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: rgba(10, 15, 21, .97); }
+      .builds > .section-title { grid-area: auto; min-height: 58px; padding: 10px 14px; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; }
+      .builds > .section-title::before { content: none; }
+      .builds > .section-title > span { display: inline; color: var(--text); font-size: 13px; }
+      .build-list { grid-area: auto; padding: 8px; border: 0; border-radius: 0; overflow: auto; }
+      .build-card { min-height: 148px; grid-template-columns: minmax(0, 1fr) 70px; padding: 12px; }
+      .build-main { display: grid; grid-template-columns: 1fr; grid-template-rows: auto auto auto; gap: 7px; }
+      .build-title { grid-row: auto; }
+      .build-main > p { display: block; }
+      .build-meta { display: grid; grid-template-columns: 1fr; gap: 3px; padding-top: 7px; border-top: 1px solid var(--line); }
+      .build-detail { display: none; }
+      .build-actions { grid-template-columns: 1fr; }
+      .build-actions .btn { min-height: 34px; padding: 5px; }
+      .builds > .ops-mini { display: none !important; }
+
+      .dock { min-height: 290px; grid-template-rows: 52px minmax(0, 1fr) 30px; }
+      .dock-head { padding: 7px 14px; }
+      .dock-head-actions #dockOpenCodex, .dock-head-actions #dockFinishTask, .dock-head-actions #dockStartTask { display: none; }
+      .dock-body { grid-template-columns: .9fr 1.1fr 1fr; grid-template-rows: 1fr; padding: 10px 14px; }
+      .dock-card { overflow: visible; border: 0; border-radius: 0; background: transparent; padding: 8px 14px; }
+      .dock-card + .dock-card { border-left: 1px solid var(--line); }
+      #dockPipeline { grid-column: 1 / -1; grid-row: 1; padding: 5px 0 12px; border: 0; border-bottom: 1px solid var(--line); }
+      #dockCurrent { grid-column: 1; grid-row: 2; }
+      #dockEvidence { grid-column: 2; grid-row: 2; }
+      #dockNext { grid-column: 3; grid-row: 2; }
+      .dock-body { grid-template-rows: 54px minmax(0, 1fr); }
+      .pipeline { gap: 8px; }
+      .stage { font-size: 9px; }
+      .dock-foot { padding-inline: 14px; }
+
+      .chat-card { grid-area: chat; min-height: 330px; grid-template-rows: 48px minmax(0, 1fr) auto 70px; }
+      .chat-head { padding-inline: 14px; }
+      .chat-feed { grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 10px 14px; }
+      .message { max-width: none; min-height: 92px; }
+      .auto-row { margin-left: 50%; padding-inline: 14px; }
+      .composer { grid-template-columns: 150px minmax(0, 1fr) 52px 58px; padding: 9px 14px; }
+      .composer textarea { height: 50px; resize: vertical; }
+      .sync-foot { grid-area: sync; }
     }
   </style>
 </head>
@@ -878,14 +1023,29 @@
       <button class="os-left btn ghost" type="button" id="homeButton" title="Restore the Marcus display home state">
         <span class="glyph">*</span><span class="os-title">MARCUS OS</span>
       </button>
-      <div class="os-center"><span>Dedicated workspace</span><span>-</span><span>Display 2</span></div>
+      <div class="os-center"><span id="monitoringSummary">Monitoring Codex work</span></div>
       <div class="os-right">
         <button class="connection" type="button" data-source="codex"><span class="status-dot" id="codexDot"></span><span id="codexStatus">Codex checking</span></button>
         <button class="connection" type="button" data-source="github"><span class="status-dot" id="githubDot"></span><span id="githubStatus">GitHub checking</span></button>
         <button class="connection" type="button" data-source="cloudflare"><span class="status-dot" id="cloudflareDot"></span><span id="cloudflareStatus">Cloudflare checking</span></button>
+        <span class="os-quick-actions">
+          <button class="btn primary" type="button" id="topStartSomething">+ Start something new</button>
+          <button class="btn icon-btn" type="button" id="topVoiceButton" title="Talk to Marcus">&#9835;</button>
+          <button class="btn icon-btn" type="button" id="topSettingsButton" title="Open Marcus settings">&#9881;</button>
+        </span>
         <span id="clock">--:--</span>
       </div>
     </header>
+
+    <section class="attention-banner" id="attentionBanner" hidden aria-live="polite">
+      <span class="attention-icon">!</span>
+      <div class="attention-copy">
+        <span class="eyebrow" id="attentionCount">Needs you</span>
+        <strong id="attentionTitle">A project needs your decision.</strong>
+        <p id="attentionSummary">Review the evidence before Marcus continues.</p>
+      </div>
+      <div class="attention-actions" id="attentionActions"></div>
+    </section>
 
     <main class="workspace-region" aria-label="Marcus workspace">
       <section class="workspace-header">
@@ -899,8 +1059,8 @@
         <nav class="tabs" aria-label="Workspace tabs">
           <button class="tab active" type="button" data-tab="browser">Browser</button>
           <button class="tab" type="button" data-tab="approvals">Approvals <span class="tab-count" id="publicationApprovalCount" hidden>0</span></button>
-          <button class="tab" type="button" data-tab="preview">Preview</button>
-          <button class="tab" type="button" data-tab="github">GitHub PR</button>
+          <button class="tab" type="button" data-tab="preview">Overview</button>
+          <button class="tab" type="button" data-tab="github">GitHub</button>
           <button class="tab" type="button" data-tab="codex">Codex</button>
           <button class="tab" type="button" data-tab="tests">Tests</button>
           <button class="tab" type="button" data-tab="evidence">Evidence</button>
@@ -945,7 +1105,7 @@
         <span id="dockElapsed" class="truncate">freshness unknown</span>
         <span class="dock-head-actions">
           <button class="btn" type="button" id="dockOpenCodex">Open Codex</button>
-          <button class="btn bad" type="button" id="dockSendBack">Send back</button>
+          <button class="btn bad" type="button" id="dockSendBack">Request changes</button>
           <button class="btn good" type="button" id="dockFinishTask">Finish task</button>
           <button class="btn primary" type="button" id="dockStartTask">Start new task</button>
         </span>
@@ -984,7 +1144,7 @@
       </header>
 
       <section class="builds">
-        <div class="section-title"><span>Active builds <span class="build-list-summary" id="activeBuildCount">discovering projects</span></span><button class="btn ghost" type="button" id="clearFilter">View all</button></div>
+        <div class="section-title"><span>Active Codex projects <span class="build-list-summary" id="activeBuildCount">discovering Codex projects</span></span><button class="btn ghost" type="button" id="clearFilter">All Codex</button></div>
         <div class="build-list" id="buildList"></div>
         <section class="ops-mini">
           <div class="section-title"><span>Marcus operations</span><button class="btn ghost" type="button" id="openOps">Open operations</button></div>
@@ -1013,7 +1173,7 @@
           <button class="toggle" type="button" id="autoToggle" aria-pressed="true"><span></span></button>
         </div>
         <form class="composer" id="composer">
-          <select id="contextSelect" aria-label="Chat context"><option value="">All projects</option><option value="__browser__">Browser</option></select>
+          <select id="contextSelect" aria-label="Chat context"><option value="">All projects</option></select>
           <textarea id="composerInput" placeholder="Ask Marcus anything, create or find a project, or steer current work..."></textarea>
           <button class="btn icon-btn" type="button" id="micButton" title="Microphone">m</button>
           <button class="btn primary icon-btn" type="submit" title="Send">&gt;</button>
@@ -1037,7 +1197,9 @@
       codexStatus: document.getElementById("codexStatus"),
       githubStatus: document.getElementById("githubStatus"),
       cloudflareStatus: document.getElementById("cloudflareStatus"),
+      monitoringSummary: document.getElementById("monitoringSummary"),
       workspaceCrumb: document.getElementById("workspaceCrumb"),
+      workspaceHeading: document.querySelector(".workspace-title h1"),
       workspaceUrl: document.getElementById("workspaceUrl"),
       browserAddressForm: document.getElementById("browserAddressForm"),
       workspaceBody: document.querySelector(".workspace-body"),
@@ -1070,6 +1232,11 @@
       micButton: document.getElementById("micButton"),
       relayDot: document.getElementById("relayDot"),
       relayState: document.getElementById("relayState"),
+      attentionBanner: document.getElementById("attentionBanner"),
+      attentionCount: document.getElementById("attentionCount"),
+      attentionTitle: document.getElementById("attentionTitle"),
+      attentionSummary: document.getElementById("attentionSummary"),
+      attentionActions: document.getElementById("attentionActions"),
       syncState: document.getElementById("syncState"),
       takeControl: document.getElementById("takeControl"),
       controlState: document.getElementById("controlState"),
@@ -1078,7 +1245,7 @@
 
     const stages = ["Brief", "Codex", "GitHub", "Preview", "Audit", "Correct", "Ship"];
     const sourceLabels = { codex: "Codex", operation: "Operation", job: "Codex job", awareness: "Awareness" };
-    let snapshot = { projects: [], operations: [], jobs: [], desktop: null, awareness: null, settings: null, browser: null, publications: [] };
+    let snapshot = { projects: [], codexProjects: [], operations: [], jobs: [], desktop: null, awareness: null, settings: null, browser: null, publications: [] };
     let selectedId = "";
     let activeTab = window.matchMedia("(orientation: portrait) and (min-width: 700px)").matches ? "preview" : "browser";
     let activeFilter = "";
@@ -1093,6 +1260,7 @@
     const voiceTelemetrySessionId = `dedicated-visualizer-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
     let lastLiveReadKey = "";
     let lastLiveReadAt = 0;
+    const messageSeenAt = new Map();
     let browserTypingBuffer = "";
     let browserTypingTimer = null;
     let browserFrameObjectUrl = "";
@@ -1145,6 +1313,14 @@
       if (hours < 24) return `${hours}h`;
       return `${Math.round(hours / 24)}d`;
     }
+    function ageWords(value) {
+      const short = age(value);
+      if (short === "now") return "just now";
+      if (short === "unknown") return "at an unknown time";
+      if (short.endsWith("m")) return `${short.slice(0, -1)} minute${short === "1m" ? "" : "s"} ago`;
+      if (short.endsWith("h")) return `${short.slice(0, -1)} hour${short === "1h" ? "" : "s"} ago`;
+      return `${short.slice(0, -1)} day${short === "1d" ? "" : "s"} ago`;
+    }
 
     async function authenticatedFetch(url, options = {}) {
       const headers = new Headers(options.headers || {});
@@ -1182,7 +1358,7 @@
     }
 
     function stateLabel(state) {
-      return ({ needs_mark: "Needs you", blocked: "Blocked", verifying: "Verifying", complete: "Ready", moving: "Building", losing_thread: "Decaying", archived: "Closed", monitoring: "Watching" })[state] || "Watching";
+      return ({ needs_mark: "Waiting for acceptance", blocked: "Blocked", verifying: "Verifying", complete: "Waiting for acceptance", moving: "Codex running", losing_thread: "Stale", archived: "Archived", monitoring: "Watching" })[state] || "Watching";
     }
     function stateTone(state) {
       if (state === "complete") return "ok";
@@ -1349,7 +1525,10 @@
         if (project.source !== "awareness") {
           const matched = awarenessByName.get(idFrom(project.name));
           if (matched) {
-            if (matched.state === "archived" || matched.raw?.dashboardVisible === false) continue;
+            // A live Codex workspace is authoritative for the Codex panel. Marcus
+            // lifecycle/history can hide its own records, but must not suppress a
+            // workspace that the desktop relay says is currently in Codex.
+            if (project.source !== "codex" && (matched.state === "archived" || matched.raw?.dashboardVisible === false)) continue;
             project.awarenessProjectId ||= matched.awarenessProjectId;
             project.projectRegistryId ||= matched.projectRegistryId;
             project.projectId ||= matched.projectId;
@@ -1367,7 +1546,7 @@
         .sort((a, b) => rank(a) - rank(b) || Date.parse(b.updatedAt || 0) - Date.parse(a.updatedAt || 0));
     }
     function visibleProjects() {
-      const projects = snapshot.projects;
+      const projects = snapshot.codexProjects;
       if (!activeFilter) return projects;
       if (activeFilter === "building") return projects.filter((p) => ["moving", "verifying"].includes(p.state));
       if (activeFilter === "auditing") return projects.filter((p) => p.state === "verifying");
@@ -1396,15 +1575,19 @@
           api("/api/marcus/browser/status").catch((error) => ({ ok: false, online: false, error: error.message, control: { owner: "marcus" } })),
           api("/api/marcus/browser/publications").catch((error) => ({ ok: false, error: error.message, publications: [] })),
         ]);
+        const relayCodexProjects = arr(desktop.codexWorkspaces).map((item, index) => makeCodexProject(item, index, desktop));
         const projects = mergeProjects([
-          ...arr(desktop.codexWorkspaces).map((item, index) => makeCodexProject(item, index, desktop)),
+          ...relayCodexProjects,
           ...arr(operations.operations).map(makeOperationProject),
           ...arr(jobs.jobs).filter((job) => text(job.status).toLowerCase() !== "cancelled").map(makeJobProject),
           ...arr(awareness.projects).map(makeAwarenessProject),
         ]);
-        snapshot = { projects, operations: arr(operations.operations), jobs: arr(jobs.jobs), desktop, awareness, settings, github, cloudflare, google, browser, publications: arr(publications.publications) };
+        const codexIds = new Set(relayCodexProjects.map((project) => project.id));
+        const codexProjects = projects.filter((project) => project.source === "codex" && codexIds.has(project.id));
+        snapshot = { projects, codexProjects, operations: arr(operations.operations), jobs: arr(jobs.jobs), desktop, awareness, settings, github, cloudflare, google, browser, publications: arr(publications.publications) };
         markHasControl = browser?.control?.owner === "mark";
-        if (!selectedId || !projects.some((p) => p.id === selectedId)) selectedId = projects[0]?.id || "";
+        if (!selectedId || !projects.some((p) => p.id === selectedId)) selectedId = codexProjects[0]?.id || projects[0]?.id || "";
+        if (!chatContextId && selectedId) chatContextId = selectedId;
         render();
         maybePostLiveRead();
         els.syncState.textContent = `Synced ${nowLabel()}`;
@@ -1418,13 +1601,14 @@
 
     function render() {
       renderChrome();
+      renderAttention();
       renderWorkspace();
       renderDock();
       renderControlPanel();
       renderContextOptions();
     }
     function countsByState() {
-      const projects = snapshot.projects;
+      const projects = snapshot.codexProjects;
       return {
         building: projects.filter((p) => p.state === "moving").length,
         auditing: projects.filter((p) => p.state === "verifying").length,
@@ -1437,6 +1621,7 @@
       const relayOk = snapshot.desktop?.source === "relay" || snapshot.desktop?.source === "native";
       els.codexDot.className = `status-dot ${codexCount ? "ok" : "warn"}`;
       els.codexStatus.textContent = codexCount ? `Codex connected (${codexCount})` : "Codex degraded";
+      els.monitoringSummary.textContent = `Monitoring ${codexCount} Codex project${codexCount === 1 ? "" : "s"}`;
       els.githubDot.className = `status-dot ${snapshot.github?.configured ? "ok" : "warn"}`;
       els.githubStatus.textContent = snapshot.github?.configured ? "GitHub connected" : "GitHub degraded";
       els.cloudflareDot.className = `status-dot ${snapshot.cloudflare?.configured ? "ok" : "warn"}`;
@@ -1486,19 +1671,36 @@
         return;
       }
       if (!project) {
+        els.workspaceHeading.textContent = "MARCUS WORKSPACE";
         els.workspaceCrumb.textContent = "No live project selected";
         els.workspaceUrl.value = "marcus://workspace/empty";
         els.workspaceSurface.innerHTML = `<div style="display:grid;place-items:center;height:100%;color:#333"><strong>No live project evidence is available yet.</strong></div>`;
         els.auditPanel.innerHTML = emptyAudit("No selected project");
         return;
       }
-      els.workspaceCrumb.textContent = `${project.name} / ${project.current || "Live operation"} / ${sourceLabels[project.source] || project.source}`;
+      els.workspaceHeading.textContent = project.name;
+      els.workspaceCrumb.textContent = `${projectTypeLabel(project)} · ${project.branch ? `Branch ${project.branch}` : "No Git branch or deployment expected unless applicable"}`;
       els.workspaceUrl.value = project.workspacePath || project.raw?.previewUrl || `marcus://workspace/${project.id}`;
       els.workspaceStatus.textContent = workspaceStatus(project);
       els.scenarioStatus.textContent = `${stateLabel(project.state)} - ${age(project.updatedAt)}`;
       els.workspaceSurface.innerHTML = surfaceHtml(project);
       els.auditPanel.innerHTML = auditHtml(project);
       bindDynamicButtons();
+    }
+    function renderAttention() {
+      const needs = snapshot.projects.filter((project) => ["needs_mark", "complete"].includes(project.state));
+      const project = needs[0];
+      els.attentionBanner.hidden = !project;
+      if (!project) return;
+      els.attentionCount.textContent = `Needs you ${needs.length}`;
+      els.attentionTitle.textContent = outcomeLine(project);
+      els.attentionSummary.textContent = project.state === "complete"
+        ? `Marcus finished this work ${ageWords(project.updatedAt)}. Nothing is running now.`
+        : needLine(project);
+      els.attentionActions.innerHTML = `
+        <button class="btn primary" type="button" data-attention-project="${esc(project.id)}">${esc(primaryAuditAction(project).label)}</button>
+        <button class="btn" type="button" data-chat-project="${esc(project.id)}">Discuss</button>
+        <button class="btn ghost" type="button" data-project-command="why" data-project-id="${esc(project.id)}">Why now?</button>`;
     }
     function publicationStatusLabel(status) {
       return ({
@@ -1867,8 +2069,8 @@
       if (needs.length) parts.push(`${needs.map((project) => project.name).join(" and ")} ${needs.length === 1 ? "needs" : "need"} your decision.`);
       const message = parts.join(" ");
       const key = `${active?.id || "none"}:${needs.map((project) => project.id).join(",")}:${message}`;
-      if (key === lastLiveReadKey && Date.now() - lastLiveReadAt < 10 * 60_000) return;
-      if (Date.now() - lastLiveReadAt < 3 * 60_000) return;
+      if (key === lastLiveReadKey && Date.now() - lastLiveReadAt < 6 * 60 * 60_000) return;
+      if (Date.now() - lastLiveReadAt < 15 * 60_000) return;
       lastLiveReadKey = key;
       lastLiveReadAt = Date.now();
       addMessage("marcus proactive", message);
@@ -1879,6 +2081,7 @@
         .replace(/\*\*/g, "")
         .replace(/\[[^\]]+\]\(([^)]+)\)/g, "$1")
         .replace(/https?:\/\/\S+/g, "linked evidence")
+        .replace(/\b(password|token|secret|api[_ -]?key)\s*[:=]\s*[^\s,;]+/gi, "$1 [redacted]")
         .replace(/[A-Z]:[\\/][^\s,;)]+/gi, "local file")
         .replace(/<[^>]+>/g, "")
         .replace(/\s+-\s+/g, ". ");
@@ -1905,26 +2108,34 @@
       return out;
     }
     function outcomeLine(project) {
-      if (project.state === "needs_mark") return `${project.name} is waiting on your decision.`;
+      if (project.state === "needs_mark") return `${project.name} is complete and waiting for your acceptance.`;
       if (project.state === "blocked") return `${project.name} is blocked and needs a recovery pass.`;
-      if (project.state === "complete") return `${project.name} appears finished and ready to close if the evidence matches your intent.`;
-      if (project.state === "verifying") return `${project.name} is being checked before it can be closed or shipped.`;
-      if (project.state === "moving") return `${project.name} is actively moving.`;
+      if (project.state === "complete") return `${project.name} is complete and waiting for your acceptance.`;
+      if (project.state === "verifying") return `${project.name} is being verified before Marcus asks for your decision.`;
+      if (project.state === "moving") return `${project.name} is actively being worked on in Codex.`;
       return `${project.name} is being watched for meaningful changes.`;
     }
     function needLine(project) {
-      if (project.state === "needs_mark") return "Decide whether to continue, send it back for a fix, or close it out.";
+      if (project.state === "needs_mark") return "Review the evidence, then accept the result or request changes.";
       if (project.state === "blocked") return "Review the blocker and ask Marcus for the smallest recovery step.";
-      if (project.state === "complete") return "Confirm the result is acceptable, then close it out so it leaves the active list.";
-      if (project.state === "verifying") return "Look at the evidence. If it proves the result, close it out; otherwise send it back.";
+      if (project.state === "complete") return "Review the evidence, then accept and archive the result or request changes.";
+      if (project.state === "verifying") return "No decision is required while Marcus verifies the result.";
       return "No action is required unless you want to redirect or close this work.";
     }
     function recommendationLine(project) {
-      if (project.state === "needs_mark") return "Approve next step only if the visible outcome is not finished yet.";
+      if (project.state === "needs_mark") return "Review the result, then accept and archive it if it matches your intent.";
       if (project.state === "blocked") return "Ask for recovery.";
-      if (project.state === "complete") return "Close out if this matches what you wanted.";
+      if (project.state === "complete") return "Review the result, then accept and archive it if it matches your intent.";
       if (project.state === "verifying") return "Review evidence first.";
       return "Keep watching.";
+    }
+    function isPcConfiguration(project) {
+      return /pc|computer|machine|access|permission|marks_pc|c:\\/i.test(`${project.name} ${project.request} ${project.current}`);
+    }
+    function projectTypeLabel(project) {
+      if (isPcConfiguration(project)) return "PC configuration task";
+      if (/research|audit|review|investigat/i.test(`${project.request} ${project.current}`)) return "Research and review";
+      return project.source === "codex" ? "Codex software project" : "Marcus operation";
     }
     function riskLines(project) {
       const signals = splitSignals(project);
@@ -1942,46 +2153,42 @@
       const primary = primaryAuditAction(project);
       return `
         <button class="btn primary" type="button" data-project-command="${esc(primary.command)}" data-project-id="${esc(project.id)}">${esc(primary.label)}</button>
-        <button class="btn" type="button" data-project-command="close" data-project-id="${esc(project.id)}">Close out</button>
-        <button class="btn bad" type="button" data-project-command="fix" data-project-id="${esc(project.id)}">Send back for fix</button>
-        <button class="btn" type="button" data-open-tab="evidence">Show evidence</button>`;
+        ${["needs_mark", "complete"].includes(project.state) ? `<button class="btn" type="button" data-project-command="close" data-project-id="${esc(project.id)}">Accept &amp; archive</button>` : ""}
+        <button class="btn" type="button" data-project-command="fix" data-project-id="${esc(project.id)}">Request changes</button>
+        <button class="btn" type="button" data-chat-project="${esc(project.id)}">Discuss</button>`;
     }
     function previewSurface(project) {
       const tone = stateTone(project.state);
-      const risks = riskLines(project);
       const evidence = evidenceLines(project);
+      const waiting = ["needs_mark", "complete"].includes(project.state);
       return `
-        <header class="preview-nav">
-          <div class="preview-brand">${esc(project.name.split(/[\\/]/)[0] || "Project")}</div>
-          <nav class="preview-links"><span>Brief</span><span>Evidence</span><span>Codex detail</span></nav>
-        </header>
         <div class="brief-surface">
           <section class="brief-main">
             <span class="brief-status ${esc(tone)}">${esc(stateLabel(project.state))}</span>
+            <span class="brief-kicker">What's happening</span>
             <h2 class="brief-title">${esc(outcomeLine(project))}</h2>
-            <div class="brief-context"><strong>You asked</strong><p>${esc(humanizeLine(project.request || project.current, 220))}</p></div>
-            <strong class="brief-update-label">Latest ${project.source === "codex" || project.source === "job" ? "Codex" : "project"} update</strong>
-            <p class="brief-subtitle">${esc(humanizeLine(project.truth || project.response || project.current, 260))}</p>
-            <div class="brief-callout">
-              <h3>What you need to do</h3>
-              <p>${esc(needLine(project))}</p>
+            <p class="brief-subtitle">${esc(humanizeLine(project.truth || project.response || project.current, 300))} ${waiting ? "Review the evidence before removing this work from active attention." : "Marcus will surface the next decision when verification changes."}</p>
+            <div class="decision-grid">
+              <section class="decision-card">
+                <strong>Marcus recommends</strong>
+                <h3>${esc(recommendationLine(project))}</h3>
+                <p>${esc(waiting ? "Acceptance confirms the result matches your intent; it does not imply a deployment." : project.next)}</p>
+              </section>
+              <section class="decision-card request">
+                <strong>What you requested</strong>
+                <h3>${esc(humanizeLine(project.request || project.current, 150))}</h3>
+                <p>${esc(projectTypeLabel(project))}${project.branch ? ` · Branch ${esc(project.branch)}` : " · No Git branch or deployment is expected unless this is code work."}</p>
+              </section>
+            </div>
+            <div class="current-state">
+              <strong>Current state</strong>
+              <span class="state-line"><i>✓</i><span>${esc(project.state === "moving" ? "Work is running in Codex" : "The latest reported work is complete")}</span></span>
+              <span class="state-line"><i>✓</i><span>${esc(`${project.evidence.length} evidence item${project.evidence.length === 1 ? "" : "s"} collected`)}</span></span>
+              <span class="state-line ${waiting ? "wait" : ""}"><i>${waiting ? "!" : "✓"}</i><span>${esc(waiting ? "Waiting for your acceptance" : project.next)}</span></span>
             </div>
             <div class="brief-actions">${primaryActionHtml(project)}</div>
+            <div class="evidence-strip"><details><summary>Evidence · ${evidence.length} item${evidence.length === 1 ? "" : "s"}</summary><ul>${evidence.map((item) => `<li>${esc(item)}</li>`).join("")}</ul></details></div>
           </section>
-          <aside class="brief-side">
-            <div class="brief-card">
-              <h3>Marcus recommends</h3>
-              <ul class="brief-list"><li><span class="bullet ${esc(tone)}">!</span><span>${esc(recommendationLine(project))}</span></li></ul>
-            </div>
-            <div class="brief-card">
-              <h3>Watchouts</h3>
-              <ul class="brief-list">${risks.map((item) => `<li><span class="bullet ${/no major/i.test(item) ? "ok" : "warn"}">${/no major/i.test(item) ? "✓" : "!"}</span><span>${esc(item)}</span></li>`).join("")}</ul>
-            </div>
-            <div class="brief-card">
-              <h3>Evidence</h3>
-              <ul class="brief-list">${evidence.map((item) => `<li><span class="bullet ok">✓</span><span>${esc(item)}</span></li>`).join("")}</ul>
-            </div>
-          </aside>
         </div>`;
     }
     function codeSurface(project) {
@@ -2094,10 +2301,10 @@
       return "The project has live movement or context. Marcus should keep watching and only interrupt when evidence changes or Mark is required.";
     }
     function primaryAuditAction(project) {
-      if (project.state === "needs_mark") return { label: "Approve next step", command: "approve" };
+      if (project.state === "needs_mark") return { label: "Review evidence", command: "evidence" };
       if (project.state === "blocked") return { label: "Ask for recovery", command: "fix" };
       if (project.state === "verifying") return { label: "Review evidence", command: "evidence" };
-      if (project.state === "complete") return { label: "Close out", command: "close" };
+      if (project.state === "complete") return { label: "Review evidence", command: "evidence" };
       return { label: "Keep watching", command: "watch" };
     }
     function auditHeading(project) {
@@ -2141,17 +2348,23 @@
         </div>`;
     }
     function currentStage(project) {
-      if (project.state === "needs_mark") return "Ship";
-      if (project.state === "complete") return "Audit";
-      if (project.state === "verifying") return "Audit";
+      if (project.state === "needs_mark" || project.state === "complete") return "Review";
+      if (project.state === "verifying") return "Verify";
       if (project.source === "codex") return "Codex";
-      if (project.source === "operation") return "Brief";
+      if (project.source === "operation") return isPcConfiguration(project) ? "Configure" : "Brief";
       return "Evidence";
     }
+    function pipelineStages(project) {
+      if (isPcConfiguration(project)) return ["Request", "Permission plan", "Configure", "Test access", "Review", "Accept"];
+      if (/research|audit|review|investigat/i.test(`${project.request} ${project.current}`)) return ["Question", "Research", "Synthesize", "Verify", "Review", "Accept"];
+      return ["Brief", "Codex", "GitHub", "Preview", "Verify", "Review", "Deploy"];
+    }
     function pipelineHtml(project) {
+      const projectStages = pipelineStages(project);
       const current = currentStage(project);
-      const index = stages.indexOf(current);
-      return stages.map((stage, i) => {
+      let index = projectStages.indexOf(current);
+      if (index < 0) index = project.state === "blocked" ? 1 : project.state === "moving" ? 1 : Math.max(0, projectStages.length - 2);
+      return projectStages.map((stage, i) => {
         let cls = i < index ? "done" : i === index ? "active" : "";
         if (project.state === "blocked" && i === index) cls = "fail";
         if (project.state === "needs_mark" && i === index) cls = "wait";
@@ -2164,19 +2377,19 @@
       els.dockContext.textContent = project.name;
       els.dockPass.textContent = project.state === "verifying" ? "AUDIT" : project.state === "complete" ? "REVIEW" : project.state === "needs_mark" ? "APPROVAL" : "LIVE";
       els.dockPass.className = `state-pill ${stateTone(project.state)}`;
-      els.dockElapsed.textContent = `${age(project.updatedAt)} fresh`;
-      els.branchState.textContent = project.branch ? `Branch ${project.branch}` : project.workspacePath || "No branch reported";
+      els.dockElapsed.textContent = `Updated ${ageWords(project.updatedAt)}`;
+      els.branchState.textContent = project.branch ? `Branch ${project.branch}` : isPcConfiguration(project) ? "Git branch: not applicable" : project.workspacePath || "No branch associated";
       els.dockCurrent.innerHTML = `
         <span class="eyebrow">1 Current</span>
-        <div><h3>${esc(project.current || project.label)}</h3><p>${esc(project.truth)}</p></div>
+        <div><h3>${esc(["complete", "needs_mark"].includes(project.state) ? "Nothing is running" : project.current || project.label)}</h3><p>${esc(["complete", "needs_mark"].includes(project.state) ? "Marcus is waiting for your review." : project.truth)}</p></div>
         <div class="row" style="gap:6px"><button class="btn" type="button" data-pause-current>Pause</button><button class="btn bad" type="button" data-stop-current>Stop</button><button class="btn primary" type="button" data-control-current>${markHasControl ? "Return" : "Take control"}</button></div>`;
       els.dockPipeline.innerHTML = `<span class="eyebrow">2 Pipeline</span><div class="pipeline">${pipelineHtml(project)}</div><p>Current stage: ${esc(currentStage(project))}</p>`;
       els.dockEvidence.innerHTML = `<span class="eyebrow">3 Evidence</span><div>${project.evidence.slice(0, 4).map((item) => `<div class="evidence-row"><span class="state-pill ${stateTone(project.state)}">E</span><span>${esc(compact(item, 110))}</span></div>`).join("")}</div><button class="btn" type="button" data-open-tab="evidence">Open evidence</button>`;
-      els.dockNext.innerHTML = `<span class="eyebrow">4 Next</span><div><div class="next-row"><span class="state-pill warn">1</span><span>${esc(project.next)}</span></div><div class="next-row"><span class="state-pill">2</span><span>${project.state === "needs_mark" ? "Approve continuation, request a fix, or close it out if the outcome is already accepted." : "Review live evidence before closing or shipping."}</span></div></div><div class="row" style="gap:6px"><button class="btn" type="button" data-project-command="why" data-project-id="${esc(project.id)}">Why</button><button class="btn primary" type="button" data-project-command="${esc(primaryAuditAction(project).command)}" data-project-id="${esc(project.id)}">${esc(primaryAuditAction(project).label)}</button></div>`;
+      els.dockNext.innerHTML = `<span class="eyebrow">4 Next</span><div><div class="next-row"><span class="state-pill warn">1</span><span>${esc(project.next)}</span></div><div class="next-row"><span class="state-pill">2</span><span>${["needs_mark", "complete"].includes(project.state) ? "Accept and archive, or request changes." : "Marcus continues until evidence changes or your decision is required."}</span></div></div><div class="row" style="gap:6px"><button class="btn" type="button" data-project-command="why" data-project-id="${esc(project.id)}">Ask Marcus why</button><button class="btn primary" type="button" data-project-command="${esc(primaryAuditAction(project).command)}" data-project-id="${esc(project.id)}">${esc(primaryAuditAction(project).label)}</button></div>`;
     }
     function actionLabel(project) {
       if (project.state === "needs_mark") return "Review";
-      if (project.state === "complete") return "Ship";
+      if (project.state === "complete") return "Review";
       if (project.state === "verifying") return "Preview";
       if (project.state === "blocked") return "Plan";
       return "Watch";
@@ -2184,16 +2397,16 @@
     function renderControlPanel() {
       const projects = visibleProjects();
       const selected = selectedProject();
-      const total = snapshot.projects.length;
+      const total = snapshot.codexProjects.length;
       els.activeBuildCount.textContent = activeFilter
         ? `\u00b7 ${projects.length} shown of ${total}`
-        : `\u00b7 ${total} live`;
+        : `\u00b7 ${total} in Codex`;
       els.buildList.innerHTML = projects.map((project) => `
         <div class="build-card ${project.id === selected?.id ? "active" : ""}" data-state="${esc(project.state)}">
           <button class="build-main" type="button" data-select-project="${esc(project.id)}">
             <span class="build-title"><strong>${esc(project.name)}</strong><span class="state-pill ${stateTone(project.state)}">${esc(project.label)}</span></span>
-            <p>${esc(compact(project.truth, 118))}</p>
-            <span class="build-meta"><span>LIVE ${esc(compact(project.current, 38))}</span><span>NEXT ${esc(compact(project.next, 42))}</span></span>
+            <p>${esc(humanizeLine(project.truth, 118))}</p>
+            <span class="build-meta"><span>Live · ${esc(compact(["complete", "needs_mark"].includes(project.state) ? "Nothing running" : humanizeLine(project.current, 80), 52))}</span><span>Next · ${esc(compact(humanizeLine(project.next, 90), 58))}</span><span>Evidence · updated ${esc(ageWords(project.updatedAt))}</span></span>
             <span class="build-detail">
               <span class="task"><strong>Active task</strong>${esc(compact(project.current, 78))}</span>
               <span class="next"><strong>Next</strong>${esc(compact(project.next, 78))}</span>
@@ -2208,13 +2421,13 @@
             <button class="btn primary" type="button" data-action-project="${esc(project.id)}">${esc(actionLabel(project))}</button>
           </span>
         </div>
-      `).join("") || `<div class="build-card"><div><strong>No projects for this filter.</strong><p>Clear the filter or wait for live relay data.</p></div></div>`;
+      `).join("") || `<div class="build-card"><div><strong>No Codex projects for this filter.</strong><p>Clear the filter or wait for the desktop relay to discover your Codex workspaces.</p></div></div>`;
       els.miniOps.innerHTML = snapshot.projects.slice(0, 1).map((project) => `<button class="mini-row" type="button" data-select-project="${esc(project.id)}"><span><strong>${esc(project.name)}</strong><br>${esc(compact(project.current, 52))}</span><span>${esc(project.label)}</span></button>`).join("") || `<div class="mini-row"><span>No operations visible</span><span>empty</span></div>`;
       bindDynamicButtons();
     }
     function renderContextOptions() {
       if (chatContextId && chatContextId !== "__browser__" && !snapshot.projects.some((p) => p.id === chatContextId)) chatContextId = "";
-      els.contextSelect.innerHTML = `<option value="">All projects</option><option value="__browser__">Browser</option>${snapshot.projects.slice(0, 20).map((p) => `<option value="${esc(p.id)}">${esc(compact(p.name, 28))}</option>`).join("")}`;
+      els.contextSelect.innerHTML = `<option value="">All projects</option>${snapshot.projects.slice(0, 20).map((p) => `<option value="${esc(p.id)}">${esc(compact(p.name, 28))}</option>`).join("")}`;
       els.contextSelect.value = chatContextId;
       const project = snapshot.projects.find((p) => p.id === chatContextId);
       els.chatContext.textContent = chatContextId === "__browser__" ? "Browser" : project ? project.name : "All projects";
@@ -2226,7 +2439,7 @@
         if (chat) return setChatContext(chat.dataset.chatProject);
         if (action) return projectAction(action.dataset.actionProject);
         selectedId = button.dataset.selectProject;
-        activeTab = "codex";
+        activeTab = "preview";
         render();
       });
       document.querySelectorAll("[data-chat-project]").forEach((button) => button.onclick = (event) => {
@@ -2248,6 +2461,11 @@
         const message = text(input?.value).trim();
         if (!message) return;
         sendCodexFollowup(form.dataset.codexCompose, message, form);
+      });
+      document.querySelectorAll("[data-attention-project]").forEach((button) => button.onclick = () => {
+        selectedId = button.dataset.attentionProject;
+        activeTab = "preview";
+        render();
       });
       document.querySelectorAll("[data-review-next]").forEach((button) => button.onclick = () => explainReasoning(selectedId));
       document.querySelectorAll("[data-control-current]").forEach((button) => button.onclick = toggleControl);
@@ -2320,7 +2538,9 @@
           }),
         });
         addMessage("marcus", `${project.name} is closed out and removed from active attention. Its history and evidence remain searchable.`);
-        selectedId = snapshot.projects.find((p) => p.id !== project.id)?.id || "";
+        selectedId = snapshot.codexProjects.find((p) => p.id !== project.id)?.id
+          || snapshot.projects.find((p) => p.id !== project.id)?.id
+          || "";
         if (chatContextId === project.id || chatContextId === awarenessId) chatContextId = "";
         await load();
       } catch (error) {
@@ -2354,6 +2574,11 @@
       render();
     }
     function addMessage(role, content) {
+      const normalized = text(content).replace(/\s+/g, " ").trim().toLowerCase();
+      const messageKey = `${role}:${normalized}`;
+      const seenAt = messageSeenAt.get(messageKey) || 0;
+      if (normalized && Date.now() - seenAt < 6 * 60 * 60_000) return;
+      messageSeenAt.set(messageKey, Date.now());
       const div = document.createElement("div");
       div.className = `message ${role}`.trim();
       div.innerHTML = `<span class="message-meta">${role.includes("user") ? "Mark" : "MARCUS"} - ${esc(nowLabel())}</span>${esc(content)}`;
@@ -2547,7 +2772,10 @@
       renderControlPanel();
     }));
     document.getElementById("clearFilter").addEventListener("click", () => { activeFilter = ""; renderControlPanel(); });
-    document.getElementById("homeButton").addEventListener("click", () => { activeFilter = ""; activeTab = "browser"; selectedId = snapshot.projects[0]?.id || ""; render(); });
+    document.getElementById("homeButton").addEventListener("click", () => { activeFilter = ""; activeTab = "preview"; selectedId = snapshot.codexProjects[0]?.id || snapshot.projects[0]?.id || ""; render(); });
+    document.getElementById("topStartSomething").addEventListener("click", startTaskForSelectedProject);
+    document.getElementById("topSettingsButton").addEventListener("click", () => { activeTab = "evidence"; renderWorkspace(); });
+    document.getElementById("topVoiceButton").addEventListener("mousedown", (event) => { event.preventDefault(); beginVoiceHold(); });
     document.getElementById("profileButton").addEventListener("click", () => openBrowserUrl("https://mail.google.com/"));
     document.getElementById("takeControl").addEventListener("click", toggleControl);
     document.getElementById("restartDesktopAgent").addEventListener("click", restartDesktopAgent);
