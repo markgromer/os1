@@ -136,7 +136,7 @@ test('desktop visualizer uses canonical awareness instead of browser-local proje
   assert.match(html, /awarenessProjectId/);
   assert.doesNotMatch(html, /opsDismissedProjects/);
   assert.match(html, /data-tab="browser"/);
-  assert.match(html, /<option value="__browser__">Browser<\/option>/);
+  assert.doesNotMatch(html, /<option value="__browser__">Browser<\/option>/);
   assert.match(html, /context: browserContext \? "browser"/);
   assert.match(html, /\.composer select option \{ background: #fffdfa; color: #17191d; \}/);
   assert.match(html, /data-tab="approvals"/);
@@ -148,4 +148,11 @@ test('desktop visualizer uses canonical awareness instead of browser-local proje
   assert.match(html, /\["pending_approval", "failed"\]\.includes\(item\.status\)/);
   assert.match(html, /action required/);
   assert.doesNotMatch(html, /direct browser control is bound/);
+  assert.match(html, /ACTIVE CODEX PROJECTS/);
+  assert.match(html, /const projects = snapshot\.codexProjects/);
+  assert.match(html, /project\.source !== "codex" && \(matched\.state === "archived"/);
+  assert.match(html, /class="attention-banner"/);
+  assert.match(html, /Accept &amp; archive/);
+  assert.match(html, /function pipelineStages\(project\)/);
+  assert.match(html, /messageSeenAt/);
 });
