@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import vm from 'node:vm';
-import { matchWorkProject, reportState, evidenceStages, workOverviewHtml, safeWorkUrl, projectBrief } from '../public/work-status-view.js';
+import { matchWorkProject, reportState, evidenceStages, workOverviewHtml, safeWorkUrl, projectBrief, attentionProjects } from '../public/work-status-view.js';
 
 const linked = { id: 'registry-exact', name: 'Task Tracker', workspacePath: 'C:/Work/Task Tracker', repository: 'owner/project', workCount: 0, items: [], operationCount: 0, operations: [], decisions: [], engineering: { lifecycle: 'inactive', granted: false, autoAdvance: false }, deployment: null, recentChanges: [] };
 const overview = { ok: true, evidenceAvailable: true, projects: [linked], observedAt: '2026-09-05T00:00:00Z' };
@@ -32,6 +32,7 @@ test('handoff, verification, deployment and acceptance cannot promote one anothe
 
 test('failed reads show unknown counts, and provider URLs cannot inject executable or credential-bearing links', () => {
   assert.match(workOverviewHtml(project, { ok: false }), /Work data is unavailable/);
+  assert.match(projectBrief(project, { ok: false }).next, /records are unavailable/);
   assert.equal(safeWorkUrl('javascript:alert(1)'), '');
   assert.equal(safeWorkUrl('https://user:secret@example.com'), '');
   assert.equal(safeWorkUrl('https://example.com/live'), 'https://example.com/live');
@@ -72,6 +73,13 @@ test('deployment provider errors suppress a current-success headline without era
   assert.equal(projectBrief(project, { ...overview, projects: [row] }).deployed, false);
 });
 
+test('multiple session aliases cannot duplicate one registered project decision', () => {
+  const needsOverview = { ...overview, projects: [{ ...linked, needsYouCount: 1 }] };
+  const rows = attentionProjects([project, { ...project, name: 'Awareness alias' }], needsOverview);
+  assert.equal(rows.length, 1);
+  assert.equal(attentionProjects([project], overview).length, 0);
+});
+
 test('project status shortcut uses a read-only endpoint and drops a reply after a context switch', async () => {
   const html = await fs.readFile(new URL('../public/visualizer.html', import.meta.url), 'utf8');
   const start = html.indexOf('async function sendToMarcus(');
@@ -95,6 +103,7 @@ test('dedicated display loads the new surface, reads saved policy and parses as 
   const script = html.match(/<script type="module">([\s\S]*?)<\/script>/)[1];
   new vm.Script(script.replace(/^\s*import .*?;\s*$/m, ''));
   assert.match(script, /workOverviewHtml\(project, workOverview\)/);
+  assert.match(script, /activeFilter === "needs"\) return attentionProjects\(snapshot.projects, workOverview\)/);
   assert.match(script, /api\('\/api\/work\/overview'\)/);
   assert.match(script, /savedWorkPolicy\.autoAdvance/);
   assert.match(html, /class="btn" type="button" id="autoToggle">Execution policy/);

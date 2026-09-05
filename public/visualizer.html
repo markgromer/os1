@@ -1201,7 +1201,7 @@
   </dialog>
   <script src="/marcus-realtime.js"></script>
   <script type="module">
-    import { matchWorkProject, reportState, evidenceStages, workOverviewHtml, projectBrief } from '/work-status-view.js?v=3';
+    import { matchWorkProject, reportState, evidenceStages, workOverviewHtml, projectBrief, attentionProjects } from '/work-status-view.js?v=3';
     const els = {
       clock: document.getElementById("clock"),
       codexDot: document.getElementById("codexDot"),
@@ -1586,7 +1586,7 @@
       if (!activeFilter) return projects;
       if (activeFilter === "building") return projects.filter((p) => ["moving", "verifying"].includes(p.state));
       if (activeFilter === "auditing") return projects.filter((p) => p.state === "verifying");
-      if (activeFilter === "needs") return projects.filter((p) => p.state === "needs_mark");
+      if (activeFilter === "needs") return attentionProjects(snapshot.projects, workOverview);
       if (activeFilter === "decaying") return projects.filter((p) => ["blocked", "losing_thread"].includes(p.state));
       return projects;
     }
@@ -1752,11 +1752,11 @@
       bindDynamicButtons();
     }
     function renderAttention() {
-      const needs = snapshot.projects.filter((project) => projectBrief(project, workOverview).needs > 0);
+      const needs = attentionProjects(snapshot.projects, workOverview);
       const project = needs[0];
       els.attentionBanner.hidden = !project;
       if (!project) return;
-      els.attentionCount.textContent = `Needs you ${needs.length}`;
+      els.attentionCount.textContent = `Needs you ${needs.reduce((sum, row) => sum + projectBrief(row, workOverview).needs, 0)}`;
       els.attentionTitle.textContent = `${project.name}: ${projectBrief(project, workOverview).headline}`;
       els.attentionSummary.textContent = 'A linked work or execution record needs attention. Review its exact scope before acting.';
       els.attentionActions.innerHTML = `
@@ -2120,7 +2120,7 @@
       if (Number.isFinite(idle) && idle > 180) return;
       if (["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName || "")) return;
       const active = activeDesktopProject();
-      const needs = snapshot.projects.filter((project) => projectBrief(project, workOverview).needs > 0).slice(0, 2);
+      const needs = attentionProjects(snapshot.projects, workOverview).slice(0, 2);
       if (!active && !needs.length) return;
       const parts = [];
       if (active) parts.push(`I see you working in ${active.name}. ${needLine(active)}`);
