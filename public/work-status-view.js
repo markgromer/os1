@@ -69,6 +69,15 @@ export function projectBrief(project, overview) {
     : 'Keep working in the existing session. There is no need to create a duplicate task.';
   return { linked, deployed, needs, headline, next };
 }
+export function attentionProjects(projects, overview) {
+  const seen = new Set();
+  return projects.filter((project) => {
+    const brief = projectBrief(project, overview);
+    if (!brief.needs || seen.has(brief.linked.id)) return false;
+    seen.add(brief.linked.id);
+    return true;
+  });
+}
 function recordLink(url, label) {
   const safe = safeWorkUrl(url);
   return safe ? `<a href="${esc(safe)}" target="_blank" rel="noopener noreferrer">${esc(label)} ↗</a>` : '';

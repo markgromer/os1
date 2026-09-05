@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import vm from 'node:vm';
-import { matchWorkProject, reportState, evidenceStages, workOverviewHtml, safeWorkUrl, projectBrief } from '../public/work-status-view.js';
+import { matchWorkProject, reportState, evidenceStages, workOverviewHtml, safeWorkUrl, projectBrief, attentionProjects } from '../public/work-status-view.js';
 
 const linked = { id: 'registry-exact', name: 'Task Tracker', workspacePath: 'C:/Work/Task Tracker', repository: 'owner/project', workCount: 0, items: [], operationCount: 0, operations: [], decisions: [], engineering: { lifecycle: 'inactive', granted: false, autoAdvance: false }, deployment: null, recentChanges: [] };
 const overview = { ok: true, evidenceAvailable: true, projects: [linked], observedAt: '2026-09-05T00:00:00Z' };
@@ -70,6 +70,13 @@ test('deployment provider errors suppress a current-success headline without era
   assert.equal(projectBrief(project, { ...overview, projects: [row] }).deployed, false);
   row.release.refreshErrors = [{ endpoint: 'deployments' }];
   assert.equal(projectBrief(project, { ...overview, projects: [row] }).deployed, false);
+});
+
+test('multiple session aliases cannot duplicate one registered project decision', () => {
+  const needsOverview = { ...overview, projects: [{ ...linked, needsYouCount: 1 }] };
+  const rows = attentionProjects([project, { ...project, name: 'Awareness alias' }], needsOverview);
+  assert.equal(rows.length, 1);
+  assert.equal(attentionProjects([project], overview).length, 0);
 });
 
 test('project status shortcut uses a read-only endpoint and drops a reply after a context switch', async () => {
