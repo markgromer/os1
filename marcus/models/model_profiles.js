@@ -170,3 +170,12 @@ export function listModelProfilesForClient() {
     },
   }));
 }
+
+// A shared Settings picker must not offer a route-specific canary as a global
+// default. Readiness is advertised separately through modelProfiles.
+export function isGeneralModelOption(provider, model) {
+  return ['marcusChat', 'operatorBio', 'projectAssistant', 'dashboardPreview'].every((workload) => {
+    const deployment = resolveModelDeployment({ provider, model, workload });
+    return deployment.allowed && deployment.rolloutStatus !== 'canary';
+  });
+}

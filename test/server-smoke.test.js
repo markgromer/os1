@@ -74,6 +74,11 @@ test('constitution work APIs retain real server owner/business gates and isolate
     await server.waitForReady(); const base = `http://127.0.0.1:${server.port}`;
     const call = (url, body, credential = 'test-admin-token', extraHeaders = {}) => fetch(base + url, { method: body ? 'POST' : 'GET', headers: { authorization: `Bearer ${credential}`, 'content-type': 'application/json', ...extraHeaders }, ...(body ? { body: JSON.stringify(body) } : {}) });
     assert.equal((await call('/api/work', null, '')).status, 401);
+    const catalog = await (await call('/api/integrations/openai/models')).json();
+    assert.ok(catalog.models.includes('gpt-4.1-mini'));
+    assert.ok(!catalog.models.some((model) => model.includes('gpt-6-astra')), 'a canary cannot be selected globally');
+    const settings = await (await call('/api/settings')).json();
+    assert.ok(settings.modelProfiles.some((profile) => profile.model === 'gpt-6-astra'), 'readiness remains visible separately');
     const emptyCommand = await (await call('/api/marcus/command', { message: 'Show tracked work status.' })).json();
     assert.equal(emptyCommand.intent, 'work_status');
     assert.equal(emptyCommand.workSummary.trackedWorkCount, 0);

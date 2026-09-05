@@ -69,7 +69,7 @@ import {
 import { formatMissionMemoryForPrompt, MissionMemoryStore } from './marcus/memory/mission_memory_store.js';
 import { CommunityIntelligenceStore } from './marcus/memory/community_intelligence_store.js';
 import { normalizeAiHttpResponse, prepareAiHttpRequest } from './marcus/models/ai_transport.js';
-import { listModelProfilesForClient } from './marcus/models/model_profiles.js';
+import { listModelProfilesForClient, isGeneralModelOption } from './marcus/models/model_profiles.js';
 import { buildVoiceContinuityBrief } from './marcus/voice/continuity_brief.js';
 import { createOperationsEngine } from './marcus/operations/operation_engine.js';
 import { discoverDurableBackupSources } from './marcus/operations/operation_backups.js';
@@ -1275,7 +1275,7 @@ const OPENAI_MODEL_FALLBACKS = [
   'gpt-4.1-mini',
   'gpt-4o',
   'gpt-4o-mini',
-];
+].filter((model) => isGeneralModelOption('openai', model));
 const OPENAI_MODELS_CACHE_TTL_MS = 5 * 60 * 1000;
 let openAiModelsCache = {
   fetchedAt: 0,
@@ -2291,7 +2291,7 @@ function normalizeOpenAiModelList(input) {
     if (!id) continue;
     const lower = id.toLowerCase();
     const looksLikeChatModel = lower.startsWith('gpt-') || lower.startsWith('o1') || lower.startsWith('o3') || lower.startsWith('o4');
-    if (!looksLikeChatModel) continue;
+    if (!looksLikeChatModel || !isGeneralModelOption('openai', id)) continue;
     ids.push(id);
   }
   const uniq = Array.from(new Set(ids));

@@ -57,3 +57,18 @@ test('proactive summaries retain evidence, respect busy/away and hourly budgets,
   const summary = await f.operator.pass('personal'); assert.equal(summary.needsMark.length, 0); assert.equal(summary.opportunities.length, 3); assert.equal(summary.canContinue.length, 0);
   assert.equal((await f.attention.list('personal', { status: 'resolved' })).length, 3); assert.ok(summary.away.changes.every((row) => row.id));
 });
+
+test('queued advancement waits for an active matching director grant without spending retry attempts', async () => {
+  const f = await workFixture(); const work = await f.create('Wait for director authority');
+  await f.execution.setPolicy('personal', f.project.id, true);
+  await f.execution.drainOutbox('personal');
+  for (const configuration of [null, { lifecycle: 'paused', projectIds: [f.project.id] }, { lifecycle: 'active', projectIds: [f.other.id] }]) {
+    if (configuration) await f.director.configure('personal', configuration);
+    for (let attempt = 0; attempt < 4; attempt++) assert.deepEqual(await f.execution.pass('personal'), []);
+    const pending = (await f.execution.store.read('personal')).runs.find((run) => run.workId === work.id);
+    assert.equal(pending.status, 'queued'); assert.equal(pending.attempts, 0);
+  }
+  await f.director.configure('personal', { lifecycle: 'active', projectIds: [f.project.id] });
+  const claimed = await f.execution.claim('personal', 'resumed-worker');
+  assert.equal(claimed.workId, work.id); assert.equal(claimed.attempts, 1);
+});

@@ -27,12 +27,13 @@ test('Command ignores an in-flight work status response after switching business
   const commandSource = app.slice(start, app.indexOf('function recordChatMessage(', start));
   const ui = { activeBusinessKey: 'personal', workStatusReadout: null };
   const actions = [];
+  let typingCleared = 0;
   let respond;
   const command = vm.runInNewContext(`${commandSource}; sendOperationalCommand`, {
     state: ui, safeText: (value) => String(value || ''), normalizeBusinessKey: (value) => value,
     getStoredBusinessKey: () => ui.activeBusinessKey,
     stopMarcusSpeech() {}, recordChatMessage: (role) => actions.push(role), addChatMessage() {},
-    document: { getElementById: () => null }, setMarcusPresence() {}, showMarcusTypingIndicator() {}, removeMarcusTypingIndicator() {},
+    document: { getElementById: () => null }, setMarcusPresence() {}, showMarcusTypingIndicator() {}, removeMarcusTypingIndicator() { typingCleared++; },
     apiJson: () => new Promise((resolve) => { respond = resolve; }),
     renderMain: () => actions.push('render'), speakMarcus: () => actions.push('speak'),
   });
@@ -42,4 +43,5 @@ test('Command ignores an in-flight work status response after switching business
   await pending;
   assert.equal(ui.workStatusReadout, null);
   assert.deepEqual(actions, ['user']);
+  assert.equal(typingCleared, 1);
 });

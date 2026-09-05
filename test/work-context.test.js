@@ -67,3 +67,25 @@ test('context does not silently truncate mandatory decisions or accept stale dec
   await memory.add('personal', { kind: 'decision', projectId: project.id, content: 'Needs confirmation', reviewAfter: '2020-01-01' });
   await assert.rejects(context.prepare('personal', work.id), /freshness/);
 });
+
+test('invalidation of nested parents changes revisions and emits events exactly once per cause', async () => {
+  const f = await workFixture();
+  const root = await f.graph.create('personal', { projectId: f.project.id, kind: 'objective', objective: 'Root objective', acceptanceCriteria: ['Children verified'] });
+  const parent = await f.graph.create('personal', { projectId: f.project.id, kind: 'objective', parentId: root.id, objective: 'Parent objective', acceptanceCriteria: ['Child verified'] });
+  const child = await f.graph.create('personal', { projectId: f.project.id, parentId: parent.id, objective: 'Implement child', acceptanceCriteria: ['Decision remains current'] });
+  for (const work of [root, parent, child]) await f.context.prepare('personal', work.id);
+  const before = await f.graph.store.read('personal');
+  await f.memory.add('personal', { kind: 'decision', projectId: f.project.id, content: 'Require current decisions for the nested objective.', sourceRefs: ['owner:test'] });
+  await f.context.invalidate('personal');
+  const after = await f.graph.store.read('personal');
+  for (const [ancestor, cause] of [[parent, child], [root, parent]]) {
+    const updated = after.items.find((item) => item.id === ancestor.id);
+    assert.ok(updated.revision > before.items.find((item) => item.id === ancestor.id).revision);
+    assert.ok(updated.invalidatedBy.includes(cause.id));
+    assert.equal(after.outbox.filter((event) => event.type === 'work.context.invalidated' && event.subjectId === ancestor.id && event.data.childWorkId === cause.id).length, 1);
+  }
+  assert.deepEqual(await f.context.invalidate('personal'), []);
+  const repeated = await f.graph.store.read('personal');
+  assert.deepEqual(repeated.items, after.items);
+  assert.equal(repeated.outbox.length, after.outbox.length);
+});

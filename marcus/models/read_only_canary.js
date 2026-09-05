@@ -35,7 +35,7 @@ export async function runReadOnlyCanary({ baseline, workload, requestId, message
     await observe(receipt).catch(() => {});
     return { ...checked, receipt };
   };
-  if (selected.canary && !profile && !resolveModelDeployment({ provider: selected.provider, model: selected.model, workload }).allowed) {
+  if (selected.canary && !resolveModelDeployment({ provider: selected.provider, model: selected.model, workload }).allowed) {
     return attempt({ ...baseline, canary: false });
   }
   const result = await attempt(selected);

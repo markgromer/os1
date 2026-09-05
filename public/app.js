@@ -17741,6 +17741,7 @@ async function sendOperationalCommand(message, options = {}) {
         addChatMessage("ai", `Error: ${friendly}`);
         throw e;
     } finally {
+        removeMarcusTypingIndicator();
         if (status) status.style.opacity = "0";
         setMarcusPresence('idle');
     }

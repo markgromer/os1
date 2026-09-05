@@ -86,7 +86,10 @@ export class WorkContextService {
       const affected = [];
       for (const item of state.items.filter((row) => row.contextPacketId)) {
         const current = currentByProject.get(item.projectId) || [];
-        const stale = this.staleIds(item, current);
+        // Retain child invalidations until this parent's context is explicitly
+        // refreshed; otherwise each background pass removes and re-adds them.
+        const inherited = item.invalidatedBy.filter((id) => state.items.some((child) => child.id === id && child.parentId === item.id));
+        const stale = [...new Set([...this.staleIds(item, current), ...inherited])];
         if (stale.length && JSON.stringify(item.invalidatedBy) !== JSON.stringify(stale)) {
           item.invalidatedBy = stale; item.revision++; affected.push(item.id);
           emitWorkEvent(state, 'work.context.invalidated', item, { decisionIds: stale });
@@ -99,7 +102,11 @@ export class WorkContextService {
         for (const item of state.items) {
           if (item.parentId && item.invalidatedBy.length) {
             const parent = state.items.find((row) => row.id === item.parentId);
-            if (parent && !parent.invalidatedBy.includes(item.id)) { parent.invalidatedBy.push(item.id); affected.push(parent.id); changed = true; }
+            if (parent && !parent.invalidatedBy.includes(item.id)) {
+              parent.invalidatedBy.push(item.id); parent.revision++;
+              emitWorkEvent(state, 'work.context.invalidated', parent, { childWorkId: item.id });
+              affected.push(parent.id); changed = true;
+            }
           }
         }
       }

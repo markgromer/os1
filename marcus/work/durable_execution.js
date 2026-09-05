@@ -70,13 +70,16 @@ export class DurableExecution {
   }
   async claim(key, owner) {
     if (!owner) throw domainError('LEASE_INVALID', 'A worker owner is required.');
+    const director = await this.director.store.read(key);
     return this.store.mutate(key, (doc) => {
       for (const run of doc.runs.filter((row) => row.status === 'running' && row.lease?.expiresAt <= this.now())) {
         run.checkpoints.push({ at: this.now(), phase: 'lease_expired', leaseToken: run.lease.token });
         run.status = run.attempts >= run.maxAttempts ? 'dead_letter' : 'queued'; run.lease = null;
       }
       const run = doc.runs.find((row) => row.status === 'queued' && row.availableAt <= this.now()
-        && (row.kind !== 'advance_work' || doc.policies.some((policy) => policy.projectId === row.projectId && policy.autoAdvance)));
+        && (row.kind !== 'advance_work' || (
+          doc.policies.some((policy) => policy.projectId === row.projectId && policy.autoAdvance)
+          && ['probation', 'active'].includes(director.lifecycle) && director.projectIds.includes(row.projectId))));
       if (!run) return null;
       run.status = 'running'; run.attempts++; run.lease = { owner, token: newDomainId('lease'), expiresAt: this.now() + this.leaseMs };
       run.checkpoints.push({ at: this.now(), phase: 'claimed', attempt: run.attempts }); return run;

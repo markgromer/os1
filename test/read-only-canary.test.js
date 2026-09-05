@@ -54,3 +54,13 @@ test('preview validation rejects invented IDs, tool calls, and malformed output'
     { content: '{}', tool_calls: [{ id: 'call' }] },
   ]) assert.equal(validateDashboardPreview({ ok: true, message }, tasks, []).ok, false);
 });
+
+test('an explicit canary profile cannot bypass the qualified deployment preflight', async () => {
+  const models = [];
+  const unqualified = { ...profile, model: 'openai/gpt-6-astra' };
+  const result = await runReadOnlyCanary({ baseline, workload: 'dashboardPreview', requestId: sampledId, profile: unqualified,
+    messages: [], validate: (value) => value,
+    complete: async ({ route }) => { models.push(route.model); return { ok: true }; } });
+  assert.equal(result.ok, true);
+  assert.deepEqual(models, [baseline.model]);
+});
