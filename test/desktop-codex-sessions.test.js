@@ -6,7 +6,30 @@ import path from 'node:path';
 import test from 'node:test';
 
 const require = createRequire(import.meta.url);
-const { discoverRecentCodexWorkspaces, parseGitStatus, readSessionHandoffSummary, readSessionOriginalUserRequest, readSessionRollingContext } = require('../desktop-codex-sessions.cjs');
+const { discoverRecentCodexWorkspaces, parseSessionMetadata, parseGitStatus, readSessionHandoffSummary, readSessionOriginalUserRequest, readSessionLatestUserRequest, readSessionRollingContext } = require('../desktop-codex-sessions.cjs');
+
+test('long turns retain the latest structured request and runtime without treating tool output as user text', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-long-turn-'));
+  const file = path.join(root, 'session.jsonl');
+  const now = new Date();
+  const event = (payload) => JSON.stringify({ type: 'event_msg', timestamp: now.toISOString(), payload }) + '\n';
+  const noise = JSON.stringify({ type: 'response_item', payload: { type: 'function_call_output', output: 'x'.repeat(130000) } }) + '\n';
+  try {
+    await fs.writeFile(file, JSON.stringify({ type: 'session_meta', payload: { id: 'long', cwd: root, source: 'cli' } }) + '\n' + event({ type: 'task_started' }) + event({ type: 'user_message', message: 'Show the current work, not the original request.' }) + noise.repeat(65));
+    let result = parseSessionMetadata(file, Date.now(), 86400000);
+    assert.equal(result.latestUserRequest, 'Show the current work, not the original request.');
+    assert.equal(result.runtimeState, 'running');
+    assert.equal(readSessionLatestUserRequest(file).request, result.latestUserRequest);
+    await fs.appendFile(file, event({ type: 'task_complete' }) + event({ type: 'user_message', message: 'Now check the updated list.' }));
+    result = parseSessionMetadata(file, Date.now(), 86400000);
+    assert.equal(result.latestUserRequest, 'Now check the updated list.');
+    assert.equal(result.runtimeState, 'idle');
+    await fs.writeFile(file, event({ type: 'user_message', message: 'Replacement session.' }));
+    assert.equal(readSessionLatestUserRequest(file).request, 'Replacement session.');
+    await fs.writeFile(file, event({ type: 'user_message', message: 'Outside bounded read.' }) + noise.repeat(140));
+    assert.equal(readSessionLatestUserRequest(file), null);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
 
 test('git status parsing preserves leading-column status and dot-prefixed paths', () => {
   const result = parseGitStatus(' D .github/workflows/deploy.yml\n M src/app/page.tsx\n?? output/', 30);

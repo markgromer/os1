@@ -6,6 +6,7 @@ import path from 'node:path';
 import { groupProjects, isSetAside, taskKey, projectContextHtml, projectRowHtml, visibleWorklistGroups } from '../public/project-worklist.js';
 import { AwarenessStore } from '../marcus/awareness/awareness_store.js';
 const started = '2026-09-05T10:00:00.000Z';
+const now = Date.parse('2026-09-05T12:00:00Z');
 const session = (id, workspace = 'C:/work/reggie') => ({ id, name: 'REGGIE', source: 'codex', workspacePath: workspace, latestRequest: 'Fix the real website alerts', response: 'Three alerts were stale records.', updatedAt: started, raw: { sessionId: id, latestUserRequestAt: started } });
 
 test('default list is seven days and task summaries, agent state and next steps are visible before opening context', () => {
@@ -28,6 +29,21 @@ test('worklist groups exact workspaces, not similar names; multiple conversation
 test('native transcript and desktop job for the exact thread do not become duplicate tasks', () => {
   const groups = groupProjects([session('one'), { ...session('provider'), source: 'job', raw: { jobId: 'j1', threadId: 'one', status: 'running' } }], null);
   assert.equal(groups[0].tasks.length, 1); assert.equal(groups[0].status, 'In progress');
+});
+
+test('old tasks stay in history inside a recently active project; pending decisions remain visible', () => {
+  const old = { ...session('old'), latestRequest: 'Old request', updatedAt: '2026-08-20T10:00:00Z' };
+  const current = session('current');
+  const groups = groupProjects([old, current], null, [], now);
+  assert.deepEqual(groups[0].activeTasks.map((task) => task.id), ['current']);
+  assert.equal(groups[0].tasks.length, 2);
+  assert.ok(!projectRowHtml(groups[0]).includes('Old request'));
+  assert.ok(projectContextHtml(groups[0], { showHandled: true }).includes('Old request'));
+  assert.ok(projectContextHtml(groups[0]).includes('Show history (1)'));
+  assert.equal(visibleWorklistGroups(groupProjects([old], null, [], now), 'aside', '', now).length, 0);
+  const pending = { ...old, source: 'operation', raw: { status: 'waiting_for_approval' } };
+  assert.equal(visibleWorklistGroups(groupProjects([pending], null, [], now), 'active', '', now).length, 1);
+  assert.equal(projectRowHtml(groups[0]).split(current.latestRequest).length - 1, 1, 'single task request is not repeated');
 });
 
 test('handled tasks and projects stay hidden through repeated reports but new requests bring them back', () => {
