@@ -1171,7 +1171,7 @@
         </div>
         <div class="auto-row">
           <span>Saved project policy</span>
-          <button class="toggle" type="button" id="autoToggle" aria-pressed="true"><span></span></button>
+          <button class="btn" type="button" id="autoToggle">Execution policy</button>
         </div>
         <form class="composer" id="composer">
           <select id="contextSelect" aria-label="Chat context"><option value="">All projects</option></select>
@@ -2858,8 +2858,6 @@ els.dockNext.innerHTML = `<span class="eyebrow">4 Next</span><div><div class="ne
     document.getElementById("dockStartTask").addEventListener("click", startTaskForSelectedProject);
     document.getElementById("pauseButton").addEventListener("click", () => setBrowserControl("mark"));
     document.getElementById("closeWorkspace").addEventListener("click", () => addMessage("marcus", "Workspace surface closed visually; active work remains visible in the dock and right panel."));
-    document.getElementById('autoToggle').textContent = 'Execution policy';
-    document.getElementById('autoToggle').removeAttribute('aria-pressed');
     document.getElementById('autoToggle').addEventListener('click', () => {
       activeTab = 'preview'; renderWorkspace();
       addMessage('marcus', 'The Work & evidence panel shows the saved project policy. This button does not change grants or start work.');

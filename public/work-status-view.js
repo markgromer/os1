@@ -28,10 +28,12 @@ export function evidenceStages(project, linked) {
   // Separate evidence dimensions: progress in one never paints earlier stages green.
   const latest = linked?.operations?.[0];
   const deployment = linked?.deployment;
+  const recordedSuccess = deployment && ['production_published', 'deployment_completed'].includes(deployment.type)
+    && !/fail|cancel|error|deactivat/i.test(deployment.status || '');
   return [
     { label: 'Codex report', value: project.response && project.response !== 'No Codex handoff summary yet.' ? 'Received · unverified' : 'Not received', ok: false },
     { label: 'Latest execution', value: latest ? (latest.verified ? 'Required checks passed' : latest.status.replaceAll('_', ' ')) : 'Not linked', ok: latest?.verified === true },
-    { label: 'Recorded deploy', value: deployment ? `${deployment.status || deployment.type} · ${String(deployment.commit || 'commit unknown').slice(0, 8)}` : 'Not verified', ok: false },
+    { label: 'Recorded deploy', value: deployment ? `Recorded ${deployment.status || deployment.type} · ${String(deployment.commit || 'commit unknown').slice(0, 8)}` : 'Not verified', ok: recordedSuccess === true },
     { label: 'Your acceptance', value: 'Not established here', ok: false },
   ];
 }
