@@ -403,11 +403,16 @@ function findWorkspacePath(workspaceName) {
 // ── Run a git command in a directory ────────────────────────────
 function gitCmd(cwd, args) {
   return new Promise((resolve) => {
+    // A killed Git child can leave inherited pipes open on Windows. Give the
+    // read-only observation its own completion deadline as well.
+    const deadline = setTimeout(() => resolve(''), 6000);
     try {
       execFile('git', args, { cwd, windowsHide: true, timeout: 5000 }, (err, stdout) => {
+        clearTimeout(deadline);
         resolve(err ? '' : String(stdout || '').trimEnd());
       });
     } catch {
+      clearTimeout(deadline);
       resolve('');
     }
   });
@@ -1470,15 +1475,17 @@ function captureDesktop() {
   });
 }
 
-async function scanCodexWorkspaceSummary(session) {
+async function scanCodexWorkspaceSummary(session, gitCache = new Map()) {
   const wsPath = String(session?.workspacePath || '').trim();
   if (!wsPath) return session;
-  const [gitBranch, gitRemote, statusRaw, recentCommitsRaw] = await Promise.all([
-    gitCmd(wsPath, ['rev-parse', '--abbrev-ref', 'HEAD']),
-    gitCmd(wsPath, ['remote', 'get-url', 'origin']),
-    gitCmd(wsPath, ['status', '--porcelain', '--untracked-files=normal']),
-    gitCmd(wsPath, ['log', '--oneline', '-3', '--no-decorate']),
-  ]);
+  const key = path.resolve(wsPath).toLowerCase();
+  if (!gitCache.has(key)) gitCache.set(key, Promise.all([
+      gitCmd(wsPath, ['rev-parse', '--abbrev-ref', 'HEAD']),
+      gitCmd(wsPath, ['remote', 'get-url', 'origin']),
+      gitCmd(wsPath, ['status', '--porcelain', '--untracked-files=normal']),
+      gitCmd(wsPath, ['log', '--oneline', '-3', '--no-decorate']),
+    ]));
+  const [gitBranch, gitRemote, statusRaw, recentCommitsRaw] = await gitCache.get(key);
   const parsedStatus = parseGitStatus(statusRaw, 30);
   return {
     ...session,
@@ -1702,8 +1709,35 @@ function captureSystemHealth() {
 let consecutive = 0;
 let lastTitle = '';
 
+let codexWorkspaceScanInFlight = false;
+async function refreshCodexWorkspaceObservations() {
+  if (codexWorkspaceScanInFlight) return;
+  codexWorkspaceScanInFlight = true;
+  const started = Date.now();
+  try {
+    const sessions = discoverRecentCodexWorkspaces({ maxResults: 30, maxPerWorkspace: 4 });
+    const gitCache = new Map(), results = new Array(sessions.length);
+    let cursor = 0;
+    await Promise.all(Array.from({ length: Math.min(4, sessions.length) }, async () => {
+      while (cursor < sessions.length) {
+        const index = cursor++;
+        results[index] = await scanCodexWorkspaceSummary(sessions[index], gitCache);
+      }
+    }));
+    cachedCodexWorkspaces = results;
+    writeDesktopAgentStatus({ codexScan: { ok: true, count: results.length, durationMs: Date.now() - started, checkedAt: new Date().toISOString() } });
+  } catch (error) {
+    writeDesktopAgentStatus({ codexScan: { ok: false, errorType: String(error?.name || 'Error'), checkedAt: new Date().toISOString() } });
+  } finally {
+    lastCodexWorkspaceScanAt = Date.now();
+    codexWorkspaceScanInFlight = false;
+  }
+}
+
 async function tick() {
-  await checkDesktopActions();
+  // The dedicated action loop owns dispatch. Long actions must not hold up
+  // the context heartbeat that tells the dashboard what is happening.
+  writeDesktopAgentStatus({ contextRelay: { phase: 'capture', checkedAt: new Date().toISOString() } });
 
   const capturedDesktop = await captureDesktop();
   if (!capturedDesktop) {
@@ -1785,11 +1819,10 @@ async function tick() {
   }
 
   // Build relay payload
+  writeDesktopAgentStatus({ contextRelay: { phase: 'sessions', checkedAt: new Date().toISOString() } });
   const codexNow = Date.now();
   if (!cachedCodexWorkspaces.length || (codexNow - lastCodexWorkspaceScanAt) > CODEX_WORKSPACE_SCAN_INTERVAL_MS) {
-    const sessions = discoverRecentCodexWorkspaces({ maxResults: 30, maxPerWorkspace: 4 });
-    cachedCodexWorkspaces = await Promise.all(sessions.map((session) => scanCodexWorkspaceSummary(session)));
-    lastCodexWorkspaceScanAt = codexNow;
+    void refreshCodexWorkspaceObservations();
   }
   const payload = {
     agentId: DESKTOP_AGENT_ID,
@@ -1812,6 +1845,7 @@ async function tick() {
   }
 
   // System health (collected on slower interval)
+  writeDesktopAgentStatus({ contextRelay: { phase: 'health', checkedAt: new Date().toISOString() } });
   const now3 = Date.now();
   if (!cachedSystemHealth || (now3 - lastSystemHealthAt) > SYSTEM_HEALTH_INTERVAL_MS) {
     const health = await captureSystemHealth();
@@ -1831,7 +1865,9 @@ async function tick() {
     payload.systemHealth = cachedSystemHealth;
   }
 
+  writeDesktopAgentStatus({ contextRelay: { phase: 'upload', checkedAt: new Date().toISOString() } });
   const result = await relay(payload);
+  writeDesktopAgentStatus({ contextRelay: { phase: 'uploaded', ok: result.status === 200, status: Number(result.status || 0), checkedAt: new Date().toISOString() } });
   if (result.status === 401) {
     console.error('[!] 401 Unauthorized - check your ADMIN_TOKEN');
   } else if (result.status && result.status !== 200) {
@@ -1908,6 +1944,7 @@ async function runLoop() {
     await tick();
   } catch (error) {
     console.error(`[!] Relay tick failed: ${String(error?.message || error).slice(0, 200)}`);
+    writeDesktopAgentStatus({ contextRelay: { phase: 'failed', ok: false, errorType: String(error?.name || 'Error'), checkedAt: new Date().toISOString() } });
   } finally {
     setTimeout(runLoop, POLL_MS);
   }
