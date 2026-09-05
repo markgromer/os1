@@ -19,6 +19,7 @@ const state = {
     activeBriefLoading: false,
     activeBriefFetchedAt: 0,
     activeBriefError: '',
+    workStatusReadout: null,
     operationalControls: {
         proactiveMode: 'normal',
         signals: {},
@@ -947,6 +948,7 @@ function applyBusinessConfig(cfg) {
 
     state.activeBusinessKey = next;
     setStoredBusinessKey(next);
+    state.workStatusReadout = null;
 }
 
 async function fetchBusinesses() {
@@ -5735,6 +5737,16 @@ function renderActionsSurface(container, sidePort, brief, actionControls) {
     bindRoot(sidePort);
 }
 
+function renderWorkStatusReadout(readout, businessKey) {
+    if (!readout || readout.businessKey !== businessKey) return '';
+    return `<section data-work-status-readout role="status" aria-live="polite" class="border border-blue-500/25 rounded-lg bg-ops-surface/60 p-4">
+        <h2 class="text-sm font-semibold text-white">Durable work status</h2>
+        <div class="mt-1 text-[10px] font-mono text-ops-light/65">Read-only snapshot · ${escapeHtml(safeText(readout.observedAt))}</div>
+        <div class="mt-3 text-xs text-ops-light/90 whitespace-pre-wrap break-words">${escapeHtml(safeText(readout.reply))}</div>
+        <div class="mt-3 text-[11px] text-ops-light/65">Select Work status again to refresh. This does not start or approve work.</div>
+    </section>`;
+}
+
 function renderCommandSurface(container, sidePort) {
     const view = safeText(state.currentView) || 'command';
     const titleByView = {
@@ -6390,6 +6402,7 @@ function renderCommandSurface(container, sidePort) {
                 </div>
                 <div class="flex flex-wrap gap-1.5 shrink-0">
                     <button type="button" data-command="What matters today?" class="stat-pill stat-pill--accent">What matters?</button>
+                    <button type="button" data-command="Show tracked work status." class="stat-pill stat-pill--accent">Work status</button>
                     <button type="button" data-command="What needs a decision?" class="stat-pill stat-pill--accent">Decisions?</button>
                     <button type="button" data-command="What am I forgetting?" class="stat-pill stat-pill--accent">Forgetting?</button>
                     <button type="button" data-refresh-brief class="stat-pill stat-pill--muted">Refresh</button>
@@ -6424,6 +6437,7 @@ function renderCommandSurface(container, sidePort) {
             </form>
         </div>
 
+        ${renderWorkStatusReadout(state.workStatusReadout, normalizeBusinessKey(state.activeBusinessKey))}
         ${nowBriefingStrip}
         ${focusLaneStrip}
         ${signalsStreamStrip}
@@ -9950,6 +9964,11 @@ function renderSettings(container) {
         { key: 'projectAssistant', label: 'Project Assistant' },
         { key: 'dashboardPreview', label: 'Dashboard Preview' },
     ];
+    const gpt6Profile = (Array.isArray(state.settings?.modelProfiles) ? state.settings.modelProfiles : [])
+        .find((profile) => String(profile?.model || '').trim() === 'gpt-6-astra');
+    const gpt6AccessStatus = String(gpt6Profile?.qualification?.accessStatus || 'unverified');
+    const gpt6EvaluationStatus = String(gpt6Profile?.qualification?.evaluationStatus || 'not_run');
+    const gpt6RolloutStatus = String(gpt6Profile?.rollout?.status || 'disabled');
     const routeOpenAiModels = routeDefs
         .map((r) => {
             const entry = (state.settings?.aiRoutes && typeof state.settings.aiRoutes === 'object' && state.settings.aiRoutes[r.key] && typeof state.settings.aiRoutes[r.key] === 'object')
@@ -10018,6 +10037,12 @@ function renderSettings(container) {
                 </label>
                 <div class="text-[11px] text-ops-light mt-1">Effective model: ${escapeHtml(currentOpenAiModel)} • AI Enabled: ${state.settings.aiEnabled ? 'Yes' : 'No'}</div>
             </div>
+        </div>
+        <div class="mt-4 border border-ops-border rounded p-3 bg-ops-bg/30">
+            <div class="text-xs text-white">GPT-6 Astra readiness</div>
+            <div class="text-[11px] text-ops-light mt-1">Transport: Responses ready | Qualified account: ${escapeHtml(gpt6AccessStatus)} | Evaluation: ${escapeHtml(gpt6EvaluationStatus)} | Rollout profile: ${escapeHtml(gpt6RolloutStatus)}</div>
+            <div class="text-[11px] text-ops-light mt-1">Dashboard previews only: up to 10% of eligible requests, with a matching qualified credential and automatic fallback. Keep your existing model selected; GPT-6 is sampled separately.</div>
+            <div class="text-[11px] text-ops-light mt-1">Main chat and voice are unchanged. Qualification is not proof of a live GPT-6 request. Engineering supervision and automatic advancement require explicit project setup.</div>
         </div>
         <div class="mt-4 border border-ops-border rounded p-3 bg-ops-bg/30">
             <div class="text-xs text-ops-light mb-2">Per-route OpenAI models</div>
@@ -17671,6 +17696,7 @@ async function sendOperationalCommand(message, options = {}) {
     const initiatedBy = safeText(opts.initiatedBy).trim();
     const recordUser = opts.recordUser !== false;
     const displayUser = opts.displayUser !== false;
+    const requestBusinessKey = normalizeBusinessKey(getStoredBusinessKey() || state.activeBusinessKey || '');
 
     stopMarcusSpeech();
     if (recordUser) recordChatMessage("user", msg);
@@ -17688,11 +17714,18 @@ async function sendOperationalCommand(message, options = {}) {
             body: JSON.stringify({ message: msg }),
         });
         const reply = safeText(data?.reply) || 'No operational response was produced.';
+        if (data?.intent === 'work_status') {
+            // Do not display, record, or speak a response into another business after a switch.
+            if (requestBusinessKey !== normalizeBusinessKey(state.activeBusinessKey)
+                || requestBusinessKey !== normalizeBusinessKey(getStoredBusinessKey() || state.activeBusinessKey || '')) return;
+            state.workStatusReadout = { businessKey: requestBusinessKey, reply, observedAt: safeText(data?.generatedAt) };
+            renderMain();
+        }
         removeMarcusTypingIndicator();
         setMarcusPresence('responding');
         const recordedReply = initiatedBy ? `[${initiatedBy}] ${reply}` : reply;
         recordChatMessage("ai", recordedReply);
-        if (data?.ok && (briefList(data?.cards).length || briefList(data?.suggestedActions).length || data?.evidence)) {
+        if (data?.ok && (data?.intent === 'work_status' || briefList(data?.cards).length || briefList(data?.suggestedActions).length || data?.evidence)) {
             addOperationalChatMessage(data);
         } else {
             addChatMessage("ai", reply, true);
@@ -17708,6 +17741,7 @@ async function sendOperationalCommand(message, options = {}) {
         addChatMessage("ai", `Error: ${friendly}`);
         throw e;
     } finally {
+        removeMarcusTypingIndicator();
         if (status) status.style.opacity = "0";
         setMarcusPresence('idle');
     }
@@ -17846,10 +17880,10 @@ function addOperationalChatMessage(data) {
             </div>
             ${confidence ? `<span class="stat-pill stat-pill--muted shrink-0">${escapeHtml(confidence)}</span>` : ''}
         </div>
-        <div class="mt-3 text-[12px] leading-relaxed text-ops-light/90">${typeof marked === 'function' ? marked.parse(reply) : escapeHtml(reply).replace(/\n/g, '<br/>')}</div>
+        <div class="mt-3 text-[12px] leading-relaxed text-ops-light/90">${data?.plainText !== true && typeof marked === 'function' ? marked.parse(reply) : escapeHtml(reply).replace(/\n/g, '<br/>')}</div>
         ${cards.length ? `<div class="mt-3 space-y-2">
             ${cards.map((card) => {
-                const id = safeText(card?.id || card?.target || card?.name || card?.title);
+                const id = card?.readOnly === true ? '' : safeText(card?.id || card?.target || card?.name || card?.title);
                 const score = Number.isFinite(Number(card?.score)) ? Math.round(Number(card.score)) : '';
                 const why = commandItemReason(card);
                 const cardType = safeText(card?.type || card?.group).toLowerCase();

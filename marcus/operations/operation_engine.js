@@ -190,6 +190,7 @@ export function createOperationsEngine({
   };
 
   const api = {
+    setWorkGuard(guard) { service.workGuard = guard; runner.workGuard = guard; },
     store,
     registry,
     resolver,

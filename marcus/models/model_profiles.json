@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "version": "2026-09-04.3",
+  "profiles": [
+    {
+      "id": "openai:gpt-6-astra",
+      "provider": "openai",
+      "model": "gpt-6-astra",
+      "endpoint": "responses",
+      "timeoutMs": 180000,
+      "reasoning": {
+        "supported": ["low", "medium", "high", "xhigh", "max"],
+        "default": "low"
+      },
+      "capabilities": {
+        "functionCalling": true,
+        "structuredOutputs": true,
+        "statelessReasoningContinuation": true
+      },
+      "qualification": {
+        "accessStatus": "verified",
+        "evaluationStatus": "passed",
+        "evaluationSuite": "gpt6-readiness-v1",
+        "evaluationVersion": "2026-09-04.3",
+        "scope": "Credential-bound read-only dashboard-preview canary only. Qualification records are maintained privately. Main chat and unrelated workloads remain outside this rollout.",
+        "qualifiedWorkloads": ["dashboardPreview"],
+        "shadowPassedWorkloads": ["dashboardPreview"],
+        "evidence": [
+          "private:dashboard-preview-qualification/2026-09-04.3"
+        ]
+      },
+      "rollout": {
+        "status": "canary",
+        "enabledWorkloads": ["dashboardPreview"],
+        "shadowWorkloads": ["dashboardPreview"],
+        "trafficPercent": 10,
+        "credentialFingerprint": "1465c79b2efaf3b8",
+        "minimumEvaluationScore": 0.9,
+        "rollback": "Set MARCUS_DISABLE_GPT6_CANARY=true and restart, or disable this profile and restart. Preview sampling then uses the unchanged baseline aiRoutes setting; candidate failure automatically falls back."
+      }
+    }
+  ]
+}

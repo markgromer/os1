@@ -1,4 +1,15 @@
 import crypto from 'node:crypto';
+import { dashboardPreviewMessages, validateDashboardPreview } from './marcus/models/dashboard_preview.js';
+import { runReadOnlyCanary } from './marcus/models/read_only_canary.js';
+import { WorkGraph } from './marcus/work/work_graph.js';
+import { registerWorkRoutes } from './marcus/api/work_routes.js';
+import { WorkContextService } from './marcus/work/context_service.js';
+import { EngineeringDirector } from './marcus/work/engineering_director.js';
+import { HumanIdentityService } from './marcus/work/human_identity.js';
+import { DurableExecution } from './marcus/work/durable_execution.js';
+import { ProactiveOperator } from './marcus/work/proactive_operator.js';
+import { isWorkStatusCommand, buildWorkStatusResponse } from './marcus/work/work_command.js';
+import { registerCollaborationRoutes } from './marcus/api/collaboration_routes.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
@@ -57,6 +68,8 @@ import {
 } from './marcus/live/live_presence.js';
 import { formatMissionMemoryForPrompt, MissionMemoryStore } from './marcus/memory/mission_memory_store.js';
 import { CommunityIntelligenceStore } from './marcus/memory/community_intelligence_store.js';
+import { normalizeAiHttpResponse, prepareAiHttpRequest } from './marcus/models/ai_transport.js';
+import { listModelProfilesForClient, isGeneralModelOption } from './marcus/models/model_profiles.js';
 import { buildVoiceContinuityBrief } from './marcus/voice/continuity_brief.js';
 import { createOperationsEngine } from './marcus/operations/operation_engine.js';
 import { discoverDurableBackupSources } from './marcus/operations/operation_backups.js';
@@ -370,6 +383,29 @@ const operationsEngine = createOperationsEngine({
   }),
   allowedWorkspaceRoots: String(process.env.MARCUS_ALLOWED_WORKSPACE_ROOTS || '')
     .split(path.delimiter).map((value) => value.trim()).filter(Boolean),
+});
+
+const workGraph = new WorkGraph({ dataDir: DATA_DIR, engine: operationsEngine, bus: marcusSignalBus });
+const workContext = new WorkContextService({ dataDir: DATA_DIR, graph: workGraph, memory: missionMemoryStore,
+  retrieveSemantic: async ({ businessKey, projectId, query, limit }) => {
+    const settings = await readSettings();
+    const config = getQdrantConfig(settings);
+    const project = await operationsEngine.registry.get(businessKey, projectId);
+    if (!config.enabled || !config.configured || !config.useForMarcus || !project?.projectId) return { ok: false, matches: [] };
+    const result = await qdrantSearchKnowledge(settings, query, { limit, filter: { businessKey, projectId: project.projectId } });
+    return { ok: result.ok, matches: (result.matches || []).filter((match) => match.payload?.businessKey === businessKey && match.payload?.projectId === project.projectId)
+      .map((match) => ({ id: match.id, businessKey, projectId, source: match.payload.source, text: match.payload.text, score: match.score })) };
+  },
+});
+workGraph.decisions = workContext;
+const engineeringDirector = new EngineeringDirector({ dataDir: DATA_DIR, graph: workGraph, context: workContext });
+const humanIdentities = new HumanIdentityService({ dataDir: DATA_DIR, graph: workGraph });
+const durableExecution = new DurableExecution({ dataDir: DATA_DIR, graph: workGraph, director: engineeringDirector, bus: marcusSignalBus });
+const proactiveOperator = new ProactiveOperator({ dataDir: DATA_DIR, graph: workGraph, execution: durableExecution, director: engineeringDirector, attention: marcusAttentionStore });
+operationsEngine.setWorkGuard(async (businessKey, operation) => {
+  if (!operation) return;
+  await workGraph.assertOperationReady(businessKey, operation);
+  await engineeringDirector.assertOperationGrant(businessKey, operation);
 });
 
 const projectEvidenceService = new ProjectEvidenceService({
@@ -995,6 +1031,7 @@ function isMarcusLiveSessionRoute(req) {
 
 // Optional auth for internet-hosting. If ADMIN_TOKEN is set, all /api/* routes require it
 // except inbound webhooks + OAuth callbacks.
+registerCollaborationRoutes(app, { identities: humanIdentities, getBusinessKey: () => getBusinessKeyFromContext() });
 app.use((req, res, next) => {
   try {
     if (!ADMIN_TOKEN) return next();
@@ -1015,7 +1052,9 @@ app.use((req, res, next) => {
 });
 
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', uptime: process.uptime() });
+  const commit = /^[a-f0-9]{40}$/i.test(process.env.RENDER_GIT_COMMIT || '') ? process.env.RENDER_GIT_COMMIT : '';
+  res.set('Cache-Control', 'no-store');
+  res.json({ status: 'ok', uptime: process.uptime(), release: 'constitution-feedback-v1', commit });
 });
 
 app.get('/api/auth/status', (req, res) => {
@@ -1087,6 +1126,7 @@ registerOperationsRoutes(app, {
   engine: operationsEngine,
   getBusinessKey: () => getBusinessKeyFromContext(),
 });
+registerWorkRoutes(app, { graph: workGraph, context: workContext, memory: missionMemoryStore, director: engineeringDirector, identities: humanIdentities, execution: durableExecution, operator: proactiveOperator, getBusinessKey: () => getBusinessKeyFromContext() });
 
 registerMissionMemoryRoutes(app, {
   store: missionMemoryStore,
@@ -1227,6 +1267,7 @@ const EMPTY_STORE = {
 let writeLock = Promise.resolve();
 
 const OPENAI_MODEL_FALLBACKS = [
+  'gpt-6-astra',
   'gpt-5',
   'gpt-5-mini',
   'gpt-5-nano',
@@ -1234,7 +1275,7 @@ const OPENAI_MODEL_FALLBACKS = [
   'gpt-4.1-mini',
   'gpt-4o',
   'gpt-4o-mini',
-];
+].filter((model) => isGeneralModelOption('openai', model));
 const OPENAI_MODELS_CACHE_TTL_MS = 5 * 60 * 1000;
 let openAiModelsCache = {
   fetchedAt: 0,
@@ -2250,7 +2291,7 @@ function normalizeOpenAiModelList(input) {
     if (!id) continue;
     const lower = id.toLowerCase();
     const looksLikeChatModel = lower.startsWith('gpt-') || lower.startsWith('o1') || lower.startsWith('o3') || lower.startsWith('o4');
-    if (!looksLikeChatModel) continue;
+    if (!looksLikeChatModel || !isGeneralModelOption('openai', id)) continue;
     ids.push(id);
   }
   const uniq = Array.from(new Set(ids));
@@ -4859,6 +4900,8 @@ function buildQdrantSearchFilter(input) {
     must.push({ key: 'businessKey', match: { value: businessKey } });
   }
   const source = typeof filter.source === 'string' ? filter.source.trim() : '';
+  const projectId = typeof filter.projectId === 'string' ? filter.projectId.trim() : '';
+  if (projectId) must.push({ key: 'projectId', match: { value: projectId } });
   if (source) {
     must.push({ key: 'source', match: { value: source } });
   }
@@ -4977,50 +5020,32 @@ function resolveAiRoute(saved, routeKey) {
   return { provider, model, apiKey: providerSecrets.apiKey };
 }
 
-async function aiChatCompletion({ routeKey, messages, tools, tool_choice, response_format, timeoutMs = 30_000 }) {
+async function aiChatCompletion({ routeKey, messages, tools, tool_choice, response_format, timeoutMs = 30_000, routeOverride, deadlineMs, maxOutputTokens }) {
   const saved = await readSettings();
-  const route = resolveAiRoute(saved, routeKey);
-  if (!route.apiKey) {
-    return { ok: false, error: `AI is not enabled (missing API key for ${route.provider})` };
-  }
-
-  const modelLower = String(route.model || '').trim().toLowerCase();
-  const requestedTimeoutMs = Number.isFinite(Number(timeoutMs)) ? Math.max(5_000, Number(timeoutMs)) : 30_000;
-  let effectiveTimeoutMs = requestedTimeoutMs;
-  if (modelLower.startsWith('gpt-5')) {
-    effectiveTimeoutMs = Math.max(requestedTimeoutMs, 90_000);
-  } else if (modelLower.includes('gpt-4.1') || modelLower.includes('gpt-4o')) {
-    effectiveTimeoutMs = Math.max(requestedTimeoutMs, 45_000);
-  }
-
-  const baseUrl = route.provider === 'openrouter' ? 'https://openrouter.ai/api/v1' : 'https://api.openai.com/v1';
-  const headers = {
-    Authorization: `Bearer ${route.apiKey}`,
-    'Content-Type': 'application/json',
-  };
-  if (route.provider === 'openrouter') {
-    // Optional but helpful for OpenRouter analytics/compliance.
-    headers['HTTP-Referer'] = typeof process.env.OPENROUTER_HTTP_REFERER === 'string' ? process.env.OPENROUTER_HTTP_REFERER.trim() : '';
-    headers['X-Title'] = typeof process.env.OPENROUTER_X_TITLE === 'string' ? process.env.OPENROUTER_X_TITLE.trim() : 'M.A.R.C.U.S.';
-    if (!headers['HTTP-Referer']) delete headers['HTTP-Referer'];
-  }
-
-  const body = {
-    model: route.model,
+  const route = routeOverride || resolveAiRoute(saved, routeKey);
+  const prepared = prepareAiHttpRequest({
+    route,
+    workload: routeKey,
+    purpose: 'runtime',
     messages,
-  };
-  if (Array.isArray(tools) && tools.length) body.tools = tools;
-  if (tool_choice) body.tool_choice = tool_choice;
-  if (response_format) body.response_format = response_format;
+    tools,
+    toolChoice: tool_choice,
+    responseFormat: response_format,
+    timeoutMs,
+    maxOutputTokens,
+    openrouterReferer: process.env.OPENROUTER_HTTP_REFERER,
+    openrouterTitle: process.env.OPENROUTER_X_TITLE,
+  });
+  if (!prepared.ok) return prepared;
 
   let resp;
   let data;
   try {
-    const out = await fetchJsonWithTimeout(`${baseUrl}/chat/completions`, {
-      timeoutMs: effectiveTimeoutMs,
+    const out = await fetchJsonWithTimeout(prepared.url, {
+      timeoutMs: deadlineMs ? Math.min(prepared.timeoutMs, deadlineMs) : prepared.timeoutMs,
       method: 'POST',
-      headers,
-      body: JSON.stringify(body),
+      headers: prepared.headers,
+      body: JSON.stringify(prepared.body),
     });
     resp = out.resp;
     data = out.data;
@@ -5030,7 +5055,7 @@ async function aiChatCompletion({ routeKey, messages, tools, tool_choice, respon
     if (timedOut) {
       return {
         ok: false,
-        error: `AI request timed out after ${Math.round(effectiveTimeoutMs / 1000)}s. provider=${route.provider}. model=${route.model}. Try again or use a faster model for this route.`,
+        error: `AI request timed out after ${Math.round((deadlineMs ? Math.min(prepared.timeoutMs, deadlineMs) : prepared.timeoutMs) / 1000)}s. provider=${route.provider}. model=${route.model}. Try again or use a faster model for this route.`,
       };
     }
     return {
@@ -5043,10 +5068,12 @@ async function aiChatCompletion({ routeKey, messages, tools, tool_choice, respon
     const detail = typeof data?.error?.message === 'string' ? data.error.message : JSON.stringify(data);
     return { ok: false, error: `AI request failed (${resp.status}). provider=${route.provider}. model=${route.model}. ${detail}`.slice(0, 700) };
   }
-
-  const msg = data?.choices?.[0]?.message;
-  if (!msg) return { ok: false, error: 'AI returned no message' };
-  return { ok: true, provider: route.provider, model: route.model, message: msg };
+  return normalizeAiHttpResponse({
+    transport: prepared.transport,
+    data,
+    provider: route.provider,
+    model: route.model,
+  });
 }
 
 async function fetchJsonWithTimeout(url, { timeoutMs = 25_000, ...init } = {}) {
@@ -10316,6 +10343,7 @@ app.get('/api/settings', async (req, res) => {
     openrouterKeyHint: openrouter.keyHint,
     openrouterConfigured: Boolean(openrouter.apiKey),
     aiRoutes,
+    modelProfiles: listModelProfilesForClient(),
     source,
     settingsUpdatedAt,
     googleConfigured,
@@ -18557,6 +18585,11 @@ app.post('/api/marcus/command', async (req, res) => {
   try {
     const message = typeof req.body?.message === 'string' ? req.body.message.trim().slice(0, 2000) : '';
     if (!message) return res.status(400).json({ ok: false, error: 'Message required' });
+    if (isWorkStatusCommand(message)) {
+      const key = getBusinessKeyFromContext();
+      const summary = await proactiveOperator.summary(key);
+      return res.json(buildWorkStatusResponse(summary, await workGraph.snapshot(key)));
+    }
     if (shouldCreateDurableOperationForRequest(message)) {
       const result = await createOrReuseDurableOperationForMessage(message, { source: 'marcus_command' });
       return res.json({
@@ -19504,6 +19537,8 @@ ${contextParts.join('\n')}`;
         role: 'assistant',
         content: finalMessage.content || '',
         ...(calls.length ? { tool_calls: calls } : {}),
+        ...(Array.isArray(finalMessage.response_output) ? { response_output: finalMessage.response_output } : {}),
+        ...(finalMessage.response_id ? { response_id: finalMessage.response_id } : {}),
       });
       if (!calls.length) break;
 
@@ -20846,43 +20881,17 @@ app.post('/api/dashboard/ai-previews', async (req, res) => {
       return;
     }
 
-    const system =
-      'You rewrite dashboard items into meaningful, human-readable one-liners. ' +
-      'Return ONLY strict JSON. No markdown. No extra keys.';
-
-    const user = {
-      tasks: pickedTasks,
-      inbox: pickedInbox,
-      instructions: {
-        tasks: {
-          title: 'Short action title (3-8 words), imperative where possible',
-          summary: 'One short clause with context (project / due date / status)',
-        },
-        inbox: {
-          title: 'Short title describing what the message is about (not just "Item")',
-          summary: 'One short clause: who/where + what needs doing; mention Unassigned if no projectName',
-        },
-        rules: [
-          'Never output "[object Object]".',
-          'Avoid repeating words like "Inbox:" or "Message:".',
-          'If unsure, make a reasonable guess from text.',
-          'Keep each title under 60 chars, summary under 110 chars.',
-        ],
-      },
-      schema: {
-        tasks: { '<taskId>': { title: 'string', summary: 'string' } },
-        inbox: { '<inboxId>': { title: 'string', summary: 'string' } },
-      },
-    };
-
     try {
-      const result = await aiChatCompletion({
-        routeKey: 'dashboardPreview',
-        timeoutMs: 20_000,
-        messages: [
-          { role: 'system', content: system },
-          { role: 'user', content: JSON.stringify(user).slice(0, 24000) },
-        ],
+      const result = await runReadOnlyCanary({
+        baseline: route, workload: 'dashboardPreview', requestId: crypto.randomUUID(),
+        disabled: process.env.MARCUS_DISABLE_GPT6_CANARY === 'true',
+        messages: dashboardPreviewMessages(pickedTasks, pickedInbox),
+        complete: ({ route: selected, messages, deadlineMs, maxOutputTokens }) => aiChatCompletion({
+          routeKey: 'dashboardPreview', routeOverride: selected, messages, deadlineMs, maxOutputTokens,
+        }),
+        validate: (completion) => validateDashboardPreview(completion, pickedTasks, pickedInbox),
+        observe: (receipt) => marcusSignalBus.publish({ type: 'model.preview.observed', source: 'model-canary',
+          businessKey: getBusinessKeyFromContext(), severity: receipt.passed ? 'debug' : 'warning', context: receipt }),
       });
 
       if (!result.ok) {
@@ -20890,18 +20899,7 @@ app.post('/api/dashboard/ai-previews', async (req, res) => {
         return;
       }
 
-      const content = String(result.message?.content || '').trim();
-      const clean = content.replace(/```json/g, '').replace(/```/g, '').trim();
-      const parsed = tryParseJson(clean);
-      if (!parsed || typeof parsed !== 'object') {
-        res.json(heuristic());
-        return;
-      }
-
-      const outTasks = parsed.tasks && typeof parsed.tasks === 'object' ? parsed.tasks : {};
-      const outInbox = parsed.inbox && typeof parsed.inbox === 'object' ? parsed.inbox : {};
-
-      res.json({ ok: true, ai: true, tasks: outTasks, inbox: outInbox });
+      res.json({ ok: true, ai: true, tasks: result.value.tasks, inbox: result.value.inbox });
     } catch {
       res.json(heuristic());
     }
@@ -21727,7 +21725,10 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
       return { content: lines.join('\n') };
     }
 
-    const tools = [];
+    const tools = [
+      { type: 'function', function: { name: 'marcus_work_summary', description: 'Read current durable work: what needs Mark, what can continue, anomalies, opportunities, and changes while away. This does not launch or approve work.', parameters: { type: 'object', properties: { since: { type: 'string', description: 'Optional ISO timestamp for the away summary.' } }, additionalProperties: false } } },
+      { type: 'function', function: { name: 'marcus_work_graph', description: 'Read project-scoped work items, dependency readiness, evidence and Engineering execution bindings.', parameters: { type: 'object', properties: { projectId: { type: 'string' } }, additionalProperties: false } } },
+    ];
 
     if (effectiveThreadId === 'operator_bio') {
       tools.push({
@@ -22191,6 +22192,8 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
     };
 
     const execTool = async (toolName, args) => {
+      if (toolName === 'marcus_work_summary') return proactiveOperator.summary(getBusinessKeyFromContext(), { since: String(args?.since || '') });
+      if (toolName === 'marcus_work_graph') return workGraph.snapshot(getBusinessKeyFromContext(), String(args?.projectId || ''));
       if (isMarcusProjectActivityTool(toolName)) {
         return executeMarcusProjectActivityTool({
           name: toolName,
@@ -22649,6 +22652,8 @@ async function aiAgentAction(message, store, projectId = null, options = {}) {
           // Preserve the assistant message in the transcript for tool-call chaining.
           const assistantMsg = { role: 'assistant', content: msg.content || '' };
           if (msg.tool_calls) assistantMsg.tool_calls = msg.tool_calls;
+          if (Array.isArray(msg.response_output)) assistantMsg.response_output = msg.response_output;
+          if (msg.response_id) assistantMsg.response_id = msg.response_id;
           messages.push(assistantMsg);
 
           if (!msg.tool_calls || msg.tool_calls.length === 0) {
@@ -23191,6 +23196,17 @@ async function reconcileAttentionPass() {
   }
 }
 
+async function runConstitutionWorkPass() {
+  await refreshBusinessCacheFromSettings();
+  for (const business of Array.isArray(cachedBusinesses) ? cachedBusinesses : []) {
+    const key = normalizeBusinessKey(business?.key || '') || DEFAULT_BUSINESS_KEY;
+    await withBusinessKey(key, async () => {
+      await durableExecution.pass(key);
+      await proactiveOperator.pass(key);
+    });
+  }
+}
+
 function startMarcusOperatingLoop() {
   marcusOperatingLoop = startOperatingLoop({
     bus: marcusSignalBus,
@@ -23207,7 +23223,7 @@ function startMarcusOperatingLoop() {
         }));
       },
     }],
-    homeostasis: [runDurableOperationPass, reconcileAttentionPass],
+    homeostasis: [runDurableOperationPass, runConstitutionWorkPass, reconcileAttentionPass],
     initialDelayMs: Math.max(1_000, Number(process.env.MARCUS_OPERATING_LOOP_INITIAL_DELAY_MS) || 3_000),
     intervalMs: Math.max(5_000, Number(process.env.MARCUS_OPERATING_LOOP_INTERVAL_MS) || 15_000),
     onError: (error, context = {}) => console.error(`M.A.R.C.U.S. operating loop ${context.phase || 'cycle'} failed:`, error?.message || error),

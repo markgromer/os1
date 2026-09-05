@@ -289,6 +289,7 @@ export class OperationService {
   }
 
   async startOperation(businessKey, operationId, { actor = 'mark', runCycle = true } = {}) {
+    if (this.workGuard) await this.workGuard(businessKey, await this.store.get(businessKey, operationId));
     const registryRecord = await this.getRegistryForOperation(businessKey, operationId);
     const operation = await this.store.update(businessKey, operationId, (draft) => {
       if (draft.status !== 'planned') throw Object.assign(new Error(`Operation cannot start from ${draft.status}.`), { code: 'INVALID_TRANSITION' });

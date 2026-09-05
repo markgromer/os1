@@ -111,7 +111,14 @@ function normalizeMemory(input, businessKey, { rejectSecrets = false, defaults =
     businessKey: safeBusinessKey(businessKey),
     kind: normalizeKind(raw.kind || defaults.kind),
     status: normalizeStatus(raw.status || defaults.status),
-    scope: 'global',
+    scope: raw.projectId ? 'project' : 'global',
+    projectId: safeString(raw.projectId || defaults.projectId, 160),
+    revision: safeInteger(raw.revision ?? defaults.revision, 1, 1),
+    supersedesId: safeString(raw.supersedesId, 160),
+    supersededBy: safeString(raw.supersededBy, 160),
+    sourceRefs: (Array.isArray(raw.sourceRefs) ? raw.sourceRefs : []).slice(0, 20).map((entry) => normalizeText(entry, 500)),
+    confidence: Math.max(0, Math.min(1, Number.isFinite(raw.confidence) ? raw.confidence : 1)),
+    reviewAfter: Number.isFinite(Date.parse(raw.reviewAfter)) ? new Date(raw.reviewAfter).toISOString() : '',
     title,
     content,
     priority: safeInteger(raw.priority ?? defaults.priority, 3, 1, 5),
@@ -239,6 +246,7 @@ export class MissionMemoryStore {
     const document = await this.ensureDefaults(businessKey);
     let memories = document.memories.slice();
     if (filters.status) memories = memories.filter((item) => item.status === normalizeStatus(filters.status));
+    if (filters.projectId !== undefined) memories = memories.filter((item) => !item.projectId || item.projectId === filters.projectId);
     if (filters.kind && MEMORY_KINDS.has(String(filters.kind).toLowerCase())) {
       memories = memories.filter((item) => item.kind === String(filters.kind).toLowerCase());
     }
@@ -256,8 +264,8 @@ export class MissionMemoryStore {
     };
   }
 
-  async relevant(businessKey, query = '', { limit = 12 } = {}) {
-    const { memories } = await this.list(businessKey, { status: 'active', limit: MAX_ITEMS });
+  async relevant(businessKey, query = '', { limit = 12, projectId = '' } = {}) {
+    const { memories } = await this.list(businessKey, { status: 'active', limit: MAX_ITEMS, projectId });
     return memories
       .map((memory) => ({ memory, score: memorySearchScore(memory, query) }))
       .sort((a, b) => b.score - a.score || b.memory.updatedAt.localeCompare(a.memory.updatedAt))
@@ -275,6 +283,7 @@ export class MissionMemoryStore {
     return this.mutate(key, (document) => {
       const contentKey = candidate.content.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
       const duplicate = document.memories.find((item) => item.status === 'active'
+        && item.projectId === candidate.projectId
         && item.kind === candidate.kind
         && item.content.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim() === contentKey);
       if (duplicate) {
@@ -285,8 +294,9 @@ export class MissionMemoryStore {
       }
       document.memories.push(candidate);
       if (document.memories.length > MAX_ITEMS) {
-        const removable = document.memories.findIndex((item) => item.status !== 'active' && !item.seedKey);
-        document.memories.splice(removable >= 0 ? removable : 0, 1);
+        const removable = document.memories.findIndex((item) => item.status !== 'active' && !item.seedKey && item.kind !== 'decision');
+        if (removable < 0) throw Object.assign(new Error('Memory capacity reached; decisions and active records cannot be silently discarded.'), { code: 'MEMORY_CAPACITY' });
+        document.memories.splice(removable, 1);
       }
       return { memory: structuredClone(candidate), created: true };
     });
@@ -300,6 +310,9 @@ export class MissionMemoryStore {
       if (index < 0) throw Object.assign(new Error('Mission memory not found.'), { code: 'MISSION_MEMORY_NOT_FOUND' });
       const current = document.memories[index];
       const rawPatch = safeObject(patch);
+      if (current.kind === 'decision' && ['content', 'title', 'kind', 'status'].some((field) => Object.hasOwn(rawPatch, field))) {
+        throw Object.assign(new Error('Decisions require explicit supersession; existing decision history is immutable.'), { code: 'DECISION_REQUIRES_SUPERSESSION' });
+      }
       const candidate = normalizeMemory({
         ...current,
         ...(Object.hasOwn(rawPatch, 'title') ? { title: rawPatch.title } : {}),
@@ -308,6 +321,7 @@ export class MissionMemoryStore {
         ...(Object.hasOwn(rawPatch, 'status') ? { status: rawPatch.status } : {}),
         ...(Object.hasOwn(rawPatch, 'priority') ? { priority: rawPatch.priority } : {}),
         id: current.id,
+        revision: current.revision + 1,
         seedKey: current.seedKey,
         createdAt: current.createdAt,
         createdBy: current.createdBy,
@@ -359,6 +373,21 @@ export class MissionMemoryStore {
         throw error;
       }
     }
+  }
+
+  async supersedeDecision(businessKey, id, replacement, { actor = 'mark', expectedRevision } = {}) {
+    return this.mutate(businessKey, (document) => {
+      const current = document.memories.find((item) => item.id === id);
+      if (!current || current.kind !== 'decision') throw Object.assign(new Error('Decision not found.'), { code: 'DECISION_NOT_FOUND' });
+      if (current.status !== 'active' || current.revision !== expectedRevision) throw Object.assign(new Error('Decision revision changed; reload before superseding.'), { code: 'REVISION_MISMATCH' });
+      if (!Array.isArray(replacement.sourceRefs) || !replacement.sourceRefs.length) throw Object.assign(new Error('Decision supersession requires source references.'), { code: 'DECISION_SOURCE_REQUIRED' });
+      if (document.memories.length >= MAX_ITEMS) throw Object.assign(new Error('Decision ledger capacity reached.'), { code: 'MEMORY_CAPACITY' });
+      const next = normalizeMemory({ ...replacement, id: '', kind: 'decision', status: 'active', projectId: current.projectId,
+        supersedesId: current.id, createdBy: actor, source: 'authenticated_decision', revision: 1 }, businessKey, { rejectSecrets: true });
+      current.status = 'superseded'; current.supersededBy = next.id; current.revision++; current.updatedAt = nowIso();
+      document.memories.push(next);
+      return { previous: structuredClone(current), decision: structuredClone(next) };
+    });
   }
 }
 

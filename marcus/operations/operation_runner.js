@@ -621,6 +621,7 @@ export class OperationRunner {
   }
 
   async invokeProvider({ operation, step, registryRecord }) {
+    if (this.workGuard) await this.workGuard(operation.businessKey, operation);
     if (step.type === 'approval') return { status: 'completed', output: `Approval checkpoint satisfied by record ${step.approvalId || 'unknown'}.` };
     if (step.type === 'internal') {
       const allowed = new Set(['prepare_operation_context', 'prepare_context', 'create_internal_note', 'generate_plan', 'create_handoff']);

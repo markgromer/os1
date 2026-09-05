@@ -8,6 +8,12 @@
   },
   "scripts": {
     "build:mobile": "node scripts/build-mobile.mjs",
+    "runtime:check": "node scripts/runtime-release-check.mjs",
+    "gpt6:check": "node scripts/gpt6-readiness.mjs check",
+    "gpt6:probe": "node scripts/gpt6-readiness.mjs probe",
+    "gpt6:evaluate": "node scripts/gpt6-readiness.mjs evaluate",
+    "gpt6:exercise": "node scripts/gpt6-readiness.mjs exercise",
+    "gpt6:canary": "node scripts/gpt6-canary.mjs",
     "prestart": "npm run build:mobile",
     "start": "node server.js",
     "dev": "node --watch server.js",
