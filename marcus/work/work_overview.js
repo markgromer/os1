@@ -36,7 +36,13 @@ export async function readWorkOverview(key, { graph, director, execution, memory
       const runs = (operationsByProject.get(project.id) || []).sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
       const receipts = (receiptsByProject.get(project.id) || [])
         .sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp)));
-      const release = summarizeRelease(receipts, evidenceResult.sourceState['github:' + project.id]);
+      const githubState = evidenceResult.sourceState['github:' + project.id] || {};
+      const deploymentState = evidenceResult.sourceState['deployments:' + project.id] || {};
+      const release = summarizeRelease(receipts, { ...githubState,
+        lastRefreshedAt: [githubState.lastRefreshedAt, deploymentState.lastRefreshedAt].filter(Boolean).sort().at(-1),
+        errors: [...(githubState.errors || []), ...(deploymentState.errors || [])],
+      });
+      release.providerRefreshSkipped = deploymentState.skipped || [];
       const granted = ['active', 'probation'].includes(agent.lifecycle) && grantedProjects.has(project.id);
       const boundIds = new Set(items.map((row) => row.operationId).filter(Boolean));
       const attention = [

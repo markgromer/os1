@@ -53,7 +53,7 @@ export class GitHubEvidenceIngestor {
       pulls: `${base}/pulls?state=all&sort=updated&direction=desc&per_page=100`,
       issues: `${base}/issues?state=all&sort=updated&direction=desc&since=${encodeURIComponent(since)}&per_page=100`,
       workflows: `${base}/actions/runs?per_page=100`,
-      deployments: `${base}/deployments?per_page=10`,
+      deployments: `${base}/deployments?per_page=100`,
     };
     const results = Object.fromEntries(await Promise.all(Object.entries(endpoints).map(async ([name, endpoint]) => {
       try { return [name, { ok: true, data: await this.api(endpoint) }]; }
@@ -172,7 +172,7 @@ export class GitHubEvidenceIngestor {
     // Construct the path locally; never follow a payload-supplied API URL.
     const deployments = results.deployments?.ok && Array.isArray(results.deployments.data) ? results.deployments.data : [];
     const deploymentErrors = [];
-    const statusRows = await Promise.all(deployments.slice(0, 10).filter((deployment) => project.deployments?.productionUrl && deployment.production_environment === true && deployment.transient_environment !== true).map(async (deployment) => {
+    const statusRows = await Promise.all(deployments.filter((deployment) => project.deployments?.productionUrl && deployment.production_environment === true && deployment.transient_environment !== true).slice(0, 10).map(async (deployment) => {
       if (!/^\d+$/.test(String(deployment.id))) return null;
       const endpoint = `${base}/deployments/${deployment.id}/statuses?per_page=5`;
       try {

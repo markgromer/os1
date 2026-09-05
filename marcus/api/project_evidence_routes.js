@@ -33,10 +33,9 @@ export function registerProjectEvidenceRoutes(app, { service, getBusinessKey }) 
 
   router.post('/project-evidence/refresh', asyncRoute(async (req, res) => {
     if (req.body?.projectRegistryId) {
-      // Scoped refresh persists GitHub evidence only, without the business-wide
+      // Scoped refresh persists provider evidence only, without the business-wide
       // reconciliation path that can synchronize derived Airtable state.
-      const project = await service.assertProject(business(req), String(req.body.projectRegistryId));
-      const result = await service.github.collectProject({ businessKey: business(req), project, force: true });
+      const result = await service.refreshProject(business(req), String(req.body.projectRegistryId));
       return res.json({ ok: true, businessKey: business(req), result });
     }
     const result = await service.refresh(business(req), {

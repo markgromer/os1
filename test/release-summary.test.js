@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { summarizeRelease } from '../marcus/work/release_summary.js';
 import { GitHubEvidenceIngestor } from '../marcus/evidence/github_evidence.js';
+import { ProjectEvidenceService } from '../marcus/evidence/project_evidence_service.js';
 
 const now = '2026-09-05T10:00:00Z';
 const target = 'https://app.example.com/';
@@ -92,4 +93,36 @@ test('failed status reads and unknown production targets persist errors, never f
   const result = await ingest([ghDeployment(1), ghDeployment(2)], { 1: new Error('Rate limited'), 2: [ghStatus(22, 'failure', '')] });
   assert.equal(result.rows.length, 0); assert.equal(result.result.errors.length, 2);
   assert.equal(result.state.errors.length, 2);
+});
+
+test('preview deployments do not consume the bounded production status lookups', async () => {
+  const previews = Array.from({ length: 20 }, (_, id) => ghDeployment(id + 100, { production_environment: false }));
+  const result = await ingest([...previews, ghDeployment(1)], { 1: [ghStatus(11)] });
+  assert.equal(result.rows.length, 1);
+  assert.equal(result.paths.filter((path) => path.includes('/statuses?')).length, 1);
+  assert.ok(result.paths.some((path) => path.endsWith('/deployments?per_page=100')));
+});
+
+test('scoped refresh reads mapped providers without other projects, global reconciliation or lost ambiguity guards', async () => {
+  const calls = []; const saved = []; const states = new Map();
+  const projects = [{ id: 'selected', repo: {}, deployments: { renderServiceId: 'chosen', cloudflareProject: 'chosen-pages', cloudflareAccountId: 'account', productionUrl: target } },
+    { id: 'other', deployments: { renderServiceId: 'other', cloudflareProject: 'other-pages', cloudflareAccountId: 'account' } }];
+  const store = { append: async (_key, rows) => { saved.push(...rows); return { accepted: rows, duplicateCount: 0 }; }, setSourceState: async (_key, id, state) => states.set(id, state) };
+  const service = new ProjectEvidenceService({ store, listProjects: async () => projects,
+    renderApi: async (path) => { calls.push(path); return [{ id: 'render-one', status: 'live', createdAt: now, commit: { id: 'abc' } }]; },
+    cloudflareApi: async (path) => { calls.push(path); return { result: [{ id: 'pages-one', environment: 'production', created_on: now }] }; },
+    syncAirtableDerivedState: async () => { throw new Error('Must not synchronize Airtable'); },
+  });
+  service.recalculate = async () => { throw new Error('Must not reconcile globally'); };
+  const result = await service.refreshProject('personal', 'selected');
+  assert.equal(result.projectRegistryId, 'selected'); assert.equal(calls.length, 2);
+  assert.ok(calls.every((path) => !path.includes('other')));
+  assert.ok(saved.every((row) => row.projectRegistryId === 'selected'));
+  assert.equal(saved.find((row) => row.source === 'cloudflare').type, 'deployment_started');
+  assert.ok(states.has('deployments:selected'));
+  projects.push({ id: 'ambiguous', deployments: { renderServiceId: 'chosen', cloudflareProject: 'chosen-pages' } });
+  calls.length = 0;
+  const blocked = await service.refreshProject('personal', 'selected');
+  assert.equal(calls.length, 0);
+  assert.ok(blocked.deployments.results.every((row) => row.skipped === 'low_confidence_mapping'));
 });

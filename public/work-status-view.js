@@ -51,7 +51,8 @@ export function projectBrief(project, overview) {
   const deployment = linked?.deployment;
   const deployed = !!deployment && ['production_published', 'deployment_completed'].includes(deployment.type)
     && ['success', 'live', 'ready', 'active', 'completed'].includes(deployment.status)
-    && overview?.evidenceAvailable !== false && !linked?.release?.refreshErrors?.some((row) => /^deployment/.test(row.endpoint));
+    && overview?.evidenceAvailable !== false && !linked?.release?.refreshErrors?.some((row) => /^deployment/.test(row.endpoint))
+    && !linked?.release?.providerRefreshSkipped?.some((row) => row.provider === deployment.source);
   const needs = linked?.needsYouCount || 0;
   const failed = deployment?.type === 'deployment_failed';
   const headline = !overview?.ok ? 'Connecting your project records…'
@@ -107,6 +108,7 @@ export function workOverviewHtml(project, overview) {
       </section>
     </div>
     ${release?.refreshErrors.length ? `<p class="work-coverage">Some provider reads failed; saved records may be stale. ${esc(release.refreshErrors.map((row) => row.endpoint).join(', '))}. Refresh evidence to retry.</p>` : ''}
+    ${release?.providerRefreshSkipped?.some((row) => row.provider === deployment?.source) ? '<p class="work-coverage">The provider for this historical receipt could not be refreshed. Its current release status is unknown.</p>' : ''}
     ${!overview?.evidenceAvailable ? '<p class="work-coverage">Provider evidence is unavailable; the release summary is incomplete.</p>' : ''}
     ${release?.mergedChanges.length ? `<section class="work-section merged-changes"><h3>Recently merged in this repository</h3><ul class="brief-changes">${release.mergedChanges.map((row) => `<li>${recordLink(row.url, row.title) || esc(row.title)} <small>${esc(stamp(row.timestamp))}</small></li>`).join('')}</ul></section>` : ''}
     <section class="work-section current-work"><h3>Current work</h3><p>${esc(objective)}</p>
