@@ -63,7 +63,7 @@ test('Codex workspace discovery reads bounded metadata plus assistant handoff an
   await writeSession('older', { id: 'session-old', cwd: workspace, source: 'vscode', originator: 'codex_vscode' }, new Date(now.getTime() - 120_000));
   const newerFile = await writeSession('newer', { id: 'session-new', cwd: workspace, source: 'vscode', originator: 'codex_vscode' }, new Date(now.getTime() - 30_000), [
     { type: 'response_item', timestamp: '2026-08-12T11:58:00.000Z', payload: { role: 'user', text: 'Make the portrait decision check compact and preserve workspace context.' } },
-    { type: 'response_item', payload: { role: 'assistant', text: 'Fixed the live blocker. Refresh https://poopsites.com/admin/reggie and confirm 15 sites load.' } },
+    { type: 'response_item', timestamp: '2026-08-12T11:58:30.000Z', payload: { role: 'assistant', text: 'Fixed the live blocker. Refresh https://poopsites.com/admin/reggie and confirm 15 sites load.' } },
     { type: 'response_item', timestamp: '2026-08-12T11:59:00.000Z', payload: { role: 'user', text: 'merge, commit and deploy' } },
   ]);
   await writeSession('other', { id: 'session-other', cwd: otherWorkspace, source: 'cli', originator: 'codex_cli_rs' }, new Date(now.getTime() - 60_000));
@@ -76,6 +76,7 @@ test('Codex workspace discovery reads bounded metadata plus assistant handoff an
     assert.equal(result[0].projectName, 'Scoop Fairies');
     assert.match(result[0].handoffSummary, /Fixed the live blocker/);
     assert.equal(result[0].handoffStatus, 'ready_for_mark');
+    assert.equal(result[0].handoffObservedAt, '2026-08-12T11:58:30.000Z', 'the message timestamp wins over filesystem metadata');
     assert.match(result[0].originalUserRequest, /portrait decision check/);
     assert.equal(result[0].latestUserRequest, 'merge, commit and deploy');
     assert.equal(result.some((item) => item.sessionId === 'session-subagent'), false);
