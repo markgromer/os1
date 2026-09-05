@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#070B10">
-  <title>MARCUS Dedicated Display</title>
+  <title>MARCUS Dedicated Display · Work &amp; Evidence</title>
   <link rel="icon" href="/icons/marcus.svg" type="image/svg+xml">
   <style>
     :root {
@@ -1016,6 +1016,7 @@
       .sync-foot { grid-area: sync; }
     }
   </style>
+  <link rel="stylesheet" href="/work-status-view.css?v=2">
 </head>
 <body>
   <div class="display">
@@ -1059,7 +1060,7 @@
         <nav class="tabs" aria-label="Workspace tabs">
           <button class="tab active" type="button" data-tab="browser">Browser</button>
           <button class="tab" type="button" data-tab="approvals">Approvals <span class="tab-count" id="publicationApprovalCount" hidden>0</span></button>
-          <button class="tab" type="button" data-tab="preview">Overview</button>
+          <button class="tab" type="button" data-tab="preview">Work &amp; evidence</button>
           <button class="tab" type="button" data-tab="github">GitHub</button>
           <button class="tab" type="button" data-tab="codex">Codex</button>
           <button class="tab" type="button" data-tab="tests">Tests</button>
@@ -1106,7 +1107,7 @@
         <span class="dock-head-actions">
           <button class="btn" type="button" id="dockOpenCodex">Open Codex</button>
           <button class="btn bad" type="button" id="dockSendBack">Request changes</button>
-          <button class="btn good" type="button" id="dockFinishTask">Finish task</button>
+          <button class="btn good" type="button" id="dockFinishTask">Review outcome</button>
           <button class="btn primary" type="button" id="dockStartTask">Start new task</button>
         </span>
       </header>
@@ -1119,7 +1120,7 @@
       <footer class="dock-foot">
         <span id="recordingState">All consequential actions require evidence.</span>
         <span id="branchState">Branch unknown</span>
-        <span>Automatic continuation: <strong id="autoState">On for reversible work</strong></span>
+        <span>Project advancement: <strong id="autoState">Checking saved policy</strong></span>
       </footer>
     </section>
 
@@ -1169,7 +1170,7 @@
           <div class="message marcus"><span class="message-meta">MARCUS</span><span id="initialMessage">Ask about a project, decision, or what should happen next.</span></div>
         </div>
         <div class="auto-row">
-          <span>Marcus may continue automatically</span>
+          <span>Saved project policy</span>
           <button class="toggle" type="button" id="autoToggle" aria-pressed="true"><span></span></button>
         </div>
         <form class="composer" id="composer">
@@ -1187,8 +1188,19 @@
     </aside>
   </div>
 
+  <dialog id="workDraftDialog" class="work-dialog">
+    <form id="workDraftForm">
+      <h2>Track a follow-up</h2><p id="workDraftProject"></p>
+      <p>This saves a work item only. It does not launch Codex, enable Engineering, approve deployment or change a model.</p>
+      <label>Objective<textarea id="workDraftObjective" maxlength="4000" required></textarea></label>
+      <label>What will prove it is done? <small>One acceptance criterion per line.</small><textarea id="workDraftCriteria" maxlength="12000" required></textarea></label>
+      <p id="workDraftError" class="error" role="alert"></p>
+      <div class="work-actions"><button type="submit" class="btn primary" id="workDraftSave">Save work item</button><button type="button" class="btn" id="workDraftCancel">Cancel</button></div>
+    </form>
+  </dialog>
   <script src="/marcus-realtime.js"></script>
-  <script>
+  <script type="module">
+    import { matchWorkProject, reportState, evidenceStages, workOverviewHtml } from '/work-status-view.js?v=2';
     const els = {
       clock: document.getElementById("clock"),
       codexDot: document.getElementById("codexDot"),
@@ -1247,12 +1259,18 @@
     const sourceLabels = { codex: "Codex", operation: "Operation", job: "Codex job", awareness: "Awareness" };
     let snapshot = { projects: [], codexProjects: [], operations: [], jobs: [], desktop: null, awareness: null, settings: null, browser: null, publications: [] };
     let selectedId = "";
-    let activeTab = window.matchMedia("(orientation: portrait) and (min-width: 700px)").matches ? "preview" : "browser";
+    let activeTab = "preview";
     let activeFilter = "";
     let chatContextId = "";
     let loading = false;
     let markHasControl = false;
-    let autoContinue = true;
+    let workOverview = null;
+    let workOverviewReadAt = 0;
+    let workDraft = null;
+    const requestedWorkProjectId = new URL(window.location.href).searchParams.get('project') || '';
+    let inspectedRegistryId = requestedWorkProjectId;
+    let loadedBusinessKey = '';
+    let renderedSurfaceKey = '';
     let voiceHeld = false;
     let realtimeVoice = null;
     let voiceStartInFlight = null;
@@ -1271,6 +1289,7 @@
     const LIVE_BROWSER_CONTEXT_KINDS = new Set(["zoom", "skool", "google-meet", "teams", "youtube", "tiktok"]);
     let browserStatusLoading = false;
     const publicationRequests = new Set();
+    const workStartRequests = new Set();
     const autoRefreshMs = 3000;
     const codexWorkspaceCacheKey = "marcus-visualizer-codex-workspaces-v1";
     const codexWorkspaceCacheMaxAgeMs = 6 * 60 * 60 * 1000;
@@ -1289,7 +1308,7 @@
     function readCachedCodexWorkspaces() {
       try {
         const cached = JSON.parse(sessionStorage.getItem(codexWorkspaceCacheKey) || "null");
-        if (!cached || Date.now() - Number(cached.savedAt || 0) > codexWorkspaceCacheMaxAgeMs) return [];
+        if (!cached || cached.businessKey !== businessKey() || Date.now() - Number(cached.savedAt || 0) > codexWorkspaceCacheMaxAgeMs) return [];
         return arr(cached.workspaces);
       } catch { return []; }
     }
@@ -1299,7 +1318,7 @@
       const reportIsConfirmed = reported.length > 0 && desktop?.codexWorkspacesStale !== true;
       if (reportIsConfirmed) {
         lastConfirmedCodexWorkspaces = reported;
-        try { sessionStorage.setItem(codexWorkspaceCacheKey, JSON.stringify({ savedAt: Date.now(), workspaces: reported })); } catch {}
+        try { sessionStorage.setItem(codexWorkspaceCacheKey, JSON.stringify({ savedAt: Date.now(), businessKey: businessKey(), workspaces: reported })); } catch {}
         return desktop;
       }
       if (reported.length) return { ...desktop, codexWorkspaces: reported, codexWorkspacesStale: true };
@@ -1369,18 +1388,11 @@
     }
 
     function projectStateFromStatus(rawStatus, handoffStatus = "") {
-      const raw = `${text(rawStatus)} ${text(handoffStatus)}`.toLowerCase();
-      if (/archived|known_history|history/.test(raw)) return "archived";
-      if (/needs|approval|ready_for_mark|waiting_for_mark/.test(raw)) return "needs_mark";
-      if (/blocked|failed|error|recovery/.test(raw)) return "blocked";
-      if (/verify|audit|test|review/.test(raw)) return "verifying";
-      if (/complete|completed|done|accepted|ready_to_ship|ship/.test(raw)) return "complete";
-      if (/run|build|codex|moving|handoff|active|queued|progress/.test(raw)) return "moving";
-      return "monitoring";
+      return reportState(rawStatus, handoffStatus);
     }
 
     function stateLabel(state) {
-      return ({ needs_mark: "Waiting for acceptance", blocked: "Blocked", verifying: "Verifying", complete: "Waiting for acceptance", moving: "Codex running", losing_thread: "Stale", archived: "Archived", monitoring: "Watching" })[state] || "Watching";
+      return ({ needs_mark: "Handoff needs review", blocked: "Reported blocker", verifying: "Verification reported", complete: "Result reported", moving: "Activity reported", losing_thread: "Stale", archived: "Archived", monitoring: "Watching" })[state] || "Watching";
     }
     function stateTone(state) {
       if (state === "complete") return "ok";
@@ -1583,6 +1595,14 @@
     async function load() {
       if (loading) return;
       loading = true;
+      const requestedBusinessKey = businessKey();
+      if (loadedBusinessKey !== requestedBusinessKey) {
+        loadedBusinessKey = requestedBusinessKey; workOverview = null; inspectedRegistryId = requestedWorkProjectId; selectedId = ''; chatContextId = '';
+        lastConfirmedCodexWorkspaces = readCachedCodexWorkspaces();
+        snapshot.projects = []; snapshot.codexProjects = []; snapshot.publications = [];
+        document.getElementById('workDraftDialog').close();
+        render();
+      }
       els.syncState.textContent = "Syncing";
       try {
         const [operations, jobs, desktop, awareness, settings, github, cloudflare, google, browser, publications] = await Promise.all([
@@ -1597,6 +1617,13 @@
           api("/api/marcus/browser/status").catch((error) => ({ ok: false, online: false, error: error.message, control: { owner: "marcus" } })),
           api("/api/marcus/browser/publications").catch((error) => ({ ok: false, error: error.message, publications: [] })),
         ]);
+        if (businessKey() !== requestedBusinessKey) return;
+        if (!workOverview || Date.now() - workOverviewReadAt > 15000) {
+          workOverview = await api('/api/work/overview').catch(() => ({ ok: false, projects: [] }));
+          workOverviewReadAt = Date.now();
+        }
+        if (businessKey() !== requestedBusinessKey) { workOverview = null; return; }
+        if (workOverview?.ok) workOverview.currentModel = settings?.openaiModel || 'unknown';
         const effectiveDesktop = retainCodexWorkspaces(desktop);
         const relayCodexProjects = arr(effectiveDesktop.codexWorkspaces).map((item, index) => makeCodexProject(item, index, effectiveDesktop));
         const projects = mergeProjects([
@@ -1607,9 +1634,11 @@
         ]);
         const codexIds = new Set(relayCodexProjects.map((project) => project.id));
         const codexProjects = projects.filter((project) => project.source === "codex" && codexIds.has(project.id));
+        const knownRegistryIds = new Set(projects.map((project) => matchWorkProject(project, workOverview)?.id).filter(Boolean));
+        for (const registered of workOverview?.projects || []) if ((registered.workCount || registered.id === inspectedRegistryId) && !projects.some((project) => project.id === `work-${registered.id}`) && (!knownRegistryIds.has(registered.id) || registered.id === inspectedRegistryId)) projects.push({ id: `work-${registered.id}`, name: registered.name, source: 'work', state: 'monitoring', label: 'Tracked work', raw: { projectRegistryId: registered.id }, workspacePath: registered.workspacePath, current: 'Durable project work', next: 'Inspect readiness and evidence.', request: '', response: '', evidence: [], updatedAt: workOverview.observedAt });
         snapshot = { projects, codexProjects, operations: arr(operations.operations), jobs: arr(jobs.jobs), desktop: effectiveDesktop, awareness, settings, github, cloudflare, google, browser, publications: arr(publications.publications) };
         markHasControl = browser?.control?.owner === "mark";
-        if (!selectedId || !projects.some((p) => p.id === selectedId)) selectedId = codexProjects[0]?.id || projects[0]?.id || "";
+        if (!selectedId || !projects.some((p) => p.id === selectedId)) selectedId = projects.find((p) => matchWorkProject(p, workOverview)?.id === inspectedRegistryId)?.id || codexProjects[0]?.id || projects[0]?.id || "";
         if (!chatContextId && selectedId) chatContextId = selectedId;
         render();
         maybePostLiveRead();
@@ -1669,7 +1698,7 @@
         preview: Boolean(selected),
         github: snapshot.github?.configured === true,
         codex: codexCount > 0,
-        tests: Boolean(selected?.evidence?.length),
+        tests: Boolean(matchWorkProject(selected || {}, workOverview)?.operations.some((row) => row.verification.length)),
         evidence: Boolean(selected?.evidence?.length),
       };
       document.querySelectorAll(".tab[data-tab]").forEach((tab) => {
@@ -1679,6 +1708,11 @@
     }
     function renderWorkspace() {
       const project = selectedProject();
+      const surfaceKey = `${loadedBusinessKey}:${project?.id || ''}:${activeTab}`;
+      const surfaceScroll = surfaceKey === renderedSurfaceKey ? els.workspaceSurface.scrollTop : 0;
+      renderedSurfaceKey = surfaceKey;
+      document.body.classList.toggle('work-mode', activeTab === 'preview');
+      els.workspaceSurface.classList.toggle('work-surface', activeTab === 'preview');
       const browserMode = activeTab === "browser";
       const fullSurfaceMode = browserMode || activeTab === "approvals";
       els.workspaceBody.classList.toggle("browser-mode", fullSurfaceMode);
@@ -1698,8 +1732,9 @@
         els.workspaceHeading.textContent = "MARCUS WORKSPACE";
         els.workspaceCrumb.textContent = "No live project selected";
         els.workspaceUrl.value = "marcus://workspace/empty";
-        els.workspaceSurface.innerHTML = `<div style="display:grid;place-items:center;height:100%;color:#333"><strong>No live project evidence is available yet.</strong></div>`;
+        els.workspaceSurface.innerHTML = workOverviewHtml({ name: 'Select a registered project', state: 'monitoring', raw: {} }, workOverview);
         els.auditPanel.innerHTML = emptyAudit("No selected project");
+        bindDynamicButtons();
         return;
       }
       els.workspaceHeading.textContent = project.name;
@@ -1708,6 +1743,7 @@
       els.workspaceStatus.textContent = workspaceStatus(project);
       els.scenarioStatus.textContent = `${stateLabel(project.state)} - ${age(project.updatedAt)}`;
       els.workspaceSurface.innerHTML = surfaceHtml(project);
+      els.workspaceSurface.scrollTop = surfaceScroll;
       els.auditPanel.innerHTML = auditHtml(project);
       bindDynamicButtons();
     }
@@ -1718,9 +1754,7 @@
       if (!project) return;
       els.attentionCount.textContent = `Needs you ${needs.length}`;
       els.attentionTitle.textContent = outcomeLine(project);
-      els.attentionSummary.textContent = project.state === "complete"
-        ? `Marcus finished this work ${ageWords(project.updatedAt)}. Nothing is running now.`
-        : needLine(project);
+      els.attentionSummary.textContent = 'A reported status needs review. Check linked work and receipts before accepting an outcome.';
       els.attentionActions.innerHTML = `
         <button class="btn primary" type="button" data-attention-project="${esc(project.id)}">${esc(primaryAuditAction(project).label)}</button>
         <button class="btn" type="button" data-chat-project="${esc(project.id)}">Discuss</button>
@@ -2061,7 +2095,7 @@
     function workspaceStatus(project) {
       if (project.state === "needs_mark") return `${project.name} needs Mark before Marcus continues.`;
       if (project.state === "blocked") return `${project.name} is blocked; Marcus should prepare recovery.`;
-      if (project.state === "complete") return `${project.name} produced completion evidence; Marcus has not treated that as shipped.`;
+      if (project.state === "complete") return `${project.name} has a reported result; verification and deployment must be checked separately.`;
       if (project.state === "verifying") return `${project.name} is under audit or verification.`;
       return `${project.name} is live; Marcus is watching Codex, GitHub, and desktop evidence.`;
     }
@@ -2132,9 +2166,9 @@
       return out;
     }
     function outcomeLine(project) {
-      if (project.state === "needs_mark") return `${project.name} is complete and waiting for your acceptance.`;
+      if (project.state === "needs_mark") return `${project.name} has a handoff for review; completion is not established.`;
       if (project.state === "blocked") return `${project.name} is blocked and needs a recovery pass.`;
-      if (project.state === "complete") return `${project.name} is complete and waiting for your acceptance.`;
+      if (project.state === "complete") return `${project.name} has a reported result; inspect verification and deployment separately.`;
       if (project.state === "verifying") return `${project.name} is being verified before Marcus asks for your decision.`;
       if (project.state === "moving") return `${project.name} is actively being worked on in Codex.`;
       return `${project.name} is being watched for meaningful changes.`;
@@ -2182,38 +2216,7 @@
         <button class="btn" type="button" data-chat-project="${esc(project.id)}">Discuss</button>`;
     }
     function previewSurface(project) {
-      const tone = stateTone(project.state);
-      const evidence = evidenceLines(project);
-      const waiting = ["needs_mark", "complete"].includes(project.state);
-      return `
-        <div class="brief-surface">
-          <section class="brief-main">
-            <span class="brief-status ${esc(tone)}">${esc(stateLabel(project.state))}</span>
-            <span class="brief-kicker">What's happening</span>
-            <h2 class="brief-title">${esc(outcomeLine(project))}</h2>
-            <p class="brief-subtitle">${esc(humanizeLine(project.truth || project.response || project.current, 300))} ${waiting ? "Review the evidence before removing this work from active attention." : "Marcus will surface the next decision when verification changes."}</p>
-            <div class="decision-grid">
-              <section class="decision-card">
-                <strong>Marcus recommends</strong>
-                <h3>${esc(recommendationLine(project))}</h3>
-                <p>${esc(waiting ? "Acceptance confirms the result matches your intent; it does not imply a deployment." : project.next)}</p>
-              </section>
-              <section class="decision-card request">
-                <strong>What you requested</strong>
-                <h3>${esc(humanizeLine(project.request || project.current, 150))}</h3>
-                <p>${esc(projectTypeLabel(project))}${project.branch ? ` · Branch ${esc(project.branch)}` : " · No Git branch or deployment is expected unless this is code work."}</p>
-              </section>
-            </div>
-            <div class="current-state">
-              <strong>Current state</strong>
-              <span class="state-line"><i>✓</i><span>${esc(project.state === "moving" ? "Work is running in Codex" : "The latest reported work is complete")}</span></span>
-              <span class="state-line"><i>✓</i><span>${esc(`${project.evidence.length} evidence item${project.evidence.length === 1 ? "" : "s"} collected`)}</span></span>
-              <span class="state-line ${waiting ? "wait" : ""}"><i>${waiting ? "!" : "✓"}</i><span>${esc(waiting ? "Waiting for your acceptance" : project.next)}</span></span>
-            </div>
-            <div class="brief-actions">${primaryActionHtml(project)}</div>
-            <div class="evidence-strip"><details><summary>Evidence · ${evidence.length} item${evidence.length === 1 ? "" : "s"}</summary><ul>${evidence.map((item) => `<li>${esc(item)}</li>`).join("")}</ul></details></div>
-          </section>
-        </div>`;
+      return workOverviewHtml(project, workOverview);
     }
     function codeSurface(project) {
       const directJob = directCodexJob(project);
@@ -2320,7 +2323,7 @@
     function auditFinding(project) {
       if (project.state === "needs_mark") return "Progress depends on a Mark decision. Marcus should present the exact action, risk, rollback, and evidence before continuing.";
       if (project.state === "blocked") return "The project has a blocker or failed handoff. Marcus should preserve the evidence and prepare the smallest recovery assignment.";
-      if (project.state === "complete") return "Completion evidence exists, but Marcus still needs audit and ship authority before production movement.";
+      if (project.state === "complete") return "Codex reported a result. This alone establishes neither verification, deployment nor acceptance.";
       if (project.state === "verifying") return "Verification is underway. Failed findings should become a correction pass, not a vague follow-up.";
       return "The project has live movement or context. Marcus should keep watching and only interrupt when evidence changes or Mark is required.";
     }
@@ -2384,20 +2387,13 @@
       return ["Brief", "Codex", "GitHub", "Preview", "Verify", "Review", "Deploy"];
     }
     function pipelineHtml(project) {
-      const projectStages = pipelineStages(project);
-      const current = currentStage(project);
-      let index = projectStages.indexOf(current);
-      if (index < 0) index = project.state === "blocked" ? 1 : project.state === "moving" ? 1 : Math.max(0, projectStages.length - 2);
-      return projectStages.map((stage, i) => {
-        let cls = i < index ? "done" : i === index ? "active" : "";
-        if (project.state === "blocked" && i === index) cls = "fail";
-        if (project.state === "needs_mark" && i === index) cls = "wait";
-        return `<div class="stage ${cls}"><span class="stage-line"></span><span>${esc(stage)}</span></div>`;
-      }).join("");
+      return evidenceStages(project, matchWorkProject(project, workOverview)).map((stage) => `<div class="stage ${stage.ok ? 'done' : ''}" title="${esc(stage.value)}"><span class="stage-line"></span><span>${esc(stage.label)}</span></div>`).join('');
     }
     function renderDock() {
       const project = selectedProject();
       if (!project) return;
+      const savedWorkPolicy = matchWorkProject(project, workOverview)?.engineering;
+      document.getElementById('autoState').textContent = !savedWorkPolicy ? 'Unknown · project not linked' : savedWorkPolicy.autoAdvance ? 'Enabled by saved project policy' : 'Off · no automatic advancement';
       els.dockContext.textContent = project.name;
       els.dockPass.textContent = project.state === "verifying" ? "AUDIT" : project.state === "complete" ? "REVIEW" : project.state === "needs_mark" ? "APPROVAL" : "LIVE";
       els.dockPass.className = `state-pill ${stateTone(project.state)}`;
@@ -2405,11 +2401,11 @@
       els.branchState.textContent = project.branch ? `Branch ${project.branch}` : isPcConfiguration(project) ? "Git branch: not applicable" : project.workspacePath || "No branch associated";
       els.dockCurrent.innerHTML = `
         <span class="eyebrow">1 Current</span>
-        <div><h3>${esc(["complete", "needs_mark"].includes(project.state) ? "Nothing is running" : project.current || project.label)}</h3><p>${esc(["complete", "needs_mark"].includes(project.state) ? "Marcus is waiting for your review." : project.truth)}</p></div>
+        <div><h3>${esc(stateLabel(project.state))}</h3><p>${esc('Reported session state—not a verified execution or deployment result.')}</p></div>
         <div class="row" style="gap:6px"><button class="btn" type="button" data-pause-current>Pause</button><button class="btn bad" type="button" data-stop-current>Stop</button><button class="btn primary" type="button" data-control-current>${markHasControl ? "Return" : "Take control"}</button></div>`;
       els.dockPipeline.innerHTML = `<span class="eyebrow">2 Pipeline</span><div class="pipeline">${pipelineHtml(project)}</div><p>Current stage: ${esc(currentStage(project))}</p>`;
       els.dockEvidence.innerHTML = `<span class="eyebrow">3 Evidence</span><div>${project.evidence.slice(0, 4).map((item) => `<div class="evidence-row"><span class="state-pill ${stateTone(project.state)}">E</span><span>${esc(compact(item, 110))}</span></div>`).join("")}</div><button class="btn" type="button" data-open-tab="evidence">Open evidence</button>`;
-      els.dockNext.innerHTML = `<span class="eyebrow">4 Next</span><div><div class="next-row"><span class="state-pill warn">1</span><span>${esc(project.next)}</span></div><div class="next-row"><span class="state-pill">2</span><span>${["needs_mark", "complete"].includes(project.state) ? "Accept and archive, or request changes." : "Marcus continues until evidence changes or your decision is required."}</span></div></div><div class="row" style="gap:6px"><button class="btn" type="button" data-project-command="why" data-project-id="${esc(project.id)}">Ask Marcus why</button><button class="btn primary" type="button" data-project-command="${esc(primaryAuditAction(project).command)}" data-project-id="${esc(project.id)}">${esc(primaryAuditAction(project).label)}</button></div>`;
+els.dockNext.innerHTML = `<span class="eyebrow">4 Next</span><div><div class="next-row"><span class="state-pill warn">1</span><span>${esc(project.next)}</span></div><div class="next-row"><span class="state-pill">2</span><span>${["needs_mark", "complete"].includes(project.state) ? "Review work and receipts; accept only if the outcome is proved." : "Inspect the saved execution policy; reading this screen starts nothing."}</span></div></div><div class="row" style="gap:6px"><button class="btn" type="button" data-project-command="why" data-project-id="${esc(project.id)}">Ask Marcus why</button><button class="btn primary" type="button" data-project-command="${esc(primaryAuditAction(project).command)}" data-project-id="${esc(project.id)}">${esc(primaryAuditAction(project).label)}</button></div>`;
     }
     function actionLabel(project) {
       if (project.state === "needs_mark") return "Review";
@@ -2459,6 +2455,43 @@
       els.chatContext.textContent = chatContextId === "__browser__" ? "Browser" : project ? project.name : "All projects";
     }
     function bindDynamicButtons() {
+      document.querySelectorAll('[data-work-start]').forEach((button) => {
+        button.disabled = workStartRequests.has(button.dataset.workStart);
+        button.onclick = async () => {
+          const project = selectedProject(); const linked = project && matchWorkProject(project, workOverview);
+          const item = linked?.items.find((row) => row.id === button.dataset.workStart);
+          if (!item?.readiness.runnable || workStartRequests.has(item.id) || workOverview.businessKey !== businessKey()) return;
+          if (!window.confirm(`Start this work in ${linked.name}?\n\n${item.objective}\n\nThis creates or resumes its bound operation and may launch the configured worker. Existing approvals still apply; this does not grant deployment or messaging authority.`)) return;
+          workStartRequests.add(item.id); button.disabled = true;
+          const startContext = selectedId; const startBusiness = businessKey();
+          try {
+            await api(`/api/work/${encodeURIComponent(item.id)}/launch`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ start: true }) });
+            if (selectedId === startContext && businessKey() === startBusiness) addMessage('marcus', 'Start request recorded. Inspect the bound operation for execution, approval or handoff status; completion is not implied.');
+          } catch (error) { if (selectedId === startContext && businessKey() === startBusiness) addMessage('marcus error', `Start not confirmed: ${error.message}. Inspect the existing operation before retrying.`); }
+          finally { workStartRequests.delete(item.id); workOverviewReadAt = 0; await load(); }
+        };
+      });
+      document.querySelectorAll('[data-work-refresh]').forEach((button) => button.onclick = async () => { workOverviewReadAt = 0; await load(); });
+      document.querySelectorAll('[data-work-question]').forEach((button) => button.onclick = async () => {
+        const project = selectedProject(); if (!project) return;
+        setChatContext(project.id); await sendToMarcus('What needs me?');
+      });
+      document.querySelectorAll('[data-work-draft]').forEach((button) => button.onclick = () => {
+        const project = selectedProject(); const linked = project && matchWorkProject(project, workOverview); if (!linked) return;
+        workDraft = { projectId: linked.id, businessKey: workOverview.businessKey, clientRequestId: crypto.randomUUID(), pending: false };
+        document.getElementById('workDraftProject').textContent = `Project: ${linked.name}`;
+        document.getElementById('workDraftObjective').value = '';
+        document.getElementById('workDraftCriteria').value = '';
+        document.getElementById('workDraftError').textContent = '';
+        document.getElementById('workDraftDialog').showModal();
+      });
+      document.querySelectorAll('[data-work-project]').forEach((select) => select.onchange = () => {
+        const row = workOverview?.projects.find((project) => project.id === select.value); if (!row) return;
+        inspectedRegistryId = row.id;
+        const id = `work-${row.id}`;
+        if (!snapshot.projects.some((project) => project.id === id)) snapshot.projects.push({ id, name: row.name, source: 'work', state: 'monitoring', label: 'Registered project', raw: { projectRegistryId: row.id }, workspacePath: row.workspacePath, current: 'Durable project work', next: 'Inspect readiness and evidence.', request: '', response: '', evidence: [], updatedAt: workOverview.observedAt });
+        selectedId = id; chatContextId = id; activeTab = 'preview'; render();
+      });
       document.querySelectorAll("[data-select-project]").forEach((button) => button.onclick = (event) => {
         const chat = event.target.closest("[data-chat-project]");
         const action = event.target.closest("[data-action-project]");
@@ -2515,9 +2548,9 @@
     }
     async function finishSelectedTask() {
       const project = selectedProject();
-      if (!project) return addMessage("marcus error", "Select a project before finishing a task.");
-      setChatContext(project.id);
-      await sendToMarcus(`Mark the current task for ${project.name} finished, preserve its outcome and evidence, and keep the project active for future tasks. Do not archive or close the project.`);
+      if (!project) return;
+      activeTab = 'preview'; renderWorkspace();
+      addMessage('marcus', 'Review the linked work and execution checks. Opening this view does not mark work complete or accept it.');
     }
     function startTaskForSelectedProject() {
       const project = selectedProject();
@@ -2616,6 +2649,19 @@
       const browserContext = chatContextId === "__browser__";
       const projectId = project?.awarenessProjectId || project?.projectRegistryId || project?.projectId || project?.id || "";
       if (echoUser) addMessage("user", message);
+      if (!browserContext && /^(?:what needs me|what is blocked|what's blocked|show (?:tracked )?work status|work status|what can continue)[?.!\s]*$/i.test(message.trim())) {
+        const linked = project && matchWorkProject(project, workOverview);
+        if (!linked) { addMessage('marcus', 'Select an exactly linked project in Work & evidence first. I will not infer a project from a similar name.'); return; }
+        const requestContext = chatContextId;
+        const requestBusiness = businessKey();
+        try {
+          const result = await api(`/api/work/overview?projectId=${encodeURIComponent(linked.id)}`);
+          if (chatContextId !== requestContext || businessKey() !== requestBusiness) return;
+          addMessage('marcus', result.reply);
+          activeTab = 'preview'; workOverviewReadAt = 0; await load();
+          return result;
+        } catch (error) { if (chatContextId === requestContext) addMessage('marcus error', `Work status unavailable: ${error.message}`); return; }
+      }
       try {
         const data = await api("/api/marcus/live/chat", {
           method: "POST",
@@ -2812,11 +2858,33 @@
     document.getElementById("dockStartTask").addEventListener("click", startTaskForSelectedProject);
     document.getElementById("pauseButton").addEventListener("click", () => setBrowserControl("mark"));
     document.getElementById("closeWorkspace").addEventListener("click", () => addMessage("marcus", "Workspace surface closed visually; active work remains visible in the dock and right panel."));
-    document.getElementById("autoToggle").addEventListener("click", () => {
-      autoContinue = !autoContinue;
-      document.getElementById("autoToggle").setAttribute("aria-pressed", String(autoContinue));
-      document.getElementById("autoState").textContent = autoContinue ? "On for reversible work" : "Off";
-      addMessage("marcus", `Automatic continuation is now ${autoContinue ? "on for reversible work" : "off"}. High-impact actions still require approval.`);
+    document.getElementById('autoToggle').textContent = 'Execution policy';
+    document.getElementById('autoToggle').removeAttribute('aria-pressed');
+    document.getElementById('autoToggle').addEventListener('click', () => {
+      activeTab = 'preview'; renderWorkspace();
+      addMessage('marcus', 'The Work & evidence panel shows the saved project policy. This button does not change grants or start work.');
+    });
+    document.getElementById('workDraftCancel').addEventListener('click', () => {
+      if (!workDraft?.pending) document.getElementById('workDraftDialog').close();
+    });
+    document.getElementById('workDraftDialog').addEventListener('cancel', (event) => { if (workDraft?.pending) event.preventDefault(); });
+    document.getElementById('workDraftForm').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (!workDraft || workDraft.pending) return;
+      const draft = workDraft;
+      const errorNode = document.getElementById('workDraftError');
+      const objective = document.getElementById('workDraftObjective').value.trim();
+      const acceptanceCriteria = document.getElementById('workDraftCriteria').value.split('\n').map((value) => value.trim()).filter(Boolean);
+      if (!objective || !acceptanceCriteria.length || acceptanceCriteria.length > 30) { errorNode.textContent = 'Enter an objective and 1–30 acceptance criteria.'; return; }
+      if (workOverview?.businessKey !== draft.businessKey || businessKey() !== draft.businessKey) { errorNode.textContent = 'Business context changed. Reopen the form in the intended project.'; return; }
+      draft.pending = true; document.getElementById('workDraftSave').disabled = true; errorNode.textContent = '';
+      try {
+        const result = await api('/api/work', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: draft.projectId, objective, acceptanceCriteria, clientRequestId: draft.clientRequestId }) });
+        document.getElementById('workDraftDialog').close();
+        addMessage('marcus', `Saved work item ${result.item.id}. Nothing was launched or approved.`);
+        workOverviewReadAt = 0; await load();
+      } catch (error) { errorNode.textContent = `Save not confirmed: ${error.message}. Retrying the same unchanged form will not create a duplicate.`; }
+      finally { draft.pending = false; document.getElementById('workDraftSave').disabled = false; }
     });
     els.contextSelect.addEventListener("change", () => {
       chatContextId = els.contextSelect.value;

@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { spawnSync } from 'node:child_process';
 
 import { AwarenessService } from '../marcus/awareness/awareness_service.js';
 import { AwarenessStore } from '../marcus/awareness/awareness_store.js';
@@ -173,5 +174,6 @@ test('desktop visualizer retains the last confirmed Codex ledger during relay ga
     .map((match) => match[1])
     .find((script) => script.includes('function retainCodexWorkspaces'));
   assert.ok(inlineScript);
-  assert.doesNotThrow(() => new Function(inlineScript));
+  const syntax = spawnSync(process.execPath, ['--check', '--input-type=module'], { input: inlineScript, encoding: 'utf8', windowsHide: true });
+  assert.equal(syntax.status, 0, syntax.stderr);
 });

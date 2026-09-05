@@ -86,6 +86,14 @@ test('constitution work APIs retain real server owner/business gates and isolate
     const registry = await (await call('/api/project-registry', { canonicalName: 'Scoped constitution HTTP test', projectId: 'constitution-http' })).json();
     const project = registry.project || registry.record;
     assert.ok(project?.id, JSON.stringify(registry));
+    assert.equal((await call('/api/work/overview', null, '')).status, 401);
+    const overviewResponse = await call(`/api/work/overview?projectId=${encodeURIComponent(project.id)}`);
+    assert.equal(overviewResponse.headers.get('cache-control'), 'no-store');
+    const overview = await overviewResponse.json();
+    assert.equal(overview.projects.length, 1); assert.equal(overview.projects[0].id, project.id);
+    assert.match(overview.reply, /no work-graph items/i);
+    assert.equal((await call(`/api/work/overview?projectId=${encodeURIComponent(project.id)}`, null, 'test-admin-token', { 'x-business-key': 'agency' })).status, 403);
+    assert.equal((await call('/api/work/overview?projectId=not-in-this-business')).status, 404);
     const created = await (await call('/api/work', { projectId: project.id, kind: 'human', objective: 'Review scoped acceptance', acceptanceCriteria: ['Evidence is project scoped'] })).json();
     assert.ok(created.item?.id);
     const populatedCommand = await (await call('/api/marcus/command', { message: 'What needs me?' })).json();
@@ -97,6 +105,7 @@ test('constitution work APIs retain real server owner/business gates and isolate
     assert.equal(view.items.length, 1); assert.equal(view.items[0].id, created.item.id);
     assert.equal((await call('/api/settings', null, issued.token)).status, 401);
     assert.equal((await call('/api/work', null, issued.token)).status, 401);
+    assert.equal((await call('/api/work/overview', null, issued.token)).status, 401);
     assert.equal((await call('/api/collaboration/work', null, issued.token, { 'x-business-key': 'agency' })).status, 403);
     const summary = await (await call('/api/work/operator/summary')).json(); assert.equal(summary.summary.trackedWorkCount, 1);
     const agent = await (await call('/api/work/engineering')).json(); assert.equal(agent.agent.lifecycle, 'inactive');

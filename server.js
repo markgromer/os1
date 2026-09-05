@@ -1126,7 +1126,7 @@ registerOperationsRoutes(app, {
   engine: operationsEngine,
   getBusinessKey: () => getBusinessKeyFromContext(),
 });
-registerWorkRoutes(app, { graph: workGraph, context: workContext, memory: missionMemoryStore, director: engineeringDirector, identities: humanIdentities, execution: durableExecution, operator: proactiveOperator, getBusinessKey: () => getBusinessKeyFromContext() });
+registerWorkRoutes(app, { graph: workGraph, context: workContext, memory: missionMemoryStore, director: engineeringDirector, identities: humanIdentities, execution: durableExecution, operator: proactiveOperator, evidence: projectEvidenceService, getBusinessKey: () => getBusinessKeyFromContext() });
 
 registerMissionMemoryRoutes(app, {
   store: missionMemoryStore,

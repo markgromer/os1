@@ -1,0 +1,48 @@
+.work-overview{background:#0d1420;color:#dce6f4;padding:20px;min-width:0;line-height:1.5;font:14px/1.5 system-ui,sans-serif}.work-hero{border-left:3px solid #9c7cff;padding:4px 0 12px 16px}.work-kicker{color:#b6a0ff;font-size:11px;letter-spacing:.12em;font-weight:700}.work-hero h2{font-size:clamp(20px,2.5vw,30px);line-height:1.2;color:#f2f5ff;margin:10px 0}.work-hero p,.work-section>p,.work-foot{color:#aabbd1}.work-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}.work-stages{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:18px 0}.work-stage{border:1px solid #334059;border-radius:8px;padding:12px;background:#151f30}.work-stage span{display:block;font-size:11px;color:#aabbd1}.work-stage strong{display:block;margin-top:5px;font-size:13px;overflow-wrap:anywhere}.work-stage.verified{border-color:#357c64}.work-coverage{background:#252034;border:1px solid #51416b;border-radius:8px;padding:12px;font-size:13px}.work-counts{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:16px 0}.work-counts span{padding:10px;background:#151f30;border-radius:6px;font-size:11px}.work-counts b{display:block;font-size:23px;color:#f2f5ff}.work-section{padding:16px 0;border-top:1px solid #293449}.work-section h3{margin:0 0 8px;font-size:16px;color:#f2f5ff}.work-item{border:1px solid #344159;border-radius:8px;padding:12px;margin-top:10px;overflow-wrap:anywhere}.work-item>strong{display:block;color:#f2f5ff}.work-item p{font-size:13px;margin:8px 0}.work-tag{display:inline-block;border:1px solid #635385;color:#c8b7ff;font-size:11px;padding:2px 7px;border-radius:12px;margin-top:5px}.work-section a{color:#b9a0ff}.work-section summary{cursor:pointer;color:#c8d5e9}.work-section ul{padding-left:22px}.work-section li{margin:6px 0}.work-report{white-space:pre-wrap;overflow-wrap:anywhere}.work-foot{font-size:12px;border-top:1px solid #293449;padding-top:16px}.work-link{display:grid;gap:8px}.work-link select{max-width:100%;color:#e9edff;background:#162033;padding:10px}.work-dialog{background:#111b2a;color:#e9edff;border:1px solid #635385;border-radius:12px;width:min(560px,90vw);padding:24px}.work-dialog::backdrop{background:#000a}.work-dialog label{display:grid;gap:8px;margin:16px 0}.work-dialog textarea{box-sizing:border-box;width:100%;min-height:100px;background:#0a101b;color:#e9edff;border:1px solid #465572;border-radius:6px;padding:10px}.work-dialog p{color:#aabbd1}.work-dialog .error{color:#ffb2ad}.work-dialog small{color:#bac8dc}@media(max-width:600px){.work-overview{padding:14px}.work-counts{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.work-mode .workspace-header{display:grid;grid-template-columns:minmax(0,1fr);gap:6px;padding:10px 14px}
+.work-mode .workspace-header .top-actions,.work-mode .browser-bar,.work-mode .audit-panel{display:none}
+.work-mode .workspace-header .tabs{display:flex;flex-wrap:nowrap;overflow-x:auto;white-space:nowrap;min-width:0;gap:8px}
+.work-mode .workspace-header .tab{flex:0 0 auto;white-space:nowrap;padding:7px 9px}
+.work-mode .workspace-body{display:grid;grid-template-columns:minmax(0,1fr);min-height:0}
+.work-mode .workspace-body .surface.work-surface{display:block;background:#0d1420;color:#dce6f4;overflow:auto;min-height:0;scrollbar-gutter:stable}
+.work-mode .work-overview .work-hero{background:#0d1420;color:#dce6f4;min-height:0;height:auto}
+.work-mode .work-overview .work-hero h2{color:#f2f5ff}
+.work-mode .work-overview .work-section{background:transparent;color:#dce6f4}
+.work-mode .work-overview p{color:#aabbd1}
+.work-mode .workspace-region{grid-template-rows:auto minmax(0,1fr)30px}
+.work-mode .workspace-header{grid-row:1}
+.work-mode .workspace-body{grid-row:2}
+.work-mode .workspace-status{grid-row:3}
+.work-mode .workspace-header .tabs{height:auto;justify-content:flex-start}
+.work-mode #autoToggle{width:auto;min-width:110px;height:auto;padding:4px 8px;border-radius:6px;font-size:11px}
+@media(orientation:landscape){
+  .work-mode .display{height:100vh;grid-template-columns:minmax(0,1fr)360px;grid-template-rows:58px auto minmax(200px,1fr)180px;grid-template-areas:"os os" "attention attention" "workspace control" "dock control";gap:8px;padding:8px}
+  .work-mode .os-strip{height:58px;grid-template-columns:190px minmax(0,1fr)320px;padding:0 10px;gap:8px}
+  .work-mode .os-quick-actions{display:none}
+  .work-mode .os-right{gap:8px;flex-wrap:wrap;font-size:10px}
+  .work-mode .attention-banner{grid-area:attention;display:flex;align-items:center;gap:10px;background:#1d1924;border:1px solid #52416b;border-radius:6px;padding:8px 12px}
+  .work-mode .attention-banner[hidden]{display:none}
+  .work-mode .attention-copy{min-width:0;flex:1}
+  .work-mode .attention-copy strong{font-size:12px}
+  .work-mode .attention-copy p,.work-mode .attention-icon{display:none}
+  .work-mode .attention-actions{display:flex;gap:6px}
+  .work-mode .attention-actions .btn{font-size:11px;padding:5px 7px}
+  .work-mode .control-panel{display:flex;flex-direction:column;gap:8px;min-height:0;overflow:hidden;padding:0}
+  .work-mode .control-head{flex:0 0 auto;min-height:65px;padding:8px;font-size:11px}
+  .work-mode .control-title h1{font-size:14px}
+  .work-mode .control-actions{display:none}
+  .work-mode .builds{display:grid;grid-template-rows:30px minmax(0,1fr);min-height:0;flex:1 1 auto;overflow:hidden}
+  .work-mode .builds .ops-mini{display:none}
+  .work-mode .build-list{overflow:auto;min-height:0}
+  .work-mode .build-card{min-height:120px;height:auto}
+  .work-mode .build-main{min-height:100px;height:auto;padding:8px}
+  .work-mode .build-extra{display:none}
+  .work-mode .chat-card{flex:0 0 220px;min-height:0;display:grid;grid-template-rows:30px minmax(0,1fr)28px 55px}
+  .work-mode .composer{grid-template-columns:95px minmax(0,1fr)26px 28px;gap:4px;padding:5px}
+  .work-mode .composer textarea{height:44px}
+  .work-mode .dock{min-height:0;grid-template-rows:30px minmax(0,1fr)28px}
+  .work-mode .dock-head{font-size:11px}.work-mode .dock-head h2{font-size:12px}
+  .work-mode .dock-card{font-size:11px;padding:6px}.work-mode .dock-card h3{font-size:13px}
+  .work-mode .dock-card>.row{display:none}.work-mode .dock-card .btn{font-size:10px;padding:4px}
+  .work-mode .dock-foot{font-size:10px;gap:6px}
+}
