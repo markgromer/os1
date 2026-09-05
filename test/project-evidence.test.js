@@ -144,6 +144,7 @@ test('GitHub ingestion collects repositories, commits, branches, pull requests, 
       if (endpoint.includes('/branches?')) return [{ name: 'main', protected: true, commit: { sha: 'a'.repeat(40) } }];
       if (endpoint.includes('/pulls?')) return [{ number: 7, title: 'Evidence engine', state: 'open', draft: false, created_at: '2026-08-04T10:00:00Z', updated_at: '2026-08-05T17:00:00Z', user: { login: 'markgromer' }, head: { ref: 'evidence', sha: 'a'.repeat(40) }, base: { ref: 'main' }, html_url: 'https://github.com/markgromer/os1/pull/7' }];
       if (endpoint.includes('/issues?')) return [{ number: 9, title: 'Track focus shifts', state: 'open', created_at: '2026-08-01T10:00:00Z', updated_at: '2026-08-05T16:00:00Z', user: { login: 'markgromer' }, html_url: 'https://github.com/markgromer/os1/issues/9' }];
+      if (endpoint.includes('/deployments?')) return [];
       if (endpoint.includes('/actions/runs?')) return { workflow_runs: [{ id: 100, name: 'Tests', status: 'completed', conclusion: 'success', head_branch: 'main', head_sha: 'a'.repeat(40), created_at: '2026-08-05T18:05:00Z', updated_at: '2026-08-05T18:10:00Z', run_attempt: 1, actor: { login: 'github-actions' } }] };
       throw new Error(`Unexpected endpoint ${endpoint}`);
     };

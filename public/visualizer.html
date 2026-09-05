@@ -1016,7 +1016,7 @@
       .sync-foot { grid-area: sync; }
     }
   </style>
-  <link rel="stylesheet" href="/work-status-view.css?v=2">
+  <link rel="stylesheet" href="/work-status-view.css?v=3">
 </head>
 <body>
   <div class="display">
@@ -1051,6 +1051,7 @@
     <main class="workspace-region" aria-label="Marcus workspace">
       <section class="workspace-header">
         <div class="workspace-title">
+          <label class="project-switcher">Project<select id="projectPicker" aria-label="Choose project"></select></label>
           <span class="glyph">*</span>
           <div>
             <h1>MARCUS WORKSPACE</h1>
@@ -1060,7 +1061,7 @@
         <nav class="tabs" aria-label="Workspace tabs">
           <button class="tab active" type="button" data-tab="browser">Browser</button>
           <button class="tab" type="button" data-tab="approvals">Approvals <span class="tab-count" id="publicationApprovalCount" hidden>0</span></button>
-          <button class="tab" type="button" data-tab="preview">Work &amp; evidence</button>
+          <button class="tab" type="button" data-tab="preview">Project brief</button>
           <button class="tab" type="button" data-tab="github">GitHub</button>
           <button class="tab" type="button" data-tab="codex">Codex</button>
           <button class="tab" type="button" data-tab="tests">Tests</button>
@@ -1200,7 +1201,7 @@
   </dialog>
   <script src="/marcus-realtime.js"></script>
   <script type="module">
-    import { matchWorkProject, reportState, evidenceStages, workOverviewHtml } from '/work-status-view.js?v=2';
+    import { matchWorkProject, reportState, evidenceStages, workOverviewHtml, projectBrief } from '/work-status-view.js?v=3';
     const els = {
       clock: document.getElementById("clock"),
       codexDot: document.getElementById("codexDot"),
@@ -1266,6 +1267,7 @@
     let markHasControl = false;
     let workOverview = null;
     let workOverviewReadAt = 0;
+    let evidenceRefreshPending = false;
     let workDraft = null;
     const requestedWorkProjectId = new URL(window.location.href).searchParams.get('project') || '';
     let inspectedRegistryId = requestedWorkProjectId;
@@ -1392,7 +1394,7 @@
     }
 
     function stateLabel(state) {
-      return ({ needs_mark: "Handoff needs review", blocked: "Reported blocker", verifying: "Verification reported", complete: "Result reported", moving: "Activity reported", losing_thread: "Stale", archived: "Archived", monitoring: "Watching" })[state] || "Watching";
+      return ({ needs_mark: "Handoff received", blocked: "Reported blocker", verifying: "Verification reported", complete: "Result reported", moving: "Activity reported", losing_thread: "Stale", archived: "Archived", monitoring: "Watching" })[state] || "Watching";
     }
     function stateTone(state) {
       if (state === "complete") return "ok";
@@ -1422,7 +1424,7 @@
     }
     function nextFromCodex(item, state) {
       const handoff = text(item.handoffStatus);
-      if (/ready_for_mark|needs/i.test(handoff)) return "Mark reviews the handoff and decides whether Marcus should continue.";
+      if (/ready_for_mark|needs/i.test(handoff)) return "Read the session handoff alongside independent evidence.";
       if (/blocked|failed/i.test(handoff) || state === "blocked") return "Marcus should inspect the blocker and prepare a recovery prompt.";
       if (state === "complete") return "Marcus audits the result before any ship decision.";
       if (state === "verifying") return "Marcus checks evidence and reruns failed scenarios.";
@@ -1635,7 +1637,7 @@
         const codexIds = new Set(relayCodexProjects.map((project) => project.id));
         const codexProjects = projects.filter((project) => project.source === "codex" && codexIds.has(project.id));
         const knownRegistryIds = new Set(projects.map((project) => matchWorkProject(project, workOverview)?.id).filter(Boolean));
-        for (const registered of workOverview?.projects || []) if ((registered.workCount || registered.id === inspectedRegistryId) && !projects.some((project) => project.id === `work-${registered.id}`) && (!knownRegistryIds.has(registered.id) || registered.id === inspectedRegistryId)) projects.push({ id: `work-${registered.id}`, name: registered.name, source: 'work', state: 'monitoring', label: 'Tracked work', raw: { projectRegistryId: registered.id }, workspacePath: registered.workspacePath, current: 'Durable project work', next: 'Inspect readiness and evidence.', request: '', response: '', evidence: [], updatedAt: workOverview.observedAt });
+        for (const registered of workOverview?.projects || []) if ((registered.workCount || registered.needsYouCount || registered.id === inspectedRegistryId) && !knownRegistryIds.has(registered.id)) projects.push({ id: `work-${registered.id}`, name: registered.name, source: 'work', state: 'monitoring', label: 'Tracked work', raw: { projectRegistryId: registered.id }, workspacePath: registered.workspacePath, current: registered.objective || 'Durable project work', next: 'Inspect readiness and evidence.', request: '', response: '', evidence: [], updatedAt: workOverview.observedAt });
         snapshot = { projects, codexProjects, operations: arr(operations.operations), jobs: arr(jobs.jobs), desktop: effectiveDesktop, awareness, settings, github, cloudflare, google, browser, publications: arr(publications.publications) };
         markHasControl = browser?.control?.owner === "mark";
         if (!selectedId || !projects.some((p) => p.id === selectedId)) selectedId = projects.find((p) => matchWorkProject(p, workOverview)?.id === inspectedRegistryId)?.id || codexProjects[0]?.id || projects[0]?.id || "";
@@ -1664,7 +1666,7 @@
       return {
         building: projects.filter((p) => p.state === "moving").length,
         auditing: projects.filter((p) => p.state === "verifying").length,
-        needs: projects.filter((p) => p.state === "needs_mark").length,
+        needs: (workOverview?.projects || []).reduce((sum, p) => sum + p.needsYouCount, 0),
         decaying: projects.filter((p) => ["blocked", "losing_thread"].includes(p.state)).length,
       };
     }
@@ -1686,7 +1688,7 @@
       els.countAuditing.textContent = counts.auditing;
       els.countNeeds.textContent = counts.needs;
       els.countDecaying.textContent = counts.decaying;
-      els.orchestrationLine.textContent = `Orchestrating ${counts.building + counts.auditing} live build${counts.building + counts.auditing === 1 ? "" : "s"}`;
+      els.orchestrationLine.textContent = `Following ${codexCount} existing sessions`;
       const actionablePublications = snapshot.publications.filter((item) => ["pending_approval", "failed"].includes(item.status)).length;
       els.publicationApprovalCount.hidden = actionablePublications === 0;
       els.publicationApprovalCount.textContent = actionablePublications;
@@ -1698,7 +1700,7 @@
         preview: Boolean(selected),
         github: snapshot.github?.configured === true,
         codex: codexCount > 0,
-        tests: Boolean(matchWorkProject(selected || {}, workOverview)?.operations.some((row) => row.verification.length)),
+        tests: Boolean(matchWorkProject(selected || {}, workOverview)?.release?.checks.count || matchWorkProject(selected || {}, workOverview)?.operations.some((row) => row.verification.length)),
         evidence: Boolean(selected?.evidence?.length),
       };
       document.querySelectorAll(".tab[data-tab]").forEach((tab) => {
@@ -1710,6 +1712,7 @@
       const project = selectedProject();
       const surfaceKey = `${loadedBusinessKey}:${project?.id || ''}:${activeTab}`;
       const surfaceScroll = surfaceKey === renderedSurfaceKey ? els.workspaceSurface.scrollTop : 0;
+      const openDetails = surfaceKey === renderedSurfaceKey ? [...els.workspaceSurface.querySelectorAll('details[data-brief-detail][open]')].map((node) => node.dataset.briefDetail) : [];
       renderedSurfaceKey = surfaceKey;
       document.body.classList.toggle('work-mode', activeTab === 'preview');
       els.workspaceSurface.classList.toggle('work-surface', activeTab === 'preview');
@@ -1738,23 +1741,24 @@
         return;
       }
       els.workspaceHeading.textContent = project.name;
-      els.workspaceCrumb.textContent = `${projectTypeLabel(project)} · ${project.branch ? `Branch ${project.branch}` : "No Git branch or deployment expected unless applicable"}`;
+      els.workspaceCrumb.textContent = matchWorkProject(project, workOverview)?.repository || 'Existing session · provider records shown when linked';
       els.workspaceUrl.value = project.workspacePath || project.raw?.previewUrl || `marcus://workspace/${project.id}`;
       els.workspaceStatus.textContent = workspaceStatus(project);
       els.scenarioStatus.textContent = `${stateLabel(project.state)} - ${age(project.updatedAt)}`;
       els.workspaceSurface.innerHTML = surfaceHtml(project);
+      els.workspaceSurface.querySelectorAll('details[data-brief-detail]').forEach((node) => { node.open = openDetails.includes(node.dataset.briefDetail); });
       els.workspaceSurface.scrollTop = surfaceScroll;
       els.auditPanel.innerHTML = auditHtml(project);
       bindDynamicButtons();
     }
     function renderAttention() {
-      const needs = snapshot.projects.filter((project) => ["needs_mark", "complete"].includes(project.state));
+      const needs = snapshot.projects.filter((project) => projectBrief(project, workOverview).needs > 0);
       const project = needs[0];
       els.attentionBanner.hidden = !project;
       if (!project) return;
       els.attentionCount.textContent = `Needs you ${needs.length}`;
-      els.attentionTitle.textContent = outcomeLine(project);
-      els.attentionSummary.textContent = 'A reported status needs review. Check linked work and receipts before accepting an outcome.';
+      els.attentionTitle.textContent = `${project.name}: ${projectBrief(project, workOverview).headline}`;
+      els.attentionSummary.textContent = 'A linked work or execution record needs attention. Review its exact scope before acting.';
       els.attentionActions.innerHTML = `
         <button class="btn primary" type="button" data-attention-project="${esc(project.id)}">${esc(primaryAuditAction(project).label)}</button>
         <button class="btn" type="button" data-chat-project="${esc(project.id)}">Discuss</button>
@@ -2093,11 +2097,7 @@
       }
     }
     function workspaceStatus(project) {
-      if (project.state === "needs_mark") return `${project.name} needs Mark before Marcus continues.`;
-      if (project.state === "blocked") return `${project.name} is blocked; Marcus should prepare recovery.`;
-      if (project.state === "complete") return `${project.name} has a reported result; verification and deployment must be checked separately.`;
-      if (project.state === "verifying") return `${project.name} is under audit or verification.`;
-      return `${project.name} is live; Marcus is watching Codex, GitHub, and desktop evidence.`;
+      return projectBrief(project, workOverview).next;
     }
     function surfaceHtml(project) {
       if (activeTab === "codex") return codeSurface(project);
@@ -2120,7 +2120,7 @@
       if (Number.isFinite(idle) && idle > 180) return;
       if (["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName || "")) return;
       const active = activeDesktopProject();
-      const needs = snapshot.projects.filter((project) => project.state === "needs_mark").slice(0, 2);
+      const needs = snapshot.projects.filter((project) => projectBrief(project, workOverview).needs > 0).slice(0, 2);
       if (!active && !needs.length) return;
       const parts = [];
       if (active) parts.push(`I see you working in ${active.name}. ${needLine(active)}`);
@@ -2174,18 +2174,10 @@
       return `${project.name} is being watched for meaningful changes.`;
     }
     function needLine(project) {
-      if (project.state === "needs_mark") return "Review the evidence, then accept the result or request changes.";
-      if (project.state === "blocked") return "Review the blocker and ask Marcus for the smallest recovery step.";
-      if (project.state === "complete") return "Review the evidence, then accept and archive the result or request changes.";
-      if (project.state === "verifying") return "No decision is required while Marcus verifies the result.";
-      return "No action is required unless you want to redirect or close this work.";
+      return projectBrief(project, workOverview).next;
     }
     function recommendationLine(project) {
-      if (project.state === "needs_mark") return "Review the result, then accept and archive it if it matches your intent.";
-      if (project.state === "blocked") return "Ask for recovery.";
-      if (project.state === "complete") return "Review the result, then accept and archive it if it matches your intent.";
-      if (project.state === "verifying") return "Review evidence first.";
-      return "Keep watching.";
+      return projectBrief(project, workOverview).next;
     }
     function isPcConfiguration(project) {
       return /pc|computer|machine|access|permission|marks_pc|c:\\/i.test(`${project.name} ${project.request} ${project.current}`);
@@ -2199,7 +2191,7 @@
       const signals = splitSignals(project);
       const risks = signals.filter((line) => /risk|block|fail|missing|uncommitted|remaining|cannot|needs|waiting|approval|unsafe|security|credential|error/i.test(line));
       if (risks.length) return uniqueLines(risks, 3);
-      if (project.state === "needs_mark") return ["Marcus needs your decision before continuing."];
+      if (project.state === "needs_mark") return ["A session handoff is a report, not an approval requirement."];
       if (project.state === "complete") return ["Only close this if the result matches your intent."];
       return ["No major risk surfaced in the visible evidence."];
     }
@@ -2211,7 +2203,6 @@
       const primary = primaryAuditAction(project);
       return `
         <button class="btn primary" type="button" data-project-command="${esc(primary.command)}" data-project-id="${esc(project.id)}">${esc(primary.label)}</button>
-        ${["needs_mark", "complete"].includes(project.state) ? `<button class="btn" type="button" data-project-command="close" data-project-id="${esc(project.id)}">Accept &amp; archive</button>` : ""}
         <button class="btn" type="button" data-project-command="fix" data-project-id="${esc(project.id)}">Request changes</button>
         <button class="btn" type="button" data-chat-project="${esc(project.id)}">Discuss</button>`;
     }
@@ -2304,6 +2295,8 @@
       return out;
     }
     function testEvidence(project) {
+      const release = matchWorkProject(project, workOverview)?.release;
+      if (release?.checks.count) return [`Recorded CI for commit ${release.commit.slice(0, 8)}: ${release.checks.passed}/${release.checks.count} runs passed. This is not owner acceptance.`, ...release.checks.runs.map((run) => `${run.name}: ${run.status}. ${run.url}`)];
       if (project.state === "verifying") return ["Verification is currently active or inferred from test/audit signals.", ...project.evidence];
       if (project.state === "complete") return ["Completion was reported, but ship readiness still requires audit evidence.", ...project.evidence];
       return ["No test pass has been treated as authoritative for this project yet.", ...project.evidence];
@@ -2321,7 +2314,7 @@
       ];
     }
     function auditFinding(project) {
-      if (project.state === "needs_mark") return "Progress depends on a Mark decision. Marcus should present the exact action, risk, rollback, and evidence before continuing.";
+      if (project.state === "needs_mark") return "The session reported a handoff. Only a linked decision record can establish an approval requirement.";
       if (project.state === "blocked") return "The project has a blocker or failed handoff. Marcus should preserve the evidence and prepare the smallest recovery assignment.";
       if (project.state === "complete") return "Codex reported a result. This alone establishes neither verification, deployment nor acceptance.";
       if (project.state === "verifying") return "Verification is underway. Failed findings should become a correction pass, not a vague follow-up.";
@@ -2335,16 +2328,16 @@
       return { label: "Keep watching", command: "watch" };
     }
     function auditHeading(project) {
-      if (project.state === "needs_mark") return "YOUR DECISION IS NEEDED";
+      if (project.state === "needs_mark") return "SESSION HANDOFF RECEIVED";
       if (project.state === "blocked") return "BUILD NEEDS HELP";
       if (project.state === "complete") return "READY FOR YOUR REVIEW";
       if (project.state === "verifying") return "VERIFYING THE RESULT";
       return "NO DECISION NEEDED";
     }
     function auditSummary(project) {
-      if (project.state === "needs_mark") return "Work is paused until you choose the next step.";
+      if (project.state === "needs_mark") return projectBrief(project, workOverview).next;
       if (project.state === "blocked") return "Progress stopped; Marcus can prepare a recovery pass.";
-      if (project.state === "complete") return "The work reports complete and is waiting for your acceptance.";
+      if (project.state === "complete") return "The session reports a result; this is not verified completion or acceptance.";
       if (project.state === "verifying") return "Checks are running; Marcus will surface failures or a final review.";
       return "Marcus is monitoring this work. You only need to act if its status changes.";
     }
@@ -2395,7 +2388,7 @@
       const savedWorkPolicy = matchWorkProject(project, workOverview)?.engineering;
       document.getElementById('autoState').textContent = !savedWorkPolicy ? 'Unknown · project not linked' : savedWorkPolicy.autoAdvance ? 'Enabled by saved project policy' : 'Off · no automatic advancement';
       els.dockContext.textContent = project.name;
-      els.dockPass.textContent = project.state === "verifying" ? "AUDIT" : project.state === "complete" ? "REVIEW" : project.state === "needs_mark" ? "APPROVAL" : "LIVE";
+      els.dockPass.textContent = projectBrief(project, workOverview).needs ? "NEEDS ATTENTION" : "SESSION REPORT";
       els.dockPass.className = `state-pill ${stateTone(project.state)}`;
       els.dockElapsed.textContent = `Updated ${ageWords(project.updatedAt)}`;
       els.branchState.textContent = project.branch ? `Branch ${project.branch}` : isPcConfiguration(project) ? "Git branch: not applicable" : project.workspacePath || "No branch associated";
@@ -2448,6 +2441,16 @@ els.dockNext.innerHTML = `<span class="eyebrow">4 Next</span><div><div class="ne
       bindDynamicButtons();
     }
     function renderContextOptions() {
+      const picker = document.getElementById('projectPicker');
+      if (document.activeElement !== picker) {
+        picker.innerHTML = snapshot.projects.map((p) => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('');
+        picker.value = selectedId;
+      }
+      picker.onchange = () => {
+        selectedId = picker.value; chatContextId = selectedId; activeTab = 'preview';
+        inspectedRegistryId = matchWorkProject(selectedProject() || {}, workOverview)?.id || '';
+        render();
+      };
       if (chatContextId && chatContextId !== "__browser__" && !snapshot.projects.some((p) => p.id === chatContextId)) chatContextId = "";
       els.contextSelect.innerHTML = `<option value="">All projects</option>${snapshot.projects.slice(0, 20).map((p) => `<option value="${esc(p.id)}">${esc(compact(p.name, 28))}</option>`).join("")}`;
       els.contextSelect.value = chatContextId;
@@ -2471,7 +2474,24 @@ els.dockNext.innerHTML = `<span class="eyebrow">4 Next</span><div><div class="ne
           finally { workStartRequests.delete(item.id); workOverviewReadAt = 0; await load(); }
         };
       });
-      document.querySelectorAll('[data-work-refresh]').forEach((button) => button.onclick = async () => { workOverviewReadAt = 0; await load(); });
+      document.querySelectorAll('[data-work-refresh]').forEach((button) => {
+        button.disabled = evidenceRefreshPending;
+        button.textContent = evidenceRefreshPending ? 'Refreshing receipts…' : 'Refresh evidence';
+        button.onclick = async () => {
+          if (evidenceRefreshPending) return;
+          const linked = matchWorkProject(selectedProject() || {}, workOverview);
+          const refreshBusiness = businessKey(); const refreshProject = selectedId;
+          evidenceRefreshPending = true; button.disabled = true; button.textContent = 'Refreshing receipts…';
+          try {
+            if (linked) {
+              const refreshed = await api('/api/project-evidence/refresh', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectRegistryId: linked.id }) });
+              if (refreshed.result?.skipped && refreshBusiness === businessKey() && refreshProject === selectedId) addMessage('marcus', 'Provider refresh was not available for this project. Check its registered repository and GitHub connection; saved receipts are unchanged.');
+            }
+          } catch (error) {
+            if (refreshBusiness === businessKey() && refreshProject === selectedId) addMessage('marcus error', `Evidence refresh failed: ${error.message}. Existing receipts are historical, not a fresh check.`);
+          } finally { evidenceRefreshPending = false; workOverviewReadAt = 0; await load(); }
+        };
+      });
       document.querySelectorAll('[data-work-question]').forEach((button) => button.onclick = async () => {
         const project = selectedProject(); if (!project) return;
         setChatContext(project.id); await sendToMarcus('What needs me?');

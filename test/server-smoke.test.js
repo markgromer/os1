@@ -91,7 +91,7 @@ test('constitution work APIs retain real server owner/business gates and isolate
     assert.equal(overviewResponse.headers.get('cache-control'), 'no-store');
     const overview = await overviewResponse.json();
     assert.equal(overview.projects.length, 1); assert.equal(overview.projects[0].id, project.id);
-    assert.match(overview.reply, /no work-graph items/i);
+    assert.match(overview.reply, /No graph work is linked/i);
     assert.equal((await call(`/api/work/overview?projectId=${encodeURIComponent(project.id)}`, null, 'test-admin-token', { 'x-business-key': 'agency' })).status, 403);
     assert.equal((await call('/api/work/overview?projectId=not-in-this-business')).status, 404);
     const created = await (await call('/api/work', { projectId: project.id, kind: 'human', objective: 'Review scoped acceptance', acceptanceCriteria: ['Evidence is project scoped'] })).json();
@@ -850,6 +850,13 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     }) });
     const registry = (await registryResponse.json()).project;
     assert.equal(registryResponse.status, 201);
+    const scopedRefresh = await fetch(`${base}/api/project-evidence/refresh`, { method: 'POST', headers: agencyHeaders, body: JSON.stringify({ projectRegistryId: registry.id }) });
+    assert.equal(scopedRefresh.status, 200);
+    assert.equal((await scopedRefresh.json()).result.projectRegistryId, registry.id);
+    const wrongBusinessRefresh = await fetch(`${base}/api/project-evidence/refresh`, { method: 'POST', headers: { ...agencyHeaders, 'x-business-key': 'personal' }, body: JSON.stringify({ projectRegistryId: registry.id }) });
+    assert.equal(wrongBusinessRefresh.status, 404);
+    const unauthedRefresh = await fetch(`${base}/api/project-evidence/refresh`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectRegistryId: registry.id }) });
+    assert.equal(unauthedRefresh.status, 401);
     const manualEvidence = await fetch(`${base}/api/project-evidence/ingest`, { method: 'POST', headers: agencyHeaders, body: JSON.stringify({
       projectRegistryId: registry.id,
       source: 'manual',
