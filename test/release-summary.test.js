@@ -22,6 +22,9 @@ test('release matches CI by nonempty commit and latest observation of each run',
   assert.equal(result.checks.allRecordedPassed, false);
   assert.equal(summarizeRelease([check('missing', '')]).checks.count, 0);
   assert.equal(summarizeRelease([check('run', 'head')], { defaultBranchHead: 'head' }).checks.passed, 1);
+  const missingDeploymentCommit = summarizeRelease([deploy('missing-sha', now, now, 'success', ''), check('head-run', 'head')], { defaultBranchHead: 'head' });
+  assert.equal(missingDeploymentCommit.commit, '');
+  assert.equal(missingDeploymentCommit.checks.count, 0);
 });
 
 test('new failed deployment wins; delayed inactive status on older deployment does not override new release', () => {

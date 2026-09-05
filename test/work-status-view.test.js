@@ -68,6 +68,8 @@ test('deployment provider errors suppress a current-success headline without era
   const row = { ...linked, deployment: { type: 'production_published', status: 'success' },
     release: { refreshErrors: [{ endpoint: 'deployment_status' }] } };
   assert.equal(projectBrief(project, { ...overview, projects: [row] }).deployed, false);
+  row.release.refreshErrors = [{ endpoint: 'deployments' }];
+  assert.equal(projectBrief(project, { ...overview, projects: [row] }).deployed, false);
 });
 
 test('project status shortcut uses a read-only endpoint and drops a reply after a context switch', async () => {

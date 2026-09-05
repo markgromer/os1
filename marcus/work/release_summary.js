@@ -5,7 +5,7 @@ export function summarizeRelease(receipts, sourceState = {}) {
     .sort((a, b) => String(b.metadata?.deploymentCreatedAt || b.timestamp).localeCompare(String(a.metadata?.deploymentCreatedAt || a.timestamp))
       || String(b.timestamp).localeCompare(String(a.timestamp)));
   const deployment = deployments[0] || null;
-  const commit = deployment?.deployment?.commitSha || deployment?.commitSha || sourceState.defaultBranchHead || '';
+  const commit = deployment ? deployment.deployment?.commitSha || deployment.commitSha || '' : sourceState.defaultBranchHead || '';
   const runs = new Map();
   for (const row of receipts.filter((entry) => commit && entry.source === 'github' && entry.commitSha === commit
     && ['build_run', 'test_run', 'lint_run', 'typecheck_run'].includes(entry.type))
