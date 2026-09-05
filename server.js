@@ -1215,18 +1215,23 @@ app.get('/api/codex-monitor/jobs/:jobId', async (req, res) => {
 
 app.get('/api/codex/jobs', async (_req, res) => {
   if (!desktopCodexAdapter) return res.json({ ok: true, enabled: false, jobs: [] });
-  res.json({ ok: true, enabled: true, jobs: await desktopCodexAdapter.listJobs({ limit: 50 }) });
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({ ok: true, enabled: true, jobs: await desktopCodexAdapter.listJobs({ limit: 50, businessKey: getBusinessKeyFromContext() }) });
 });
 
 app.post('/api/codex/jobs/:jobId/followup', async (req, res) => {
   if (!desktopCodexAdapter) return res.status(404).json({ ok: false, error: 'Desktop Codex is not enabled.' });
-  const message = typeof req.body?.message === 'string' ? req.body.message.trim().slice(0, 8_000) : '';
+  const message = typeof req.body?.message === 'string' ? req.body.message.trim() : '';
   if (!message) return res.status(400).json({ ok: false, error: 'Follow-up message is required.' });
+  if (message.length > 8_000) return res.status(400).json({ ok: false, definite: true, error: 'Follow-up messages must be at most 8,000 characters; nothing was sent.' });
+  const requestId = typeof req.body?.requestId === 'string' ? req.body.requestId : '';
+  if (!/^[a-zA-Z0-9_-]{16,100}$/.test(requestId)) return res.status(400).json({ ok: false, definite: true, error: 'A unique send request id is required. Refresh the display before retrying.' });
   try {
-    const job = await desktopCodexAdapter.sendFollowup({ jobId: req.params.jobId }, message);
-    res.status(202).json({ ok: true, job });
+    const result = await desktopCodexAdapter.queueFollowup(req.params.jobId, message, { requestId, businessKey: getBusinessKeyFromContext() });
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(202).json({ ok: true, ...result });
   } catch (error) {
-    res.status(error?.code === 'CODEX_JOB_NOT_FOUND' ? 404 : 400).json({ ok: false, error: String(error?.message || error) });
+    res.status(error.statusCode || 503).json({ ok: false, definite: error.definite === true, error: String(error?.message || error) });
   }
 });
 
@@ -15855,8 +15860,10 @@ function getRecentCodexWorkspacesForDesktopContext() {
   }
   let workspaces = [];
   try {
-    workspaces = discoverRecentCodexWorkspaces({ maxResults: 12 }).map((item) => ({
+    workspaces = discoverRecentCodexWorkspaces({ maxResults: 30, maxPerWorkspace: 4 }).map((item) => ({
       sessionId: typeof item.sessionId === 'string' ? item.sessionId.slice(0, 160) : '',
+      runtimeState: ['running', 'idle', 'interrupted'].includes(item.runtimeState) ? item.runtimeState : 'unknown',
+      runtimeStateAt: typeof item.runtimeStateAt === 'string' ? item.runtimeStateAt.slice(0, 40) : '',
       workspacePath: typeof item.workspacePath === 'string' ? item.workspacePath.slice(0, 512) : '',
       folderName: typeof item.folderName === 'string' ? item.folderName.slice(0, 128) : '',
       projectName: typeof item.projectName === 'string' ? item.projectName.slice(0, 160) : '',
@@ -16009,11 +16016,13 @@ app.post('/api/desktop-context/relay', (req, res) => {
 
   const hasCodexWorkspaceReport = Array.isArray(req.body?.codexWorkspaces);
   const reportedCodexWorkspaces = (hasCodexWorkspaceReport ? req.body.codexWorkspaces : [])
-    .slice(0, 12)
+    .slice(0, 30)
     .map((raw) => {
       const item = raw && typeof raw === 'object' ? raw : {};
       return {
         sessionId: typeof item.sessionId === 'string' ? item.sessionId.trim().slice(0, 160) : '',
+        runtimeState: ['running', 'idle', 'interrupted'].includes(item.runtimeState) ? item.runtimeState : 'unknown',
+        runtimeStateAt: typeof item.runtimeStateAt === 'string' ? item.runtimeStateAt.slice(0, 40) : '',
         workspacePath: typeof item.workspacePath === 'string' ? item.workspacePath.trim().slice(0, 512) : '',
         folderName: typeof item.folderName === 'string' ? item.folderName.trim().slice(0, 128) : '',
         projectName: typeof item.projectName === 'string' ? item.projectName.trim().slice(0, 160) : '',

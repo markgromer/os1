@@ -170,7 +170,7 @@ test('desktop visualizer retains the last confirmed Codex ledger during relay ga
   assert.match(html, /function retainCodexWorkspaces\(desktop\)/);
   assert.match(html, /lastConfirmedCodexWorkspaces/);
   assert.match(html, /codexWorkspacesStale: true/);
-  assert.match(html, /retained while reconnecting/);
+  assert.ok(html.includes('Relay reconnecting · projects retained'));
   const inlineScript = [...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)]
     .map((match) => match[1])
     .find((script) => script.includes('function retainCodexWorkspaces'));

@@ -101,7 +101,7 @@ test('project status shortcut uses a read-only endpoint and drops a reply after 
 test('dedicated display loads the new surface, reads saved policy and parses as a module body', async () => {
   const html = await fs.readFile(new URL('../public/visualizer.html', import.meta.url), 'utf8');
   const script = html.match(/<script type="module">([\s\S]*?)<\/script>/)[1];
-  new vm.Script(script.replace(/^\s*import .*?;\s*$/m, ''));
+  new vm.Script(script.replace(/^\s*import .*?;\s*$/gm, ''));
   assert.match(script, /workOverviewHtml\(project, workOverview\)/);
   assert.match(script, /activeFilter === "needs"\) return attentionProjects\(snapshot.projects, workOverview\)/);
   assert.match(script, /api\('\/api\/work\/overview'\)/);

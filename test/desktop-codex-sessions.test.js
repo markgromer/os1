@@ -62,6 +62,14 @@ test('Codex workspace discovery reads bounded metadata plus assistant handoff an
     assert.match(readSessionRollingContext(newerFile)[2].content, /Fixed the live blocker/);
     assert.match(readSessionOriginalUserRequest(newerFile).request, /portrait decision check/);
     assert.equal(readSessionHandoffSummary(newerFile).status, 'ready_for_mark');
+    assert.equal(result[0].runtimeState, 'unknown', 'assistant completion prose is not runtime status');
+    await fs.appendFile(newerFile, JSON.stringify({ type: 'event_msg', timestamp: now.toISOString(), payload: { type: 'task_started' } }) + '\n');
+    let runtime = discoverRecentCodexWorkspaces({ codexHome, nowMs: now.getTime(), maxResults: 5, maxPerWorkspace: 4 });
+    assert.equal(runtime.filter((item) => item.workspacePath === workspace).length, 2);
+    assert.equal(runtime.find((item) => item.sessionId === 'session-new').runtimeState, 'running');
+    await fs.appendFile(newerFile, JSON.stringify({ type: 'event_msg', timestamp: now.toISOString(), payload: { type: 'task_complete' } }) + '\n');
+    runtime = discoverRecentCodexWorkspaces({ codexHome, nowMs: now.getTime(), maxResults: 5 });
+    assert.equal(runtime.find((item) => item.sessionId === 'session-new').runtimeState, 'idle');
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }

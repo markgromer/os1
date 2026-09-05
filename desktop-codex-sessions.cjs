@@ -299,6 +299,7 @@ function parseSessionMetadata(filePath, nowMs, maxAgeMs) {
   const originalRequest = readSessionOriginalUserRequest(filePath);
   const latestRequest = readSessionLatestUserRequest(filePath);
   const rollingContext = readSessionRollingContext(filePath);
+  const runtime = readSessionRuntimeState(filePath);
   return {
     sessionId: String(payload.id || '').trim().slice(0, 160),
     workspacePath,
@@ -308,6 +309,7 @@ function parseSessionMetadata(filePath, nowMs, maxAgeMs) {
     source: String(payload.source || '').trim().slice(0, 80),
     originator: String(payload.originator || '').trim().slice(0, 120),
     rollingContext,
+    ...runtime,
     ...(originalRequest ? { originalUserRequest: originalRequest.request, originalUserRequestAt: originalRequest.requestedAt } : {}),
     ...(latestRequest ? { latestUserRequest: latestRequest.request, latestUserRequestAt: latestRequest.requestedAt } : {}),
     ...(handoff ? {
@@ -316,6 +318,27 @@ function parseSessionMetadata(filePath, nowMs, maxAgeMs) {
       handoffObservedAt: handoff.observedAt,
     } : {}),
   };
+}
+
+function readSessionRuntimeState(filePath) {
+  let handle;
+  try {
+    handle = fs.openSync(filePath, 'r');
+    const size = fs.fstatSync(handle).size;
+    const bytes = Math.min(MAX_HANDOFF_BYTES, size);
+    const buffer = Buffer.alloc(bytes);
+    fs.readSync(handle, buffer, 0, bytes, Math.max(0, size - bytes));
+    const lines = buffer.toString('utf8').split(/\r?\n/);
+    for (let index = lines.length - 1; index >= 0; index--) {
+      let event;
+      try { event = JSON.parse(lines[index]); } catch { continue; }
+      const type = event.type === 'event_msg' ? event.payload?.type : event.type;
+      const runtimeState = ({ task_started: 'running', turn_started: 'running', 'turn.started': 'running', task_complete: 'idle', task_completed: 'idle', 'turn.completed': 'idle', turn_aborted: 'interrupted', 'turn.failed': 'interrupted' })[type];
+      if (runtimeState) return { runtimeState, runtimeStateAt: typeof event.timestamp === 'string' ? event.timestamp : '' };
+    }
+  } catch { /* Unknown is safer than guessing from assistant prose or editor focus. */ }
+  finally { if (handle !== undefined) try { fs.closeSync(handle); } catch {} }
+  return { runtimeState: 'unknown', runtimeStateAt: '' };
 }
 
 function discoverRecentCodexWorkspaces({

@@ -24,6 +24,11 @@ export function registerAwarenessRoutes(app, { service, getBusinessKey }) {
   const router = express.Router();
   const business = (req) => getBusinessKey(req);
 
+  router.post('/marcus/awareness/worklist', asyncRoute(async (req, res) => {
+    const preference = await service.store.setWorklistPreference(business(req), req.body || {});
+    res.json({ ok: true, preference });
+  }));
+
   router.get('/marcus/awareness', asyncRoute(async (req, res) => {
     const result = await service.feed(business(req), {
       includeArchived: req.query.includeArchived === 'true',

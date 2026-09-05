@@ -1040,7 +1040,8 @@
       { role: 'assistant', content: cleanText(project.raw?.handoffSummary || project.summary, 'No Codex update has been reported yet.'), at: project.raw?.handoffObservedAt },
     ];
     const session = project.sessionId || project.jobId || project.id;
-    const route = project.jobId ? 'Direct to this Codex job.' : 'MARCUS routes this to the active Codex workspace.';
+    const route = project.jobId ? 'Queues a follow-up to this desktop Codex job.' : 'Observed Codex app session. Send your message in the Codex app; direct messaging is not connected here.';
+    const requestId = crypto.randomUUID();
     host.innerHTML = `
       <header class="codex-mobile-head">
         <div class="codex-mobile-title"><strong>${escapeHtml(project.name)}</strong><span class="status-label">CODEX</span></div>
@@ -1051,7 +1052,7 @@
       </div>
       <form class="codex-mobile-compose">
         <textarea aria-label="Message Codex" placeholder="Tell Codex what to inspect, change, test, or explain..." required></textarea>
-        <button class="btn primary" type="submit">Send</button>
+        <button class="btn primary" type="submit" ${project.jobId ? '' : 'disabled'}>${project.jobId ? 'Send' : 'Send unavailable'}</button>
         <span class="route-note">${escapeHtml(route)} MARCUS keeps the project context.</span>
       </form>`;
     host.querySelector('form')?.addEventListener('submit', async (event) => {
@@ -1063,9 +1064,11 @@
       button.disabled = true;
       try {
         if (project.jobId) {
-          await adminApi(`/api/codex/jobs/${encodeURIComponent(project.jobId)}/followup`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message }) });
+          const result = await adminApi(`/api/codex/jobs/${encodeURIComponent(project.jobId)}/followup`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message, requestId }) });
+          if (result?.receipt?.requestId !== requestId) throw new Error('Queue receipt not confirmed; draft retained.');
+          addMessage('system', `Queued for the desktop agent. Receipt: ${result.receipt.actionId}. Execution is not yet confirmed.`);
         } else {
-          await api('/api/marcus/live/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: `Send this exact follow-up to the active Codex work for ${project.name}: ${message}`, surface: 'mobile_codex', projectId: project.raw?.awarenessProjectId || project.raw?.projectId || project.id }) });
+          throw new Error('This observed Codex app session cannot receive messages here.');
         }
         input.value = '';
         await refreshHealth();
