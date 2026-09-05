@@ -1586,7 +1586,7 @@
       if (!activeFilter) return projects;
       if (activeFilter === "building") return projects.filter((p) => ["moving", "verifying"].includes(p.state));
       if (activeFilter === "auditing") return projects.filter((p) => p.state === "verifying");
-      if (activeFilter === "needs") return projects.filter((p) => p.state === "needs_mark");
+      if (activeFilter === "needs") return attentionProjects(snapshot.projects, workOverview);
       if (activeFilter === "decaying") return projects.filter((p) => ["blocked", "losing_thread"].includes(p.state));
       return projects;
     }

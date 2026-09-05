@@ -62,7 +62,8 @@ export function projectBrief(project, overview) {
     : deployed ? 'Your latest release is deployed.'
     : linked?.release?.mergedChanges?.length ? 'Changes are merged. Deployment evidence is incomplete.'
     : 'Your existing work, in one place.';
-  const next = needs ? 'Review the specific decision below. No additional authority is implied.'
+  const next = !overview?.ok ? 'Project records are unavailable. Refresh before relying on status or deciding what to do next.'
+    : needs ? 'Review the specific decision below. No additional authority is implied.'
     : failed ? 'Inspect the deployment receipt before retrying. An older success does not clear this failure.'
     : project.state === 'blocked' ? 'Investigate the reported blocker; it is not an approval request by itself.'
     : deployed ? 'Try the live result and tell me what to change. Deployment does not accept the current request.'

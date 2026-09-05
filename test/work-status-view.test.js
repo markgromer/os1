@@ -32,6 +32,7 @@ test('handoff, verification, deployment and acceptance cannot promote one anothe
 
 test('failed reads show unknown counts, and provider URLs cannot inject executable or credential-bearing links', () => {
   assert.match(workOverviewHtml(project, { ok: false }), /Work data is unavailable/);
+  assert.match(projectBrief(project, { ok: false }).next, /records are unavailable/);
   assert.equal(safeWorkUrl('javascript:alert(1)'), '');
   assert.equal(safeWorkUrl('https://user:secret@example.com'), '');
   assert.equal(safeWorkUrl('https://example.com/live'), 'https://example.com/live');
@@ -102,6 +103,7 @@ test('dedicated display loads the new surface, reads saved policy and parses as 
   const script = html.match(/<script type="module">([\s\S]*?)<\/script>/)[1];
   new vm.Script(script.replace(/^\s*import .*?;\s*$/m, ''));
   assert.match(script, /workOverviewHtml\(project, workOverview\)/);
+  assert.match(script, /activeFilter === "needs"\) return attentionProjects\(snapshot.projects, workOverview\)/);
   assert.match(script, /api\('\/api\/work\/overview'\)/);
   assert.match(script, /savedWorkPolicy\.autoAdvance/);
   assert.match(html, /class="btn" type="button" id="autoToggle">Execution policy/);

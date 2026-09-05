@@ -388,11 +388,6 @@ export class ProjectEvidenceService {
       this.github.collectProject({ businessKey: key, project, force: true }),
       this.collectDeployments(key, projects, { projectRegistryId }),
     ]);
-    await this.store.setSourceState(key, `deployments:${projectRegistryId}`, {
-      lastRefreshedAt: new Date().toISOString(),
-      errors: deployments.results.filter((row) => row.error).map((row) => ({ endpoint: `deployment_${row.provider}`, error: row.error })),
-      skipped: deployments.results.filter((row) => row.skipped).map((row) => ({ provider: row.provider, reason: row.skipped })),
-    });
     return { projectRegistryId, github, deployments, skipped: github.skipped && !deployments.accepted ? github.skipped : undefined };
   }
 
@@ -452,6 +447,19 @@ export class ProjectEvidenceService {
       } catch (error) { results.push({ provider: 'cloudflare', externalId: projectName, ...(error?.message === 'CLOUDFLARE_API_TOKEN is not configured.' ? { skipped: 'not_configured' } : { error: safeString(error?.message, 1_000) }) }); }
     }
     const appended = await this.store.append(businessKey, evidence, { trusted: true, provenanceMethod: 'deployment_api_exact_registry_mapping' });
+    // Both scheduled and selected-project refreshes persist provider availability.
+    // Failed reads must not leave an older positive headline looking current.
+    for (const project of projects) {
+      if (projectRegistryId && project.id !== projectRegistryId) continue;
+      if (!project.deployments?.renderServiceId && !project.deployments?.cloudflareProject) continue;
+      const relevant = results.filter((row) => row.provider === 'render'
+        ? row.externalId === project.deployments.renderServiceId : row.externalId === project.deployments.cloudflareProject);
+      await this.store.setSourceState(businessKey, `deployments:${project.id}`, {
+        lastRefreshedAt: new Date().toISOString(),
+        errors: relevant.filter((row) => row.error).map((row) => ({ endpoint: `deployment_${row.provider}`, error: row.error })),
+        skipped: relevant.filter((row) => row.skipped).map((row) => ({ provider: row.provider, reason: row.skipped })),
+      });
+    }
     return { accepted: appended.accepted.length, duplicates: appended.duplicateCount, results };
   }
 

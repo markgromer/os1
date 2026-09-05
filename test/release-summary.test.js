@@ -125,4 +125,13 @@ test('scoped refresh reads mapped providers without other projects, global recon
   const blocked = await service.refreshProject('personal', 'selected');
   assert.equal(calls.length, 0);
   assert.ok(blocked.deployments.results.every((row) => row.skipped === 'low_confidence_mapping'));
+  projects.pop();
+  service.renderApi = async () => { throw new Error('Provider unavailable'); };
+  await service.collectDeployments('personal', projects);
+  assert.equal(states.get('deployments:selected').errors[0].endpoint, 'deployment_render');
+  assert.equal(states.get('deployments:other').errors[0].endpoint, 'deployment_render');
+  service.renderApi = null;
+  await service.collectDeployments('personal', projects);
+  assert.equal(states.get('deployments:selected').errors.length, 0);
+  assert.equal(states.get('deployments:selected').skipped[0].provider, 'render');
 });
