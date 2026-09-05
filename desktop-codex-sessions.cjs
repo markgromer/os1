@@ -227,7 +227,7 @@ function readSessionHandoffSummary(filePath) {
       return {
         summary,
         status: classifyHandoffSummary(summary),
-        observedAt: stat.mtime.toISOString(),
+        observedAt: typeof event.timestamp === 'string' && Number.isFinite(Date.parse(event.timestamp)) ? event.timestamp : stat.mtime.toISOString(),
       };
     }
   } catch {
