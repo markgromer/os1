@@ -1,4 +1,5 @@
 import express from 'express';
+import { readWorkOverview, workOverviewReply } from '../work/work_overview.js';
 
 export function workRoute(handler) {
   return async (req, res) => {
@@ -11,8 +12,19 @@ export function workRoute(handler) {
   };
 }
 
-export function registerWorkRoutes(app, { graph, context, memory, director, identities, execution, operator, getBusinessKey }) {
+export function registerWorkRoutes(app, { graph, context, memory, director, identities, execution, operator, evidence, getBusinessKey }) {
   const router = express.Router();
+  router.use((_req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
+  if (evidence && director && execution && memory) router.get('/overview', workRoute(async (req, res) => {
+    const overview = await readWorkOverview(getBusinessKey(req), { graph, director, execution, memory, evidence });
+    const projectId = String(req.query.projectId || '');
+    if (projectId) {
+      const project = overview.projects.find((row) => row.id === projectId);
+      if (!project) return res.status(404).json({ ok: false, code: 'PROJECT_NOT_FOUND', error: 'Project not found in this business.' });
+      return res.json({ ok: true, ...overview, projects: [project], reply: workOverviewReply(project) });
+    }
+    res.json({ ok: true, ...overview });
+  }));
   router.get('/', workRoute(async (req, res) => res.json({ ok: true, ...await graph.snapshot(getBusinessKey(req), String(req.query.projectId || '')) })));
   router.post('/', workRoute(async (req, res) => res.status(201).json({ ok: true, item: await graph.create(getBusinessKey(req), req.body || {}, 'mark') })));
   router.post('/dependencies', workRoute(async (req, res) => res.json({ ok: true, dependency: await graph.addDependency(getBusinessKey(req), req.body || {}) })));

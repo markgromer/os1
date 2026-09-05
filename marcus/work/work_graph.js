@@ -72,14 +72,24 @@ export class WorkGraph {
     if (!await this.engine.registry.get(key, input.projectId)) throw domainError('PROJECT_NOT_FOUND', 'Project not found in this business.');
     const objective = bounded(input.objective);
     if (!objective || !Array.isArray(input.acceptanceCriteria) || !input.acceptanceCriteria.some((value) => bounded(value))) throw domainError('WORK_INVALID', 'Objective and acceptance criteria are required.');
+    const clientRequestId = bounded(input.clientRequestId, 160);
+    const acceptanceCriteria = input.acceptanceCriteria.slice(0, 30).map((entry) => bounded(entry, 2000)).filter(Boolean);
     return this.store.mutate(key, (doc) => {
+      if (clientRequestId) {
+        const existing = doc.items.find((row) => row.projectId === input.projectId && row.clientRequestId === clientRequestId);
+        if (existing) {
+          if (existing.objective !== objective || JSON.stringify(existing.acceptanceCriteria) !== JSON.stringify(acceptanceCriteria)
+            || existing.kind !== (['objective', 'human'].includes(input.kind) ? input.kind : 'task') || existing.parentId !== (input.parentId || '')) throw domainError('WORK_REQUEST_CONFLICT', 'This save request already belongs to different work. Refresh before creating a new item.');
+          return existing;
+        }
+      }
       if (doc.items.length >= 2000) throw domainError('WORK_CAPACITY', 'Work graph capacity reached.');
       if (input.parentId) {
         const parent = itemFor(doc, input.parentId);
         if (parent.projectId !== input.projectId || parent.kind !== 'objective' || parent.status === 'completed') throw domainError('WORK_SCOPE', 'Parent must be an open objective in the same project.');
       }
       const item = { id: newDomainId('work'), projectId: input.projectId, parentId: input.parentId || '', kind: ['objective', 'human'].includes(input.kind) ? input.kind : 'task',
-        objective, acceptanceCriteria: input.acceptanceCriteria.slice(0, 30).map((entry) => bounded(entry, 2000)).filter(Boolean),
+        objective, acceptanceCriteria, ...(clientRequestId ? { clientRequestId } : {}),
         status: 'ready', revision: 1, owner: actor, operationId: '', launchToken: '', launchState: '',
         legacyTaskId: bounded(input.legacyTaskId, 160), decisionRefs: [], invalidatedBy: [], blockers: [], evidence: [],
         createdAt: timestamp(), updatedAt: timestamp() };
