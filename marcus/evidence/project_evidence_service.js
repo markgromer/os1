@@ -380,12 +380,29 @@ export class ProjectEvidenceService {
     return values;
   }
 
-  async collectDeployments(businessKey, projects) {
+  async refreshProject(businessKey, projectRegistryId) {
+    const key = safeBusinessKey(businessKey);
+    const project = await this.assertProject(key, projectRegistryId);
+    const projects = await this.projects(key);
+    const [github, deployments] = await Promise.all([
+      this.github.collectProject({ businessKey: key, project, force: true }),
+      this.collectDeployments(key, projects, { projectRegistryId }),
+    ]);
+    await this.store.setSourceState(key, `deployments:${projectRegistryId}`, {
+      lastRefreshedAt: new Date().toISOString(),
+      errors: deployments.results.filter((row) => row.error).map((row) => ({ endpoint: `deployment_${row.provider}`, error: row.error })),
+      skipped: deployments.results.filter((row) => row.skipped).map((row) => ({ provider: row.provider, reason: row.skipped })),
+    });
+    return { projectRegistryId, github, deployments, skipped: github.skipped && !deployments.accepted ? github.skipped : undefined };
+  }
+
+  async collectDeployments(businessKey, projects, { projectRegistryId = '' } = {}) {
     const evidence = [];
     const results = [];
     const observedAt = new Date().toISOString();
     const renderMappings = this.deploymentMappings(projects, 'renderServiceId');
     for (const [serviceId, matches] of renderMappings) {
+      if (projectRegistryId && !matches.some((project) => project.id === projectRegistryId)) continue;
       if (matches.length !== 1) { results.push({ provider: 'render', externalId: serviceId, skipped: 'low_confidence_mapping' }); continue; }
       if (typeof this.renderApi !== 'function') { results.push({ provider: 'render', externalId: serviceId, skipped: 'not_configured' }); continue; }
       try {
@@ -402,13 +419,14 @@ export class ProjectEvidenceService {
             event: `render_${safeString(status, 100).toLowerCase() || 'deployment_observed'}`, summary: `Render deployment ${deploy.id || ''} is ${status || 'observed'}.`,
             timestamp, observedAt, actor: 'render', repository: project.repo?.fullName, branch: deploy.branch, commitSha: deploy.commit?.id || deploy.commit?.sha || deploy.commitSha,
             externalId: `render-deploy:${serviceId}:${deploy.id}:${status}:${timestamp}`, deployment: { id: deploy.id, provider: 'render', environment: 'production', status, url: project.deployments?.productionUrl, branch: deploy.branch, commitSha: deploy.commit?.id || deploy.commit?.sha },
-            metadata: { serviceId }, confidence: 1, provenance: { method: 'render_api_exact_registry_mapping' },
+            metadata: { serviceId, deploymentCreatedAt: deploy.createdAt || deploy.created_at, url: `https://dashboard.render.com/web/${encodeURIComponent(serviceId)}/deploys/${encodeURIComponent(deploy.id)}` }, confidence: 1, provenance: { method: 'render_api_exact_registry_mapping' },
           });
         }
-      } catch (error) { results.push({ provider: 'render', externalId: serviceId, error: safeString(error?.message, 1_000) }); }
+      } catch (error) { results.push({ provider: 'render', externalId: serviceId, ...(error?.message === 'RENDER_API_KEY is not configured.' ? { skipped: 'not_configured' } : { error: safeString(error?.message, 1_000) }) }); }
     }
     const cloudflareMappings = this.deploymentMappings(projects, 'cloudflareProject');
     for (const [projectName, matches] of cloudflareMappings) {
+      if (projectRegistryId && !matches.some((project) => project.id === projectRegistryId)) continue;
       if (matches.length !== 1) { results.push({ provider: 'cloudflare', externalId: projectName, skipped: 'low_confidence_mapping' }); continue; }
       if (typeof this.cloudflareApi !== 'function') { results.push({ provider: 'cloudflare', externalId: projectName, skipped: 'not_configured' }); continue; }
       const accountId = safeString(matches[0]?.deployments?.cloudflareAccountId || process.env.CLOUDFLARE_ACCOUNT_ID, 300);
@@ -419,7 +437,7 @@ export class ProjectEvidenceService {
         const project = matches[0];
         for (const deploy of rows) {
           const environment = deploy.environment === 'production' ? 'production' : 'preview';
-          const status = deploy.latest_stage?.status || deploy.stages?.slice(-1)?.[0]?.status || 'success';
+          const status = deploy.latest_stage?.status || deploy.stages?.slice(-1)?.[0]?.status || 'unknown';
           const type = deploymentStatusType(status, environment);
           const timestamp = safeIso(deploy.modified_on || deploy.created_on) || observedAt;
           evidence.push({
@@ -428,10 +446,10 @@ export class ProjectEvidenceService {
             timestamp, observedAt, actor: 'cloudflare', repository: project.repo?.fullName, branch: deploy.deployment_trigger?.metadata?.branch,
             commitSha: deploy.deployment_trigger?.metadata?.commit_hash, externalId: `cloudflare-deploy:${projectName}:${deploy.id}:${status}:${timestamp}`,
             deployment: { id: deploy.id, provider: 'cloudflare', environment, status, url: deploy.url, branch: deploy.deployment_trigger?.metadata?.branch, commitSha: deploy.deployment_trigger?.metadata?.commit_hash },
-            metadata: { projectName }, confidence: 1, provenance: { method: 'cloudflare_api_exact_registry_mapping' },
+            metadata: { projectName, deploymentCreatedAt: deploy.created_on }, confidence: 1, provenance: { method: 'cloudflare_api_exact_registry_mapping' },
           });
         }
-      } catch (error) { results.push({ provider: 'cloudflare', externalId: projectName, error: safeString(error?.message, 1_000) }); }
+      } catch (error) { results.push({ provider: 'cloudflare', externalId: projectName, ...(error?.message === 'CLOUDFLARE_API_TOKEN is not configured.' ? { skipped: 'not_configured' } : { error: safeString(error?.message, 1_000) }) }); }
     }
     const appended = await this.store.append(businessKey, evidence, { trusted: true, provenanceMethod: 'deployment_api_exact_registry_mapping' });
     return { accepted: appended.accepted.length, duplicates: appended.duplicateCount, results };

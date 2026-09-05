@@ -159,7 +159,8 @@ test('desktop visualizer uses canonical awareness instead of browser-local proje
   assert.match(html, /const projects = snapshot\.codexProjects/);
   assert.match(html, /project\.source !== "codex" && \(matched\.state === "archived"/);
   assert.match(html, /class="attention-banner"/);
-  assert.match(html, /Accept &amp; archive/);
+  assert.doesNotMatch(html, /Accept &amp; archive/);
+  assert.match(html, /projectBrief\(project, workOverview\)\.needs/);
   assert.match(html, /function pipelineStages\(project\)/);
   assert.match(html, /messageSeenAt/);
 });

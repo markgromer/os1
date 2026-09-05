@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import vm from 'node:vm';
-import { matchWorkProject, reportState, evidenceStages, workOverviewHtml, safeWorkUrl } from '../public/work-status-view.js';
+import { matchWorkProject, reportState, evidenceStages, workOverviewHtml, safeWorkUrl, projectBrief } from '../public/work-status-view.js';
 
 const linked = { id: 'registry-exact', name: 'Task Tracker', workspacePath: 'C:/Work/Task Tracker', repository: 'owner/project', workCount: 0, items: [], operationCount: 0, operations: [], decisions: [], engineering: { lifecycle: 'inactive', granted: false, autoAdvance: false }, deployment: null, recentChanges: [] };
 const overview = { ok: true, evidenceAvailable: true, projects: [linked], observedAt: '2026-09-05T00:00:00Z' };
@@ -23,7 +23,7 @@ test('handoff, verification, deployment and acceptance cannot promote one anothe
   assert.equal(stages[1].value, 'Not linked'); assert.equal(stages[2].value, 'Not verified');
   assert.equal(stages[3].value, 'Not established here');
   const html = workOverviewHtml(project, overview);
-  assert.match(html, /DISPLAY V2/); assert.match(html, /not automatic acceptance/);
+  assert.match(html, /DISPLAY V3/); assert.match(html, /Owner acceptance is not established/);
   assert.match(html, /&lt;img/); assert.doesNotMatch(html, /<img|is complete and waiting|Accept &amp; archive/);
   assert.match(html, /Automatic advancement: off/);
   const checked = evidenceStages(project, { ...linked, operations: [{ status: 'completed', verified: true }] });
@@ -52,6 +52,24 @@ test('only runnable work gets an explicit start control; saving or reading is no
   assert.match(workOverviewHtml(project, { ...overview, projects: [{ ...linked, workCount: 1, items: [item] }] }), /data-work-start="work-1"/);
   item.readiness = { runnable: false, blockers: [{ message: 'Exact approval missing' }] };
   assert.doesNotMatch(workOverviewHtml(project, { ...overview, projects: [{ ...linked, workCount: 1, items: [item] }] }), /data-work-start/);
+});
+
+test('existing sessions are useful without duplicate work; handoff prose is not an approval', () => {
+  const brief = projectBrief(project, overview);
+  assert.equal(brief.needs, 0); assert.match(brief.next, /existing session/);
+  const html = workOverviewHtml({ ...project, request: 'Make the portrait display useful' }, overview);
+  assert.match(html, /Make the portrait display useful/);
+  assert.match(html, /No approval is requested by the linked work records/);
+  assert.doesNotMatch(html, /No work-graph items yet|Accept &amp; archive|waiting for your acceptance/);
+  assert.equal(projectBrief(project, { ...overview, projects: [{ ...linked, needsYouCount: 1 }] }).needs, 1);
+});
+
+test('deployment provider errors suppress a current-success headline without erasing historical receipts', () => {
+  const row = { ...linked, deployment: { type: 'production_published', status: 'success' },
+    release: { refreshErrors: [{ endpoint: 'deployment_status' }] } };
+  assert.equal(projectBrief(project, { ...overview, projects: [row] }).deployed, false);
+  row.release.refreshErrors = [{ endpoint: 'deployments' }];
+  assert.equal(projectBrief(project, { ...overview, projects: [row] }).deployed, false);
 });
 
 test('project status shortcut uses a read-only endpoint and drops a reply after a context switch', async () => {
