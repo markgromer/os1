@@ -1,0 +1,60 @@
+/* Worklist layout is stable across context, conversation, and detail tabs. */
+html:has(body.worklist-mode),body.worklist-mode{height:100%;min-height:0;overflow:hidden;font-family:system-ui,sans-serif}
+body.worklist-mode .display{height:100dvh;min-height:0;display:grid;grid-template-columns:minmax(285px,.8fr) minmax(0,1.4fr);grid-template-rows:56px minmax(0,1fr)190px;grid-template-areas:"os os" "projects workspace" "projects chat";gap:12px;padding:12px;box-sizing:border-box}
+body.worklist-mode .os-strip{grid-area:os;min-height:0;height:auto;display:flex;justify-content:space-between;gap:16px;padding:0 12px}
+body.worklist-mode .os-title{font-size:18px;letter-spacing:.02em}
+body.worklist-mode .os-left{min-width:0}
+body.worklist-mode .os-left::before,body.worklist-mode .os-left::after{display:none}
+body.worklist-mode .os-center{font-size:12px}
+body.worklist-mode .os-right{display:flex;gap:10px;font-size:11px}
+body.worklist-mode .os-right .connection:not([data-source="codex"]),body.worklist-mode .os-quick-actions,body.worklist-mode #clock{display:none}
+body.worklist-mode .control-panel{display:contents}
+body.worklist-mode .control-head,body.worklist-mode .sync-foot,body.worklist-mode .ops-mini,body.worklist-mode .attention-banner,body.worklist-mode .dock{display:none!important}
+body.worklist-mode .builds{grid-area:projects;display:grid;grid-template-rows:52px auto minmax(0,1fr);min-height:0;height:auto;border:1px solid #283444;border-radius:10px;overflow:hidden;background:#0d141d}
+body.worklist-mode .builds>.section-title{display:flex;align-items:center;justify-content:space-between;min-height:0;height:auto;padding:12px 16px;font-size:16px;text-transform:none;letter-spacing:0}
+body.worklist-mode .builds>.section-title::before{display:none}
+body.worklist-mode .builds>.section-title>span{display:block}
+body.worklist-mode .build-list-summary{font-size:12px;color:#9bacbf}
+body.worklist-mode .build-list{display:block;overflow:auto;min-height:0;padding:0 8px 12px;scrollbar-gutter:stable}
+.worklist-tools{display:flex;gap:8px;padding:0 12px 12px;min-width:0}
+.worklist-tools input,.worklist-tools select{background:#111e2b;color:#e6edf7;border:1px solid #35465c;border-radius:6px;padding:9px;font:13px system-ui;min-width:0}
+.worklist-tools input{width:100%}.worklist-tools select{max-width:115px}
+.project-row{display:block;width:100%;text-align:left;background:transparent;color:#eff4fa;border:1px solid transparent;border-bottom-color:#263343;border-radius:8px;padding:16px 12px;margin:0 0 4px;cursor:pointer;font:14px/1.5 system-ui;min-height:140px}
+.project-row:hover{background:#152030}.project-row.selected{background:#1c2438;border-color:#9179db}
+.project-row-title{display:block;font-size:18px;font-weight:650;line-height:1.3;overflow-wrap:anywhere}
+.project-row-status{display:block;color:#b6c7d9;font-size:12px;margin:5px 0 9px}
+.project-row-summary{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;line-height:1.5;color:#d2dce9}
+.project-row-foot{display:block;color:#91a4bc;font-size:11px;margin-top:10px}.worklist-empty{padding:20px;color:#afbed1}
+.project-select{display:block;width:100%;text-align:left;background:none;color:inherit;border:0;padding:0;cursor:pointer}.project-row .project-row-summary{display:block;overflow:visible;-webkit-line-clamp:unset;margin:8px 0 14px}.project-agent{font-size:12px;color:#aebfd2;margin:10px 0}.project-task-row{border-top:1px solid #334153;padding:14px 0 8px}.project-task-row>button:not(.btn){background:none;border:0;padding:0;color:#e8eef7;text-align:left;font:14px/1.5 system-ui;cursor:pointer}.project-task-row p{font-size:13px;line-height:1.6;color:#c1cee0;margin:8px 0;overflow-wrap:anywhere}.project-task-row>span{font-size:11px;color:#bca6ee}.project-task-row .project-next{font-size:12px;color:#aabdcd}.project-row{cursor:default}.project-row.selected{border-color:#9179db}.project-task-row .btn{font-size:12px}
+body.worklist-mode .display{grid-template-columns:minmax(340px,1fr) minmax(0,1.05fr)}
+body.worklist-mode .codex-turn p{white-space:pre-wrap;overflow-wrap:anywhere}
+body.worklist-mode .workspace-region{grid-area:workspace;display:grid;grid-template-rows:auto minmax(0,1fr);min-width:0;min-height:0;height:auto;overflow:hidden}
+body.worklist-mode .workspace-header{display:block;padding:14px 18px;border-bottom:1px solid #283444}
+body.worklist-mode .workspace-title{display:block;min-width:0}
+body.worklist-mode .workspace-title>div{display:block}
+body.worklist-mode .workspace-title h1{font-size:21px;line-height:1.2;white-space:normal}
+body.worklist-mode .workspace-title .glyph,body.worklist-mode .project-switcher,body.worklist-mode .workspace-header .top-actions,body.worklist-mode .workspace-status,body.worklist-mode .browser-bar,body.worklist-mode .audit-panel{display:none}
+body.worklist-mode .workspace-header .tabs{display:flex;gap:14px;overflow:auto;flex-wrap:nowrap;justify-content:flex-start;height:auto;padding:10px 0 0}
+body.worklist-mode .workspace-header .tab{display:block;flex:none;padding:8px 0;font-size:12px;white-space:nowrap}
+body.worklist-mode .workspace-header .tab[data-tab="tests"],body.worklist-mode .workspace-header .tab[data-tab="github"],body.worklist-mode .workspace-header .tab[data-tab="browser"]{display:none}
+body.worklist-mode .workspace-header .tab::before{display:none}
+body.worklist-mode .workspace-body{grid-row:2;display:block;min-height:0;height:auto;padding:0;overflow:hidden}
+body.worklist-mode .workspace-body .surface{display:block;height:100%;min-height:0;overflow:auto;background:#0c1520;scrollbar-gutter:stable}
+.project-context{padding:24px;font:15px/1.6 system-ui;color:#dbe5f1;max-width:900px;margin:auto}
+.project-context header{border-bottom:1px solid #2a3748;padding-bottom:16px;margin-bottom:16px}
+.context-kicker{color:#b39de7;font-size:10px;letter-spacing:.12em}.project-context h2{font-size:26px;line-height:1.2;margin:8px 0}.project-context header p{margin:8px 0 0;color:#aebece}
+.project-context h3{font-size:17px;margin:28px 0 12px}.context-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}.context-hint{color:#90a3bc;font-size:12px;line-height:1.6}
+.context-task{padding:18px 0;border-bottom:1px solid #2a3748}.context-task-heading{display:flex;gap:12px;align-items:center;justify-content:space-between;font-size:12px;color:#c8b4f7}.context-task-heading small{color:#8fa3ba}
+.task-request{white-space:pre-wrap;overflow-wrap:anywhere;margin:12px 0;font-size:16px;line-height:1.55}.task-update{white-space:pre-wrap;overflow-wrap:anywhere;color:#b9c9dc}.context-task summary{cursor:pointer;font-size:13px;color:#a8bed6}
+body.worklist-mode .chat-card{grid-area:chat;display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:34px minmax(0,1fr)62px;min-height:0;height:auto;overflow:hidden}
+body.worklist-mode .chat-head{padding:8px 12px}.worklist-mode .chat-feed{display:block;min-height:0;overflow:auto;padding:8px 12px}.worklist-mode .chat-feed .message{margin-bottom:8px}
+body.worklist-mode .chat-card .auto-row{display:none}
+body.worklist-mode .composer{display:grid;grid-template-columns:100px minmax(0,1fr)30px 36px;gap:6px;padding:6px 10px}
+body.worklist-mode .composer textarea{min-height:0;height:48px}
+body.worklist-mode .codex-workbench{min-height:100%;height:auto;display:block}
+body.worklist-mode .codex-thread{max-height:none;overflow:visible;padding:20px}
+body.worklist-mode .codex-compose{padding:18px;grid-template-columns:minmax(0,1fr)100px;position:static}
+body.worklist-mode .codex-compose textarea{min-height:120px;font:14px/1.5 system-ui}
+body.worklist-mode .codex-compose-note{grid-column:1/-1;font-size:12px;line-height:1.6}
+body.worklist-mode .codex-compose [data-copy-codex-draft]{justify-self:start}
+@media(max-width:700px){body.worklist-mode .display{grid-template-columns:minmax(0,1fr);grid-template-rows:48px 220px minmax(0,1fr)160px;grid-template-areas:"os" "projects" "workspace" "chat";padding:6px;gap:6px}.worklist-mode .os-center{display:none}.project-row{min-height:0;padding:12px}.project-row-summary,.project-row-foot{display:none}.worklist-mode .project-context{padding:16px}body.worklist-mode .workspace-header{padding:10px 14px}body.worklist-mode .composer{grid-template-columns:80px minmax(0,1fr)28px 32px}.context-task-heading{display:block}}

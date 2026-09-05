@@ -62,6 +62,7 @@ function publicJob(job, { includeEvents = false } = {}) {
     diffSummary: job.diffSummary,
     changedFiles: job.changedFiles,
     eventCount: job.events.length,
+    followups: (job.followups || []).map(({ requestId, jobId, actionId, phase, createdAt }) => ({ requestId, jobId, actionId, phase, createdAt })),
     ...(includeEvents ? { events: job.events } : {}),
   };
 }
@@ -95,6 +96,7 @@ function normalizeStoredJob(raw = {}) {
     changedFiles: (Array.isArray(value.changedFiles) ? value.changedFiles : []).slice(0, 300)
       .map((item) => safeString(item, 1_000)).filter(Boolean),
     events,
+    followups: Array.isArray(value.followups) ? value.followups.slice(-250) : [],
   };
 }
 
@@ -109,6 +111,7 @@ export class DesktopCodexAdapter {
     this.jobs = new Map();
     this.loaded = false;
     this.writeQueue = Promise.resolve();
+    this.followupQueue = Promise.resolve();
   }
 
   async ensureLoaded() {
@@ -262,6 +265,53 @@ export class DesktopCodexAdapter {
     } : { summary: '' };
   }
 
+  async queueFollowup(jobId, message, { businessKey, requestId } = {}) {
+    const run = this.followupQueue.catch(() => {}).then(async () => {
+      await this.ensureLoaded();
+      const record = this.jobs.get(jobId);
+      const reject = (message, statusCode = 409, definite = true) => Object.assign(new Error(message), { statusCode, definite });
+      if (!record || record.businessKey !== businessKey) throw reject('Codex job not found in this business.', 404);
+      const prior = record.followups.find((item) => item.requestId === requestId);
+      const messageHash = hash(message);
+      if (prior) {
+        if (prior.messageHash !== messageHash) throw reject('This request id belongs to a different message.');
+        if (prior.phase === 'failed') throw reject(prior.error || 'The desktop queue rejected this request.');
+        if (prior.phase !== 'queued') throw reject('The earlier send has an uncertain queue result. Inspect the desktop job before resending.', 503, false);
+        return { job: this.providerJob(record), receipt: { requestId, jobId, actionId: prior.actionId, phase: prior.phase, createdAt: prior.createdAt } };
+      }
+      if (!record.threadId) throw reject('This job has no resumable Codex thread.');
+      if (!TERMINAL_STATUSES.has(record.status)) throw reject('Codex is already active or waiting. Wait for this job to finish before sending a follow-up.');
+      if (record.followups.length >= 250) throw reject('This job reached its follow-up receipt limit.');
+      const receipt = { requestId, jobId, actionId: `codex_followup_${hash(`${businessKey}:${jobId}:${requestId}`).slice(0, 32)}`, messageHash, phase: 'dispatching', createdAt: nowIso() };
+      record.followups.push(receipt);
+      try { await this.persist(); } catch (error) { record.followups.pop(); throw reject('Could not persist the send request.', 503); }
+      try {
+        await this.queueAction({
+          id: receipt.actionId,
+          idempotencyKey: receipt.actionId,
+          type: 'followup-local-codex-job',
+          requestedBy: 'owner:codex-compose',
+          payload: {
+            jobId: record.jobId, operationId: record.operationId, stepId: record.stepId,
+            businessKey: record.businessKey, projectRegistryId: record.projectRegistryId,
+            threadId: record.threadId, path: record.workspacePath, message,
+            desktopAgentId: record.desktopAgentId,
+          },
+        });
+      } catch (error) {
+        // A persistence error is not proof that enqueue had no effect. Do not retry it as a new send.
+        receipt.error = 'The desktop queue result could not be confirmed.';
+        await this.persist(); throw reject(receipt.error, 503, false);
+      }
+      receipt.phase = 'queued';
+      record.status = 'queued'; record.completedAt = ''; record.error = ''; record.updatedAt = nowIso();
+      try { await this.persist(); } catch { receipt.phase = 'dispatching'; throw reject('The desktop action may be queued but its final receipt could not be saved.', 503, false); }
+      return { job: this.providerJob(record), receipt: { requestId, jobId, actionId: receipt.actionId, phase: 'queued', createdAt: receipt.createdAt } };
+    });
+    this.followupQueue = run;
+    return run;
+  }
+
   async sendFollowup(job, message) {
     await this.ensureLoaded();
     const record = this.jobs.get(safeString(job?.jobId, 300));
@@ -362,9 +412,9 @@ export class DesktopCodexAdapter {
     return job;
   }
 
-  async listJobs({ limit = 30 } = {}) {
+  async listJobs({ limit = 30, businessKey } = {}) {
     await this.ensureLoaded();
-    return [...this.jobs.values()].slice(-Math.max(1, Math.min(100, Number(limit) || 30))).reverse()
+    return [...this.jobs.values()].filter((job) => businessKey === undefined || job.businessKey === businessKey).slice(-Math.max(1, Math.min(100, Number(limit) || 30))).reverse()
       .map((job) => publicJob(job, { includeEvents: false }));
   }
 }

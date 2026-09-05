@@ -143,6 +143,7 @@ export class AwarenessService {
       version: 1,
       businessKey: key,
       generatedAt: new Date().toISOString(),
+      worklistPreferences: (await this.store.read(key)).worklistPreferences || [],
       projects,
       counts: {
         total: awareness.length,

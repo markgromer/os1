@@ -1017,8 +1017,9 @@
     }
   </style>
   <link rel="stylesheet" href="/work-status-view.css?v=3">
+  <link rel="stylesheet" href="/project-worklist.css?v=1">
 </head>
-<body>
+<body class="worklist-mode">
   <div class="display">
     <header class="os-strip">
       <button class="os-left btn ghost" type="button" id="homeButton" title="Restore the Marcus display home state">
@@ -1061,7 +1062,8 @@
         <nav class="tabs" aria-label="Workspace tabs">
           <button class="tab active" type="button" data-tab="browser">Browser</button>
           <button class="tab" type="button" data-tab="approvals">Approvals <span class="tab-count" id="publicationApprovalCount" hidden>0</span></button>
-          <button class="tab" type="button" data-tab="preview">Project brief</button>
+          <button class="tab" type="button" data-tab="context">Current work</button>
+          <button class="tab" type="button" data-tab="preview">Details</button>
           <button class="tab" type="button" data-tab="github">GitHub</button>
           <button class="tab" type="button" data-tab="codex">Codex</button>
           <button class="tab" type="button" data-tab="tests">Tests</button>
@@ -1146,7 +1148,8 @@
       </header>
 
       <section class="builds">
-        <div class="section-title"><span>Active Codex projects <span class="build-list-summary" id="activeBuildCount">discovering Codex projects</span></span><button class="btn ghost" type="button" id="clearFilter">All Codex</button></div>
+        <div class="section-title"><span>Projects <span class="build-list-summary" id="activeBuildCount">loading</span></span><button class="btn ghost" type="button" id="clearFilter">Show set aside</button></div>
+        <div class="worklist-tools"><input id="worklistSearch" type="search" aria-label="Find a project" placeholder="Find a project…"><select id="worklistFilter" aria-label="Filter projects"><option value="active">Active</option><option value="needs">Needs you</option><option value="blocked">Blocked</option><option value="aside">Set aside</option><option value="all">All projects</option></select></div>
         <div class="build-list" id="buildList"></div>
         <section class="ops-mini">
           <div class="section-title"><span>Marcus operations</span><button class="btn ghost" type="button" id="openOps">Open operations</button></div>
@@ -1202,6 +1205,14 @@
   <script src="/marcus-realtime.js"></script>
   <script type="module">
     import { matchWorkProject, reportState, evidenceStages, workOverviewHtml, projectBrief, attentionProjects } from '/work-status-view.js?v=3';
+    import { exactCodexJob, composeKey, CodexComposeState } from '/codex-compose.js?v=1';
+    import { groupProjects, projectContextHtml, taskKey, workStartedAt, visibleWorklistGroups, projectRowHtml, escapeHtml } from '/project-worklist.js?v=1';
+    let worklistFilter = 'active', worklistQuery = '', showHandled = false;
+    const contextScrollPositions = new Map();
+    let renderedSurfaceContent = '';
+    let codexDraftStorage;
+    try { codexDraftStorage = sessionStorage; } catch { /* Browser storage may be disabled. */ }
+    const codexCompose = new CodexComposeState(codexDraftStorage);
     const els = {
       clock: document.getElementById("clock"),
       codexDot: document.getElementById("codexDot"),
@@ -1260,7 +1271,7 @@
     const sourceLabels = { codex: "Codex", operation: "Operation", job: "Codex job", awareness: "Awareness" };
     let snapshot = { projects: [], codexProjects: [], operations: [], jobs: [], desktop: null, awareness: null, settings: null, browser: null, publications: [] };
     let selectedId = "";
-    let activeTab = "preview";
+    let activeTab = "context";
     let activeFilter = "";
     let chatContextId = "";
     let loading = false;
@@ -1369,7 +1380,7 @@
       const headers = new Headers(options.headers || {});
       const token = adminToken();
       if (token) headers.set("Authorization", `Bearer ${token}`);
-      const key = businessKey();
+      const key = headers.get('X-Business-Key') || businessKey();
       if (key) headers.set("X-Business-Key", key);
       let response = await fetch(url, { ...options, headers, credentials: "include" });
       if (response.status === 401 || response.status === 403) {
@@ -1385,7 +1396,7 @@
     async function api(url, options = {}) {
       const response = await authenticatedFetch(url, options);
       const data = await response.json().catch(() => null);
-      if (!response.ok) throw new Error(text(data?.error || data?.message || `${url} returned ${response.status}`));
+      if (!response.ok) throw Object.assign(new Error(text(data?.error || data?.message || `${url} returned ${response.status}`)), { definitive: data?.definite === true || [400, 401, 403, 404, 413].includes(response.status) });
       return data;
     }
 
@@ -1449,7 +1460,7 @@
       const statusCount = Number(item.gitStatusCount || arr(item.gitStatus).length || 0);
       const current = request || inferTask(item) || response || "Codex session is visible.";
       return {
-        id: idFrom(`${item.sessionId || item.workspacePath || name}-${index}`, "codex"),
+        id: idFrom(item.sessionId || item.workspacePath || name, "codex"),
         name,
         source: "codex",
         state: active ? "moving" : state,
@@ -1460,7 +1471,7 @@
         request: request || "No user request captured for this session yet.",
         latestRequest: text(item.latestUserRequest || request),
         response: response || "No Codex handoff summary yet.",
-        updatedAt: item.latestUserRequestAt || item.modifiedAt || item.handoffObservedAt,
+        updatedAt: [item.latestUserRequestAt, item.modifiedAt, item.handoffObservedAt].filter(Boolean).sort((a, b) => Date.parse(b) - Date.parse(a))[0],
         workspacePath: text(item.workspacePath),
         branch,
         statusCount,
@@ -1499,7 +1510,7 @@
       const state = projectStateFromStatus(job.status || "codex job");
       const name = text(job.projectName || job.repository || "Codex job");
       return {
-        id: idFrom(job.id || `${name}-${index}`, "job"),
+        id: idFrom(job.jobId || `${name}-${index}`, "job"),
         name,
         source: "job",
         state,
@@ -1515,6 +1526,7 @@
         recentCommits: [],
         evidence: [`Codex job status: ${text(job.status, "unknown")}`],
         raw: job,
+        workspacePath: text(job.workspacePath),
       };
     }
     function makeAwarenessProject(item, index) {
@@ -1556,10 +1568,10 @@
       const out = [];
       const seen = new Set();
       const awareness = projects.filter((project) => project?.source === "awareness");
-      const awarenessByName = new Map(awareness.map((project) => [idFrom(project.name), project]));
       for (const project of projects.filter(Boolean)) {
         if (project.source !== "awareness") {
-          const matched = awarenessByName.get(idFrom(project.name));
+          const registered = matchWorkProject(project, workOverview);
+          const matched = registered && awareness.find((item) => item.projectRegistryId === registered.id);
           if (matched) {
             // A live Codex workspace is authoritative for the Codex panel. Marcus
             // lifecycle/history can hide its own records, but must not suppress a
@@ -1569,7 +1581,7 @@
             project.projectRegistryId ||= matched.projectRegistryId;
             project.projectId ||= matched.projectId;
           }
-        } else if (out.some((item) => idFrom(item.name) === idFrom(project.name))) {
+        } else if (out.some((item) => item.projectRegistryId && item.projectRegistryId === project.projectRegistryId)) {
           continue;
         }
         const key = idFrom(`${project.source}-${project.id}`);
@@ -1643,7 +1655,7 @@
         if (!selectedId || !projects.some((p) => p.id === selectedId)) selectedId = projects.find((p) => matchWorkProject(p, workOverview)?.id === inspectedRegistryId)?.id || codexProjects[0]?.id || projects[0]?.id || "";
         if (!chatContextId && selectedId) chatContextId = selectedId;
         render();
-        maybePostLiveRead();
+        // The worklist owns the current context; no repeated status monologue on each poll.
         els.syncState.textContent = `Synced ${nowLabel()}`;
       } catch (error) {
         addMessage("marcus error", `Live sync failed: ${error.message}`);
@@ -1676,7 +1688,7 @@
       const codexStale = snapshot.desktop?.codexWorkspacesStale === true;
       els.codexDot.className = `status-dot ${codexCount && !codexStale ? "ok" : "warn"}`;
       els.codexStatus.textContent = codexStale && codexCount ? `Codex reconnecting (${codexCount} retained)` : codexCount ? `Codex connected (${codexCount})` : "Codex degraded";
-      els.monitoringSummary.textContent = `Monitoring ${codexCount} Codex project${codexCount === 1 ? "" : "s"}${codexStale && codexCount ? " · last confirmed" : ""}`;
+      els.monitoringSummary.textContent = `Project worklist · V4${codexStale && codexCount ? ' · relay reconnecting' : ''}`;
       els.githubDot.className = `status-dot ${snapshot.github?.configured ? "ok" : "warn"}`;
       els.githubStatus.textContent = snapshot.github?.configured ? "GitHub connected" : "GitHub degraded";
       els.cloudflareDot.className = `status-dot ${snapshot.cloudflare?.configured ? "ok" : "warn"}`;
@@ -1711,8 +1723,11 @@
     function renderWorkspace() {
       const project = selectedProject();
       const surfaceKey = `${loadedBusinessKey}:${project?.id || ''}:${activeTab}`;
-      const surfaceScroll = surfaceKey === renderedSurfaceKey ? els.workspaceSurface.scrollTop : 0;
-      const openDetails = surfaceKey === renderedSurfaceKey ? [...els.workspaceSurface.querySelectorAll('details[data-brief-detail][open]')].map((node) => node.dataset.briefDetail) : [];
+      if (renderedSurfaceKey) contextScrollPositions.set(renderedSurfaceKey, { surface: els.workspaceSurface.scrollTop, thread: els.workspaceSurface.querySelector('.codex-thread')?.scrollTop || 0 });
+      // Polling must not replace the live editor (including IME composition and selection).
+      if (activeTab === 'codex' && surfaceKey === renderedSurfaceKey && els.workspaceSurface.querySelector('[data-codex-compose]')?.contains(document.activeElement)) return;
+      const surfaceScroll = contextScrollPositions.get(surfaceKey)?.surface || 0;
+      const openDetails = surfaceKey === renderedSurfaceKey ? [...els.workspaceSurface.querySelectorAll('details[open]')].map((node, index) => node.dataset.briefDetail || node.dataset.contextDetail) : [];
       renderedSurfaceKey = surfaceKey;
       document.body.classList.toggle('work-mode', activeTab === 'preview');
       els.workspaceSurface.classList.toggle('work-surface', activeTab === 'preview');
@@ -1724,14 +1739,17 @@
       els.workspaceSurface.classList.toggle("codex-surface", activeTab === "codex");
       document.querySelectorAll(".tab").forEach((tab) => tab.classList.toggle("active", tab.dataset.tab === activeTab));
       if (browserMode) {
+        renderedSurfaceContent = '';
         renderBrowserSurface();
         return;
       }
       if (activeTab === "approvals") {
+        renderedSurfaceContent = '';
         renderPublicationApprovals();
         return;
       }
       if (!project) {
+        renderedSurfaceContent = '';
         els.workspaceHeading.textContent = "MARCUS WORKSPACE";
         els.workspaceCrumb.textContent = "No live project selected";
         els.workspaceUrl.value = "marcus://workspace/empty";
@@ -1745,9 +1763,12 @@
       els.workspaceUrl.value = project.workspacePath || project.raw?.previewUrl || `marcus://workspace/${project.id}`;
       els.workspaceStatus.textContent = workspaceStatus(project);
       els.scenarioStatus.textContent = `${stateLabel(project.state)} - ${age(project.updatedAt)}`;
-      els.workspaceSurface.innerHTML = surfaceHtml(project);
-      els.workspaceSurface.querySelectorAll('details[data-brief-detail]').forEach((node) => { node.open = openDetails.includes(node.dataset.briefDetail); });
+      const content = activeTab === 'context' ? projectContextHtml(selectedWorklistGroup(), { showHandled }) : surfaceHtml(project);
+      if (content !== renderedSurfaceContent) { els.workspaceSurface.innerHTML = content; renderedSurfaceContent = content; }
+      els.workspaceSurface.querySelectorAll('details').forEach((node, index) => { if (!node.dataset.briefDetail) node.dataset.contextDetail = String(index); node.open = openDetails.includes(node.dataset.briefDetail || node.dataset.contextDetail); });
       els.workspaceSurface.scrollTop = surfaceScroll;
+      const thread = els.workspaceSurface.querySelector('.codex-thread');
+      if (thread) thread.scrollTop = contextScrollPositions.get(surfaceKey)?.thread || 0;
       els.auditPanel.innerHTML = auditHtml(project);
       bindDynamicButtons();
     }
@@ -2211,12 +2232,14 @@
     }
     function codeSurface(project) {
       const directJob = directCodexJob(project);
-      const routeLabel = directJob ? "Direct to this Codex job" : "MARCUS routes to this Codex workspace";
-      const context = arr(project.rollingContext).length ? arr(project.rollingContext) : [
+      const state = codexCompose.get(composeKey(project, businessKey()));
+      const routeLabel = directJob ? 'Sends an exact follow-up to this desktop Codex job. Queue acceptance is not proof of execution.' : 'Observed Codex app session · direct messaging is not connected here. Copy your draft into this conversation in the Codex app.';
+      const contextProject = selectedWorklistGroup()?.tasks.find((item) => item.id === project.id) || project;
+      const context = arr(contextProject.rollingContext).length ? arr(contextProject.rollingContext) : [
         { role: "user", content: project.request, at: "" },
         { role: "assistant", content: project.response, at: project.updatedAt },
       ];
-      const sessionId = text(project.raw?.sessionId || directJob?.id || project.id);
+      const sessionId = text(project.raw?.sessionId || directJob?.threadId || project.id);
       return `
         <div class="codex-workbench">
           <header class="preview-nav" style="background:#0b1725;color:#f4f1ea;border-color:#223247">
@@ -2225,53 +2248,44 @@
           </header>
           <div class="codex-thread" aria-label="Codex conversation for ${esc(project.name)}">
             <div class="codex-context"><span>${esc(project.workspacePath || "workspace not reported")}</span><span>${esc(project.branch || "branch not reported")}</span><span>${esc(String(project.statusCount || 0))} changed files</span></div>
-            ${context.map((item) => `<article class="codex-turn ${item.role === "assistant" ? "assistant" : "user"}"><span class="message-meta">${item.role === "assistant" ? "CODEX" : "MARK"}${item.at ? ` · ${esc(age(item.at))}` : ""}</span><p>${esc(item.content)}</p></article>`).join("")}
+            ${context.map((item) => `<article class="codex-turn ${item.role === "assistant" ? "assistant" : "user"}"><span class="message-meta">${item.role === "assistant" ? "CODEX" : "MARK"}${item.at ? ` · ${esc(age(item.at))}` : ""}</span><p>${escapeHtml(item.content)}</p></article>`).join("")}
           </div>
           <form class="codex-compose" data-codex-compose="${esc(project.id)}">
-            <textarea aria-label="Message Codex" placeholder="Tell Codex what to inspect, change, test, or explain..." required></textarea>
-            <button class="btn primary" type="submit">Send</button>
-            <span class="codex-compose-note">${esc(routeLabel)}. MARCUS remains visible in the right panel and keeps the project context.</span>
+            <textarea aria-label="Message Codex" placeholder="Tell Codex what to inspect, change, test, or explain..." maxlength="8000" ${state.request ? '' : 'required'}>${escapeHtml(state.draft)}</textarea>
+            <button class="btn primary" type="submit" ${state.phase === 'sending' || !directJob ? 'disabled' : ''}>${state.phase === 'sending' ? 'Sending…' : state.phase === 'uncertain' ? 'Check send' : directJob ? 'Send' : 'Send unavailable'}</button>
+            <span class="codex-compose-note">${esc(routeLabel)} Drafts are kept in this browser tab across refreshes.</span>
+            <div class="codex-compose-note" role="status" aria-live="polite" data-codex-send-status>${esc(state.notice || 'Not sent.')} ${state.receipt ? `<br>Queue receipt: ${esc(state.receipt.actionId)}` : ''}</div>
+            <button class="btn" type="button" data-copy-codex-draft>Copy draft</button>
           </form>
         </div>`;
     }
 
     function directCodexJob(project) {
-      if (!project) return null;
-      if (project.source === "job" && project.raw?.id) return project.raw;
-      const workspace = text(project.workspacePath).toLowerCase();
-      const name = idFrom(project.name);
-      return snapshot.jobs.find((job) => {
-        if (!job?.id) return false;
-        const jobWorkspace = text(job.workspacePath || job.cwd || job.repositoryPath).toLowerCase();
-        return (workspace && jobWorkspace && workspace === jobWorkspace)
-          || (name && idFrom(job.projectName || job.repository || "") === name);
-      }) || null;
+      return exactCodexJob(project, snapshot.jobs, businessKey());
     }
 
     async function sendCodexFollowup(projectId, message, form) {
       const project = snapshot.projects.find((item) => item.id === projectId);
-      if (!project || !message) return;
-      const submit = form?.querySelector('button[type="submit"]');
-      if (submit) { submit.disabled = true; submit.textContent = "Sending…"; }
-      try {
-        const job = directCodexJob(project);
-        if (job) {
-          await api(`/api/codex/jobs/${encodeURIComponent(job.id)}/followup`, {
-            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message }),
-          });
-          addMessage("marcus", `Sent directly to the Codex job for ${project.name}. I’ll keep its evidence and next decision synchronized here.`);
-        } else {
-          setChatContext(project.id);
-          await sendToMarcus(`Send this exact follow-up to the active Codex work for ${project.name}: ${message}`, { echoUser: false, rethrow: true });
-        }
-        await load();
-        activeTab = "codex";
-        renderWorkspace();
-      } catch (error) {
-        addMessage("marcus error", `Codex follow-up failed: ${error.message}`);
-      } finally {
-        if (submit) { submit.disabled = false; submit.textContent = "Send"; }
-      }
+      if (!project) return;
+      const requestBusiness = businessKey();
+      const key = composeKey(project, requestBusiness);
+      codexCompose.draft(key, message);
+      const update = () => {
+        if (businessKey() !== requestBusiness || selectedProject()?.id !== projectId || activeTab !== 'codex') return;
+        const currentForm = els.workspaceSurface.querySelector('[data-codex-compose]');
+        if (!currentForm) return;
+        const state = codexCompose.get(key);
+        currentForm.querySelector('textarea').value = state.draft;
+        const submit = currentForm.querySelector('button[type="submit"]');
+        submit.disabled = state.phase === 'sending' || !directCodexJob(project);
+        submit.textContent = state.phase === 'sending' ? 'Sending…' : state.phase === 'uncertain' ? 'Check send' : directCodexJob(project) ? 'Send' : 'Send unavailable';
+        currentForm.querySelector('[data-codex-send-status]').textContent = state.notice + (state.receipt ? ` Queue receipt: ${state.receipt.actionId}` : '');
+      };
+      const pending = codexCompose.send(key, directCodexJob(project), (request) => api(`/api/codex/jobs/${encodeURIComponent(request.jobId)}/followup`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Business-Key': requestBusiness },
+        body: JSON.stringify({ message: request.message, requestId: request.requestId }),
+      }));
+      update(); await pending; update();
     }
     function evidenceSurface(project, title, items) {
       return `
@@ -2407,37 +2421,21 @@ els.dockNext.innerHTML = `<span class="eyebrow">4 Next</span><div><div class="ne
       if (project.state === "blocked") return "Plan";
       return "Watch";
     }
+    function worklistGroups() {
+      return groupProjects(snapshot.projects, workOverview, snapshot.awareness?.worklistPreferences || []);
+    }
+    function selectedWorklistGroup() {
+      return worklistGroups().find((group) => group.tasks.some((item) => item.id === selectedId) || group.representative.id === selectedId) || null;
+    }
     function renderControlPanel() {
-      const projects = visibleProjects();
-      const selected = selectedProject();
-      const total = snapshot.codexProjects.length;
-      els.activeBuildCount.textContent = activeFilter
-        ? `\u00b7 ${projects.length} shown of ${total}`
-        : snapshot.desktop?.codexWorkspacesStale && total
-          ? `\u00b7 ${total} retained while reconnecting`
-          : `\u00b7 ${total} in Codex`;
-      els.buildList.innerHTML = projects.map((project) => `
-        <div class="build-card ${project.id === selected?.id ? "active" : ""}" data-state="${esc(project.state)}">
-          <button class="build-main" type="button" data-select-project="${esc(project.id)}">
-            <span class="build-title"><strong>${esc(project.name)}</strong><span class="state-pill ${stateTone(project.state)}">${esc(project.label)}</span></span>
-            <p>${esc(humanizeLine(project.truth, 118))}</p>
-            <span class="build-meta"><span>Live · ${esc(compact(["complete", "needs_mark"].includes(project.state) ? "Nothing running" : humanizeLine(project.current, 80), 52))}</span><span>Next · ${esc(compact(humanizeLine(project.next, 90), 58))}</span><span>Evidence · updated ${esc(ageWords(project.updatedAt))}</span></span>
-            <span class="build-detail">
-              <span class="task"><strong>Active task</strong>${esc(compact(project.current, 78))}</span>
-              <span class="next"><strong>Next</strong>${esc(compact(project.next, 78))}</span>
-              <span><strong>Source</strong>${esc(sourceLabels[project.source] || project.source)}</span>
-              <span><strong>Evidence</strong>${esc(String(project.evidence.length))} signal${project.evidence.length === 1 ? "" : "s"}</span>
-              <span><strong>Branch</strong>${esc(compact(project.branch || "not reported", 28))}</span>
-              <span><strong>Freshness</strong>${esc(age(project.updatedAt))}</span>
-            </span>
-          </button>
-          <span class="build-actions">
-            <button class="btn" type="button" data-chat-project="${esc(project.id)}">Chat</button>
-            <button class="btn primary" type="button" data-action-project="${esc(project.id)}">${esc(actionLabel(project))}</button>
-          </span>
-        </div>
-      `).join("") || `<div class="build-card"><div><strong>No Codex projects for this filter.</strong><p>Clear the filter or wait for the desktop relay to discover your Codex workspaces.</p></div></div>`;
-      els.miniOps.innerHTML = snapshot.projects.slice(0, 1).map((project) => `<button class="mini-row" type="button" data-select-project="${esc(project.id)}"><span><strong>${esc(project.name)}</strong><br>${esc(compact(project.current, 52))}</span><span>${esc(project.label)}</span></button>`).join("") || `<div class="mini-row"><span>No operations visible</span><span>empty</span></div>`;
+      const groups = worklistGroups();
+      const selected = selectedWorklistGroup();
+      const visible = visibleWorklistGroups(groups, worklistFilter, worklistQuery);
+      els.activeBuildCount.textContent = `· ${visible.length}${worklistFilter === 'active' ? ' · last 7 days' : ''}`;
+      document.getElementById('clearFilter').textContent = worklistFilter === 'aside' ? 'Back to active' : 'Show set aside';
+      document.getElementById('worklistFilter').value = worklistFilter;
+      els.buildList.innerHTML = visible.map((group) => projectRowHtml(group, group.key === selected?.key)).join('') || '<p class="worklist-empty">No projects in this view. Choose All projects or Set aside to find earlier work.</p>';
+      els.miniOps.innerHTML = '';
       bindDynamicButtons();
     }
     function renderContextOptions() {
@@ -2447,7 +2445,7 @@ els.dockNext.innerHTML = `<span class="eyebrow">4 Next</span><div><div class="ne
         picker.value = selectedId;
       }
       picker.onchange = () => {
-        selectedId = picker.value; chatContextId = selectedId; activeTab = 'preview';
+        selectedId = picker.value; chatContextId = selectedId; activeTab = 'context';
         inspectedRegistryId = matchWorkProject(selectedProject() || {}, workOverview)?.id || '';
         render();
       };
@@ -2458,6 +2456,35 @@ els.dockNext.innerHTML = `<span class="eyebrow">4 Next</span><div><div class="ne
       els.chatContext.textContent = chatContextId === "__browser__" ? "Browser" : project ? project.name : "All projects";
     }
     function bindDynamicButtons() {
+      document.querySelectorAll('[data-worklist-task]').forEach((button) => button.onclick = () => {
+        selectedId = button.dataset.worklistTask; chatContextId = selectedId;
+        activeTab = ['codex', 'job'].includes(selectedProject()?.source) ? 'codex' : 'preview'; render();
+      });
+      document.querySelectorAll('[data-show-handled]').forEach((button) => button.onclick = () => { showHandled = !showHandled; renderWorkspace(); });
+      document.querySelectorAll('[data-worklist-placement]').forEach((button) => button.onclick = async () => {
+        const group = worklistGroups().find((item) => item.key === button.dataset.worklistPlacement || item.tasks.some((task) => taskKey(task) === button.dataset.worklistPlacement));
+        if (!group) return;
+        const key = button.dataset.worklistPlacement;
+        const task = group.tasks.find((item) => taskKey(item) === key);
+        const requestBusiness = businessKey();
+        const hidden = button.dataset.hidden === 'true';
+        button.disabled = true;
+        try {
+          const result = await api('/api/marcus/awareness/worklist', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key, hidden, resumeAfter: task ? workStartedAt(task) : group.startedAt }) });
+          if (businessKey() !== requestBusiness) return;
+          if (result?.ok !== true) throw new Error('The display preference was not saved.');
+          const preferences = snapshot.awareness.worklistPreferences ||= [];
+          const index = preferences.findIndex((item) => item.key === key);
+          if (index < 0) preferences.push(result.preference); else preferences[index] = result.preference;
+          render();
+          const notice = els.workspaceSurface.querySelector('[data-worklist-feedback]');
+          if (notice) notice.textContent = hidden ? 'Set aside. You can bring it back here or from the Set aside list.' : 'Back in your active list.';
+        } catch (error) {
+          button.disabled = false;
+          const notice = els.workspaceSurface.querySelector('[data-worklist-feedback]');
+          if (notice) notice.textContent = `Not saved: ${error.message}`;
+        }
+      });
       document.querySelectorAll('[data-work-start]').forEach((button) => {
         button.disabled = workStartRequests.has(button.dataset.workStart);
         button.onclick = async () => {
@@ -2518,7 +2545,7 @@ els.dockNext.innerHTML = `<span class="eyebrow">4 Next</span><div><div class="ne
         if (chat) return setChatContext(chat.dataset.chatProject);
         if (action) return projectAction(action.dataset.actionProject);
         selectedId = button.dataset.selectProject;
-        activeTab = "preview";
+        chatContextId = selectedId; showHandled = false; activeTab = "context";
         render();
       });
       document.querySelectorAll("[data-chat-project]").forEach((button) => button.onclick = (event) => {
@@ -2534,12 +2561,23 @@ els.dockNext.innerHTML = `<span class="eyebrow">4 Next</span><div><div class="ne
         renderWorkspace();
       });
       document.querySelectorAll("[data-project-command]").forEach((button) => button.onclick = () => runProjectCommand(button.dataset.projectCommand, button.dataset.projectId));
-      document.querySelectorAll("[data-codex-compose]").forEach((form) => form.onsubmit = (event) => {
+      document.querySelectorAll("[data-codex-compose]").forEach((form) => {
+        const project = snapshot.projects.find((item) => item.id === form.dataset.codexCompose);
+        const key = composeKey(project, businessKey());
+        const input = form.querySelector('textarea');
+        input.oninput = () => codexCompose.draft(key, input.value);
+        form.querySelector('[data-copy-codex-draft]').onclick = async () => {
+          try { await navigator.clipboard.writeText(input.value); codexCompose.get(key).notice = 'Draft copied. Paste it into the matching Codex conversation; it has not been sent here.'; }
+          catch { input.focus(); input.select(); codexCompose.get(key).notice = 'Clipboard unavailable. Your draft is selected; press Ctrl+C to copy it.'; }
+          form.querySelector('[data-codex-send-status]').textContent = codexCompose.get(key).notice;
+        };
+        form.onsubmit = (event) => {
         event.preventDefault();
         const input = form.querySelector("textarea");
-        const message = text(input?.value).trim();
-        if (!message) return;
+        const message = input?.value || '';
+        if (!message.trim() && !codexCompose.get(key).request) return;
         sendCodexFollowup(form.dataset.codexCompose, message, form);
+        };
       });
       document.querySelectorAll("[data-attention-project]").forEach((button) => button.onclick = () => {
         selectedId = button.dataset.attentionProject;
@@ -2863,8 +2901,10 @@ els.dockNext.innerHTML = `<span class="eyebrow">4 Next</span><div><div class="ne
       activeFilter = activeFilter === button.dataset.filter ? "" : button.dataset.filter;
       renderControlPanel();
     }));
-    document.getElementById("clearFilter").addEventListener("click", () => { activeFilter = ""; renderControlPanel(); });
-    document.getElementById("homeButton").addEventListener("click", () => { activeFilter = ""; activeTab = "preview"; selectedId = snapshot.codexProjects[0]?.id || snapshot.projects[0]?.id || ""; render(); });
+    document.getElementById('worklistSearch').addEventListener('input', (event) => { worklistQuery = event.target.value; renderControlPanel(); });
+    document.getElementById('worklistFilter').addEventListener('change', (event) => { worklistFilter = event.target.value; renderControlPanel(); });
+    document.getElementById("clearFilter").addEventListener("click", () => { worklistFilter = worklistFilter === 'aside' ? 'active' : 'aside'; renderControlPanel(); });
+    document.getElementById("homeButton").addEventListener("click", () => { worklistFilter = 'active'; activeTab = "context"; render(); });
     document.getElementById("topStartSomething").addEventListener("click", startTaskForSelectedProject);
     document.getElementById("topSettingsButton").addEventListener("click", () => { activeTab = "evidence"; renderWorkspace(); });
     document.getElementById("topVoiceButton").addEventListener("mousedown", (event) => { event.preventDefault(); beginVoiceHold(); });
@@ -2909,12 +2949,18 @@ els.dockNext.innerHTML = `<span class="eyebrow">4 Next</span><div><div class="ne
       if (chatContextId && chatContextId !== "__browser__") selectedId = chatContextId;
       render();
     });
-    els.composer.addEventListener("submit", (event) => {
-      event.preventDefault();
-      const message = text(els.composerInput.value);
-      if (!message) return;
-      els.composerInput.value = "";
-      sendToMarcus(message);
+      let marcusSendPending = false;
+      els.composer.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const message = text(els.composerInput.value);
+        if (!message || marcusSendPending) return;
+        marcusSendPending = true;
+        const button = els.composer.querySelector('button[type="submit"]'); button.disabled = true;
+        try {
+          const result = await sendToMarcus(message, { rethrow: true });
+          if (result && els.composerInput.value === message) els.composerInput.value = '';
+        } catch { /* The error is visible in chat; preserve the original draft. */ }
+        finally { marcusSendPending = false; button.disabled = false; }
     });
     els.composerInput.addEventListener("keydown", (event) => {
       if (event.key === "Enter" && !event.shiftKey) {

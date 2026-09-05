@@ -8,8 +8,42 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { getModelProfile } from '../marcus/models/model_profiles.js';
+import { DesktopCodexAdapter } from '../marcus/providers/desktop_codex_adapter.js';
 
 const repositoryRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
+
+test('worklist preferences and Codex send receipts retain owner/business gates over real HTTP', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'worklist-http-'));
+  const adapter = new DesktopCodexAdapter({ dataDir: path.join(root, 'data'), queueAction: async (action) => action });
+  const job = await adapter.startJob({ operationId: 'fixture-op', stepId: 'fixture-step', businessKey: 'personal', workspacePath: path.join(root, 'workspaces'), desktopAgentId: 'fixture-agent', prompt: 'Fixture only' });
+  await adapter.ingestUpdate({ jobId: job.jobId, desktopAgentId: 'fixture-agent', threadId: 'fixture-thread', status: 'completed' });
+  const server = await spawnServer({ testRoot: root });
+  try {
+    await server.waitForReady();
+    const base = `http://127.0.0.1:${server.port}`;
+    const call = (route, body, token = 'test-admin-token', business = 'personal') => fetch(base + route, { method: body ? 'POST' : 'GET', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', 'x-business-key': business }, ...(body ? { body: JSON.stringify(body) } : {}) });
+    const preference = { key: 'workspace:c:/fixture/reggie', hidden: true, resumeAfter: '2026-09-05T10:00:00Z' };
+    assert.equal((await call('/api/marcus/awareness/worklist', preference, '')).status, 401);
+    assert.equal((await call('/api/marcus/awareness/worklist', preference, 'test-admin-token', 'agency')).status, 403);
+    assert.equal((await call('/api/marcus/awareness/worklist', preference)).status, 200);
+    const feed = await (await call('/api/marcus/awareness?includeArchived=true')).json();
+    assert.equal(feed.worklistPreferences[0].key, preference.key);
+    assert.equal(feed.worklistPreferences[0].hidden, true);
+    const route = `/api/codex/jobs/${job.jobId}/followup`;
+    const message = { message: 'Fixture follow-up only', requestId: 'request-fixture-00001' };
+    assert.equal((await call(route, message, '')).status, 401);
+    assert.equal((await call(route, message, 'test-admin-token', 'agency')).status, 403);
+    assert.equal((await call(route, { message: 'Legacy page has no receipt key' })).status, 400);
+    const first = await call(route, message); assert.equal(first.status, 202);
+    const receipt = (await first.json()).receipt;
+    assert.equal(receipt.jobId, job.jobId); assert.equal(receipt.requestId, message.requestId);
+    const replay = await call(route, message); assert.equal(replay.status, 202);
+    assert.equal((await replay.json()).receipt.actionId, receipt.actionId);
+    assert.equal((await call(route, { ...message, message: 'Wrong body' })).status, 409);
+    const queue = JSON.parse(await fs.readFile(path.join(root, 'data', 'desktop-actions.json'), 'utf8'));
+    assert.equal(queue.actions.length, 1); assert.equal(queue.actions[0].payload.message, message.message);
+  } finally { await server.close(); }
+});
 
 async function freePort() {
   const server = net.createServer();

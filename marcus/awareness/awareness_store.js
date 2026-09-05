@@ -79,6 +79,10 @@ function normalizeDocument(input, businessKey) {
     revision: Math.max(1, Math.floor(Number(raw.revision) || 1)),
     updatedAt: safeIso(raw.updatedAt) || new Date(0).toISOString(),
     projects: (Array.isArray(raw.projects) ? raw.projects : []).map((item) => normalizeRecord(item, key)),
+    worklistPreferences: (Array.isArray(raw.worklistPreferences) ? raw.worklistPreferences : []).slice(-500).map((item) => ({
+      key: safeString(item?.key, 2200), hidden: item?.hidden === true,
+      resumeAfter: safeIso(item?.resumeAfter), changedAt: safeIso(item?.changedAt),
+    })).filter((item) => item.key),
   };
 }
 
@@ -113,6 +117,19 @@ export class AwarenessStore {
 
   async list(businessKey) {
     return (await this.read(businessKey)).projects;
+  }
+
+  async setWorklistPreference(businessKey, input = {}) {
+    const key = safeString(input.key, 2200);
+    if (!/^(registry|workspace|task):.+/.test(key) || typeof input.hidden !== 'boolean') throw new Error('A worklist identity and hidden flag are required.');
+    return this.mutate(businessKey, (document) => {
+      const preferences = document.worklistPreferences ||= [];
+      const index = preferences.findIndex((item) => item.key === key);
+      if (index < 0 && preferences.length >= 500) throw new Error('The saved worklist preference limit has been reached.');
+      const preference = { key, hidden: input.hidden, resumeAfter: safeIso(input.resumeAfter), changedAt: nowIso() };
+      if (index < 0) preferences.push(preference); else preferences[index] = preference;
+      return structuredClone(preference);
+    });
   }
 
   async get(businessKey, id) {
@@ -228,9 +245,9 @@ export class AwarenessStore {
     const previous = this.queues.get(key) || Promise.resolve();
     const run = previous.catch(() => {}).then(async () => {
       const document = await this.read(key);
-      const before = JSON.stringify(document.projects);
+      const before = JSON.stringify([document.projects, document.worklistPreferences]);
       const result = await mutator(document);
-      if (JSON.stringify(document.projects) === before) return result;
+      if (JSON.stringify([document.projects, document.worklistPreferences]) === before) return result;
       document.revision += 1;
       document.updatedAt = nowIso();
       await this.writeFile(this.fileForBusiness(key), document, true);
