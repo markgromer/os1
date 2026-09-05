@@ -34,7 +34,7 @@ export function nextStep(project) {
   if (status === 'Needs you') return 'Open the exact decision and choose how to proceed.';
   if (['Blocked', 'Failed', 'Blocker reported', 'Interrupted'].includes(status)) return 'Read the blocker and give the agent a correction or missing answer.';
   if (['Running', 'Running · last observed', 'Queued', 'Checking', 'Waiting on provider'].includes(status)) return 'Let this run continue; open the conversation if you want to steer it.';
-  return 'Review the latest update. Continue the conversation, or mark this task Done for now.';
+  return 'Continue this task, or choose Done for now.';
 }
 function updateAge(project) {
   const at = date(project.updatedAt);
@@ -45,27 +45,31 @@ function updateAge(project) {
 export function visibleWorklistGroups(groups, filter = 'active', query = '', now = Date.now()) {
   return groups.filter((group) => {
     if (query && !group.name.toLowerCase().includes(query.toLowerCase())) return false;
-    if (filter === 'aside') return group.hidden || (group.tasks.length > 0 && !group.activeTasks.length);
+    if (filter === 'aside') return group.hidden || (group.handledTasks.length > 0 && !group.activeTasks.length);
     if (filter === 'all') return true;
     if (group.hidden || (!group.activeTasks.length && !group.needs)) return false;
     if (filter === 'needs') return group.needs > 0;
     if (filter === 'blocked') return group.status === 'Blocked';
-    return date(group.updatedAt) >= now - 7 * 86400000;
+    return group.needs > 0 || group.activeTasks.some((task) => isRecentOrOngoing(task, now));
   });
 }
 export function projectRowHtml(group, selected = false) {
   const e = escapeHtml;
   const tasks = group.hidden ? [] : group.activeTasks;
   const running = tasks.filter((item) => ['Running', 'Running · last observed', 'Checking'].includes(taskStatus(item)));
+  const agents = [...new Set(running.map((item) => ['codex', 'job'].includes(item.source) ? 'Codex' : 'Marcus'))].join(' + ');
   return `<article class="project-row ${selected ? 'selected' : ''}">
-    <button class="project-select" data-select-project="${e(group.representative.id)}" aria-pressed="${selected}"><span class="project-row-title">${e(group.name)}</span><span class="project-row-status">${e(group.hidden ? 'Set aside' : group.status)}</span></button>
+    <button class="project-select" data-select-project="${e(group.representative.id)}" aria-pressed="${selected}"><span class="project-row-title">${e(group.name)}</span>${group.hidden || group.status !== 'No live run confirmed' ? `<span class="project-row-status">${e(group.hidden ? 'Set aside' : group.status)}</span>` : ''}</button>
     <p class="project-row-summary">${e(readableSummary(group.summary))}</p>
-    <p class="project-agent"><strong>Agent:</strong> ${running.length ? `${running.length} Codex / Marcus ${running.length === 1 ? 'run' : 'runs'} last observed active` : 'No running agent confirmed'}</p>
-    ${tasks.map((task) => `<section class="project-task-row"><button data-worklist-task="${e(task.id)}"><strong>${e(readableSummary(task.latestRequest || task.request || task.current, 125))}</strong></button><p>${e(readableSummary(task.response || task.current || 'No update captured.', 240))}</p><span>${e(['codex', 'job'].includes(task.source) ? 'Codex' : 'Marcus')} · ${e(taskStatus(task))} · ${e(updateAge(task))}</span><p class="project-next"><strong>Next:</strong> ${e(nextStep(task))}</p><button class="btn" data-worklist-placement="${e(taskKey(task))}" data-hidden="true">Done for now</button></section>`).join('')}
+    <p class="project-agent"><strong>Agent:</strong> ${running.length ? `${e(agents)} · ${running.length} ${running.length === 1 ? 'run' : 'runs'} last observed active` : 'No running agent confirmed'}</p>
+    ${tasks.map((task) => `<section class="project-task-row"><button data-worklist-task="${e(task.id)}"><strong>${tasks.length === 1 ? 'Current task' : e(readableSummary(task.latestRequest || task.request || task.current, 125))}</strong></button><p>${e(readableSummary(task.response || task.current || 'No update captured.', 240))}</p><span>${e(['codex', 'job'].includes(task.source) ? 'Codex' : 'Marcus')} · ${e(taskStatus(task))} · ${e(updateAge(task))}</span><p class="project-next"><strong>Next:</strong> ${e(nextStep(task))}</p><button class="btn" data-worklist-placement="${e(taskKey(task))}" data-hidden="true">Done for now</button></section>`).join('')}
     <div class="context-actions"><button class="btn" data-select-project="${e(group.representative.id)}">Open context</button><button class="btn" data-worklist-placement="${e(group.key)}" data-hidden="${!group.hidden}">${group.hidden ? 'Bring back' : 'Set aside'}</button></div>
   </article>`;
 }
-export function groupProjects(projects, overview, preferences = []) {
+function isRecentOrOngoing(project, now) {
+  return date(project.updatedAt) >= now - 7 * 86400000 || /^(Running|Queued|Checking|Waiting on provider|Needs you)/.test(taskStatus(project));
+}
+export function groupProjects(projects, overview, preferences = [], now = Date.now()) {
   const groups = new Map();
   for (const project of projects) {
     const linked = matchWorkProject(project, overview);
@@ -88,12 +92,13 @@ export function groupProjects(projects, overview, preferences = []) {
     // A provider job and its discovered native transcript represent the same thread.
     group.tasks = group.tasks.filter((item) => item.source !== 'codex' || !group.tasks.some((other) => other.source === 'job' && other.raw?.threadId && other.raw.threadId === item.raw?.sessionId));
     group.tasks.sort((a, b) => date(b.updatedAt) - date(a.updatedAt));
-    group.activeTasks = group.tasks.filter((item) => !isSetAside(taskKey(item), workStartedAt(item), preferences));
+    group.handledTasks = group.tasks.filter((item) => isSetAside(taskKey(item), workStartedAt(item), preferences));
+    group.activeTasks = group.tasks.filter((item) => !group.handledTasks.includes(item) && isRecentOrOngoing(item, now));
     group.hidden = isSetAside(group.key, group.startedAt, preferences);
     const tasks = group.activeTasks;
     group.needs = Number(group.linked?.needsYouCount || 0);
     group.status = group.needs ? 'Needs you' : tasks.some((item) => /^(Blocked|Failed|Blocker reported|Interrupted)$/.test(taskStatus(item))) ? 'Blocked' : tasks.some((item) => /^(Running|Queued|Checking)/.test(taskStatus(item))) ? 'In progress' : 'No live run confirmed';
-    group.summary = text(tasks[0]?.latestRequest || tasks[0]?.request || group.linked?.objective || 'No current task recorded.');
+    group.summary = text(tasks[0]?.latestRequest || tasks[0]?.request || group.linked?.objective || group.tasks[0]?.latestRequest || group.tasks[0]?.request || 'No current task recorded.');
   }
   return [...groups.values()].sort((a, b) => Number(b.needs > 0) - Number(a.needs > 0) || date(b.updatedAt) - date(a.updatedAt));
 }
@@ -112,8 +117,8 @@ export function projectContextHtml(group, { showHandled = false } = {}) {
       <p class="task-request">${e(item.latestRequest || item.request || item.current || 'No task description captured.')}</p>
       ${item.response ? `<details><summary>Latest update</summary><p class="task-update">${e(item.response)}</p></details>` : ''}
       <div class="context-actions"><button class="btn primary" data-worklist-task="${e(item.id)}">${['codex', 'job'].includes(item.source) ? 'Conversation' : 'Inspect work'}</button><button class="btn" data-worklist-placement="${e(taskKey(item))}" data-hidden="${!isSetAside(taskKey(item), workStartedAt(item), group.preferences)}">${isSetAside(taskKey(item), workStartedAt(item), group.preferences) ? 'Bring task back' : 'Done for now'}</button></div>
-    </article>`).join('') || '<p>No active task is recorded here. Earlier work is available under Show handled.</p>'}
-    ${group.tasks.length !== group.activeTasks.length ? `<button class="btn" data-show-handled>${showHandled ? 'Hide handled' : `Show handled (${group.tasks.length - group.activeTasks.length})`}</button>` : ''}
+    </article>`).join('') || '<p>No active task in the last 7 days. Earlier and set-aside work is available in history.</p>'}
+    ${group.tasks.length !== group.activeTasks.length ? `<button class="btn" data-show-handled>${showHandled ? 'Hide history' : `Show history (${group.tasks.length - group.activeTasks.length})`}</button>` : ''}
     <p class="context-hint">Only reported sessions and linked executions are listed. Unreported agents cannot be shown.</p>
     <p role="status" data-worklist-feedback></p>
   </section>`;

@@ -10,6 +10,8 @@ const MAX_HANDOFF_TEXT = 1800;
 const MAX_REQUEST_TEXT = 800;
 const MAX_CONTEXT_ITEMS = 18;
 const MAX_CONTEXT_TEXT = 1800;
+const MAX_SIGNAL_BYTES = 16 * 1024 * 1024;
+const signalCache = new Map();
 
 function humanizeWorkspaceName(value) {
   return String(value || '')
@@ -103,6 +105,7 @@ function classifyHandoffSummary(summary) {
 function eventLooksUserRequest(event) {
   const payload = event?.payload && typeof event.payload === 'object' ? event.payload : {};
   const role = String(payload.role || payload.author?.role || event?.role || '').toLowerCase();
+  if (!role && event?.type === 'event_msg' && payload.type === 'user_message') return true;
   if (role !== 'user') return false;
   const type = String(event?.type || payload.type || '').toLowerCase();
   if (type && !/message|response_item|event_msg/.test(type)) return false;
@@ -167,41 +170,7 @@ function readSessionRollingContext(filePath) {
 }
 
 function readSessionLatestUserRequest(filePath) {
-  let stat;
-  try {
-    stat = fs.statSync(filePath);
-  } catch {
-    return null;
-  }
-  if (!stat.isFile()) return null;
-  let handle;
-  try {
-    handle = fs.openSync(filePath, 'r');
-    const bytes = Math.min(MAX_HANDOFF_BYTES, stat.size);
-    const buffer = Buffer.alloc(bytes);
-    fs.readSync(handle, buffer, 0, bytes, Math.max(0, stat.size - bytes));
-    const lines = buffer.toString('utf8').split(/\r?\n/).filter(Boolean);
-    for (let index = lines.length - 1; index >= 0; index -= 1) {
-      let event;
-      try { event = JSON.parse(lines[index]); } catch { continue; }
-      if (!eventLooksUserRequest(event)) continue;
-      const request = cleanUserRequestText(extractTextParts(event.payload || event).join(' '));
-      if (!request) continue;
-      const safeRequest = redactContextText(request);
-      if (!safeRequest || /\[redacted sensitive content\]/i.test(safeRequest)) continue;
-      return {
-        request: safeRequest,
-        requestedAt: typeof event.timestamp === 'string' ? event.timestamp : stat.mtime.toISOString(),
-      };
-    }
-  } catch {
-    return null;
-  } finally {
-    if (handle !== undefined) {
-      try { fs.closeSync(handle); } catch {}
-    }
-  }
-  return null;
+  return readSessionSignals(filePath).request;
 }
 
 function readSessionOriginalUserRequest(filePath) {
@@ -321,24 +290,55 @@ function parseSessionMetadata(filePath, nowMs, maxAgeMs) {
 }
 
 function readSessionRuntimeState(filePath) {
+  return readSessionSignals(filePath).runtime;
+}
+
+// Tool output can dwarf a request in a long turn. Search backwards in bounded
+// blocks, retaining only redacted request text and structured runtime signals.
+// Unchanged files are not rescanned; giant tool records are never reconstructed.
+function readSessionSignals(filePath) {
+  const unknown = () => ({ request: null, runtime: { runtimeState: 'unknown', runtimeStateAt: '' } });
   let handle;
   try {
     handle = fs.openSync(filePath, 'r');
-    const size = fs.fstatSync(handle).size;
-    const bytes = Math.min(MAX_HANDOFF_BYTES, size);
-    const buffer = Buffer.alloc(bytes);
-    fs.readSync(handle, buffer, 0, bytes, Math.max(0, size - bytes));
-    const lines = buffer.toString('utf8').split(/\r?\n/);
-    for (let index = lines.length - 1; index >= 0; index--) {
-      let event;
-      try { event = JSON.parse(lines[index]); } catch { continue; }
-      const type = event.type === 'event_msg' ? event.payload?.type : event.type;
-      const runtimeState = ({ task_started: 'running', turn_started: 'running', 'turn.started': 'running', task_complete: 'idle', task_completed: 'idle', 'turn.completed': 'idle', turn_aborted: 'interrupted', 'turn.failed': 'interrupted' })[type];
-      if (runtimeState) return { runtimeState, runtimeStateAt: typeof event.timestamp === 'string' ? event.timestamp : '' };
+    const stat = fs.fstatSync(handle);
+    if (!stat.isFile()) return unknown();
+    const stamp = `${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
+    if (signalCache.get(filePath)?.stamp === stamp) return signalCache.get(filePath).value;
+    const value = unknown();
+    const floor = Math.max(0, stat.size - MAX_SIGNAL_BYTES);
+    let end = stat.size, carry = Buffer.alloc(0);
+    while (end > floor && (!value.request || value.runtime.runtimeState === 'unknown')) {
+      const start = Math.max(floor, end - MAX_HANDOFF_BYTES);
+      const block = Buffer.alloc(end - start);
+      const read = fs.readSync(handle, block, 0, block.length, start);
+      const joined = Buffer.concat([block.subarray(0, read), carry]);
+      const boundary = start > 0 ? joined.indexOf(10) : -1;
+      carry = boundary >= 0 ? joined.subarray(0, Math.min(boundary, MAX_HANDOFF_BYTES)) : Buffer.alloc(0);
+      const lines = (start > 0 ? boundary >= 0 ? joined.subarray(boundary + 1) : Buffer.alloc(0) : joined).toString('utf8').split(/\r?\n/);
+      for (let index = lines.length - 1; index >= 0; index--) {
+        if (lines[index].length > MAX_HANDOFF_BYTES) continue;
+        let event;
+        try { event = JSON.parse(lines[index]); } catch { continue; }
+        if (!value.request && eventLooksUserRequest(event)) {
+          const request = redactContextText(cleanUserRequestText(extractTextParts(event.payload || event).join(' ')));
+          if (request && !/\[redacted sensitive content\]/i.test(request)) value.request = { request, requestedAt: typeof event.timestamp === 'string' ? event.timestamp : stat.mtime.toISOString() };
+        }
+        if (value.runtime.runtimeState === 'unknown') {
+          const type = event.type === 'event_msg' ? event.payload?.type : event.type;
+          const runtimeState = ({ task_started: 'running', turn_started: 'running', 'turn.started': 'running', task_complete: 'idle', task_completed: 'idle', 'turn.completed': 'idle', turn_aborted: 'interrupted', 'turn.failed': 'interrupted' })[type];
+          if (runtimeState) value.runtime = { runtimeState, runtimeStateAt: typeof event.timestamp === 'string' ? event.timestamp : '' };
+        }
+      }
+      end = start;
     }
+    signalCache.delete(filePath);
+    signalCache.set(filePath, { stamp, value });
+    if (signalCache.size > 128) signalCache.delete(signalCache.keys().next().value);
+    return value;
   } catch { /* Unknown is safer than guessing from assistant prose or editor focus. */ }
   finally { if (handle !== undefined) try { fs.closeSync(handle); } catch {} }
-  return { runtimeState: 'unknown', runtimeStateAt: '' };
+  return unknown();
 }
 
 function discoverRecentCodexWorkspaces({
