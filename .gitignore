@@ -41,3 +41,17 @@ demos/marcus-operator-demo-worker/
 
 # Nested demo dependencies
 demos/**/node_modules/
+
+# Private design framework and evidence are maintained outside the public runtime.
+/constitution
+/AGENTS.md
+/marcus/constitution/
+/docs/marcus/constitution-*.md
+/docs/marcus/gpt-6-qualification.md
+/docs/marcus/gpt-6-readiness.md
+/scripts/constitution-*.mjs
+/test/constitution-program.test.js
+/output/model-evals/
+/output/constitution-acceptance/
+/output/constitution-checks/
+/output/worktrees/

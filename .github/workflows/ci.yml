@@ -21,6 +21,8 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
+      - run: npm run runtime:check
+      - run: npm run gpt6:check
       - run: npm test
       - name: Syntax validation
         run: npm run lint

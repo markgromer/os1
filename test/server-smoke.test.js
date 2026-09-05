@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { getModelProfile } from '../marcus/models/model_profiles.js';
 
 const repositoryRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 
@@ -66,6 +67,37 @@ async function spawnServer({ startupCheck = false, adminToken = 'test-admin-toke
   };
   return { child, port, root, workspaceRoot, get output() { return output; }, waitForExit, waitForReady, close };
 }
+
+test('constitution work APIs retain real server owner/business gates and isolate collaborator credentials', async () => {
+  const server = await spawnServer();
+  try {
+    await server.waitForReady(); const base = `http://127.0.0.1:${server.port}`;
+    const call = (url, body, credential = 'test-admin-token', extraHeaders = {}) => fetch(base + url, { method: body ? 'POST' : 'GET', headers: { authorization: `Bearer ${credential}`, 'content-type': 'application/json', ...extraHeaders }, ...(body ? { body: JSON.stringify(body) } : {}) });
+    assert.equal((await call('/api/work', null, '')).status, 401);
+    const emptyCommand = await (await call('/api/marcus/command', { message: 'Show tracked work status.' })).json();
+    assert.equal(emptyCommand.intent, 'work_status');
+    assert.equal(emptyCommand.workSummary.trackedWorkCount, 0);
+    assert.match(emptyCommand.reply, /absence of alerts does not prove/);
+    const registry = await (await call('/api/project-registry', { canonicalName: 'Scoped constitution HTTP test', projectId: 'constitution-http' })).json();
+    const project = registry.project || registry.record;
+    assert.ok(project?.id, JSON.stringify(registry));
+    const created = await (await call('/api/work', { projectId: project.id, kind: 'human', objective: 'Review scoped acceptance', acceptanceCriteria: ['Evidence is project scoped'] })).json();
+    assert.ok(created.item?.id);
+    const populatedCommand = await (await call('/api/marcus/command', { message: 'What needs me?' })).json();
+    assert.equal(populatedCommand.workSummary.trackedWorkCount, 1);
+    assert.deepEqual(populatedCommand.suggestedActions, []);
+    const issued = await (await call('/api/work/identities/issue', { displayName: 'Server acceptance test person', projectId: project.id })).json();
+    assert.ok(issued.token);
+    const view = await (await call('/api/collaboration/work', null, issued.token)).json();
+    assert.equal(view.items.length, 1); assert.equal(view.items[0].id, created.item.id);
+    assert.equal((await call('/api/settings', null, issued.token)).status, 401);
+    assert.equal((await call('/api/work', null, issued.token)).status, 401);
+    assert.equal((await call('/api/collaboration/work', null, issued.token, { 'x-business-key': 'agency' })).status, 403);
+    const summary = await (await call('/api/work/operator/summary')).json(); assert.equal(summary.summary.trackedWorkCount, 1);
+    const agent = await (await call('/api/work/engineering')).json(); assert.equal(agent.agent.lifecycle, 'inactive');
+    const execution = await (await call('/api/work/execution')).json(); assert.deepEqual(execution.execution.policies, []);
+  } finally { await server.close(); }
+});
 
 async function withMockCodexAdapter(callback) {
   const server = http.createServer((req, res) => {
@@ -186,7 +218,12 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
   const adminHeaders = { authorization: 'Bearer test-admin-token', 'content-type': 'application/json' };
   try {
     await server.waitForReady();
-    assert.equal((await fetch(`${base}/api/health`)).status, 200);
+    const healthResponse = await fetch(`${base}/api/health`);
+    assert.equal(healthResponse.status, 200);
+    assert.equal(healthResponse.headers.get('cache-control'), 'no-store');
+    const releaseHealth = await healthResponse.json();
+    assert.equal(releaseHealth.release, 'constitution-feedback-v1');
+    assert.match(releaseHealth.commit, /^(?:[a-f0-9]{40})?$/i);
     const livePage = await fetch(`${base}/live.html`);
     const liveHtml = await livePage.text();
     assert.equal(livePage.status, 200);
@@ -477,6 +514,12 @@ test('server auth, business scope, existing reads, Marcus routing, and Live oper
     assert.equal(settingsAfterProviderSave.githubSource, 'settings');
     assert.equal(settingsAfterProviderSave.cloudflareConfigured, true);
     assert.equal(settingsAfterProviderSave.cloudflareSource, 'settings');
+    const gpt6Profile = settingsAfterProviderSave.modelProfiles.find((profile) => profile.model === 'gpt-6-astra');
+    assert.equal(gpt6Profile.endpoint, 'responses');
+    assert.equal(gpt6Profile.qualification.accessStatus, getModelProfile('openai', 'gpt-6-astra').qualification.accessStatus);
+    assert.equal(gpt6Profile.qualification.evaluationStatus, getModelProfile('openai', 'gpt-6-astra').qualification.evaluationStatus);
+    assert.equal(gpt6Profile.rollout.status, getModelProfile('openai', 'gpt-6-astra').rollout.status);
+    assert.deepEqual(gpt6Profile.rollout.enabledWorkloads, ['dashboardPreview']);
     const operatorHealthWithSavedProviders = await (await fetch(`${base}/api/marcus/operator-health`, { headers: liveHeaders })).json();
     assert.equal(operatorHealthWithSavedProviders.capabilities.github.backendTokenConfigured, true);
     assert.equal(operatorHealthWithSavedProviders.capabilities.github.source, 'settings');
