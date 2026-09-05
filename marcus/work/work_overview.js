@@ -1,5 +1,15 @@
 import { requiredVerificationPassed } from '../operations/operation_types.js';
 
+function groupBy(rows, key) {
+  const groups = new Map();
+  for (const row of rows) {
+    const id = row[key];
+    if (!groups.has(id)) groups.set(id, []);
+    groups.get(id).push(row);
+  }
+  return groups;
+}
+
 // A read projection over existing domains, never another task/approval store.
 export async function readWorkOverview(key, { graph, director, execution, memory, evidence }) {
   // snapshot also reads the legacy operation store. Do not race its first-file
@@ -11,18 +21,25 @@ export async function readWorkOverview(key, { graph, director, execution, memory
     evidence.store.readDocument(key).then((doc) => ({ available: true, rows: doc.evidence })).catch(() => ({ available: false, rows: [] })),
   ]);
   const operations = [...operationMap.values()];
+  const itemsByProject = groupBy(graphState.items, 'projectId');
+  const operationsByProject = groupBy(operations, 'projectRegistryId');
+  const receiptsByProject = groupBy(evidenceResult.rows.filter((row) => row.provenance?.trusted === true), 'projectRegistryId');
+  const decisionsByProject = groupBy(decisions.memories, 'projectId');
+  const dependenciesByItem = groupBy(graphState.dependencies, 'itemId');
+  const grantedProjects = new Set(agent.projectIds);
+  const automaticProjects = new Set(queue.policies.filter((row) => row.autoAdvance === true).map((row) => row.projectId));
   return { observedAt: new Date().toISOString(), businessKey: key, evidenceAvailable: evidenceResult.available,
     decisionsMayBeTruncated: decisions.memories.length >= 500,
     projects: registry.map((project) => {
-      const items = graphState.items.filter((row) => row.projectId === project.id);
-      const runs = operations.filter((row) => row.projectRegistryId === project.id).sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
-      const receipts = evidenceResult.rows.filter((row) => row.projectRegistryId === project.id && row.provenance?.trusted === true)
+      const items = itemsByProject.get(project.id) || [];
+      const runs = (operationsByProject.get(project.id) || []).sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+      const receipts = (receiptsByProject.get(project.id) || [])
         .sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp)));
       // Latest deployment event wins, including failures. Never promote an older success over it.
       const deployment = receipts.find((row) => ['render', 'cloudflare', 'github'].includes(row.source)
         && ['production_published', 'deployment_completed', 'deployment_failed', 'deployment_started'].includes(row.type)
         && row.deployment?.environment === 'production');
-      const granted = ['active', 'probation'].includes(agent.lifecycle) && agent.projectIds.includes(project.id);
+      const granted = ['active', 'probation'].includes(agent.lifecycle) && grantedProjects.has(project.id);
       const boundIds = new Set(items.map((row) => row.operationId).filter(Boolean));
       const attention = [
         ...items.filter((row) => row.readiness.needsMark).map((row) => ({ id: row.id, source: 'work', title: row.objective, reason: row.readiness.blockers.map((blocker) => blocker.message).join(' ') })),
@@ -34,13 +51,13 @@ export async function readWorkOverview(key, { graph, director, execution, memory
         readyCount: items.filter((row) => row.readiness.runnable).length,
         workCount: items.length, items: items.slice(0, 100).map((row) => ({ id: row.id, objective: row.objective, kind: row.kind, status: row.readiness.status,
           revision: row.revision, updatedAt: row.updatedAt, operationId: row.operationId, acceptanceCriteria: row.acceptanceCriteria, readiness: row.readiness })),
-        dependencies: graphState.dependencies.filter((edge) => items.some((item) => item.id === edge.itemId)),
+        dependencies: items.flatMap((item) => dependenciesByItem.get(item.id) || []),
         operationCount: runs.length, operations: runs.slice(0, 10).map((row) => ({ id: row.id, title: row.title || row.objective, status: row.status, updatedAt: row.updatedAt,
           verified: row.status === 'completed' && requiredVerificationPassed(row),
           verification: (row.verification || []).map((check) => ({ id: check.id, type: check.type, status: check.status, required: check.required !== false, waived: check.waived === true })),
           blockers: (row.blockers || []).filter((blocker) => blocker.status === 'active').map((blocker) => ({ type: blocker.type, message: blocker.message || blocker.reason })) })),
-        decisions: decisions.memories.filter((row) => row.projectId === project.id).slice(0, 20).map((row) => ({ id: row.id, revision: row.revision, content: row.content, updatedAt: row.updatedAt })),
-        engineering: { lifecycle: agent.lifecycle, granted, autoAdvance: granted && queue.policies.some((row) => row.projectId === project.id && row.autoAdvance === true) },
+        decisions: (decisionsByProject.get(project.id) || []).slice(0, 20).map((row) => ({ id: row.id, revision: row.revision, content: row.content, updatedAt: row.updatedAt })),
+        engineering: { lifecycle: agent.lifecycle, granted, autoAdvance: granted && automaticProjects.has(project.id) },
         deployment: deployment ? { id: deployment.id, type: deployment.type, source: deployment.source, observedAt: deployment.observedAt, timestamp: deployment.timestamp,
           commit: deployment.deployment.commitSha || deployment.commitSha || '', status: deployment.deployment.status, url: deployment.deployment.url || '' } : null,
         recentChanges: receipts.slice(0, 8).map((row) => ({ id: row.id, type: row.type, source: row.source, timestamp: row.timestamp, summary: row.summary })),

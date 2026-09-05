@@ -52,3 +52,17 @@ test('work saves are idempotent per business and project, and conflicting retrie
   assert.notEqual(first.id, separate.id);
   assert.equal((await f.graph.operations('personal')).size, 0);
 });
+
+test('overview indexes project-owned records once instead of scanning all records for each project', async () => {
+  const f = await workFixture(); let projectKeyReads = 0;
+  const projects = Array.from({ length: 100 }, (_, index) => ({ id: 'project-' + index, canonicalName: 'Project ' + index }));
+  const items = projects.map((project, index) => ({ id: 'item-' + index, get projectId() { projectKeyReads += 1; return project.id; },
+    objective: project.canonicalName, acceptanceCriteria: [], readiness: { needsMark: false, runnable: true, status: 'ready', blockers: [] } }));
+  f.graph.engine.registry.list = async () => projects;
+  f.graph.snapshot = async () => ({ items, dependencies: [{ itemId: 'item-1', prerequisiteId: 'item-0' }] });
+  f.graph.operations = async () => new Map();
+  const result = await readWorkOverview('personal', { ...f, evidence: { store: { readDocument: async () => ({ evidence: [] }) } } });
+  assert.equal(projectKeyReads, 100); assert.equal(result.projects.length, 100);
+  assert.ok(result.projects.every((project) => project.workCount === 1 && project.readyCount === 1));
+  assert.equal(result.projects[1].dependencies.length, 1); assert.equal(result.projects[2].dependencies.length, 0);
+});

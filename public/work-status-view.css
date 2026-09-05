@@ -14,7 +14,7 @@
 .work-mode .workspace-body{grid-row:2}
 .work-mode .workspace-status{grid-row:3}
 .work-mode .workspace-header .tabs{height:auto;justify-content:flex-start}
-.work-mode #autoToggle{width:auto;min-width:110px;height:auto;padding:4px 8px;border-radius:6px;font-size:11px}
+#autoToggle{width:auto;min-width:110px;height:auto;padding:4px 8px;border-radius:6px;font-size:11px}
 @media(orientation:landscape){
   .work-mode .display{height:100vh;grid-template-columns:minmax(0,1fr)360px;grid-template-rows:58px auto minmax(200px,1fr)180px;grid-template-areas:"os os" "attention attention" "workspace control" "dock control";gap:8px;padding:8px}
   .work-mode .os-strip{height:58px;grid-template-columns:190px minmax(0,1fr)320px;padding:0 10px;gap:8px}

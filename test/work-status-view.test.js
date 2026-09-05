@@ -37,6 +37,16 @@ test('failed reads show unknown counts, and provider URLs cannot inject executab
   assert.equal(safeWorkUrl('https://example.com/live'), 'https://example.com/live');
 });
 
+test('a positive recorded deployment is distinct from current health and owner acceptance', () => {
+  const deployment = { type: 'production_published', status: 'live', commit: 'abcdef123456', timestamp: '2026-09-05' };
+  const stages = evidenceStages(project, { ...linked, deployment });
+  assert.equal(stages[2].ok, true); assert.match(stages[2].value, /^Recorded live/);
+  assert.equal(stages[0].ok, false); assert.equal(stages[1].ok, false); assert.equal(stages[3].ok, false);
+  const failed = evidenceStages(project, { ...linked, deployment: { ...deployment, type: 'deployment_failed', status: 'failed' } });
+  assert.equal(failed[2].ok, false);
+  assert.match(workOverviewHtml(project, { ...overview, projects: [{ ...linked, deployment }] }), /not a fresh health check or acceptance/);
+});
+
 test('only runnable work gets an explicit start control; saving or reading is not a start', () => {
   const item = { id: 'work-1', objective: 'Scoped follow-up', status: 'ready', acceptanceCriteria: ['Verify outcome'], readiness: { runnable: true, blockers: [] } };
   assert.match(workOverviewHtml(project, { ...overview, projects: [{ ...linked, workCount: 1, items: [item] }] }), /data-work-start="work-1"/);
@@ -47,7 +57,10 @@ test('only runnable work gets an explicit start control; saving or reading is no
 test('project status shortcut uses a read-only endpoint and drops a reply after a context switch', async () => {
   const html = await fs.readFile(new URL('../public/visualizer.html', import.meta.url), 'utf8');
   const start = html.indexOf('async function sendToMarcus(');
-  const source = html.slice(start, html.indexOf('function updateVoiceUi(', start));
+  const end = html.indexOf('function updateVoiceUi(', start);
+  assert.ok(start >= 0, 'sendToMarcus start marker must exist');
+  assert.ok(end > start, 'updateVoiceUi end marker must follow sendToMarcus');
+  const source = html.slice(start, end);
   let respond; const paths = []; const messages = [];
   const context = vm.createContext({ chatContextId: 'selected', snapshot: { projects: [{ ...project, id: 'selected' }] }, workOverview: overview,
     matchWorkProject, businessKey: () => 'personal', addMessage: (...args) => messages.push(args),
@@ -66,6 +79,8 @@ test('dedicated display loads the new surface, reads saved policy and parses as 
   assert.match(script, /workOverviewHtml\(project, workOverview\)/);
   assert.match(script, /api\('\/api\/work\/overview'\)/);
   assert.match(script, /savedWorkPolicy\.autoAdvance/);
+  assert.match(html, /class="btn" type="button" id="autoToggle">Execution policy/);
+  assert.doesNotMatch(html, /id="autoToggle" aria-pressed/);
   assert.match(script, /if \(!window\.confirm\(`Start this work in/);
   assert.match(script, /cached\.businessKey !== businessKey\(\)/);
   assert.doesNotMatch(script, /autoContinue|is complete and waiting for your acceptance|The latest reported work is complete/);
